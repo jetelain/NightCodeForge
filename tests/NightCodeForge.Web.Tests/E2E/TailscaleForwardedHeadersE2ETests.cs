@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Xunit;
 
@@ -39,8 +40,10 @@ public class TailscaleForwardedHeadersE2ETests
         Assert.True(response!.Ok, $"Unexpected status {response.Status}");
 
         // Circuit connected: interactive navigation works (the settings link is rendered by the interactive shell).
-        await page.GotoAsync($"{_fixture.BaseUrl}/settings");
-        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
+        var settingsLink = page.Locator("a.forge-nav-link[href*='settings']");
+        await settingsLink.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 15000 });
+        await settingsLink.ClickAsync();
+        await page.WaitForURLAsync(new Regex(@"/settings"), new PageWaitForURLOptions { Timeout = 15000 });
         Assert.Contains("/settings", page.Url);
     }
 }

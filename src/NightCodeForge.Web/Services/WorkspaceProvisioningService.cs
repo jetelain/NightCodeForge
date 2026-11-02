@@ -256,6 +256,8 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
         var workspace = new Workspace
         {
             Name = model.Name.Trim(),
+            Emoji = WorkspacePresentationHelper.ResolveEmoji(model.Emoji),
+            ColorCode = WorkspacePresentationHelper.ResolveColor(model.ColorCode, WorkspacePresentationHelper.DefaultColor),
             RepositoryPath = Path.GetFullPath(model.RepositoryPath.Trim()),
             DefaultBaseBranch = string.IsNullOrWhiteSpace(model.DefaultBaseBranch) ? "main" : model.DefaultBaseBranch.Trim(),
             ExecutionMode = model.ExecutionMode,

@@ -103,6 +103,57 @@
                @bind:event="oninput" />
         <span class="form-hint">Friendly identifier displayed across top bar, telemetry dashboard, and task DAG.</span>
     </div>
+
+    <!-- Workspace Branding & Visual Identity (Optional) -->
+    <div class="form-group mt-4 p-3" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); border-left: 4px solid @WorkspacePresentationHelper.ResolveColor(Model.ColorCode, "#6366f1");">
+        <label class="form-label mb-2" style="font-weight: 600;">
+            🎨 Visual Identity &amp; Motif (Optional)
+        </label>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; align-items: start;">
+            <!-- Emoji Selection -->
+            <div>
+                <span class="form-hint mb-1" style="display: block;">Emoji Icon</span>
+                <div style="display: flex; gap: 0.35rem; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 1.35rem; min-width: 1.8rem; text-align: center;">@(WorkspacePresentationHelper.ResolveEmoji(Model.Emoji))</span>
+                    <input type="text" class="form-control-dark font-mono" maxlength="16" style="max-width: 90px;" @bind="Model.Emoji" @bind:event="oninput" placeholder="📁" />
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.3rem;">
+                    @foreach (var preset in WorkspacePresentationHelper.EmojiPresets.Take(6))
+                    {
+                        var isSelected = Model.Emoji == preset.Emoji;
+                        <button type="button"
+                                class="forge-btn @(isSelected ? "forge-btn-primary" : "forge-btn-outline")"
+                                style="padding: 0.2rem 0.45rem; font-size: 0.95rem;"
+                                title="@preset.Label"
+                                @onclick="() => Model.Emoji = preset.Emoji">
+                            @preset.Emoji
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <!-- Color Selection -->
+            <div>
+                <span class="form-hint mb-1" style="display: block;">Brand Color Accent</span>
+                <div style="display: flex; gap: 0.35rem; align-items: center; margin-bottom: 0.5rem;">
+                    <input type="color" value="@(WorkspacePresentationHelper.IsValidHexColor(Model.ColorCode) ? Model.ColorCode : "#6366f1")" @onchange="(e) => { if (e.Value is string c && !string.IsNullOrWhiteSpace(c)) Model.ColorCode = c; }" style="width: 34px; height: 32px; border: none; border-radius: 4px; cursor: pointer; background: transparent;" />
+                    <input type="text" class="form-control-dark font-mono" maxlength="32" style="max-width: 110px;" @bind="Model.ColorCode" @bind:event="oninput" placeholder="#6366f1" />
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
+                    @foreach (var preset in WorkspacePresentationHelper.ColorPresets.Take(6))
+                    {
+                        var isSelected = string.Equals(Model.ColorCode, preset.HexCode, StringComparison.OrdinalIgnoreCase);
+                        <button type="button"
+                                style="background: @preset.HexCode; width: 24px; height: 24px; border-radius: 50%; border: 2px solid @(isSelected ? "#ffffff" : "transparent"); cursor: pointer;"
+                                title="@preset.Name"
+                                @onclick="() => Model.ColorCode = preset.HexCode">
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
 
 @code {

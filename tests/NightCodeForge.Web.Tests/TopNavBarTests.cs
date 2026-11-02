@@ -178,4 +178,30 @@ public class TopNavBarTests : BunitContext
         // Verify event unsubscription was made
         _operationsControlMock.VerifyRemove(o => o.OnOperationsStateChanged -= It.IsAny<Action<bool>>(), Times.Once);
     }
+
+    [Fact]
+    public async Task TopNavBar_RendersActiveWorkspaceEmoji_AndColorCode()
+    {
+        var ws = new Workspace
+        {
+            Id = 42,
+            Name = "ComicGenCLI",
+            Emoji = "🎨",
+            ColorCode = "#f59e0b"
+        };
+        await _workspaceRepo.CreateAsync(ws);
+        _workspaceState.SetKnownWorkspaces(new[] { ws });
+        _workspaceState.SetActiveWorkspace(ws);
+
+        var cut = Render<TopNavBar>();
+
+        var selectIcon = cut.Find(".workspace-select-icon");
+        Assert.Equal("📁", selectIcon.TextContent.Trim());
+
+        var selectWrapper = cut.Find(".workspace-select-wrapper");
+        Assert.Contains("border-left: 3px solid #f59e0b", selectWrapper.GetAttribute("style"));
+
+        var option = cut.Find(".workspace-dropdown option");
+        Assert.Contains("🎨 ComicGenCLI", option.TextContent);
+    }
 }

@@ -2,7 +2,7 @@
 
 > **Quick-Win Feature Specification (Workspace Identity, Navigation & Settings Ergonomics)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Planned  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests`  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
@@ -140,14 +140,14 @@ To preserve strict Presentation Separation ([AGENTS.md](../../AGENTS.md)) and pr
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Add `Emoji` and `ColorCode` nullable properties to `Workspace.cs` in `NightCodeForge.Core.Domain`.
-- [ ] Create EF Core database migration adding `Emoji` and `ColorCode` columns to the `Workspaces` table in `NightCodeForge.Infrastructure`.
-- [ ] Implement `WorkspacePresentationHelper` in `NightCodeForge.Web.Services` with emoji fallback, color resolution, hex validation, and preset palettes.
-- [ ] Add Workspace Identity controls (Name text input, Emoji picker/presets, Color chips/picker, and Live Preview card) to `WorkspaceSettingsTab.razor`.
-- [ ] Update `WorkspaceStateService` to notify listeners on workspace updates.
-- [ ] Update `TopNavBar.razor` to render custom emoji in the selector icon, dropdown option text, and breadcrumbs with accent color.
-- [ ] Update `Home.razor` to render custom emoji in workspace card titles and apply colored left border accents.
-- [ ] Update `WorkspaceCreationWizardModal` to support optional initial emoji and color selection.
-- [ ] Author unit tests in `WorkspacePresentationHelperTests.cs` and component tests in `WorkspaceSettingsTabTests.cs`.
-- [ ] Author Playwright E2E test verifying workspace identity editing in `/settings` updates the navigation bar and home dashboard; verify all tests pass with `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Add `Emoji` and `ColorCode` nullable properties to `Workspace.cs` in `NightCodeForge.Core.Domain`.
+- [x] Create EF Core database migration adding `Emoji` and `ColorCode` columns to the `Workspaces` table in `NightCodeForge.Infrastructure`.
+- [x] Implement `WorkspacePresentationHelper` in `NightCodeForge.Web.Services` with emoji fallback, color resolution, hex validation, and preset palettes.
+- [x] Add Workspace Identity controls (Name text input, Emoji picker/presets, Color chips/picker, and Live Preview card) to `WorkspaceSettingsTab.razor`.
+- [x] Update `WorkspaceStateService` to notify listeners on workspace updates.
+- [x] Update `TopNavBar.razor` to render custom emoji in the selector icon, dropdown option text, and breadcrumbs with accent color.
+- [x] Update `Home.razor` to render custom emoji in workspace card titles and apply colored left border accents.
+- [x] Update `WorkspaceCreationWizardModal` to support optional initial emoji and color selection.
+- [x] Author unit tests in `WorkspacePresentationHelperTests.cs` and component tests in `WorkspaceSettingsTabTests.cs`.
+- [x] Author Playwright E2E test verifying workspace identity editing in `/settings` updates the navigation bar and home dashboard; verify all tests pass with `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

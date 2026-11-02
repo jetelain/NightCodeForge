@@ -66,7 +66,9 @@ public class WorkspaceStateService
         var changed = _activeWorkspaceId != workspace.Id ||
                       _activeWorkspace?.Name != workspace.Name ||
                       _activeWorkspace?.DefaultBaseBranch != workspace.DefaultBaseBranch ||
-                      _activeWorkspace?.ExecutionMode != workspace.ExecutionMode;
+                      _activeWorkspace?.ExecutionMode != workspace.ExecutionMode ||
+                      _activeWorkspace?.Emoji != workspace.Emoji ||
+                      _activeWorkspace?.ColorCode != workspace.ColorCode;
 
         _activeWorkspaceId = workspace.Id;
         _activeWorkspace = workspace;
@@ -80,6 +82,36 @@ public class WorkspaceStateService
         {
             OnWorkspaceChanged?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Notifies listeners that a workspace has been updated, refreshing the internal cached active workspace
+    /// and known workspaces collection if provided.
+    /// </summary>
+    public void NotifyWorkspaceUpdated(Workspace? workspace = null)
+    {
+        if (workspace != null)
+        {
+            if (_activeWorkspaceId == workspace.Id)
+            {
+                _activeWorkspace = workspace;
+            }
+
+            var list = _knownWorkspaces.ToList();
+            var index = list.FindIndex(w => w.Id == workspace.Id);
+            if (index >= 0)
+            {
+                list[index] = workspace;
+                _knownWorkspaces = list;
+            }
+            else
+            {
+                list.Add(workspace);
+                _knownWorkspaces = list;
+            }
+        }
+
+        OnWorkspaceChanged?.Invoke();
     }
 
     public void ClearActiveWorkspace()

@@ -43,6 +43,125 @@
     {
         var ws = WorkspaceState.ActiveWorkspace;
 
+        <!-- Workspace Identity & Branding -->
+        <div class="forge-subcard" id="workspace-identity-section" style="padding: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-bottom: 2rem; box-shadow: var(--shadow-sm); border-left: 5px solid @WorkspacePresentationHelper.ResolveColor(ws.ColorCode);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span style="font-size: 1.75rem;">🎨</span>
+                    <div>
+                        <strong style="font-size: 1.25rem; color: var(--text-primary); font-weight: 700;">Workspace Identity &amp; Branding</strong>
+                        <span style="display: block; font-size: 0.85rem; color: var(--text-muted); margin-top: 0.2rem;">Customize display name, visual motif emoji, and accent branding color</span>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span class="forge-badge" style="background: rgba(99, 102, 241, 0.15); color: var(--text-primary); border: 1px solid var(--border-subtle); font-size: 0.85rem;">
+                        @(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji)) @ws.Name
+                    </span>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.75rem; margin-bottom: 1.5rem;">
+                <!-- Workspace Name -->
+                <div>
+                    <label class="forge-field-label" for="workspace-name-edit">Workspace Name <span style="color: var(--accent-rose);">*</span></label>
+                    <input id="workspace-name-edit" type="text" class="forge-input" style="width: 100%; font-weight: 600;" @bind="ws.Name" @bind:event="oninput" placeholder="e.g. My Workspace" />
+                    @if (string.IsNullOrWhiteSpace(ws.Name))
+                    {
+                        <span class="text-danger" style="font-size: 0.8rem; margin-top: 0.35rem; display: block;">Workspace name is required.</span>
+                    }
+                </div>
+
+                <!-- Custom Emoji & Input -->
+                <div>
+                    <label class="forge-field-label" for="workspace-emoji-input">Visual Emoji Icon</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <span style="font-size: 1.5rem; min-width: 2.2rem; text-align: center;">@(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji))</span>
+                        <input id="workspace-emoji-input" type="text" maxlength="16" class="forge-input font-mono" style="max-width: 120px;" @bind="ws.Emoji" @bind:event="oninput" placeholder="e.g. 🚀" />
+                        <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.82rem;" @onclick="() => ws.Emoji = null" title="Reset to default folder">
+                            Reset
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Color Code Input & Color Picker -->
+                <div>
+                    <label class="forge-field-label" for="workspace-color-input">Color Code Accent</label>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input id="workspace-color-native" type="color" value="@(WorkspacePresentationHelper.IsValidHexColor(ws.ColorCode) ? ws.ColorCode : "#6366f1")" @onchange="OnNativeColorChanged" style="width: 42px; height: 38px; border: none; border-radius: 6px; cursor: pointer; background: transparent;" />
+                        <input id="workspace-color-input" type="text" maxlength="32" class="forge-input font-mono" style="flex: 1;" @bind="ws.ColorCode" @bind:event="oninput" placeholder="#6366f1" />
+                        <button type="button" class="forge-btn forge-btn-secondary" style="padding: 0.4rem 0.75rem; font-size: 0.82rem;" @onclick="() => ws.ColorCode = null" title="Reset to default theme color">
+                            Reset
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Emoji Preset Quick Selection -->
+            <div style="margin-bottom: 1.5rem;">
+                <label class="forge-field-label" style="margin-bottom: 0.5rem; display: block;">Emoji Presets</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                    @foreach (var preset in WorkspacePresentationHelper.EmojiPresets)
+                    {
+                        var isSelected = ws.Emoji == preset.Emoji;
+                        <button type="button"
+                                class="forge-btn @(isSelected ? "forge-btn-primary" : "forge-btn-outline")"
+                                id="emoji-preset-@preset.Emoji"
+                                style="padding: 0.35rem 0.75rem; font-size: 1.1rem; display: inline-flex; align-items: center; gap: 0.35rem;"
+                                title="@preset.Label"
+                                @onclick="() => ws.Emoji = preset.Emoji">
+                            <span>@preset.Emoji</span>
+                            <span style="font-size: 0.75rem; font-weight: normal;">@preset.Label.Split('/')[0].Trim()</span>
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <!-- Color Palette Preset Chips -->
+            <div style="margin-bottom: 1.5rem;">
+                <label class="forge-field-label" style="margin-bottom: 0.5rem; display: block;">Brand Color Palette</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+                    @foreach (var preset in WorkspacePresentationHelper.ColorPresets)
+                    {
+                        var isSelected = string.Equals(ws.ColorCode, preset.HexCode, StringComparison.OrdinalIgnoreCase);
+                        <button type="button"
+                                class="color-preset-chip"
+                                id="color-preset-@(preset.Name.Replace(" ", "-").ToLowerInvariant())"
+                                style="background: @preset.HexCode; width: 36px; height: 36px; border-radius: 50%; border: 3px solid @(isSelected ? "#ffffff" : "transparent"); box-shadow: @(isSelected ? $"0 0 0 2px {preset.HexCode}" : "var(--shadow-sm)"); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.15s ease;"
+                                title="@preset.Name (@preset.HexCode)"
+                                @onclick="() => ws.ColorCode = preset.HexCode">
+                            @if (isSelected)
+                            {
+                                <span style="color: #ffffff; font-size: 0.9rem; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.6);">✓</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+
+            <!-- Live Identity Preview Card -->
+            <div style="padding: 1.25rem; background: var(--bg-input); border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.75rem;">
+                    Live Identity Preview (Top Navigation &amp; Dashboard Card)
+                </div>
+                <div style="display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap;">
+                    <!-- Nav Bar Preview Mock -->
+                    <div id="preview-navbar-mock" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.85rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); border-left: 4px solid @WorkspacePresentationHelper.ResolveColor(ws.ColorCode);">
+                        <span style="font-size: 1.15rem;">@(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji))</span>
+                        <strong style="color: var(--text-primary); font-size: 0.9rem;">@(string.IsNullOrWhiteSpace(ws.Name) ? "Workspace" : ws.Name)</strong>
+                    </div>
+
+                    <!-- Dashboard Preview Mock -->
+                    <div id="preview-dashboard-mock" style="display: inline-flex; align-items: center; gap: 0.6rem; padding: 0.5rem 1rem; background: var(--bg-surface); border-radius: var(--radius-md); border: 1px solid var(--border-subtle); border-left: 4px solid @WorkspacePresentationHelper.ResolveColor(ws.ColorCode);">
+                        <span style="font-size: 1.3rem;">@(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji))</span>
+                        <div>
+                            <div style="font-size: 0.95rem; font-weight: 700; color: var(--text-primary);">@(string.IsNullOrWhiteSpace(ws.Name) ? "Workspace" : ws.Name)</div>
+                            <div style="font-size: 0.75rem; color: var(--text-secondary);">@ws.DefaultBaseBranch</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Core Repository & Confinement Configuration -->
         <div class="forge-subcard" style="padding: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-bottom: 2rem; box-shadow: var(--shadow-sm);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem;">
@@ -304,15 +423,33 @@
         }
     }
 
+    private void OnNativeColorChanged(ChangeEventArgs e)
+    {
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws != null && e.Value is string hex && !string.IsNullOrWhiteSpace(hex))
+        {
+            ws.ColorCode = hex;
+        }
+    }
+
     private async Task SaveWorkspaceAsync()
     {
-        if (WorkspaceState.ActiveWorkspace == null || _isSaving) return;
+        var ws = WorkspaceState.ActiveWorkspace;
+        if (ws == null || _isSaving) return;
+
+        if (string.IsNullOrWhiteSpace(ws.Name))
+        {
+            ToastService.Show("Invalid Name", "Workspace name cannot be empty.", ToastLevel.Warning);
+            return;
+        }
+
         _isSaving = true;
 
         try
         {
-            await WorkspaceRepo.UpdateAsync(WorkspaceState.ActiveWorkspace);
-            ToastService.Show("Workspace Settings Saved", "Repository execution confinement parameters updated.", ToastLevel.Success);
+            await WorkspaceRepo.UpdateAsync(ws);
+            WorkspaceState.NotifyWorkspaceUpdated(ws);
+            ToastService.Show("Workspace branding updated.", "Repository execution confinement parameters updated.", ToastLevel.Success);
         }
         catch (Exception ex)
         {

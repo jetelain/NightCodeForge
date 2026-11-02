@@ -746,6 +746,10 @@ namespace NightCodeForge.Infrastructure.Migrations
                     b.Property<int?>("BuildTimeoutSeconds")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ColorCode")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ContainerImage")
                         .HasMaxLength(512)
                         .HasColumnType("TEXT");
@@ -767,6 +771,10 @@ namespace NightCodeForge.Infrastructure.Migrations
 
                     b.Property<string>("DisabledGlobalSkillsJson")
                         .HasMaxLength(4096)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Emoji")
+                        .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
                     b.Property<int>("ExecutionMode")

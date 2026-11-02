@@ -22,7 +22,11 @@
         </button>
 
         <!-- Workspace Selector -->
-        <div class="workspace-select-wrapper">
+        @{
+            var activeWs = WorkspaceState.ActiveWorkspace;
+            var activeColor = WorkspacePresentationHelper.ResolveColor(activeWs?.ColorCode);
+        }
+        <div class="workspace-select-wrapper" style="border-left: 3px solid @activeColor;">
             <span class="workspace-select-icon">📁</span>
             <select class="workspace-dropdown" 
                     value="@(WorkspaceState.ActiveWorkspaceId?.ToString() ?? "")" 
@@ -36,7 +40,7 @@
                 {
                     @foreach (var ws in _workspaces)
                     {
-                        <option value="@ws.Id">@ws.Name</option>
+                        <option value="@ws.Id">@(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji)) @ws.Name</option>
                     }
                 }
             </select>
@@ -51,7 +55,7 @@
         <!-- Dynamic Breadcrumb Trail -->
         <nav class="forge-breadcrumbs" aria-label="Breadcrumb">
             <span class="breadcrumb-item font-mono">
-                @(WorkspaceState.ActiveWorkspace?.Name ?? "Default")
+                @(activeWs?.Name ?? "Default")
             </span>
             <span class="breadcrumb-separator">/</span>
             <span class="breadcrumb-item active">@_currentSection</span>

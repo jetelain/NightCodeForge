@@ -17,6 +17,8 @@ public class Workspace
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public string? Emoji { get; set; }
+    public string? ColorCode { get; set; }
     public string RepositoryPath { get; set; } = string.Empty;
     public string DefaultBaseBranch { get; set; } = "main";
     public ExecutionMode ExecutionMode { get; set; } = ExecutionMode.ContainerSandbox;

@@ -10,6 +10,18 @@ public class WorkspaceCreationModel
     [StringLength(100, MinimumLength = 2, ErrorMessage = "Name must be between 2 and 100 characters")]
     public string Name { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Visual motif emoji icon representing the workspace (e.g. 🚀, 🛡️, 🎨).
+    /// Defaults to 📦 if left unset.
+    /// </summary>
+    public string? Emoji { get; set; } = "📦";
+
+    /// <summary>
+    /// Hex color code accent representing the workspace branding.
+    /// Defaults to #6366f1 if left unset.
+    /// </summary>
+    public string? ColorCode { get; set; } = "#6366f1";
+
     [Required(ErrorMessage = "Repository directory path is required")]
     public string RepositoryPath { get; set; } = string.Empty;
 

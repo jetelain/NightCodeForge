@@ -122,11 +122,14 @@
                 @foreach (var item in _snapshot.RecentWorkspaces)
                 {
                     var ws = item.Workspace;
-                    <div class="forge-card workspace-summary-card" id="home-workspace-card-@ws.Id" style="display: flex; flex-direction: column; justify-content: space-between; gap: 1rem;">
+                    var wsEmoji = WorkspacePresentationHelper.ResolveEmoji(ws.Emoji);
+                    var wsColor = WorkspacePresentationHelper.ResolveColor(ws.ColorCode);
+                    <div class="forge-card workspace-summary-card" id="home-workspace-card-@ws.Id" style="display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; border-left: 4px solid @wsColor;">
                         <div>
                             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                <div style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary);">
-                                    @ws.Name
+                                <div style="font-size: 1.15rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.4rem;">
+                                    <span style="font-size: 1.25rem;">@wsEmoji</span>
+                                    <span>@ws.Name</span>
                                 </div>
                                 <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
                                     @if (item.RunningTaskCount > 0)

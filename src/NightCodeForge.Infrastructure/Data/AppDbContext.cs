@@ -55,6 +55,8 @@ public class AppDbContext : DbContext
             b.Property(w => w.GlobalSkillsInjectionMode)
                 .HasConversion<int>()
                 .HasDefaultValue(GlobalSkillsInjectionMode.Inherit);
+            b.Property(w => w.Emoji).HasMaxLength(16);
+            b.Property(w => w.ColorCode).HasMaxLength(32);
             b.Property(w => w.DisabledGlobalSkillsJson)
                 .HasMaxLength(4096);
 
@@ -426,6 +428,11 @@ public class AppDbContext : DbContext
     public const string AddWorkspaceGlobalSkillsSettingsMigrationId = "20261030103014_AddWorkspaceGlobalSkillsSettings";
 
     /// <summary>
+    /// Migration identifier for workspace emoji and color code.
+    /// </summary>
+    public const string AddWorkspaceEmojiAndColorCodeMigrationId = "20261102181531_AddWorkspaceEmojiAndColorCode";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -552,6 +559,17 @@ VALUES ('" + AddIsDeferredByPauseToForgeTaskMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddWorkspaceGlobalSkillsSettingsMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Workspaces') WHERE name = 'ColorCode';";
+                var hasColorCodeColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasColorCodeColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddWorkspaceEmojiAndColorCodeMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }
