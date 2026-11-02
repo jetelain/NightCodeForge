@@ -988,7 +988,7 @@ priority: 1
     }
 
     [Fact]
-    public async Task TaskReview_UnmodifiedSpecification_ThrowsWorkflowExecutionException()
+    public async Task TaskReview_UnmodifiedSpecification_TransitionsToFailedWithoutUnhandledException()
     {
         var task = new ForgeTask
         {
@@ -1033,9 +1033,12 @@ priority: 1
             MarkdownSyncService = sync
         }.Build();
 
-        // Stage completed without agent editing the markdown file on disk -> must throw WorkflowExecutionException
-        await Assert.ThrowsAsync<WorkflowExecutionException>(() =>
-            orchestrator.ProcessTaskAsync(task.Id));
+        // Stage completed without agent editing the markdown file on disk -> fails task gracefully after retries
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var updatedTask = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
     }
 
     [Fact]

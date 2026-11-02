@@ -189,7 +189,7 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
                 PermittedTools = DefaultAgentTools.Review,
                 OptimizationFlags = null,
                 ThinkingEffort = archEffort,
-                MaxTurns = 300
+                MaxTurns = 500
             }
         };
     }

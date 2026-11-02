@@ -2170,7 +2170,7 @@ Build FAILED.
             return ToAsyncEnumerable("Reviewed task specification, looks complete as-is.");
         };
 
-        await Assert.ThrowsAsync<WorkflowExecutionException>(() => orchestrator.ProcessTaskAsync(task.Id));
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
@@ -2241,7 +2241,7 @@ Build FAILED.
             return ToAsyncEnumerable("Hi! How can I help you today?");
         };
 
-        await Assert.ThrowsAsync<WorkflowExecutionException>(() => orchestrator.ProcessTaskAsync(task.Id));
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);
@@ -2380,7 +2380,7 @@ Build FAILED.
             return ToAsyncEnumerable("Proceeding without editing file.");
         };
 
-        await Assert.ThrowsAsync<WorkflowExecutionException>(() => orchestrator.ProcessTaskAsync(task.Id));
+        await orchestrator.ProcessTaskAsync(task.Id);
 
         var failedTask = await dbContext.Tasks.AsNoTracking().FirstOrDefaultAsync(t => t.Id == task.Id);
         Assert.NotNull(failedTask);

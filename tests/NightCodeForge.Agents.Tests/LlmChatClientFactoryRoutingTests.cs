@@ -63,6 +63,7 @@ public class LlmChatClientFactoryRoutingTests
 
         Assert.Equal("Local", request.Headers.GetValues(OllamaRoutingHeaders.Target).Single());
         Assert.Equal("ncf-task1-stage", request.Headers.GetValues(OllamaRoutingHeaders.SessionId).Single());
+        Assert.Equal(OllamaRoutingHeaders.DefaultAgentIdValue, request.Headers.GetValues(OllamaRoutingHeaders.AgentId).Single());
     }
 
     [Fact]
@@ -72,6 +73,7 @@ public class LlmChatClientFactoryRoutingTests
 
         Assert.False(request.Headers.Contains(OllamaRoutingHeaders.Target));
         Assert.False(request.Headers.Contains(OllamaRoutingHeaders.SessionId));
+        Assert.False(request.Headers.Contains(OllamaRoutingHeaders.AgentId));
     }
 
     [Fact]

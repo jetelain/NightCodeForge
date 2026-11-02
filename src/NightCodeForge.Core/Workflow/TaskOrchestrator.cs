@@ -522,6 +522,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             bool wasResumedStageRun = isResumedRun;
             bool modifiedDuringPreResumeSync = false;
             StageExecutionResult? result = null;
+            StageExecutionRecord? record = null;
             var startedAt = DateTime.UtcNow;
             int durationMs = 0;
         if (stage.Kind == WorkflowStageKind.Deterministic)
@@ -935,6 +936,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswer);
                             pipelineContext.DataBag.Remove(PipelineDataBagKeys.LastHumanAnswerJson);
                             activeInterruptedStageId = null;
+                            task.InterruptedStageId = null;
                         }
 
                         if (!string.IsNullOrEmpty(runResult.UpdatedState))
@@ -1104,7 +1106,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         durationMs = (int)(completedAt - startedAt).TotalMilliseconds;
 
         // Save execution metrics record
-        var record = result.ExecutionRecord ?? new StageExecutionRecord();
+        record = result.ExecutionRecord ?? new StageExecutionRecord();
         record.TaskId = task.Id;
         record.StageId = stage.StageId;
         record.StageKind = stage.Kind.ToString();
@@ -1530,9 +1532,136 @@ public class TaskOrchestrator : ITaskOrchestrator
                     }
                 }
 
-                if (!modifiedInThisStage && !alreadyModifiedByEarlierRun)
+                var remediationRetryKey = $"{stage.StageId}:missing-doc";
+                if (modifiedInThisStage || alreadyModifiedByEarlierRun)
                 {
-                    throw new WorkflowExecutionException($"Stage '{stage.StageId}' completed without producing a modified task specification document.");
+                    pipelineContext.ResetStageRetry(remediationRetryKey);
+                }
+                else
+                {
+                    var remediationMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? (stage.MaxRetries > 0 ? stage.MaxRetries : WorkflowDefaults.DefaultMaxStageRetries);
+                    var remediationAttempt = pipelineContext.IncrementRetry(remediationRetryKey);
+
+                    var stageConvs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken);
+                    var latestConv = stageConvs?
+                        .Where(c => string.Equals(c.StageId, stage.StageId, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(c => c.AttemptIndex)
+                        .ThenByDescending(c => c.StartedAt)
+                        .ThenByDescending(c => c.Id)
+                        .FirstOrDefault();
+
+                    if (remediationAttempt <= remediationMaxRetries)
+                    {
+                        const string remediationPrompt =
+"""
+[System Notice: Mandatory Task Specification Document Update Required]
+Your investigation turn concluded without modifying the task specification document on disk in docs/tasks/.
+
+As a Staff Software Architect, you are required to produce an updated task specification before this stage can complete.
+1. EDIT THE SPECIFICATION: Use the 'edit' or 'write' tool to update the specification document with your approved technical architecture, affected files and classes, implementation plan, and testable acceptance criteria.
+2. PRESERVE FRONTMATTER: Keep the top YAML frontmatter block intact (do not modify id or status fields).
+3. CLARIFICATION QUESTIONS: If you have blocking questions or product ambiguities for the maintainer, you MUST invoke the 'ask' tool with your structured questions. Plain text questions in conversational chat are not received by the maintainer and cannot be answered.
+
+Please update the task specification document on disk or invoke 'ask' now to proceed.
+""";
+
+                        if (latestConv != null)
+                        {
+                            await _taskRepository.AddConversationTurnAsync(
+                                latestConv.Id,
+                                StageTurnRole.User,
+                                content: remediationPrompt,
+                                cancellationToken: cancellationToken);
+
+                            await _taskRepository.CompleteConversationAsync(
+                                latestConv.Id,
+                                StageExecutionStatus.Interrupted,
+                                summary: $"Awaiting task specification document update (attempt {remediationAttempt}/{remediationMaxRetries}).",
+                                cancellationToken: cancellationToken);
+
+                            var convWithTurns = await _taskRepository.GetConversationWithTurnsAsync(latestConv.Id, cancellationToken);
+                            if (convWithTurns?.Turns != null)
+                            {
+                                pipelineContext.DataBag.Set(
+                                    PipelineDataBagKeys.RecoveredSerializedMemory,
+                                    ConversationHistorySerializer.Serialize(convWithTurns.Turns));
+                            }
+                        }
+                        else
+                        {
+                            pipelineContext.DataBag.Set(
+                                PipelineDataBagKeys.RecoveredSerializedMemory,
+                                ConversationHistorySerializer.Serialize(new[]
+                                {
+                                    new ConversationTurn
+                                    {
+                                        TurnIndex = 1,
+                                        Role = StageTurnRole.User,
+                                        Content = remediationPrompt
+                                    }
+                                }));
+                        }
+
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.ApprovedPlan);
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.StageSummary(stage.StageId));
+
+                        isResumedRun = true;
+                        activeInterruptedStageId = stage.StageId;
+                        task.InterruptedStageId = stage.StageId;
+
+                        pipelineContext.SyncDataBagToTask();
+                        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+
+                        try
+                        {
+                            await _streamer.BroadcastAsync(new Streaming.AgentActivityEvent(
+                                Guid.NewGuid().ToString("N"),
+                                task.Id,
+                                stage.StageId,
+                                Streaming.AgentActivityKind.Notice,
+                                $"Stage '{stage.StageId}' prompted agent to update task specification document (attempt {remediationAttempt}/{remediationMaxRetries}).",
+                                DateTime.UtcNow,
+                                new Dictionary<string, object?>
+                                {
+                                    [Streaming.AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
+                                    [Streaming.AgentActivityMetadataKeys.Attempt] = remediationAttempt,
+                                    [Streaming.AgentActivityMetadataKeys.MaxRetries] = remediationMaxRetries
+                                }), cancellationToken);
+                        }
+                        catch (Exception sex)
+                        {
+                            _logger.LogDebug(sex, "Failed broadcasting stage notice event for task #{TaskId}", task.Id);
+                        }
+
+                        continue;
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Task #{TaskId} stage '{StageId}' exhausted document remediation budget ({MaxRetries}) without modifying the specification document.",
+                            task.Id,
+                            stage.StageId,
+                            remediationMaxRetries);
+
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.ApprovedPlan);
+                        pipelineContext.DataBag.Remove(PipelineDataBagKeys.StageSummary(stage.StageId));
+
+                        var failureMessage = $"Stage '{stage.StageId}' completed without producing a modified task specification document after {remediationMaxRetries} conversational remediation attempts.";
+
+                        if (latestConv != null)
+                        {
+                            await _taskRepository.CompleteConversationAsync(
+                                latestConv.Id,
+                                StageExecutionStatus.Failed,
+                                summary: failureMessage,
+                                cancellationToken: cancellationToken);
+                        }
+
+                        var failureResult = StageExecutionResult.Failure(failureMessage, record: record);
+                        await HandleStageFatalFailureAsync(task, workspace, pipelineContext, stage, failureResult, cancellationToken, remediationRetryKey);
+                        cohortExitReason = CohortExitReason.Failed;
+                        return;
+                    }
                 }
             }
         }
@@ -2177,7 +2306,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         // Loopback / Retry Routing (e.g. deterministic build, test, or lint quality gate failed and routed back to implementation)
         var targetLoopBackId = result.TargetRoutingStageId ?? stage.LoopBackStageId;
         var retries = pipelineContext.IncrementRetry(stage.StageId);
-        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? (stage.MaxRetries > 0 ? stage.MaxRetries : WorkflowDefaults.DefaultMaxStageRetries);
 
         if (!string.IsNullOrWhiteSpace(targetLoopBackId) && retries <= effectiveMaxRetries)
         {
@@ -3273,7 +3402,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         CancellationToken cancellationToken,
         string? retryKey = null)
     {
-        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? WorkflowDefaults.DefaultMaxStageRetries;
+        var effectiveMaxRetries = pipelineContext.DataBag.Get<int?>(PipelineDataBagKeys.MaxRetries) ?? (stage.MaxRetries > 0 ? stage.MaxRetries : WorkflowDefaults.DefaultMaxStageRetries);
         task.Status = TaskOverallStatus.Failed;
         pipelineContext.SyncDataBagToTask();
 

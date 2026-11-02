@@ -7,6 +7,8 @@ public static class OllamaRoutingHeaders
 {
     public const string Target = "X-OllamaRouter-Target";
     public const string SessionId = "X-OllamaRouter-Session-Id";
+    public const string AgentId = "X-OllamaRouter-Agent-Id";
+    public const string DefaultAgentIdValue = LlmSessionIds.Prefix;
 
     /// <summary>Attaches the target pin (unless Auto) and the session id (when provided) as default headers.</summary>
     public static void Apply(HttpClient httpClient, OllamaRoutingTarget routingTarget, string? sessionId)
@@ -20,6 +22,7 @@ public static class OllamaRoutingHeaders
 
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
+            httpClient.DefaultRequestHeaders.Add(AgentId, DefaultAgentIdValue);
             httpClient.DefaultRequestHeaders.Add(SessionId, sessionId);
         }
     }

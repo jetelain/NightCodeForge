@@ -15,6 +15,7 @@ public interface IWorkflowStage
     AgentMode RequiredMode => AgentMode.Full;
     string? PromptTemplate => null;
     string? LoopBackStageId => null;
+    int MaxRetries => WorkflowDefaults.DefaultMaxStageRetries;
     string BuildBootstrapPrompt(ForgeTask task, PipelineContext context, string? stageDirective = null) =>
         DefaultBootstrapPromptBuilder.Build(this, task, context, stageDirective);
     Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default);

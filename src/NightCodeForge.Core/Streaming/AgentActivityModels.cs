@@ -54,4 +54,6 @@ public static class AgentActivityMetadataKeys
     public const string TokensSaved = "TokensSaved";
     public const string TokensOrBytesSaved = "TokensOrBytesSaved";
     public const string BranchName = "BranchName";
+    public const string Attempt = "Attempt";
+    public const string MaxRetries = "MaxRetries";
 }
