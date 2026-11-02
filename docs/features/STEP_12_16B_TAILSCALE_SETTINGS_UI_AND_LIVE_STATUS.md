@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 2 of 2 — `/settings` UI Card, Hot-Apply & SVG QR Code)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.16A: Tailscale Serve Hosted Service & Forwarded Headers](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
+> *Prerequisite Step:* [Step 12.16A: Tailscale Serve Hosted Service & Forwarded Headers](../archive/phase-12/STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
@@ -12,7 +12,7 @@
 
 ## 1. Executive Objective
 
-With `TailscaleServeHostedService` in place ([Step 12.16A](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)), this step (Part 2 of Step 12.16) provides a first-class **Remote & Tailscale** settings tab (`TailscaleSettingsCard.razor`) under `/settings` so developers can enable, reconfigure, and onboard mobile devices without touching terminal commands or configuration files:
+With `TailscaleServeHostedService` in place ([Step 12.16A](../archive/phase-12/STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)), this step (Part 2 of Step 12.16) provides a first-class **Remote & Tailscale** settings tab (`TailscaleSettingsCard.razor`) under `/settings` so developers can enable, reconfigure, and onboard mobile devices without touching terminal commands or configuration files:
 1. **Interactive Hot-Apply Controls:** Toggle `AutoServe`, switch between **Dedicated Tailscale Service (`svc:ncf`)** and **Device Node Mode**, configure `ServiceName` and `ListenPort`, persist to `config/config.json` / `SystemSettings`, and hot-apply changes immediately via `ITailscaleServeService`.
 2. **Live Status & Diagnostics Card:** Display real-time daemon status (`🟢 Active`, `🟡 Draining / Applying`, `⚪ Inactive`, `🔴 Tailscale Daemon Offline / Unauthenticated`), Tailscale CLI version, tailnet domain, WireGuard IP, and read-only auto-detected loopback target (`127.0.0.1:5270`).
 3. **One-Click MagicDNS URL & Dynamic Inline SVG QR Code:** Render the resolved HTTPS MagicDNS URL (`https://ncf.<tailnet-name>.ts.net`) with a "Copy Link" button and an inline SVG QR code so developers can scan with their phone camera to immediately open and install the mobile PWA.

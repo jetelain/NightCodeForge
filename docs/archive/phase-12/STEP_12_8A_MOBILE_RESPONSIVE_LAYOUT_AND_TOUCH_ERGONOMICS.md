@@ -1,11 +1,11 @@
 # 📱 Step 12.8A: Mobile-Responsive Layout, Navigation Drawer & Touch Ergonomics
 
 > **Feature Implementation Step (Part 1 of 3 — Responsive CSS, Off-Canvas Drawer & Mobile Page Layouts)** *(formerly Step 11.6)*  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Companion Steps:* [Step 12.8B: Installable PWA Manifest & Service Worker Shell](STEP_12_8B_PROGRESSIVE_WEB_APP_MANIFEST_AND_SERVICE_WORKER.md) | [Step 12.8C: Web Worker Notifications & Subject Preferences](STEP_12_8C_WEB_WORKER_NOTIFICATIONS_AND_SUBJECT_PREFERENCES.md)  
-> *Related Steps:* [Step 12.4: Ideation Quick Notes](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md) | [Step 12.12: Voice Support](STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Companion Steps:* [Step 12.8B: Installable PWA Manifest & Service Worker Shell](../../features/STEP_12_8B_PROGRESSIVE_WEB_APP_MANIFEST_AND_SERVICE_WORKER.md) | [Step 12.8C: Web Worker Notifications & Subject Preferences](../../features/STEP_12_8C_WEB_WORKER_NOTIFICATIONS_AND_SUBJECT_PREFERENCES.md)  
+> *Related Steps:* [Step 12.4: Ideation Quick Notes](../../features/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md) | [Step 12.12: Voice Support](../../features/STEP_12_12_VOICE_SUPPORT_AND_CONTINUOUS_DICTATION.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

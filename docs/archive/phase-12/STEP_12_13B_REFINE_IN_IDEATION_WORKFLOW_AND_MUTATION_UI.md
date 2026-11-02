@@ -1,11 +1,11 @@
 # 📋 Step 12.13B: "Refine in Ideation" Workflow & Mutation Tool Cards (Web UI)
 
 > **Feature Implementation Step (Part 2 of 2 — Web UI Navigation, Session Seeding & Tool Cards)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Prerequisite Step:* [Step 12.13A: Ideation Backlog Mutation Tools & Prompt Policy](STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md)  
-> *Related Steps:* [Step 12.4: Ideation Quick Notes & Suggestions](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)  
+> *Related Steps:* [Step 12.4: Ideation Quick Notes & Suggestions](../../features/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)  
 > *Target Components:* `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Ideation`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

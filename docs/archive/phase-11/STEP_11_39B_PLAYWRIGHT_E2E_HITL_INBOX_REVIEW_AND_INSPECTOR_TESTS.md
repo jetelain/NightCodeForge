@@ -1,10 +1,10 @@
 # 🎭 Step 11.39B: Baseline Playwright E2E Tests for HITL Question Inbox, Review Room, Inspector & Settings
 
 > **Fix & Resiliency Specification (Part 2 of 2 — Human-in-the-Loop & Observability Browser E2E Suite)**  
-> *Parent Plan:* [Fixes & Resiliency Roadmap](README.md)  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Prerequisite Step:* [Step 11.39A: Reusable LLM-Free Playwright E2E Host Fixture & Core Backlog Baseline Tests](STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)  
 > *Target Components:* `tests/NightCodeForge.Web.Tests/E2E` | *Status:* **Completed** | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

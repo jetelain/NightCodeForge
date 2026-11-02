@@ -2,7 +2,7 @@
 
 > **Phase 12 Implementation Step (Extend Features - Deep Integrations & Remote Experience)** *(formerly Step 11.11)*  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Related Steps:* [Step 12.4: Ideation Quick Notes](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md) | [Step 12.8: Mobile-Responsive UI & PWA](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md) | [Step 12.16: Remote Tailscale Access](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
+> *Related Steps:* [Step 12.4: Ideation Quick Notes](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md) | [Step 12.8: Mobile-Responsive UI & PWA](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md) | [Step 12.16: Remote Tailscale Access](../archive/phase-12/STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
@@ -24,14 +24,14 @@ Enable a fluid, hands-free voice interaction experience on mobile devices and de
 3. **Ergonomic Visual Feedback:**
    - Provide a pulsing audio ring and waveform indicator component ([VoiceInputButton.razor](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Common/VoiceInputButton.razor)) displaying live interim text badges as the developer speaks.
 
-*(Note: Progressive Web App installation for persistent microphone permissions is specified in [Step 12.8: Mobile-Responsive UI & PWA](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md). Secure HTTPS exposition required for browser microphone access is specified in [Step 12.16: Remote Tailscale Access](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md).)*
+*(Note: Progressive Web App installation for persistent microphone permissions is specified in [Step 12.8: Mobile-Responsive UI & PWA](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md). Secure HTTPS exposition required for browser microphone access is specified in [Step 12.16: Remote Tailscale Access](../archive/phase-12/STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md).)*
 
 ---
 
 ## 2. Problem Statement & Motivation
 
 ### 2.1 The Friction of Mobile Keyboard Input
-- Software developers often formulate ideas, review running tasks, or respond to agent questions while commuting, walking, or away from their workstation desk ([Step 12.8](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)).
+- Software developers often formulate ideas, review running tasks, or respond to agent questions while commuting, walking, or away from their workstation desk ([Step 12.8](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)).
 - Typing long technical requirements or explanatory answers on a smartphone soft keyboard is error-prone, slow, and frustrating.
 - Natural speech dictation is 3–4x faster than thumb typing and matches the conversational paradigm of the Ideation agent and human clarification triage.
 

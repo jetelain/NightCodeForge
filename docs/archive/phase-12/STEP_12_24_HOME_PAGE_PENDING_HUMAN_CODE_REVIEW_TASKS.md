@@ -1,6 +1,9 @@
-# Step 12.24 — Home Page Pending Human Code Review Tasks
+# 🔍 Step 12.24: Home Page Pending Human Code Review Tasks
 
-**Status:** ✅ Completed (Feature / Developer Ergonomics & Review Room Visibility)
+> **Feature Implementation Step (Developer Ergonomics & Review Room Visibility)**  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Target Components:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 ---
 

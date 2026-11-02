@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 2 of 2 — Orchestrator Suspension & Web UI Layer)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.1A: Backlog Context Digest & In-Tool Cycle Rejection](STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md)  
+> *Prerequisite Step:* [Step 12.1A: Backlog Context Digest & In-Tool Cycle Rejection](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md)  
 > *Target Components:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Infrastructure/Git`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Services` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
@@ -10,7 +10,7 @@
 
 ## 1. Executive Objective
 
-When a task begins execution at Stage 1 (Task Review), the scheduler dispatched it because it had zero unsatisfied prerequisites at that moment. However, with [Step 12.1A](STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md), the Stage 1 Task Review agent can discover and declare a dependency on another unmerged task in the backlog.
+When a task begins execution at Stage 1 (Task Review), the scheduler dispatched it because it had zero unsatisfied prerequisites at that moment. However, with [Step 12.1A](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md), the Stage 1 Task Review agent can discover and declare a dependency on another unmerged task in the backlog.
 
 This step (Part 2 of Step 12.1) implements:
 1. **Dynamic Task Suspension, Resource Cleanup & Clean Workflow Reset:**

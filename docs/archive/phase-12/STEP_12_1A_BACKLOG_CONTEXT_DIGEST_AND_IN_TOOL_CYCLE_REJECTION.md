@@ -1,10 +1,10 @@
 # 🔗 Step 12.1A: Backlog Context Digest, Agent Dependency Directives & In-Tool Cycle Rejection
 
 > **Feature Implementation Step (Part 1 of 2 — Backlog Context & Agent Validation Layer)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Companion Step:* [Step 12.1B: Orchestrator Prerequisite Suspension & Blocker UI Badges](STEP_12_1B_ORCHESTRATOR_PREREQUISITE_SUSPENSION_AND_BLOCKER_UI.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Companion Step:* [Step 12.1B: Orchestrator Prerequisite Suspension & Blocker UI Badges](../../features/STEP_12_1B_ORCHESTRATOR_PREREQUISITE_SUSPENSION_AND_BLOCKER_UI.md)  
 > *Target Components:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Crucible`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Services`, `src/NightCodeForge.Web/Services` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 ---
 

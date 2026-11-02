@@ -2,9 +2,9 @@
 
 > **Feature Implementation Step (Part 2 of 3 — PWA Packaging, Service Worker & CSP Alignment)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.8A: Mobile-Responsive Layout & Touch Ergonomics](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)  
+> *Prerequisite Step:* [Step 12.8A: Mobile-Responsive Layout & Touch Ergonomics](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)  
 > *Companion Step:* [Step 12.8C: Web Worker Notifications & Subject Preferences](STEP_12_8C_WEB_WORKER_NOTIFICATIONS_AND_SUBJECT_PREFERENCES.md)  
-> *Related Steps:* [Step 12.16A: Tailscale Serve & HTTPS](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
+> *Related Steps:* [Step 12.16A: Tailscale Serve & HTTPS](../archive/phase-12/STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 

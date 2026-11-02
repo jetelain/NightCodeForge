@@ -1,11 +1,11 @@
 # 📋 Step 12.13A: Ideation Backlog Mutation Tools & Zero-Surprise Prompt Policy (Backend & Agents)
 
 > **Feature Implementation Step (Part 1 of 2 — Agent Tools, Domain Guards & Prompt Engineering)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Companion Step:* [Step 12.13B: "Refine in Ideation" Workflow & Mutation Tool Cards (Web UI)](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md)  
-> *Related Steps:* [Step 11.7: Task State History & Audit Trail](../archive/phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md) | [Step 12.1A: Backlog Context Digest & Cycle Rejection](STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md) | [Step 12.4: Ideation Quick Notes & Suggestions](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)  
+> *Related Steps:* [Step 11.7: Task State History & Audit Trail](../phase-11/STEP_11_7_TASK_STATE_HISTORY_AND_AUDIT_TRAIL.md) | [Step 12.1A: Backlog Context Digest & Cycle Rejection](STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md) | [Step 12.4: Ideation Quick Notes & Suggestions](../../features/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md)  
 > *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Tools`, `skills/ncf-backlog`, `tests/NightCodeForge.Agents.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

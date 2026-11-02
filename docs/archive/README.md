@@ -26,7 +26,7 @@
 ## 2. Completed Bug Fixes, Onboarding & Hardening (Phase 11 Archive)
 
 - **Master Archive Summary:** [11_EXTEND_FEATURES.md](11_EXTEND_FEATURES.md)
-- **Step Specifications Directory:** [`phase-11/`](phase-11/) (25 completed steps: `11.2`, `11.7`, `11.12`, `11.13`, `11.15`, `11.17`, `11.18`, `11.20`, `11.21`, `11.22`, `11.23`, `11.24`, `11.25`, `11.26`, `11.27`, `11.28`, `11.29`, `11.30`, `11.31`, `11.32`, `11.33`, `11.34`, `11.35`, `11.36`, `11.38A`)
+- **Step Specifications Directory:** [`phase-11/`](phase-11/) (27 completed steps: `11.2`, `11.7`, `11.12`, `11.13`, `11.15`, `11.17`, `11.18`, `11.20`, `11.21`, `11.22`, `11.23`, `11.24`, `11.25`, `11.26`, `11.27`, `11.28`, `11.29`, `11.30`, `11.31`, `11.32`, `11.33`, `11.34`, `11.35`, `11.36`, `11.38A`, `11.39A`, `11.39B`)
 - **Remaining Fixes:** Tracked in [`docs/fixes/README.md`](../fixes/README.md)
 
 ---
@@ -34,6 +34,6 @@
 ## 3. Completed Post-MVP Features (Phase 12 Archive)
 
 - **Master Archive Summary:** [12_EXTEND_FEATURES.md](12_EXTEND_FEATURES.md)
-- **Step Specifications Directory:** [`phase-12/`](phase-12/) (4 completed steps: `12.3`, `12.14`, `12.17`, `12.19`)
+- **Step Specifications Directory:** [`phase-12/`](phase-12/) (10 completed steps: `12.1A`, `12.3`, `12.8A`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.17`, `12.19`, `12.24`)
 - **Remaining Features:** Tracked in [`docs/features/README.md`](../features/README.md)
 

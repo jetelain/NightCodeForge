@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 3 of 3 — Service Worker Notifications & Settings UI)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Steps:* [Step 12.8A: Mobile-Responsive Layout](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md) | [Step 12.8B: PWA Manifest & Service Worker Shell](STEP_12_8B_PROGRESSIVE_WEB_APP_MANIFEST_AND_SERVICE_WORKER.md)  
+> *Prerequisite Steps:* [Step 12.8A: Mobile-Responsive Layout](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md) | [Step 12.8B: PWA Manifest & Service Worker Shell](STEP_12_8B_PROGRESSIVE_WEB_APP_MANIFEST_AND_SERVICE_WORKER.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 

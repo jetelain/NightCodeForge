@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Backlog Management & Ideation Lifecycle)** *(formerly Step 11.5)*  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Companion Steps:* [Step 12.13A: Ideation Backlog Mutation Tools & Prompt Policy](STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md) | [Step 12.13B: "Refine in Ideation" Workflow & Mutation UI](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md)  
+> *Companion Steps:* [Step 12.13A: Ideation Backlog Mutation Tools & Prompt Policy](../archive/phase-12/STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md) | [Step 12.13B: "Refine in Ideation" Workflow & Mutation UI](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md)  
 > *Project Target:* `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Infrastructure/Services`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Pages` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
@@ -22,7 +22,7 @@ Transform the Ideation proposal and quick-capture experience with a clean three-
 3. **Immediate Database Drafts:** Write proposed tasks to SQLite immediately as [`TaskOverallStatus.Draft`](../../src/NightCodeForge.Core/Domain/Enums.cs) so subsequent tasks in the same conversation have concrete integer IDs (`depends_on: [104]`).
 4. **Automated TTL Pruning for Abandoned Drafts:** Purge unapproved, unpromoted `Draft` tasks older than 24 hours via a background Hangfire recurring job (`IdeationDraftPruningService`), while `Suggested` tasks are preserved indefinitely.
 
-*(Scoped agent mutation tools `get_task`/`edit_task`/`set_task_priority`/`remove_task` are specified in [Step 12.13A](STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md), and the "Refine in Ideation" `/ideation?taskId={id}` workflow is specified in [Step 12.13B](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md).)*
+*(Scoped agent mutation tools `get_task`/`edit_task`/`set_task_priority`/`remove_task` are specified in [Step 12.13A](../archive/phase-12/STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md), and the "Refine in Ideation" `/ideation?taskId={id}` workflow is specified in [Step 12.13B](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md).)*
 
 ---
 
@@ -95,7 +95,7 @@ flowchart TD
    - **Active Ideation Chat:** The interactive conversation with agent and proposal cards.
    - **Ideation Backlog (Suggestions):** List of all tasks with `Status == TaskOverallStatus.Suggested`. Each card displays title, preview, creation timestamp, and actions:
      - 🚀 **Approve & Queue:** Promotes to `Open`, entering the active dev queue.
-     - 💡 **Refine in Ideation:** Links to `/ideation?taskId={id}` ([Step 12.13B](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md)).
+     - 💡 **Refine in Ideation:** Links to `/ideation?taskId={id}` ([Step 12.13B](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md)).
      - 🗑️ **Delete:** Removes the suggestion.
 
 ### 4.2 Three-Way Action on Proposal Cards

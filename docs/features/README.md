@@ -16,27 +16,11 @@ Once a feature step is implemented and verified, its specification document is m
 
 ## 2. Remaining Feature Steps
 
-### 🎯 Priority Tier 1: Current MVP Focus (Ideation Backlog Management & Mobile/Tailscale Status)
+### 🎯 Priority Tier 1: MVP Focus (Ideation Backlog Management & Mobile/Tailscale Status) — Completed ✅
 
-This MVP track focuses on two immediate developer objectives, backed by fast, LLM-free Playwright browser E2E tests ([Step 11.39A](../fixes/STEP_11_39A_PLAYWRIGHT_E2E_HOST_FIXTURE_AND_BACKLOG_BASELINE_TESTS.md)):
-1. **Manage Backlog via Ideation Chat:** Inspect, edit, reprioritize, and remove unstarted tasks directly through the Ideation Agent with full awareness of existing backlog items and dependencies.
-2. **Check Status on Phone or Tablet over Tailscale:** Expose NightCodeForge securely over Tailscale (`tailscale serve` + forwarded headers), display all pending human actions (questions + code reviews + running tasks + live telemetry) on the Home dashboard, and render cleanly on phone and tablet viewports.
-
-#### Track 1A — Manage Backlog with Ideation Chat (MVP) ✅
-
-| Step | Specification | Focus & Key Deliverables | Status |
-| :--- | :--- | :--- | :--- |
-| **12.1A** | [🔗 Step 12.1A: Backlog Context Digest, Agent Dependency Directives & In-Tool Cycle Rejection](STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md) | `IWorkspaceBacklogSummaryService` (`<existing_workspace_tasks>` top 20 active tasks in Layer 3 so Ideation immediately knows `#ID`, title, status, priority, and dependencies), numeric `#ID` resolution in `IdeationProposalViewModel`, and immediate in-tool cycle rejection via `ITaskMarkdownValidator` in `CanonicalTools`. | ✅ Done |
-| **12.13A** | [📋 Step 12.13A: Ideation Backlog Mutation Tools & Zero-Surprise Prompt Policy](STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md) | `TaskCannotBeModifiedException`, `IBacklogMutationToolService` (`get_task`, `edit_task`, `set_task_priority`, `rework_priorities`, `remove_task`) in `CanonicalTools` with DAG cycle validation, `AuditActors.IdeationAgent` audit logs, markdown disk sync, upfront functional ambiguity resolution prompt policy, and `skills/ncf-backlog/SKILL.md` alignment. | ✅ Done |
-| **12.13B** | [📋 Step 12.13B: "Refine in Ideation" Workflow & Mutation Tool Cards (Web UI)](STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md) | Unified **"💡 Refine in Ideation"** button on `TaskDetail.razor` and `TaskDetailDrawer.razor` routing to `/w/{wsId}/ideation?taskId={id}` with pre-seeded refinement conversation, compact mutation tool call cards in `Ideation.razor`, and LLM-free Playwright E2E tests. | ✅ Done |
-
-#### Track 1B — Check Status on Phone / Tablet & Basic Tailscale Connectivity (MVP)
-
-| Step | Specification | Focus & Key Deliverables | Status |
-| :--- | :--- | :--- | :--- |
-| **12.24** | [🔍 Step 12.24: Home Page Pending Human Code Review Tasks](STEP_12_24_HOME_PAGE_PENDING_HUMAN_CODE_REVIEW_TASKS.md) | `HomePendingReviewItem` aggregation in `HomeDashboardBuilder`, top Command Center **Review Room** button & badge (`#home-review-btn`), independent clickable `🔍 Review: N` badges on workspace summary cards, dedicated **Tasks Awaiting Human Code Review** section (`#home-pending-reviews-section`) with 1-click `🔍 Review & Merge` deep-links, and LLM-free Playwright E2E tests. | ✅ Done |
-| **12.16A** | [🔒 Step 12.16A: Basic Tailscale Connectivity (`TailscaleServeHostedService` & Forwarded Headers MVP)](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md) | `ForwardedHeadersOptions` (`X-Forwarded-For`, `X-Forwarded-Proto`) in `Program.cs` for reverse-proxy compatibility, `TailscaleServeHostedService` (`tailscale serve` device or `svc:ncf` mode, dynamic Kestrel port detection, `--tailscale` CLI / `config.json` activation, graceful shutdown reset), and Playwright reverse-proxy header E2E verification. | ✅ Done |
-| **12.8A** | [📱 Step 12.8A: Mobile-Responsive Layout, Navigation Drawer & Touch Ergonomics](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md) | Off-canvas hamburger navigation drawer (`< 768px`), compact tablet sidebar (`768px–1024px`), `100dvh` & safe-area insets, $\ge 44\times 44\text{px}$ touch targets, mobile pane switcher in `Ideation.razor`, `/inbox?taskId=` deep-linking, mobile bottom-sheet `TaskDetailDrawer.razor`, card-stack layouts for Home/DevQueue/Review/Inspector, and multi-viewport Playwright E2E tests ($375\times 667$, $390\times 844$, $768\times 1024$). | ✅ Done |
+All Tier 1 MVP feature specifications have been implemented, verified, and archived:
+- **Track 1A — Manage Backlog with Ideation Chat (`12.1A`, `12.13A`, `12.13B`):** Archived in [`docs/archive/12_EXTEND_FEATURES.md`](../archive/12_EXTEND_FEATURES.md) (`docs/archive/phase-12/`).
+- **Track 1B — Check Status on Phone / Tablet & Basic Tailscale Connectivity (`12.24`, `12.16A`, `12.8A`):** Archived in [`docs/archive/12_EXTEND_FEATURES.md`](../archive/12_EXTEND_FEATURES.md) (`docs/archive/phase-12/`).
 
 ---
 
@@ -87,6 +71,6 @@ This MVP track focuses on two immediate developer objectives, backed by fast, LL
 
 ## 3. Completed Features Archive
 
-Completed feature steps (`12.3`, `12.14`, `12.17`, `12.19`) are archived in:
+Completed feature steps (`12.1A`, `12.3`, `12.8A`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.17`, `12.19`, `12.24`) are archived in:
 - **Summary & DoD Record:** [`docs/archive/12_EXTEND_FEATURES.md`](../archive/12_EXTEND_FEATURES.md)
 - **Step Specifications:** [`docs/archive/phase-12/`](../archive/phase-12/)
