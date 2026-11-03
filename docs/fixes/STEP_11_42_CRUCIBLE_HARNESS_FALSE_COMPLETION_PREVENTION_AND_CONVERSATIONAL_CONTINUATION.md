@@ -2,7 +2,7 @@
 
 > **Bug Fix & Resiliency Step (Harness Premature Completion Shield & Autonomous Agent Turn Continuation)**  
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Implemented  
 > *Target Projects:* [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests)  
 > *Dependencies:* [Step 11.37A: HTTP Transport Hardening & Outage Retry Policy](STEP_11_37A_HTTP_TRANSPORT_HARDENING_AND_OUTAGE_RETRY_POLICY.md), [Step 11.41: Task Review Specification Enforcement & Conversational Remediation](STEP_11_41_TASK_REVIEW_SPECIFICATION_ENFORCEMENT_AND_CONVERSATIONAL_REMEDIATION.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
