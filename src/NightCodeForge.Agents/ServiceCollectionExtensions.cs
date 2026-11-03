@@ -72,6 +72,10 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<ExternalProcess.HarnessActivityRecorder>();
         services.TryAddScoped<ExternalProcess.IHarnessActivityRecorder>(sp => sp.GetRequiredService<ExternalProcess.HarnessActivityRecorder>());
         services.TryAddScoped<Acp.IAcpHostRpcHandler, Acp.AcpHostRpcHandler>();
+        services.TryAddScoped<ICanonicalToolsetFactory, CanonicalToolsetFactory>();
+        services.TryAddScoped<IAgentWorkspaceContextService, AgentWorkspaceContextService>();
+        services.TryAddScoped<IHarnessAgentFactory, HarnessAgentFactory>();
+        services.TryAddScoped<ICrucibleConversationCoordinator, CrucibleConversationCoordinator>();
         services.TryAddScoped<CrucibleAgentHarness>();
         services.TryAddScoped<PiRpcAgentHarness>();
         services.TryAddScoped<AcpAgentHarness>();

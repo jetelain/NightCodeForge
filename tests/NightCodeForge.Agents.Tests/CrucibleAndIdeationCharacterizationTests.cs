@@ -240,7 +240,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             .Setup(g => g.ResolveContextWindowAsync("qwen3-coder:30b", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Gateway unreachable"));
 
-        var logger = new CapturingLogger<Crucible.CrucibleAgentHarness>();
+        var logger = new CapturingLogger<HarnessAgentFactory>();
         var client = new CapturingStreamingChatClient((_, _) =>
             [new ChatResponseUpdate(ChatRole.Assistant, "Fallback completed.")]);
 
@@ -250,7 +250,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             PathResolver = TestPathResolver.Create(),
             GatewayService = mockGateway.Object,
             LlmOptions = Options.Create(new LlmProviderOptions { ContextWindowTokens = 65536 }),
-            Logger = logger,
+            HarnessAgentLogger = logger,
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "docs", "transcripts"))
         }.Build();
 
@@ -287,7 +287,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             .Setup(g => g.ResolveContextWindowAsync("deepseek-r1:32b", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Gateway timeout"));
 
-        var logger = new CapturingLogger<IdeationService>();
+        var logger = new CapturingLogger<HarnessAgentFactory>();
         var client = new CapturingStreamingChatClient((_, _) =>
             [new ChatResponseUpdate(ChatRole.Assistant, "Ideation fallback succeeded.")]);
 
@@ -297,7 +297,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             PathResolver = TestPathResolver.Create(),
             GatewayService = mockGateway.Object,
             LlmOptions = Options.Create(new LlmProviderOptions { ContextWindowTokens = 65536 }),
-            Logger = logger,
+            HarnessAgentLogger = logger,
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "ideation-transcripts"))
         }.Build();
 

@@ -19,6 +19,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 
 public class TestCrucibleHarnessBuilder
@@ -60,6 +61,7 @@ public class TestCrucibleHarnessBuilder
         MaxRetryDuration = TimeSpan.FromSeconds(5)
     });
     public ILogger<CrucibleAgentHarness> Logger { get; set; } = NullLogger<CrucibleAgentHarness>.Instance;
+    public ILogger<HarnessAgentFactory> HarnessAgentLogger { get; set; } = NullLogger<HarnessAgentFactory>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
     private static IOperationsControlService CreateDefaultOperationsControlService()
@@ -87,32 +89,51 @@ public class TestCrucibleHarnessBuilder
             factory = new TestSingleChatClientFactory(client);
         }
 
-        return new CrucibleAgentHarness(
+        var capabilityResolver = CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions);
+
+        var toolsetFactory = new CanonicalToolsetFactory(
             PathResolver,
-            factory,
-            GatewayService,
-            CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions),
             EnvProvider,
-            McpManager,
             EditorConfigService,
             EditorConfigFileApplier,
             WebSearchService,
-            SymbolService,
             SkillsServiceFactory,
+            McpManager,
+            BacklogContext);
+
+        var workspaceContext = new AgentWorkspaceContextService(
+            PathResolver,
             AgentsMdService,
-            ActivityStreamer,
-            TranscriptService,
+            SymbolService,
+            new Mock<ITaskMarkdownSyncService>().Object,
+            BacklogContext,
+            NullLogger<AgentWorkspaceContextService>.Instance);
+
+        var agentFactory = new HarnessAgentFactory(
+            factory,
+            GatewayService,
+            capabilityResolver,
             GlobalOptimizationSettings,
+            LlmOptions,
+            HarnessAgentLogger);
+
+        var coordinator = new CrucibleConversationCoordinator(
             TaskRepository,
+            TranscriptService,
+            NullLogger<CrucibleConversationCoordinator>.Instance);
+
+        return new CrucibleAgentHarness(
+            toolsetFactory,
+            workspaceContext,
+            agentFactory,
+            coordinator,
+            ActivityStreamer,
             CancellationManager,
             OperationsControlService,
-            BacklogContext,
-            LlmOptions,
             RetryOptions,
             Logger,
             TimeProvider);
     }
-
     public class TestSingleChatClientFactory : ILlmChatClientFactory
     {
         private readonly IChatClient _client;

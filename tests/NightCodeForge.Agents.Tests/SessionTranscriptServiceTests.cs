@@ -26,7 +26,7 @@ public class SessionTranscriptServiceTests
             new(ChatRole.Assistant, "Fixed the failing test by updating assertion.")
         };
 
-        var entries = CrucibleAgentHarness.BuildTranscriptEntries(chatHistory);
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(chatHistory);
 
         Assert.Equal(5, entries.Count);
 
@@ -314,7 +314,7 @@ public class SessionTranscriptServiceTests
             new(ChatRole.Assistant, "Working on it")
         };
 
-        var entries = CrucibleAgentHarness.BuildTranscriptEntries(chatHistory);
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(chatHistory);
 
         Assert.Equal(4, entries.Count);
         Assert.Equal("system", entries[0].Role);

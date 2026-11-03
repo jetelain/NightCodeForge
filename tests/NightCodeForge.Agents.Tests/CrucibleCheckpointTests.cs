@@ -90,7 +90,7 @@ public class CrucibleCheckpointTests
     [Fact]
     public void BuildTranscriptEntries_ToolResultWithUnknownCallId_FallsBackToCallId()
     {
-        var entries = CrucibleAgentHarness.BuildTranscriptEntries([
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries([
             new ChatMessage(ChatRole.Tool, [new FunctionResultContent("orphan-1", "out")])
         ]);
 

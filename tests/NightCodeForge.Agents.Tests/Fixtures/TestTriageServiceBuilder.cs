@@ -3,6 +3,8 @@ namespace NightCodeForge.Agents.Tests.Fixtures;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Triage;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -29,12 +31,20 @@ public class TestTriageServiceBuilder
 
     public TriageService Build()
     {
+        var workspaceContext = new AgentWorkspaceContextService(
+            PathResolver,
+            new AgentsMdService(),
+            new Mock<IWorkspaceSymbolService>().Object,
+            MarkdownSyncService,
+            TestBacklogContext.CreateDefault(),
+            NullLogger<AgentWorkspaceContextService>.Instance);
+
         return new TriageService(
             TaskRepository,
             WorkspaceRepository,
             HarnessRegistry,
+            workspaceContext,
             MarkdownSyncService,
-            PathResolver,
             GlobalOptimizationSettings,
             Logger);
     }

@@ -7,6 +7,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Optimizations;
@@ -38,72 +39,41 @@ public partial class IdeationService : IIdeationService
     /// </summary>
     public const int DefaultMaxTurns = AgentProfile.DefaultMaxTurns;
 
+    private const string IdeationAgentId = "ideation-agent";
+    private const string IdeationAgentName = "IdeationAgent";
+    private const float DefaultTemperature = 0.3f;
+
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex TaskJsonArrayRegex();
 
-    private readonly ILlmChatClientFactory _chatClientFactory;
-    private readonly ILlmGatewayService _gatewayService;
-    private readonly ILlmCapabilityResolver _capabilityResolver;
-    private readonly IExecutionEnvironmentProvider _envProvider;
-    private readonly IWebSearchService _webSearchService;
-    private readonly IEditorConfigService _editorConfigService;
-    private readonly IEditorConfigFileApplier _editorConfigFileApplier;
-    private readonly AgentsMdService _agentsMdService;
+    private readonly ICanonicalToolsetFactory _toolsetFactory;
+    private readonly IAgentWorkspaceContextService _workspaceContext;
+    private readonly IHarnessAgentFactory _agentFactory;
     private readonly IAgentActivityStreamer _activityStreamer;
-    private readonly IWorkspacePathResolver _pathResolver;
-    private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly SessionTranscriptService _transcriptService;
-    private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
-    private readonly ILogger<IdeationService> _logger;
-    private readonly LlmProviderOptions _llmOptions;
-    private readonly IWorkspaceSkillsServiceFactory _skillsServiceFactory;
     private readonly IWorkspaceRepository _workspaceRepository;
+    private readonly ILogger<IdeationService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IBacklogPlanningContext _backlogContext;
 
     public IdeationService(
-        IWorkspacePathResolver pathResolver,
-        ILlmChatClientFactory chatClientFactory,
-        ILlmGatewayService gatewayService,
-        ILlmCapabilityResolver capabilityResolver,
-        IExecutionEnvironmentProvider envProvider,
-        IWebSearchService webSearchService,
-        IEditorConfigService editorConfigService,
-        IEditorConfigFileApplier editorConfigFileApplier,
-        AgentsMdService agentsMdService,
+        ICanonicalToolsetFactory toolsetFactory,
+        IAgentWorkspaceContextService workspaceContext,
+        IHarnessAgentFactory agentFactory,
         IAgentActivityStreamer activityStreamer,
         SessionTranscriptService transcriptService,
-        IGlobalOptimizationSettingsService globalOptimizationSettings,
-        IWorkspaceSkillsServiceFactory skillsServiceFactory,
         IWorkspaceRepository workspaceRepository,
-        ITaskMarkdownSyncService markdownSyncService,
-        IBacklogPlanningContext backlogContext,
-        Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
         ILogger<IdeationService> logger,
         TimeProvider timeProvider)
     {
-        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
-        _chatClientFactory = chatClientFactory ?? throw new ArgumentNullException(nameof(chatClientFactory));
-        _gatewayService = gatewayService ?? throw new ArgumentNullException(nameof(gatewayService));
-        _capabilityResolver = capabilityResolver ?? throw new ArgumentNullException(nameof(capabilityResolver));
-        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
-        _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
-        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
-        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
-        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
+        _toolsetFactory = toolsetFactory ?? throw new ArgumentNullException(nameof(toolsetFactory));
+        _workspaceContext = workspaceContext ?? throw new ArgumentNullException(nameof(workspaceContext));
+        _agentFactory = agentFactory ?? throw new ArgumentNullException(nameof(agentFactory));
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
-        _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
-        _skillsServiceFactory = skillsServiceFactory ?? throw new ArgumentNullException(nameof(skillsServiceFactory));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
-        _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
-        _backlogContext = backlogContext ?? throw new ArgumentNullException(nameof(backlogContext));
-        ArgumentNullException.ThrowIfNull(llmOptions);
-        _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
-
     /// <summary>
     /// Resolves the effective AgentProfile for ideation, prioritizing explicit profile,
     /// then workspace profile named/id 'ideation', or throws AgentProfileNotFoundException if missing.
@@ -191,9 +161,7 @@ public partial class IdeationService : IIdeationService
             }
         }
 
-        // Resolve client dynamically for the agent profile
         var sessionId = $"ideation-{workspace.Id}-{Guid.NewGuid():N}";
-        var client = _chatClientFactory.CreateClient(profile, sessionId);
         var metadata = new Dictionary<string, object?>
         {
             ["workspaceId"] = workspace.Id,
@@ -203,97 +171,13 @@ public partial class IdeationService : IIdeationService
 
         await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageStarted, "Starting ideation discovery", cancellationToken, metadata);
 
-        var repoPath = !string.IsNullOrEmpty(workspace.RepositoryPath) ? workspace.RepositoryPath : Directory.GetCurrentDirectory();
-
         // Pre-sync existing backlog tasks into clone/docs/tasks so the ideation agent has full visibility of existing tasks
-        string? cloneDir = null;
-        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
-        {
-            var customClone = _pathResolver.ToHostPath(workspace.Ext4MirrorPath);
-            if (Directory.Exists(customClone)) cloneDir = customClone;
-        }
-        if (cloneDir == null && workspace.Id > 0)
-        {
-            try
-            {
-                var canonicalClone = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
-                if (!string.IsNullOrWhiteSpace(canonicalClone))
-                {
-                    var hostClone = _pathResolver.ToHostPath(canonicalClone);
-                    if (Directory.Exists(hostClone)) cloneDir = hostClone;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Could not resolve working clone directory for workspace #{WorkspaceId}", workspace.Id);
-            }
-        }
+        var locations = _workspaceContext.ResolveLocations(workspace, taskId: null, workspacePathOverride: null);
+        var repoPath = locations.RepoPath;
+        await _workspaceContext.SyncBacklogToDiskAsync(workspace, locations, cancellationToken);
 
-        if (!string.IsNullOrWhiteSpace(repoPath) && Directory.Exists(repoPath))
-        {
-            try
-            {
-                await _markdownSyncService.SyncAllTasksToDiskAsync(workspace, repoPath, repoPath, cloneDirectory: cloneDir, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to pre-sync existing backlog tasks to clone/docs/tasks for workspace #{WorkspaceId}", workspace.Id);
-            }
-        }
-
-        var agentsRules = await _agentsMdService.IngestRulesAsync(repoPath, cancellationToken);
-        var projectConfig = CodeStackPresets.ResolveConfig(repoPath, null);
-        var projectContext = _agentsMdService.FormatProjectContextSection(agentsRules, projectConfig, workspace);
-
-        // Determine agent's effective working directory based on execution mode and workspace paths
-        string agentWorkingDir;
-        if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox)
-        {
-            bool hasClone = !string.IsNullOrEmpty(workspace.Ext4MirrorPath) ||
-                            Directory.Exists(_pathResolver.ResolveCruciblePath(workspace.Id, string.Empty));
-            agentWorkingDir = hasClone ? "/workspace/clone" : "/workspace";
-        }
-        else if (workspace.ExecutionMode == ExecutionMode.WslDirect)
-        {
-            agentWorkingDir = !string.IsNullOrEmpty(workspace.Ext4MirrorPath)
-                ? workspace.Ext4MirrorPath
-                : _pathResolver.GetAgentWorkingClonePath(workspace.Id);
-        }
-        else
-        {
-            agentWorkingDir = repoPath;
-        }
-
-        string? topLevelSummary = null;
-        try
-        {
-            var hostDir = _pathResolver.ResolveCruciblePath(workspace.Id, string.Empty);
-            if (string.IsNullOrEmpty(hostDir) || !Directory.Exists(hostDir))
-            {
-                hostDir = repoPath;
-            }
-            if (!string.IsNullOrEmpty(hostDir) && Directory.Exists(hostDir))
-            {
-                var entries = Directory.GetFileSystemEntries(hostDir)
-                    .Select(Path.GetFileName)
-                    .Where(n => !string.IsNullOrEmpty(n) &&
-                                !n.StartsWith(".git") &&
-                                !n.Equals("bin", StringComparison.OrdinalIgnoreCase) &&
-                                !n.Equals("obj", StringComparison.OrdinalIgnoreCase) &&
-                                !n.Equals(".vs", StringComparison.OrdinalIgnoreCase))
-                    .Take(20)
-                    .ToList();
-                if (entries.Count > 0)
-                {
-                    topLevelSummary = string.Join(", ", entries);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not discover top-level entries for workspace {WorkspaceId}", workspace.Id);
-        }
-
+        var agentWorkingDir = locations.AgentWorkingDir;
+        var topLevelSummary = _workspaceContext.DescribeTopLevelEntries(workspace, repoPath);
         var environmentSection = new StringBuilder();
         environmentSection.AppendLine("<environment>");
         environmentSection.AppendLine($"- Current Working Directory (PWD): {agentWorkingDir}");
@@ -369,24 +253,31 @@ You cannot edit repository files or 'docs/tasks/*.md' directly. Existing backlog
 Only tasks that are Suggested or Open, never executed, and not currently running can be changed. Tasks that already entered the pipeline (or are Reviewed, Implemented, Ready, Closed, Rejected, Cancelled) are rejected with an error: do not retry, create a follow-up task via 'propose_tasks' instead. Never mutate the backlog without the maintainer's agreement; summarize every change you made afterwards.
 </backlog_management_guidelines>";
 
+        var toolset = await _toolsetFactory.CreateAsync(
+            new CanonicalToolsetRequest(
+                workspace,
+                profile,
+                new CanonicalToolScope(
+                    repoPath,
+                    WorkspaceId: workspace.Id,
+                    IsReadOnly: profile.Mode == AgentMode.ReadOnly || profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly),
+                permittedTools,
+                Array.Empty<CustomToolConfig>(),
+                new Dictionary<string, string>(),
+                AttachBacklogMutationService: true),
+            cancellationToken);
+        var canonicalTools = toolset.Tools;
+
         // Skills catalog (lean ~25 tokens/skill) is only injected when the agent can call load_skill.
-        var skillsService = _skillsServiceFactory.Create(workspace, repoPath, taskId: null);
-        IReadOnlyList<SkillDescriptor> discoveredSkills = Array.Empty<SkillDescriptor>();
-        string skillsCatalog = string.Empty;
-        if (permittedTools.Contains(CanonicalToolNames.LoadSkill, StringComparer.OrdinalIgnoreCase))
-        {
-            discoveredSkills = await skillsService.GetActiveSkillsAsync(cancellationToken);
-            skillsCatalog = await skillsService.GetSkillsCatalogPromptAsync(cancellationToken);
-        }
-        var activeSkills = discoveredSkills.Select(s => s.Name).ToList();
-        var skillsSection = string.IsNullOrEmpty(skillsCatalog) ? string.Empty : "\n\n" + skillsCatalog;
+        var promptContext = await _workspaceContext.BuildPromptContextAsync(workspace, repoPath, permittedTools, toolset.SkillsService, cancellationToken);
+        var activeSkills = promptContext.ActiveSkills;
+        var skillsSection = string.IsNullOrEmpty(promptContext.SkillsCatalog) ? string.Empty : "\n\n" + promptContext.SkillsCatalog;
 
-        var backlogDigest = await _backlogContext.BuildBacklogDigestAsync(workspace.Id, null, cancellationToken);
+        var backlogDigest = await _workspaceContext.BuildBacklogDigestAsync(workspace.Id, null, cancellationToken);
         var backlogSection = string.IsNullOrWhiteSpace(backlogDigest) ? string.Empty : backlogDigest + "\n\n";
-
         var systemPrompt = $@"{basePersona}
 {environmentSection.ToString().TrimEnd()}
-{projectContext}{skillsSection}
+{promptContext.ProjectContext}{skillsSection}
 
 {backlogSection}{taskGuidance}";
 
@@ -428,27 +319,6 @@ Only tasks that are Suggested or Open, never executed, and not currently running
         };
 
         var transcriptBuffer = new TranscriptStreamBuffer(transcriptEntries);
-
-        var effectiveEnv = _envProvider.GetEnvironment(workspace, profile.SecurityTier)
-            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
-
-        var canonicalTools = new CanonicalTools(
-            repoPath,
-            _pathResolver,
-            effectiveEnv,
-            _editorConfigService,
-            _editorConfigFileApplier,
-            _webSearchService,
-            skillsService,
-            _backlogContext.CanonicalToolsLogger,
-            buildTimeoutSeconds: null,
-            testTimeoutSeconds: null,
-            workspaceId: workspace.Id,
-            taskId: null,
-            isReadOnly: profile.Mode == AgentMode.ReadOnly || profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly);
-
-        canonicalTools.TaskMarkdownValidator = _backlogContext.TaskMarkdownValidator;
-        canonicalTools.BacklogMutationService = _backlogContext.BacklogMutationService;
 
         var sessionProposals = new List<IdeationProposal>();
 
@@ -492,62 +362,24 @@ Only tasks that are Suggested or Open, never executed, and not currently running
         };
         HumanInterruptionException? interruption = null;
 
-        var aiTools = BuildAIFunctionList(canonicalTools, permittedTools);
-
-        var effectiveModelId = !string.IsNullOrWhiteSpace(profile.ModelName)
-            ? profile.ModelName
-            : (client.GetService<ChatClientMetadata>()?.DefaultModelId ?? _llmOptions?.ModelId);
-
-        var chatOptions = _capabilityResolver.CreateChatOptions(profile, effectiveModelId);
-        chatOptions.Tools = aiTools;
-        if (chatOptions.Temperature == null && profile.Temperature == null &&
-            (effectiveModelId == null || (!effectiveModelId.Contains("o1", StringComparison.OrdinalIgnoreCase) && !effectiveModelId.Contains("o3", StringComparison.OrdinalIgnoreCase))))
-        {
-            chatOptions.Temperature = 0.3f;
-        }
-
         int maxTurns = profile.MaxTurns.HasValue && profile.MaxTurns.Value > 0 ? profile.MaxTurns.Value : DefaultMaxTurns;
 
-        int? explicitContext = profile.ContextWindowTokens;
-        if (!explicitContext.HasValue && !string.IsNullOrWhiteSpace(effectiveModelId))
-        {
-            try
-            {
-                var discovered = await _gatewayService.ResolveContextWindowAsync(effectiveModelId, cancellationToken);
-                if (discovered > 0)
-                {
-                    explicitContext = discovered;
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(ex, "Failed to resolve context window for ideation model '{Model}', falling back to configured options", effectiveModelId);
-            }
-        }
-
-        var harnessOptions = new HarnessAgentOptions
-        {
-            Id = "ideation-agent",
-            Name = "IdeationAgent",
-            HarnessInstructions = systemPrompt,
-            ChatOptions = chatOptions,
-            MaximumIterationsPerRequest = maxTurns,
-            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
+        var setup = await _agentFactory.CreateAsync(
+            new HarnessAgentRequest(
                 profile,
-                _llmOptions,
-                explicitContextWindowTokens: explicitContext,
-                summarizerClient: client),
-            DisableTodoProvider = true,
-            DisableAgentModeProvider = true,
-            DisableFileMemory = true,
-            DisableAgentSkillsProvider = true,
-            DisableWebSearch = true,
-            DisableToolAutoApproval = false
-        };
+                sessionId,
+                AgentId: IdeationAgentId,
+                AgentName: IdeationAgentName,
+                Instructions: systemPrompt,
+                Tools: toolset.AITools,
+                MaxTurns: maxTurns,
+                CreateTracingClient: baseClient => new ThinkingAndActivityTracingChatClient(baseClient),
+                DefaultTemperature: DefaultTemperature),
+            cancellationToken);
 
-        var tracingClient = new ThinkingAndActivityTracingChatClient(client);
-        var effectiveClient = new LenientToolCallChatClient(tracingClient);
-        var agent = new HarnessAgent(effectiveClient, harnessOptions);
+        var tracingClient = setup.TracingClient;
+        var harnessOptions = setup.Options;
+        var agent = setup.Agent;
         var session = await agent.CreateSessionAsync(cancellationToken);
 
         var projector = new AgentStreamProjector();
@@ -923,12 +755,6 @@ Only tasks that are Suggested or Open, never executed, and not currently running
         }
         return null;
     }
-
-    private static IList<AITool> BuildAIFunctionList(CanonicalTools canonicalTools, IReadOnlyList<string> permittedTools)
-    {
-        return CanonicalAIFunctionFactory.CreateTools(canonicalTools, permittedTools).Cast<AITool>().ToList();
-    }
-
 
     public class IdeationProposalDto
     {

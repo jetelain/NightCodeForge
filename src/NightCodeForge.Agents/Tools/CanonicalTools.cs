@@ -57,7 +57,7 @@ public partial class CanonicalTools
     private readonly ILogger<CanonicalTools> _logger;
 
     public CanonicalTools(
-        string workspaceRoot,
+        CanonicalToolScope scope,
         IWorkspacePathResolver pathResolver,
         IExecutionEnvironment executionEnv,
         IEditorConfigService editorConfigService,
@@ -65,25 +65,9 @@ public partial class CanonicalTools
         IWebSearchService webSearchService,
         IWorkspaceSkillsService skillsService,
         ILogger<CanonicalTools> logger)
-        : this(workspaceRoot, pathResolver, executionEnv, editorConfigService, editorConfigFileApplier, webSearchService, skillsService, logger, null, null, null, null, false)
     {
-    }
-
-    public CanonicalTools(
-        string workspaceRoot,
-        IWorkspacePathResolver pathResolver,
-        IExecutionEnvironment executionEnv,
-        IEditorConfigService editorConfigService,
-        IEditorConfigFileApplier editorConfigFileApplier,
-        IWebSearchService webSearchService,
-        IWorkspaceSkillsService skillsService,
-        ILogger<CanonicalTools> logger,
-        int? buildTimeoutSeconds,
-        int? testTimeoutSeconds,
-        int? workspaceId,
-        int? taskId,
-        bool isReadOnly)
-    {
+        ArgumentNullException.ThrowIfNull(scope);
+        var workspaceRoot = scope.WorkspaceRoot;
         ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _executionEnv = executionEnv ?? throw new ArgumentNullException(nameof(executionEnv));
@@ -96,11 +80,11 @@ public partial class CanonicalTools
         _workspaceRoot = (workspaceRoot.StartsWith('/') || workspaceRoot.StartsWith('~') || workspaceRoot.StartsWith(@"\\") || workspaceRoot.StartsWith("//"))
             ? workspaceRoot
             : Path.GetFullPath(workspaceRoot);
-        _buildTimeoutSeconds = buildTimeoutSeconds;
-        _testTimeoutSeconds = testTimeoutSeconds;
-        _workspaceId = workspaceId;
-        _taskId = (taskId.HasValue && taskId.Value > 0) ? taskId.Value : null;
-        _isReadOnly = isReadOnly;
+        _buildTimeoutSeconds = scope.BuildTimeoutSeconds;
+        _testTimeoutSeconds = scope.TestTimeoutSeconds;
+        _workspaceId = scope.WorkspaceId;
+        _taskId = (scope.TaskId.HasValue && scope.TaskId.Value > 0) ? scope.TaskId.Value : null;
+        _isReadOnly = scope.IsReadOnly;
     }
 
     public IWebSearchService WebSearchService => _webSearchService;

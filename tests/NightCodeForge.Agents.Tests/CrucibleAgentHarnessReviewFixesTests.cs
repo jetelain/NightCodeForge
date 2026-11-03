@@ -71,7 +71,7 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         dispatcher.RegisterTool(new ToolDefinition("my_tool", "Echo", (args, ct) =>
             Task.FromResult(string.Join(",", args.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}")))));
 
-        var list = CrucibleAgentHarness.BuildAIFunctionList(tools, new[] { "my_tool" }, dispatcher);
+        var list = CanonicalToolsetFactory.BuildAIFunctionList(tools, new[] { "my_tool" }, dispatcher);
 
         var fn = Assert.IsAssignableFrom<AIFunction>(Assert.Single(list, t => t.Name == "my_tool"));
         var result = await fn.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["a"] = 1, ["b"] = "x" }));

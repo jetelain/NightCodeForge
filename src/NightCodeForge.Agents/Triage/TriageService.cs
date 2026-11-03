@@ -1,12 +1,11 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
+using NightCodeForge.Agents.Context;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
-using NightCodeForge.Core.Workflow.Stages;
 
 namespace NightCodeForge.Agents.Triage;
 
@@ -19,8 +18,8 @@ public class TriageService : ITriageService
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IHarnessRegistry _harnessRegistry;
+    private readonly IAgentWorkspaceContextService _workspaceContext;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
-    private readonly IWorkspacePathResolver _pathResolver;
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly ILogger<TriageService> _logger;
 
@@ -28,16 +27,16 @@ public class TriageService : ITriageService
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
         IHarnessRegistry harnessRegistry,
+        IAgentWorkspaceContextService workspaceContext,
         ITaskMarkdownSyncService markdownSyncService,
-        IWorkspacePathResolver pathResolver,
         IGlobalOptimizationSettingsService globalOptimizationSettings,
         ILogger<TriageService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _harnessRegistry = harnessRegistry ?? throw new ArgumentNullException(nameof(harnessRegistry));
+        _workspaceContext = workspaceContext ?? throw new ArgumentNullException(nameof(workspaceContext));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
-        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -58,29 +57,8 @@ public class TriageService : ITriageService
             request.Title, workspace.Id, baseBranch);
 
         // Pre-sync existing backlog tasks into clone/docs/tasks so the triage agent knows about existing backlog
-        string? cloneDir = null;
-        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
-        {
-            var customClone = _pathResolver.ToHostPath(workspace.Ext4MirrorPath);
-            if (Directory.Exists(customClone)) cloneDir = customClone;
-        }
-        if (cloneDir == null && workspace.Id > 0)
-        {
-            try
-            {
-                var canonicalClone = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
-                if (!string.IsNullOrWhiteSpace(canonicalClone))
-                {
-                    var hostClone = _pathResolver.ToHostPath(canonicalClone);
-                    if (Directory.Exists(hostClone)) cloneDir = hostClone;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Could not resolve working clone directory for workspace #{WorkspaceId}", workspace.Id);
-            }
-        }
-
+        var locations = _workspaceContext.ResolveLocations(workspace, taskId: null, workspacePathOverride: null);
+        var cloneDir = locations.CloneDir;
         var repoPath = (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
             ? workspace.RepositoryPath
             : cloneDir;
@@ -91,14 +69,7 @@ public class TriageService : ITriageService
                 $"Neither workspace repository path '{workspace.RepositoryPath}' nor agent clone directory exists for workspace #{workspace.Id}.");
         }
 
-        try
-        {
-            await _markdownSyncService.SyncAllTasksToDiskAsync(workspace, repoPath, repoPath, cloneDirectory: cloneDir, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to pre-sync existing backlog tasks to clone/docs/tasks for workspace #{WorkspaceId}", workspace.Id);
-        }
+        await _workspaceContext.SyncBacklogToDiskAsync(workspace, locations with { RepoPath = repoPath }, cancellationToken);
 
         // 1. Resolve triage agent profile with RestrictedReadOnly sandbox tier and ReadOnly agent mode
         var profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, StandardStageIds.Triage, cancellationToken);

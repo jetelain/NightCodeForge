@@ -24,10 +24,7 @@ public class ConstructorParameterCeilingTests
     private static readonly IReadOnlyDictionary<string, int> LegacyConstructorDebtAllowlist =
         new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            ["CrucibleAgentHarness"] = 23,
-            ["IdeationService"] = 19,
             ["TaskOrchestrator"] = 19,
-            ["CanonicalTools"] = 13,
             ["StartupRecoveryService"] = 11
         };
 

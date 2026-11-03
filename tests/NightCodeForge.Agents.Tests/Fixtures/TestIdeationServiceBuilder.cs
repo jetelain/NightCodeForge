@@ -8,6 +8,7 @@ using Moq;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Streaming;
@@ -44,12 +45,23 @@ public class TestIdeationServiceBuilder
     public IWorkspaceSkillsServiceFactory SkillsServiceFactory { get; set; } = new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance);
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
+    public IMcpClientManager McpManager { get; set; } = CreateDefaultMcpManager();
+    public IWorkspaceSymbolService SymbolService { get; set; } = new Mock<IWorkspaceSymbolService>().Object;
     public IBacklogPlanningContext BacklogContext { get; set; } = TestBacklogContext.CreateDefault();
     public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
     public ILlmCapabilityResolver? CapabilityResolver { get; set; }
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
     public ILogger<IdeationService> Logger { get; set; } = NullLogger<IdeationService>.Instance;
+    public ILogger<HarnessAgentFactory> HarnessAgentLogger { get; set; } = NullLogger<HarnessAgentFactory>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+
+    private static IMcpClientManager CreateDefaultMcpManager()
+    {
+        var mock = new Mock<IMcpClientManager>();
+        mock.Setup(m => m.GetConfiguredServersAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, McpServerDefinition>());
+        return mock.Object;
+    }
 
     private static ILlmGatewayService CreateDefaultGatewayService()
     {
@@ -68,24 +80,41 @@ public class TestIdeationServiceBuilder
             factory = new TestCrucibleHarnessBuilder.TestSingleChatClientFactory(client);
         }
 
-        return new IdeationService(
+        var capabilityResolver = CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions);
+
+        var toolsetFactory = new CanonicalToolsetFactory(
             PathResolver,
-            factory,
-            GatewayService,
-            CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions),
             EnvProvider,
-            WebSearchService,
             EditorConfigService,
             EditorConfigFileApplier,
-            AgentsMdService,
-            ActivityStreamer,
-            TranscriptService,
-            GlobalOptimizationSettings,
+            WebSearchService,
             SkillsServiceFactory,
-            WorkspaceRepository,
+            McpManager,
+            BacklogContext);
+
+        var workspaceContext = new AgentWorkspaceContextService(
+            PathResolver,
+            AgentsMdService,
+            SymbolService,
             MarkdownSyncService,
             BacklogContext,
+            NullLogger<AgentWorkspaceContextService>.Instance);
+
+        var agentFactory = new HarnessAgentFactory(
+            factory,
+            GatewayService,
+            capabilityResolver,
+            GlobalOptimizationSettings,
             LlmOptions,
+            HarnessAgentLogger);
+
+        return new IdeationService(
+            toolsetFactory,
+            workspaceContext,
+            agentFactory,
+            ActivityStreamer,
+            TranscriptService,
+            WorkspaceRepository,
             Logger,
             TimeProvider);
     }

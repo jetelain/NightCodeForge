@@ -57,18 +57,13 @@ public class TestCanonicalToolsBuilder
             NullLogger<WorkspaceSkillsService>.Instance);
 
         return new(
-            WorkspaceRoot,
+            new CanonicalToolScope(WorkspaceRoot, WorkspaceId, TaskId, BuildTimeoutSeconds, TestTimeoutSeconds, IsReadOnly),
             PathResolver,
             ExecutionEnv,
             EditorConfigService,
             EditorConfigFileApplier,
             WebSearchService,
             skills,
-            Logger,
-            BuildTimeoutSeconds,
-            TestTimeoutSeconds,
-            WorkspaceId,
-            TaskId,
-            IsReadOnly);
+            Logger);
     }
 }
