@@ -163,9 +163,9 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         await _page.FillAsync("textarea.chat-textarea", prompt);
         await _page.ClickAsync("button.send-btn");
 
-        // Wait for proposal card to appear in right panel
+        // Wait up to 15 minutes (matching OllamaHttpConstants.DefaultTimeout) for proposal card to appear in right panel when model is cold
         var proposalCard = _page.Locator(".proposal-card:has-text('Multiply'), .ideation-proposal-card:has-text('Multiply')");
-        await proposalCard.First.WaitForAsync(new LocatorWaitForOptions { Timeout = 90000 });
+        await proposalCard.First.WaitForAsync(new LocatorWaitForOptions { Timeout = 900_000 });
 
         // Ingest proposal into backlog
         var addBtn = proposalCard.First.Locator("button:has-text('Add to Backlog'), button.add-backlog-btn");

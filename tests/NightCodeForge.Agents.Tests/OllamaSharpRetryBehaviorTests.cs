@@ -109,7 +109,7 @@ public class OllamaSharpRetryBehaviorTests
     }
 
     [Fact]
-    public async Task GetResponseAsync_ConnectionRefused_FailsFastWithSingleAttempt()
+    public async Task GetResponseAsync_ConnectionRefused_IsRetriedUpToBudget_AndMarkedAsRetried()
     {
         var inner = new ScriptedHandler(() => throw new HttpRequestException(
             HttpRequestError.ConnectionError,
@@ -119,7 +119,8 @@ public class OllamaSharpRetryBehaviorTests
 
         var ex = await Assert.ThrowsAnyAsync<Exception>(() => client.GetResponseAsync(Messages));
 
-        Assert.Equal(1, inner.Invocations);
+        Assert.Equal(ExpectedAttempts, inner.Invocations);
         Assert.False(TransientErrorDetector.IsTransient(ex));
+        Assert.True(ex.Data.Contains(ResilienceConstants.RetriedKey));
     }
 }

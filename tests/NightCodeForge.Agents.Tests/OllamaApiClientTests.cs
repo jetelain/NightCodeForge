@@ -86,14 +86,15 @@ public class OllamaApiClientTests
 
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
         var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>().Object;
-        var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
+        var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.LlmRetryPolicyOptions());
         var factory = new OllamaRouterChatClientFactory(
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             mockTelemetry,
             mockOps,
             TimeProvider.System,
-            retryOptions);
+            retryOptions,
+            new Core.Streaming.InMemoryAgentActivityStreamer());
 
         var profileCoder = new Core.Domain.AgentProfile { Name = "Coder", ModelName = "qwen2.5-coder:32b" };
         var client1 = factory.CreateClient(profileCoder);
@@ -122,14 +123,15 @@ public class OllamaApiClientTests
 
         var mockTelemetry = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object;
         var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>().Object;
-        var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
+        var retryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.LlmRetryPolicyOptions());
         var factory = new OllamaRouterChatClientFactory(
             options,
             Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             mockTelemetry,
             mockOps,
             TimeProvider.System,
-            retryOptions);
+            retryOptions,
+            new Core.Streaming.InMemoryAgentActivityStreamer());
 
         var clientCloud1 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);
         var clientCloud2 = factory.CreateClient("model-x", OllamaRoutingTarget.Cloud);

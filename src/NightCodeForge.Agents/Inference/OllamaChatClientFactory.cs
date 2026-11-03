@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using OllamaSharp;
 
@@ -21,7 +22,19 @@ public static class OllamaChatClientFactory
         RetryPolicyOptions retryOptions,
         OllamaRoutingTarget routingTarget,
         HttpMessageHandler innerHandler,
-        Action<HttpClient> configureRouting)
+        Action<HttpClient> configureRouting) =>
+        CreateOllama(options, modelId, logger, timeProvider, retryOptions, routingTarget, innerHandler, configureRouting, operationsControlService: null);
+
+    public static IChatClient CreateOllama(
+        LlmProviderOptions options,
+        string? modelId,
+        ILogger logger,
+        TimeProvider timeProvider,
+        RetryPolicyOptions retryOptions,
+        OllamaRoutingTarget routingTarget,
+        HttpMessageHandler innerHandler,
+        Action<HttpClient> configureRouting,
+        IOperationsControlService? operationsControlService)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
@@ -36,11 +49,9 @@ public static class OllamaChatClientFactory
             ? modelId.Trim()
             : (!string.IsNullOrWhiteSpace(options.DefaultModelId) ? options.DefaultModelId.Trim() : KnownDefaultModels.DefaultBaseline);
 
-        var retryHandler = new TransientHttpErrorRetryHandler(
-            innerHandler,
-            logger,
-            timeProvider,
-            retryOptions);
+        var retryHandler = operationsControlService != null
+            ? new TransientHttpErrorRetryHandler(innerHandler, logger, timeProvider, retryOptions, operationsControlService)
+            : new TransientHttpErrorRetryHandler(innerHandler, logger, timeProvider, retryOptions);
 
         var httpClient = new HttpClient(retryHandler, disposeHandler: false)
         {
@@ -61,13 +72,7 @@ public static class OllamaChatClientFactory
         RetryPolicyOptions retryOptions,
         OllamaRoutingTarget routingTarget)
     {
-        var socketsHandler = new SocketsHttpHandler
-        {
-            PooledConnectionLifetime = OllamaHttpConstants.DefaultConnectionLifetime,
-            PooledConnectionIdleTimeout = OllamaHttpConstants.DefaultConnectionIdleTimeout,
-            KeepAlivePingDelay = OllamaHttpConstants.DefaultKeepAlivePingDelay,
-            KeepAlivePingTimeout = OllamaHttpConstants.DefaultKeepAlivePingTimeout
-        };
+        var socketsHandler = OllamaHttpConstants.CreateSocketsHttpHandler();
 
         return CreateOllama(options, modelId, logger, timeProvider, retryOptions, routingTarget, socketsHandler, client => OllamaRoutingHeaders.Apply(client, routingTarget, sessionId: null));
     }
@@ -83,5 +88,3 @@ public static class OllamaChatClientFactory
         return CreateOllama(options, profile.ModelName, logger, timeProvider, retryOptions, profile.RoutingTarget);
     }
 }
-
-

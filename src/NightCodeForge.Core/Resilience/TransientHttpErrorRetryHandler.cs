@@ -1,16 +1,27 @@
+using System.Net;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Resilience;
 
 /// <summary>
 /// HTTP delegating handler providing automatic retry with exponential backoff and random jitter
 /// for transient network failures, socket resets, timeouts, and 5xx/429/408 HTTP status codes.
+/// Supports multi-minute outage resilience with elapsed duration limits and live notification callbacks.
 /// </summary>
 public class TransientHttpErrorRetryHandler : DelegatingHandler
 {
+    public static readonly HttpRequestOptionsKey<Action<RetryNotificationContext>> RetryCallbackKey =
+        new("NightCodeForge.Resilience.RetryCallback");
+
+    public static readonly HttpRequestOptionsKey<Func<RetryNotificationContext, CancellationToken, Task>> AsyncRetryCallbackKey =
+        new("NightCodeForge.Resilience.AsyncRetryCallback");
+
     private readonly ILogger _logger;
     private readonly TimeProvider _timeProvider;
     private readonly RetryPolicyOptions _options;
+    private readonly IOperationsControlService? _operationsControlService;
 
     /// <summary>
     /// DI-friendly constructor when used with IHttpClientBuilder.AddHttpMessageHandler.
@@ -23,6 +34,22 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _operationsControlService = null;
+    }
+
+    /// <summary>
+    /// DI-friendly constructor with operations pause control.
+    /// </summary>
+    public TransientHttpErrorRetryHandler(
+        ILogger logger,
+        TimeProvider timeProvider,
+        RetryPolicyOptions options,
+        IOperationsControlService operationsControlService)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
     }
 
     /// <summary>
@@ -37,6 +64,23 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _operationsControlService = null;
+    }
+
+    /// <summary>
+    /// Explicit constructor for wrapping an inner HttpMessageHandler with operations pause control.
+    /// </summary>
+    public TransientHttpErrorRetryHandler(
+        HttpMessageHandler innerHandler,
+        ILogger logger,
+        TimeProvider timeProvider,
+        RetryPolicyOptions options,
+        IOperationsControlService operationsControlService) : base(innerHandler)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -49,9 +93,16 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
         int attempt = 0;
         var maxRetries = Math.Max(0, _options.MaxRetries);
+        var maxDuration = _options.MaxRetryDuration;
+        long? outageStartTimestamp = null;
 
         while (true)
         {
+            if (_operationsControlService?.IsPaused == true)
+            {
+                throw new OperationsPausedException();
+            }
+
             attempt++;
             var currentRequest = CloneRequest(request, contentBytes);
 
@@ -59,17 +110,47 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
             {
                 var response = await base.SendAsync(currentRequest, cancellationToken);
 
-                if (attempt <= maxRetries && TransientErrorDetector.IsTransientStatusCode(response.StatusCode))
+                if (TransientErrorDetector.IsTransientStatusCode(response.StatusCode))
                 {
-                    var delay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
-                    var body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
-                    _logger.LogWarning(
-                        "HTTP request {Method} {Uri} failed with transient status {StatusCode} (Body: {Body}). Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay...",
-                        request.Method, request.RequestUri, response.StatusCode, body, attempt, maxRetries, delay.TotalMilliseconds);
+                    outageStartTimestamp ??= _timeProvider.GetTimestamp();
+                    var elapsed = _timeProvider.GetElapsedTime(outageStartTimestamp.Value);
+                    if (attempt <= maxRetries && elapsed < maxDuration)
+                    {
+                        var calculatedDelay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
+                        var delay = ApplyRetryAfterHeader(response, calculatedDelay);
 
-                    response.Dispose();
-                    await Task.Delay(delay, _timeProvider, cancellationToken);
-                    continue;
+                        var remaining = maxDuration - elapsed;
+                        if (remaining > TimeSpan.Zero && delay > remaining)
+                        {
+                            delay = remaining;
+                        }
+
+                        var body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
+                        var errorMsg = !string.IsNullOrWhiteSpace(body) ? body : response.ReasonPhrase ?? response.StatusCode.ToString();
+
+                        _logger.LogWarning(
+                            "HTTP request {Method} {Uri} failed with transient status {StatusCode} (Body: {Body}). Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay (elapsed {ElapsedMs}ms / {MaxDurationMs}ms)...",
+                            request.Method, request.RequestUri, response.StatusCode, body, attempt, maxRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
+
+                        var notifyContext = new RetryNotificationContext(
+                            request.RequestUri,
+                            request.Method,
+                            request.Headers,
+                            attempt,
+                            maxRetries,
+                            delay,
+                            elapsed,
+                            maxDuration,
+                            errorMsg,
+                            response.StatusCode);
+
+                        response.Dispose();
+                        currentRequest.Dispose();
+
+                        await NotifyRetryAsync(request, notifyContext, cancellationToken);
+                        await WaitBackoffAsync(delay, cancellationToken);
+                        continue;
+                    }
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -85,19 +166,41 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
                 return response;
             }
-            catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
+            catch (Exception ex) when (ex is not OperationsPausedException && TransientErrorDetector.IsTransient(ex))
             {
-                if (attempt <= maxRetries)
+                currentRequest.Dispose();
+                outageStartTimestamp ??= _timeProvider.GetTimestamp();
+                var elapsed = _timeProvider.GetElapsedTime(outageStartTimestamp.Value);
+                if (attempt <= maxRetries && elapsed < maxDuration)
                 {
                     var delay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
+                    var remaining = maxDuration - elapsed;
+                    if (remaining > TimeSpan.Zero && delay > remaining)
+                    {
+                        delay = remaining;
+                    }
+
                     var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
 
                     _logger.LogWarning(
                         ex,
-                        "HTTP request {Method} {Uri} failed with transient network error: {ErrorMessage}. Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay...",
-                        request.Method, request.RequestUri, errorMsg, attempt, maxRetries, delay.TotalMilliseconds);
+                        "HTTP request {Method} {Uri} failed with transient network error: {ErrorMessage}. Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay (elapsed {ElapsedMs}ms / {MaxDurationMs}ms)...",
+                        request.Method, request.RequestUri, errorMsg, attempt, maxRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
 
-                    await Task.Delay(delay, _timeProvider, cancellationToken);
+                    var notifyContext = new RetryNotificationContext(
+                        request.RequestUri,
+                        request.Method,
+                        request.Headers,
+                        attempt,
+                        maxRetries,
+                        delay,
+                        elapsed,
+                        maxDuration,
+                        errorMsg,
+                        null);
+
+                    await NotifyRetryAsync(request, notifyContext, cancellationToken);
+                    await WaitBackoffAsync(delay, cancellationToken);
                 }
                 else
                 {
@@ -105,6 +208,141 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                     ex.Data[ResilienceConstants.RetriedKey] = true;
                     throw;
                 }
+            }
+        }
+    }
+
+    private async Task WaitBackoffAsync(TimeSpan delay, CancellationToken cancellationToken)
+    {
+        if (_operationsControlService == null)
+        {
+            await Task.Delay(delay, _timeProvider, cancellationToken);
+            return;
+        }
+
+        if (_operationsControlService.IsPaused)
+        {
+            throw new OperationsPausedException();
+        }
+
+        using var pauseCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        void OnStateChanged(bool isPaused)
+        {
+            if (isPaused)
+            {
+                try
+                {
+                    pauseCts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Justification: pauseCts may already be disposed if delay completed concurrently.
+                }
+            }
+        }
+
+        _operationsControlService.OnOperationsStateChanged += OnStateChanged;
+        try
+        {
+            if (_operationsControlService.IsPaused)
+            {
+                throw new OperationsPausedException();
+            }
+
+            await Task.Delay(delay, _timeProvider, pauseCts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && _operationsControlService.IsPaused)
+        {
+            throw new OperationsPausedException();
+        }
+        finally
+        {
+            _operationsControlService.OnOperationsStateChanged -= OnStateChanged;
+        }
+    }
+
+    private TimeSpan ApplyRetryAfterHeader(HttpResponseMessage response, TimeSpan calculatedDelay)
+    {
+        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable))
+        {
+            return calculatedDelay;
+        }
+
+        var retryAfter = response.Headers.RetryAfter;
+        if (retryAfter == null)
+        {
+            return calculatedDelay;
+        }
+
+        TimeSpan? retryAfterDelay = null;
+        if (retryAfter.Delta.HasValue)
+        {
+            retryAfterDelay = retryAfter.Delta.Value;
+        }
+        else if (retryAfter.Date.HasValue)
+        {
+            var diff = retryAfter.Date.Value - _timeProvider.GetUtcNow();
+            if (diff > TimeSpan.Zero)
+            {
+                retryAfterDelay = diff;
+            }
+        }
+
+        if (retryAfterDelay.HasValue && retryAfterDelay.Value > calculatedDelay)
+        {
+            return retryAfterDelay.Value;
+        }
+
+        return calculatedDelay;
+    }
+
+    private async Task NotifyRetryAsync(HttpRequestMessage request, RetryNotificationContext context, CancellationToken cancellationToken)
+    {
+        if (request.Options.TryGetValue(RetryCallbackKey, out var requestCallback) && requestCallback != null)
+        {
+            try
+            {
+                requestCallback(context);
+            }
+            catch (Exception ex) when (ex is not OperationsPausedException)
+            {
+                _logger.LogWarning(ex, "Retry callback threw an exception.");
+            }
+        }
+
+        if (request.Options.TryGetValue(AsyncRetryCallbackKey, out var requestAsyncCallback) && requestAsyncCallback != null)
+        {
+            try
+            {
+                await requestAsyncCallback(context, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationsPausedException)
+            {
+                _logger.LogWarning(ex, "Async retry callback threw an exception.");
+            }
+        }
+
+        if (_options.OnRetry != null)
+        {
+            try
+            {
+                _options.OnRetry(context);
+            }
+            catch (Exception ex) when (ex is not OperationsPausedException)
+            {
+                _logger.LogWarning(ex, "Options OnRetry callback threw an exception.");
+            }
+        }
+
+        if (_options.OnRetryAsync != null)
+        {
+            try
+            {
+                await _options.OnRetryAsync(context, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationsPausedException)
+            {
+                _logger.LogWarning(ex, "Options OnRetryAsync callback threw an exception.");
             }
         }
     }

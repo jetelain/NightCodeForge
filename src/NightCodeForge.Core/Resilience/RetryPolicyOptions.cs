@@ -10,6 +10,7 @@ public class RetryPolicyOptions
     public const int DefaultMaxRetries = 3;
     public const double DefaultBaseDelaySeconds = 1.0;
     public const double DefaultMaxDelaySeconds = 15.0;
+    public const double DefaultMaxRetryDurationSeconds = 30.0;
 
     /// <summary>
     /// Maximum number of retry attempts for transient errors before failing fast.
@@ -25,4 +26,19 @@ public class RetryPolicyOptions
     /// Maximum ceiling for the exponential delay before adding jitter.
     /// </summary>
     public TimeSpan MaxDelay { get; set; } = TimeSpan.FromSeconds(DefaultMaxDelaySeconds);
+
+    /// <summary>
+    /// Maximum total duration spent retrying transient errors before exhausting the retry policy.
+    /// </summary>
+    public TimeSpan MaxRetryDuration { get; set; } = TimeSpan.FromSeconds(DefaultMaxRetryDurationSeconds);
+
+    /// <summary>
+    /// Optional synchronous notification callback invoked on each retry attempt.
+    /// </summary>
+    public Action<RetryNotificationContext>? OnRetry { get; set; }
+
+    /// <summary>
+    /// Optional asynchronous notification callback invoked on each retry attempt.
+    /// </summary>
+    public Func<RetryNotificationContext, CancellationToken, Task>? OnRetryAsync { get; set; }
 }

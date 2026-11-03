@@ -7,6 +7,7 @@ using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
+using NightCodeForge.Core.Streaming;
 using Xunit;
 
 namespace NightCodeForge.Agents.Tests;
@@ -33,12 +34,14 @@ public class LlmChatClientFactoryRoutingTests
     private static OllamaRouterChatClientFactory RouterFactory() => new(
         Microsoft.Extensions.Options.Options.Create(Options), NullLoggerFactory.Instance,
         new Mock<IOperationsTelemetryService>().Object, new Mock<IOperationsControlService>().Object,
-        TimeProvider.System, Microsoft.Extensions.Options.Options.Create(new RetryPolicyOptions()));
+        TimeProvider.System, Microsoft.Extensions.Options.Options.Create(new LlmRetryPolicyOptions()),
+        new InMemoryAgentActivityStreamer());
 
     private static StandaloneOllamaChatClientFactory StandaloneFactory() => new(
         Microsoft.Extensions.Options.Options.Create(Options), NullLoggerFactory.Instance,
         new Mock<IOperationsTelemetryService>().Object, new Mock<IOperationsControlService>().Object,
-        TimeProvider.System, Microsoft.Extensions.Options.Options.Create(new RetryPolicyOptions()));
+        TimeProvider.System, Microsoft.Extensions.Options.Options.Create(new LlmRetryPolicyOptions()),
+        new InMemoryAgentActivityStreamer());
 
     private static HttpRequestMessage Capture(Action<HttpClient> configure, OllamaRoutingTarget target, string? sessionId, bool router)
     {

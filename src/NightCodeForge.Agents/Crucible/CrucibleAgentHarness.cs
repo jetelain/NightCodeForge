@@ -47,7 +47,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
     private readonly ILlmCapabilityResolver _capabilityResolver;
     private readonly ILogger<CrucibleAgentHarness> _logger;
     private readonly LlmProviderOptions _llmOptions;
-    private readonly RetryPolicyOptions _retryOptions;
+    private readonly LlmRetryPolicyOptions _retryOptions;
     private readonly TimeProvider _timeProvider;
 
     private static readonly TimeSpan PauseAbortTimeout = TimeSpan.FromSeconds(5);
@@ -75,7 +75,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         IOperationsControlService operationsControlService,
         IBacklogPlanningContext backlogContext,
         Microsoft.Extensions.Options.IOptions<LlmProviderOptions> llmOptions,
-        Microsoft.Extensions.Options.IOptions<RetryPolicyOptions> retryOptions,
+        Microsoft.Extensions.Options.IOptions<LlmRetryPolicyOptions> retryOptions,
         ILogger<CrucibleAgentHarness> logger,
         TimeProvider timeProvider)
     {
@@ -1001,6 +1001,58 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
+        async Task WaitRetryBackoffAsync(TimeSpan delay)
+        {
+            using var pauseCts = CancellationTokenSource.CreateLinkedTokenSource(interruptionCts.Token);
+            void OnStateChanged(bool isPaused)
+            {
+                if (isPaused)
+                {
+                    try
+                    {
+                        pauseCts.Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Justification: pauseCts may already be disposed if delay completed concurrently.
+                    }
+                }
+            }
+
+            _operationsControlService.OnOperationsStateChanged += OnStateChanged;
+            try
+            {
+                if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+                {
+                    await SuspendOnPauseAsync();
+                    throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).");
+                }
+
+                await Task.Delay(delay, _timeProvider, pauseCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                if (isPause)
+                {
+                    await SuspendOnPauseAsync();
+                    throw;
+                }
+                await AbortOnCancellationAsync();
+                throw;
+            }
+            finally
+            {
+                _operationsControlService.OnOperationsStateChanged -= OnStateChanged;
+            }
+
+            if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+            {
+                await SuspendOnPauseAsync();
+                throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).");
+            }
+        }
+
         var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
 
         void FlushTurnToHistory()
@@ -1180,8 +1232,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var historySnapshot = chatHistory.ToList();
         var maxTransientRetries = _retryOptions.MaxRetries;
         int streamRetryCount = 0;
+        long? streamOutageStartTimestamp = null;
 
-        var enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
+        IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
             .GetAsyncEnumerator(interruptionCts.Token);
         try
         {
@@ -1224,16 +1277,37 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     await AbortOnCancellationAsync();
                     throw;
                 }
-                catch (NightCodeForge.Core.Exceptions.OperationsPausedException opex)
+                catch (Exception ex) when (HttpErrorDetailHelper.FindException<NightCodeForge.Core.Exceptions.OperationsPausedException>(ex) is { } opex)
                 {
                     _logger.LogInformation(opex, "Crucible streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
                     await SuspendOnPauseAsync();
                     throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
                 }
-                catch (Exception ex) when (TransientErrorDetector.IsTransient(ex) && streamRetryCount < maxTransientRetries)
+                catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
                 {
+                    if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+                    {
+                        await SuspendOnPauseAsync();
+                        throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", ex);
+                    }
+
+                    streamOutageStartTimestamp ??= _timeProvider.GetTimestamp();
+                    var elapsed = _timeProvider.GetElapsedTime(streamOutageStartTimestamp.Value);
+                    if (streamRetryCount >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                    {
+                        var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                        _logger.LogError(ex, "Crucible streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
+                            streamRetryCount, maxTransientRetries, elapsed, failMsg);
+                        return await FailAsync(failMsg);
+                    }
+
                     streamRetryCount++;
                     var delay = ResilienceJitterHelper.CalculateJitteredDelay(streamRetryCount, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
+                    var remaining = _retryOptions.MaxRetryDuration - elapsed;
+                    if (remaining > TimeSpan.Zero && delay > remaining)
+                    {
+                        delay = remaining;
+                    }
                     var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
 
                     _logger.LogWarning(
@@ -1246,14 +1320,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         context.ForgeTask.Id,
                         context.StageId,
                         AgentActivityKind.Notice,
-                        $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries})...",
+                        $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
                         cancellationToken);
 
                     accumulatedText.Clear();
                     accumulatedReasoning.Clear();
 
                     await enumerator.DisposeAsync();
-                    await Task.Delay(delay, _timeProvider, cancellationToken);
+                    enumerator = null;
+                    await WaitRetryBackoffAsync(delay);
 
                     session = await agent.CreateSessionAsync(cancellationToken);
                     enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
@@ -1269,8 +1344,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                 if (!hasMore) break;
 
-                // Reset streamRetryCount upon successful chunk receipt so subsequent turns have their full retry budget
+                // Reset streamRetryCount and outage timer upon successful chunk receipt so subsequent turns have their full retry budget
                 streamRetryCount = 0;
+                streamOutageStartTimestamp = null;
 
                 if (await ProcessUpdateAsync(enumerator.Current, streaming: true))
                 {
@@ -1280,7 +1356,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
         finally
         {
-            await enumerator.DisposeAsync();
+            if (enumerator != null)
+            {
+                await enumerator.DisposeAsync();
+            }
         }
 
         if (capturedInterruption != null)
@@ -1301,6 +1380,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             chatHistory.AddRange(historySnapshot);
 
             int nonStreamingRetries = 0;
+            long? nonStreamingOutageStartTimestamp = null;
             while (true)
             {
                 try
@@ -1339,16 +1419,37 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     await AbortOnCancellationAsync();
                     throw;
                 }
-                catch (NightCodeForge.Core.Exceptions.OperationsPausedException opex)
+                catch (Exception ex) when (HttpErrorDetailHelper.FindException<NightCodeForge.Core.Exceptions.OperationsPausedException>(ex) is { } opex)
                 {
                     _logger.LogInformation(opex, "Crucible non-streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
                     await SuspendOnPauseAsync();
                     throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
                 }
-                catch (Exception ex) when (TransientErrorDetector.IsTransient(ex) && nonStreamingRetries < maxTransientRetries)
+                catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
                 {
+                    if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+                    {
+                        await SuspendOnPauseAsync();
+                        throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", ex);
+                    }
+
+                    nonStreamingOutageStartTimestamp ??= _timeProvider.GetTimestamp();
+                    var elapsed = _timeProvider.GetElapsedTime(nonStreamingOutageStartTimestamp.Value);
+                    if (nonStreamingRetries >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                    {
+                        var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                        _logger.LogError(ex, "Crucible non-streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
+                            nonStreamingRetries, maxTransientRetries, elapsed, failMsg);
+                        return await FailAsync(failMsg);
+                    }
+
                     nonStreamingRetries++;
                     var delay = ResilienceJitterHelper.CalculateJitteredDelay(nonStreamingRetries, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
+                    var remaining = _retryOptions.MaxRetryDuration - elapsed;
+                    if (remaining > TimeSpan.Zero && delay > remaining)
+                    {
+                        delay = remaining;
+                    }
                     var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
 
                     _logger.LogWarning(
@@ -1361,13 +1462,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         context.ForgeTask.Id,
                         context.StageId,
                         AgentActivityKind.Notice,
-                        $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {nonStreamingRetries}/{maxTransientRetries})...",
+                        $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {nonStreamingRetries}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
                         cancellationToken);
 
                     accumulatedText.Clear();
                     accumulatedReasoning.Clear();
 
-                    await Task.Delay(delay, _timeProvider, cancellationToken);
+                    await WaitRetryBackoffAsync(delay);
+
                     session = await agent.CreateSessionAsync(cancellationToken);
                     continue;
                 }

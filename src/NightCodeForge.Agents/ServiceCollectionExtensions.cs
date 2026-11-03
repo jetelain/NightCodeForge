@@ -34,6 +34,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
         services.AddOptions<RetryPolicyOptions>();
+        services.AddOptions<LlmRetryPolicyOptions>();
 
         // 2. Canonical Tools & Context Services
         services.TryAddSingleton<IEditorConfigService, EditorConfigService>();

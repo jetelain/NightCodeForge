@@ -234,4 +234,174 @@ public class CrucibleTransientRetryTests : IDisposable
         var conv = Assert.Single(convs);
         Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
     }
+
+    [Fact]
+    public async Task CrucibleAgent_WhenWrappedOperationsPausedExceptionThrown_SuspendsAsInterrupted_WithoutFailing()
+    {
+        int invocationCount = 0;
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            Interlocked.Increment(ref invocationCount);
+            throw new HttpRequestException(
+                "Transport aborted",
+                new NightCodeForge.Core.Exceptions.OperationsPausedException("Global operations are paused."));
+        });
+
+        var taskRepo = new InMemoryTaskRepository();
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            TaskRepository = taskRepo
+        }.Build();
+
+        var context = NewContext();
+        await taskRepo.CreateAsync(context.ForgeTask);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => harness.RunStageAsync(context, CancellationToken.None));
+        Assert.Equal(1, invocationCount);
+
+        var convs = await taskRepo.GetConversationsAsync(context.ForgeTask.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
+    }
+
+    [Fact]
+    public async Task CrucibleAgent_LongTurnBeforeMidStreamError_DoesNotPrematurelyExhaustOutageTimer()
+    {
+        var fakeTime = new ManualTimeProvider();
+        int invocationCount = 0;
+
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            var callIndex = Interlocked.Increment(ref invocationCount);
+            if (callIndex == 1)
+            {
+                return SlowTurnThenFailureStream(fakeTime, ct);
+            }
+
+            return RecoveryStream(ct);
+        });
+
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            TaskRepository = new InMemoryTaskRepository(),
+            TimeProvider = fakeTime,
+            RetryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.LlmRetryPolicyOptions
+            {
+                MaxRetries = 3,
+                BaseDelay = TimeSpan.FromMilliseconds(1),
+                MaxDelay = TimeSpan.FromMilliseconds(5),
+                MaxRetryDuration = TimeSpan.FromSeconds(30)
+            })
+        }.Build();
+
+        var context = NewContext();
+        var result = await harness.RunStageAsync(context, CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(2, invocationCount);
+
+        static async IAsyncEnumerable<ChatResponseUpdate> SlowTurnThenFailureStream(
+            ManualTimeProvider clock,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            // Simulate a 10-minute prompt evaluation / tool execution before a mid-stream connection drop
+            clock.Advance(TimeSpan.FromMinutes(10));
+            throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+
+        static async IAsyncEnumerable<ChatResponseUpdate> RecoveryStream([EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            yield return new ChatResponseUpdate { Contents = [new TextContent("Recovered after mid-stream reset.")] };
+        }
+    }
+
+    [Fact]
+    public async Task CrucibleAgent_WhenPausedDuringRetryBackoff_SuspendsImmediately_AndMarksConversationInterrupted()
+    {
+        int invocationCount = 0;
+        bool isPaused = false;
+        var mockOps = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>();
+        mockOps.Setup(m => m.IsPaused).Returns(() => isPaused);
+
+        var streamer = new CallbackStreamer(evt =>
+        {
+            if (evt.Kind == AgentActivityKind.Notice)
+            {
+                // Trigger global operations pause right as the harness enters retry backoff
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(15);
+                    isPaused = true;
+                    mockOps.Raise(m => m.OnOperationsStateChanged += null, true);
+                });
+            }
+        });
+
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            Interlocked.Increment(ref invocationCount);
+            throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+        });
+
+        var taskRepo = new InMemoryTaskRepository();
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            ActivityStreamer = streamer,
+            TaskRepository = taskRepo,
+            OperationsControlService = mockOps.Object,
+            RetryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.LlmRetryPolicyOptions
+            {
+                MaxRetries = 5,
+                BaseDelay = TimeSpan.FromSeconds(30),
+                MaxDelay = TimeSpan.FromSeconds(30),
+                MaxRetryDuration = TimeSpan.FromMinutes(5)
+            })
+        }.Build();
+
+        var context = NewContext();
+        await taskRepo.CreateAsync(context.ForgeTask);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.RunStageAsync(context, CancellationToken.None));
+        Assert.Equal(1, invocationCount);
+
+        var convs = await taskRepo.GetConversationsAsync(context.ForgeTask.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
+    }
+
+    private sealed class CallbackStreamer(Action<AgentActivityEvent> onEvent) : IAgentActivityStreamer
+    {
+        public Task BroadcastAsync(AgentActivityEvent activityEvent, CancellationToken cancellationToken = default)
+        {
+            onEvent(activityEvent);
+            return Task.CompletedTask;
+        }
+
+        public IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? taskId = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+        private long _timestampTicks;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+        public override long GetTimestamp() => _timestampTicks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public void Advance(TimeSpan delta)
+        {
+            _utcNow = _utcNow.Add(delta);
+            _timestampTicks += delta.Ticks;
+        }
+    }
 }

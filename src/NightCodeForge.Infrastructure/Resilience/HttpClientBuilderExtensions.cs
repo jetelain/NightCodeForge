@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 
 namespace NightCodeForge.Infrastructure.Resilience;
@@ -20,10 +21,15 @@ public static class HttpClientBuilderExtensions
         ArgumentNullException.ThrowIfNull(builder);
         builder.Services.AddOptions<RetryPolicyOptions>();
         builder.Services.TryAddTransient<TransientHttpErrorRetryHandler>(sp =>
-            new TransientHttpErrorRetryHandler(
-                sp.GetRequiredService<ILogger<TransientHttpErrorRetryHandler>>(),
-                sp.GetRequiredService<TimeProvider>(),
-                sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value));
+        {
+            var logger = sp.GetRequiredService<ILogger<TransientHttpErrorRetryHandler>>();
+            var timeProvider = sp.GetRequiredService<TimeProvider>();
+            var options = sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value;
+            var opsControl = sp.GetService<IOperationsControlService>();
+            return opsControl != null
+                ? new TransientHttpErrorRetryHandler(logger, timeProvider, options, opsControl)
+                : new TransientHttpErrorRetryHandler(logger, timeProvider, options);
+        });
 
         return builder.AddHttpMessageHandler<TransientHttpErrorRetryHandler>();
     }

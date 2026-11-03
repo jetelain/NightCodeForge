@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using NightCodeForge.Core.Exceptions;
 
 namespace NightCodeForge.Core.Resilience;
 
@@ -10,26 +11,15 @@ public static class TransientErrorDetector
 {
     /// <summary>
     /// Evaluates whether an exception represents a transient network, socket, or HTTP error.
-    /// Returns false if the exception was already retried by an inner handler or is an overall request timeout.
+    /// Returns false if the exception was already retried by an inner handler, is an overall request timeout,
+    /// or represents a pause / explicit cancellation.
     /// </summary>
     public static bool IsTransient(Exception? ex)
     {
         if (ex == null) return false;
 
-        // Skip exceptions that have already been retried and exhausted by an inner resilience handler
-        if (ex.Data.Contains(ResilienceConstants.RetriedKey))
-        {
-            return false;
-        }
-
-        // Do not retry overall request timeouts or explicit cancellations
-        if (ex is OperationCanceledException or TaskCanceledException)
-        {
-            return false;
-        }
-
-        // Refused connections indicate a misconfigured or stopped endpoint: fail fast
-        if (IsConnectionRefused(ex))
+        // Skip exceptions (or wrapped inner exceptions) that have already been retried, cancelled, or paused
+        if (HasNonRetryableMarkerOrCancellation(ex))
         {
             return false;
         }
@@ -63,6 +53,11 @@ public static class TransientErrorDetector
                 or HttpRequestError.SecureConnectionError
                 or HttpRequestError.NameResolutionError)
             {
+                if (httpEx.InnerException is SocketException innerSocketEx)
+                {
+                    return IsTransientSocketError(innerSocketEx.SocketErrorCode);
+                }
+
                 return true;
             }
 
@@ -99,26 +94,48 @@ public static class TransientErrorDetector
                    or HttpStatusCode.GatewayTimeout;          // 504
 
     /// <summary>
-    /// Checks whether a socket error code represents a transient connectivity or connection reset condition.
-    /// Excludes ConnectionRefused (to fail fast on endpoint misconfigurations) and TryAgain (WSAEWOULDBLOCK).
+    /// Checks whether a socket error code represents a transient connectivity, DNS, or connection reset condition.
+    /// Includes ConnectionRefused (to wait during local service restarts) and transient DNS/interface transitions.
     /// </summary>
     public static bool IsTransientSocketError(SocketError error) =>
         error is SocketError.ConnectionReset                  // 10054 (WSAECONNRESET)
               or SocketError.ConnectionAborted                // 10053 (WSAECONNABORTED)
+              or SocketError.ConnectionRefused                // 10061 (WSAECONNREFUSED)
               or SocketError.TimedOut                         // 10060 (WSAETIMEDOUT)
               or SocketError.HostUnreachable                  // 10065 (WSAEHOSTUNREACH)
               or SocketError.NetworkUnreachable               // 10051 (WSAENETUNREACH)
               or SocketError.NetworkReset                     // 10052 (WSAENETRESET)
               or SocketError.Shutdown                         // 10058 (WSAESHUTDOWN)
-              or SocketError.NotConnected;
+              or SocketError.NotConnected                     // 10057 (WSAENOTCONN)
+              or SocketError.TryAgain                         // 11002 (WSATRY_AGAIN)
+              or SocketError.HostNotFound                     // 11001 (WSAHOST_NOT_FOUND)
+              or SocketError.NoData                           // 11004 (WSANO_DATA)
+              or SocketError.OperationAborted                 // 995   (WSA_OPERATION_ABORTED)
+              or SocketError.Interrupted;                     // 10004 (WSAEINTR)
 
-    private static bool IsConnectionRefused(Exception? ex)
+    private static bool HasNonRetryableMarkerOrCancellation(Exception? ex)
     {
         for (var current = ex; current != null; current = current.InnerException)
         {
-            if (current is SocketException { SocketErrorCode: SocketError.ConnectionRefused })
+            if (current.Data.Contains(ResilienceConstants.RetriedKey))
             {
                 return true;
+            }
+
+            if (current is OperationCanceledException or TaskCanceledException or OperationsPausedException)
+            {
+                return true;
+            }
+
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    if (HasNonRetryableMarkerOrCancellation(inner))
+                    {
+                        return true;
+                    }
+                }
             }
         }
 

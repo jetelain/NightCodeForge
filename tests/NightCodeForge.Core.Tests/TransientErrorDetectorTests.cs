@@ -36,12 +36,12 @@ public class TransientErrorDetectorTests
     }
 
     [Fact]
-    public void IsTransient_ReturnsFalse_WhenConnectionRefusedIsWrappedAsConnectionError()
+    public void IsTransient_ReturnsTrue_WhenConnectionRefusedIsWrappedAsConnectionError()
     {
         var refused = new SocketException((int)SocketError.ConnectionRefused);
         var httpEx = new HttpRequestException(HttpRequestError.ConnectionError, "Connection refused", refused);
 
-        Assert.False(TransientErrorDetector.IsTransient(httpEx));
+        Assert.True(TransientErrorDetector.IsTransient(httpEx));
     }
 
     [Fact]
@@ -56,12 +56,18 @@ public class TransientErrorDetectorTests
     [Theory]
     [InlineData(SocketError.ConnectionReset)]
     [InlineData(SocketError.ConnectionAborted)]
+    [InlineData(SocketError.ConnectionRefused)]
     [InlineData(SocketError.TimedOut)]
     [InlineData(SocketError.HostUnreachable)]
     [InlineData(SocketError.NetworkUnreachable)]
     [InlineData(SocketError.NetworkReset)]
     [InlineData(SocketError.Shutdown)]
     [InlineData(SocketError.NotConnected)]
+    [InlineData(SocketError.TryAgain)]
+    [InlineData(SocketError.HostNotFound)]
+    [InlineData(SocketError.NoData)]
+    [InlineData(SocketError.OperationAborted)]
+    [InlineData(SocketError.Interrupted)]
     public void IsTransient_ReturnsTrue_ForTransientSocketErrors(SocketError socketError)
     {
         var ex = new SocketException((int)socketError);
@@ -69,12 +75,42 @@ public class TransientErrorDetectorTests
     }
 
     [Theory]
-    [InlineData(SocketError.ConnectionRefused)]
-    [InlineData(SocketError.TryAgain)]
+    [InlineData(SocketError.AccessDenied)]
+    [InlineData(SocketError.InvalidArgument)]
     public void IsTransient_ReturnsFalse_ForNonTransientSocketErrors(SocketError socketError)
     {
         var ex = new SocketException((int)socketError);
         Assert.False(TransientErrorDetector.IsTransient(ex));
+    }
+
+    [Fact]
+    public void IsTransient_ReturnsFalse_ForOperationsPausedException()
+    {
+        Assert.False(TransientErrorDetector.IsTransient(new NightCodeForge.Core.Exceptions.OperationsPausedException()));
+        Assert.False(TransientErrorDetector.IsTransient(new HttpRequestException("Error", new NightCodeForge.Core.Exceptions.OperationsPausedException())));
+        Assert.False(TransientErrorDetector.IsTransient(new HttpRequestException(
+            HttpRequestError.ConnectionError,
+            "Connection error",
+            new IOException("Aborted", new NightCodeForge.Core.Exceptions.OperationsPausedException()))));
+    }
+
+    [Fact]
+    public void IsTransient_ReturnsFalse_WhenConnectionErrorWrapsNonTransientSocketErrorOrRetriedException()
+    {
+        var nonTransientSocket = new SocketException((int)SocketError.AccessDenied);
+        var wrappedSocketEx = new HttpRequestException(HttpRequestError.ConnectionError, "Permission denied", nonTransientSocket);
+        Assert.False(TransientErrorDetector.IsTransient(wrappedSocketEx));
+
+        var innerRetried = new SocketException((int)SocketError.ConnectionReset);
+        innerRetried.Data[ResilienceConstants.RetriedKey] = true;
+        var wrappedRetriedEx = new HttpRequestException(HttpRequestError.ConnectionError, "Reset", innerRetried);
+        Assert.False(TransientErrorDetector.IsTransient(wrappedRetriedEx));
+
+        var deeplyCancelled = new HttpRequestException(
+            HttpRequestError.ConnectionError,
+            "Cancelled",
+            new IOException("Stream cancelled", new OperationCanceledException()));
+        Assert.False(TransientErrorDetector.IsTransient(deeplyCancelled));
     }
 
     [Theory]

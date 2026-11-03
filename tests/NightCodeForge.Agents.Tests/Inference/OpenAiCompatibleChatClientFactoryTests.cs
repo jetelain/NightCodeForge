@@ -7,6 +7,7 @@ using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;
 
@@ -16,7 +17,8 @@ public class OpenAiCompatibleChatClientFactoryTests
 {
     private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
     private readonly Mock<IOperationsControlService> _opsControlMock = new();
-    private readonly IOptions<RetryPolicyOptions> _retryOptions = Options.Create(new RetryPolicyOptions());
+    private readonly IOptions<LlmRetryPolicyOptions> _retryOptions = Options.Create(new LlmRetryPolicyOptions());
+    private readonly IAgentActivityStreamer _activityStreamer = new InMemoryAgentActivityStreamer();
 
     [Fact]
     public void CreateClient_WhenModelNotAllowed_ThrowsModelNotAllowedException()
@@ -41,7 +43,8 @@ public class OpenAiCompatibleChatClientFactoryTests
             TimeProvider.System,
             _retryOptions,
             cache,
-            new OpenAiDefaultModelSelector());
+            new OpenAiDefaultModelSelector(),
+            _activityStreamer);
 
         var ex = Assert.Throws<ModelNotAllowedException>(() => factory.CreateClient("unlisted-model"));
         Assert.Equal("unlisted-model", ex.ModelId);
@@ -72,7 +75,8 @@ public class OpenAiCompatibleChatClientFactoryTests
             TimeProvider.System,
             _retryOptions,
             cache,
-            new OpenAiDefaultModelSelector());
+            new OpenAiDefaultModelSelector(),
+            _activityStreamer);
 
         var client = factory.CreateClient("allowed-model");
         Assert.NotNull(client);
@@ -106,7 +110,8 @@ public class OpenAiCompatibleChatClientFactoryTests
             TimeProvider.System,
             _retryOptions,
             cache,
-            new OpenAiDefaultModelSelector());
+            new OpenAiDefaultModelSelector(),
+            _activityStreamer);
 
         // Allowed via manual configuration
         var client = factory.CreateClient("custom-llama");
@@ -143,7 +148,8 @@ public class OpenAiCompatibleChatClientFactoryTests
             TimeProvider.System,
             _retryOptions,
             cache,
-            new OpenAiDefaultModelSelector());
+            new OpenAiDefaultModelSelector(),
+            _activityStreamer);
 
         var client = factory.CreateClient();
         Assert.NotNull(client);

@@ -7,6 +7,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
+using NightCodeForge.Core.Streaming;
 using OpenAI;
 using OpenAI.Chat;
 
@@ -28,10 +29,11 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
         IOperationsTelemetryService telemetryService,
         IOperationsControlService operationsControlService,
         TimeProvider timeProvider,
-        IOptions<RetryPolicyOptions> retryOptions,
+        IOptions<LlmRetryPolicyOptions> retryOptions,
         IOpenAiModelAllowlistCache allowlistCache,
-        IDefaultModelSelector defaultModelSelector)
-        : base(options, loggerFactory, telemetryService, operationsControlService, timeProvider, retryOptions)
+        IDefaultModelSelector defaultModelSelector,
+        IAgentActivityStreamer activityStreamer)
+        : base(options, loggerFactory, telemetryService, operationsControlService, timeProvider, retryOptions, activityStreamer)
     {
         _allowlistCache = allowlistCache ?? throw new ArgumentNullException(nameof(allowlistCache));
         _defaultModelSelector = defaultModelSelector ?? throw new ArgumentNullException(nameof(defaultModelSelector));
@@ -102,7 +104,8 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
 
         var clientOptions = new OpenAIClientOptions
         {
-            Endpoint = new Uri(options.EffectiveEndpoint.TrimEnd('/') + "/")
+            Endpoint = new Uri(options.EffectiveEndpoint.TrimEnd('/') + "/"),
+            RetryPolicy = new ClientRetryPolicy(maxRetries: 0)
         };
 
         if (!string.IsNullOrWhiteSpace(options.OpenAiCompatible?.OrganizationId))
@@ -111,16 +114,21 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
         }
 
         // 3. Pipeline transport using shared SocketsHttpHandler and TransientHttpErrorRetryHandler
+        var effectiveRetryOptions = CreateEffectiveRetryOptions(sessionId);
+
         var retryHandler = new TransientHttpErrorRetryHandler(
             socketsHandler,
             _loggerFactory.CreateLogger("OpenAiApiClient"),
             _timeProvider,
-            _retryOptions.Value);
+            effectiveRetryOptions,
+            _operationsControlService);
 
         var httpClient = new HttpClient(retryHandler, disposeHandler: false)
         {
             Timeout = TimeSpan.FromMinutes(Math.Max(1, options.RequestTimeoutMinutes))
         };
+
+        LlmCorrelationHeaders.Apply(httpClient, sessionId);
 
         // Strict header hygiene: suppress X-OllamaRouter-* headers
         clientOptions.Transport = new HttpClientPipelineTransport(httpClient);

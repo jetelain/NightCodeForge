@@ -28,20 +28,20 @@ public static class InferenceServiceCollectionExtensions
         {
             case LlmProviderType.Ollama:
                 services.TryAddSingleton<IDefaultModelSelector, OllamaDefaultModelSelector>();
-                services.AddHttpClient<ILlmGatewayService, OllamaGatewayService>().AddTransientHttpErrorRetry();
-                services.AddHttpClient<ILlmModelCatalogService, OllamaModelCatalogService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmGatewayService, OllamaGatewayService>();
+                services.AddHttpClient<ILlmModelCatalogService, OllamaModelCatalogService>();
                 services.AddHttpClient<ILlmModelPreloadService, OllamaModelPreloadService>().AddTransientHttpErrorRetry();
                 break;
             case LlmProviderType.OllamaRouter:
                 services.TryAddSingleton<IDefaultModelSelector, OllamaDefaultModelSelector>();
-                services.AddHttpClient<ILlmGatewayService, OllamaRouterGatewayService>().AddTransientHttpErrorRetry();
-                services.AddHttpClient<ILlmModelCatalogService, OllamaRouterModelCatalogService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmGatewayService, OllamaRouterGatewayService>();
+                services.AddHttpClient<ILlmModelCatalogService, OllamaRouterModelCatalogService>();
                 services.AddHttpClient<ILlmModelPreloadService, OllamaModelPreloadService>().AddTransientHttpErrorRetry();
                 break;
             case LlmProviderType.OpenAiCompatible:
                 services.TryAddSingleton<IDefaultModelSelector, OpenAiDefaultModelSelector>();
-                services.AddHttpClient<ILlmGatewayService, OpenAiCompatibleGatewayService>().AddTransientHttpErrorRetry();
-                services.AddHttpClient<ILlmModelCatalogService, OpenAiCompatibleModelCatalogService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmGatewayService, OpenAiCompatibleGatewayService>();
+                services.AddHttpClient<ILlmModelCatalogService, OpenAiCompatibleModelCatalogService>();
                 services.TryAddSingleton<ILlmModelPreloadService, NoOpModelPreloadService>();
                 break;
             default:

@@ -10,8 +10,13 @@ using Xunit;
 
 namespace NightCodeForge.Web.Tests.E2E;
 
-[CollectionDefinition("PlaywrightUiE2E")]
+[CollectionDefinition("PlaywrightUiE2E", DisableParallelization = true)]
 public class PlaywrightUiE2ECollection : ICollectionFixture<PlaywrightWebHostFixture>
+{
+}
+
+[CollectionDefinition("E2E_EnvironmentSeed", DisableParallelization = true)]
+public class E2EEnvironmentSeedCollection
 {
 }
 

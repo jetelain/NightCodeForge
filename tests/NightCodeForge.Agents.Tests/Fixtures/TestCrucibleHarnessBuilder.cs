@@ -52,7 +52,13 @@ public class TestCrucibleHarnessBuilder
     public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
     public ILlmCapabilityResolver? CapabilityResolver { get; set; }
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
-    public IOptions<NightCodeForge.Core.Resilience.RetryPolicyOptions> RetryOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.RetryPolicyOptions());
+    public IOptions<NightCodeForge.Core.Resilience.LlmRetryPolicyOptions> RetryOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.LlmRetryPolicyOptions
+    {
+        MaxRetries = 3,
+        BaseDelay = TimeSpan.FromMilliseconds(1),
+        MaxDelay = TimeSpan.FromMilliseconds(5),
+        MaxRetryDuration = TimeSpan.FromSeconds(5)
+    });
     public ILogger<CrucibleAgentHarness> Logger { get; set; } = NullLogger<CrucibleAgentHarness>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
 
