@@ -1,20 +1,16 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
-using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
 using NightCodeForge.Agents.Context;
-using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Execution;
 
 namespace NightCodeForge.Agents.Acp;
@@ -28,185 +24,48 @@ public class AcpHarnessOptions
 
 /// <summary>
 /// Open Agent Client Protocol (ACP) adapter supporting ACP v2 negotiation with backward-compatible v1 fallback.
-/// Intercepts terminal, filesystem, and tool requests and routes them into the execution sandbox,
+/// Delegates host-side terminal and filesystem callbacks to <see cref="IAcpHostRpcHandler"/>,
 /// streaming live activity to IAgentActivityStreamer and persisting session markdown transcripts.
 /// </summary>
-public class AcpAgentHarness : IAgentHarness
+public class AcpAgentHarness : ExternalProcessAgentHarnessBase
 {
+    private const int JsonRpcInvalidParams = -32602;
+
     private readonly AcpHarnessOptions _options;
-    private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly IMcpClientManager _mcpManager;
-    private readonly IEditorConfigService _editorConfigService;
-    private readonly IEditorConfigFileApplier _editorConfigFileApplier;
-    private readonly AgentsMdService _agentsMdService;
-    private readonly IAgentActivityStreamer _activityStreamer;
-    private readonly SessionTranscriptService _transcriptService;
-    private readonly IWorkspacePathResolver _pathResolver;
-    private readonly IProcessRunner _processRunner;
+    private readonly IAcpHostRpcHandler _hostRpcHandler;
     private readonly ILogger<AcpAgentHarness> _logger;
 
-    public string HarnessId => StandardHarnessIds.Acp;
+    public override string HarnessId => StandardHarnessIds.Acp;
+
+    protected override string AgentDisplayName => "ACP agent";
+    protected override string DefaultExecutablePath => _options.ExecutablePath;
+    protected override string DefaultArguments => _options.Arguments;
+    protected override Func<Process>? CustomProcessFactory => _options.CustomProcessFactory;
 
     public AcpAgentHarness(
         Microsoft.Extensions.Options.IOptions<AcpHarnessOptions> options,
-        IExecutionEnvironmentProvider envProvider,
         IMcpClientManager mcpManager,
-        IEditorConfigService editorConfigService,
-        IEditorConfigFileApplier editorConfigFileApplier,
+        IAcpHostRpcHandler hostRpcHandler,
+        IHarnessActivityRecorder recorder,
         AgentsMdService agentsMdService,
-        IAgentActivityStreamer activityStreamer,
-        SessionTranscriptService transcriptService,
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
         ILogger<AcpAgentHarness> logger)
+        : base(recorder, agentsMdService, pathResolver, processRunner, logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
-        _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
-        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
-        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
-        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
-        _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
-        _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
-        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
-        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
-
-    public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
-    {
-        var sw = Stopwatch.StartNew();
-        var sessionId = Guid.NewGuid().ToString("N");
-        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
-
-        if (_options.CustomProcessFactory != null)
-        {
-            Process process;
-            try
-            {
-                process = _options.CustomProcessFactory();
-                process.Start();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to launch ACP agent via custom factory");
-                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-                return AgentRunResult.Failed($"Failed to launch ACP agent: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
-            }
-
-            using var stdin = new StreamWriter(process.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
-            using var stdout = process.StandardOutput;
-
-            try
-            {
-                return await RunSessionStreamAsync(stdin, stdout, context, sessionId, sw, cancellationToken);
-            }
-            finally
-            {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to terminate custom factory process during validation");
-                }
-                process.Dispose();
-            }
-        }
-
-        var exePath = _options.ExecutablePath;
-        var args = _options.Arguments;
-
-        if (!string.IsNullOrWhiteSpace(context.Profile.HarnessConfigurationJson))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(context.Profile.HarnessConfigurationJson);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("executablePath", out var exeProp) ||
-                    root.TryGetProperty("executable", out exeProp) ||
-                    root.TryGetProperty("command", out exeProp))
-                {
-                    var val = exeProp.GetString();
-                    if (!string.IsNullOrWhiteSpace(val)) exePath = val;
-                }
-                if (root.TryGetProperty("arguments", out var argsProp) ||
-                    root.TryGetProperty("args", out argsProp))
-                {
-                    var val = argsProp.GetString();
-                    if (val != null) args = val;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to parse HarnessConfigurationJson on AgentProfile '{ProfileName}', using defaults.", context.Profile.Name);
-            }
-        }
-
-        var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
-        if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
-        {
-            if (_pathResolver != null && context.Workspace != null)
-            {
-                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
-            }
-            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
-            {
-                workingDir = context.Workspace.RepositoryPath;
-            }
-            else
-            {
-                workingDir = Directory.GetCurrentDirectory();
-            }
-        }
-
-        if (!Directory.Exists(workingDir))
-        {
-            if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath) && Directory.Exists(context.Workspace.RepositoryPath))
-            {
-                workingDir = context.Workspace.RepositoryPath;
-            }
-            else
-            {
-                workingDir = Directory.GetCurrentDirectory();
-            }
-        }
-
-        IProcessStreamSession session;
-        try
-        {
-            var spec = new ProcessStartSpec
-            {
-                FileName = exePath,
-                Arguments = args,
-                WorkingDirectory = workingDir,
-                TimeoutSeconds = 600
-            };
-            session = _processRunner.StartSession(spec);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to launch ACP agent at {ExecutablePath}", _options.ExecutablePath);
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-            return AgentRunResult.Failed($"Failed to launch ACP agent: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
-        }
-
-        await using (session.ConfigureAwait(false))
-        {
-            return await RunSessionStreamAsync(session.StandardInput, session.StandardOutput, context, sessionId, sw, cancellationToken);
-        }
+        _hostRpcHandler = hostRpcHandler ?? throw new ArgumentNullException(nameof(hostRpcHandler));
+        _logger = logger;
     }
 
     /// <summary>
     /// Executes the full bidirectional ACP JSON-RPC message exchange against input and output streams.
-    /// Internal to allow direct unit testing without spawning external OS processes.
+    /// Public to allow direct unit testing without spawning external OS processes.
     /// </summary>
-    public async Task<AgentRunResult> RunSessionStreamAsync(
+    public override async Task<AgentRunResult> RunSessionStreamAsync(
         StreamWriter stdin,
         StreamReader stdout,
         AgentSessionContext context,
@@ -216,27 +75,8 @@ public class AcpAgentHarness : IAgentHarness
     {
         long promptTokens = 0;
         long completionTokens = 0;
-        var activeTerminals = new ConcurrentDictionary<string, (int ExitCode, string Output)>(StringComparer.OrdinalIgnoreCase);
-        var workspacePath = !string.IsNullOrEmpty(context.WorkspacePath)
-            ? context.WorkspacePath
-            : (context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
-
-        var localWorkspaceRoot = workspacePath;
-        if (OperatingSystem.IsWindows() && (localWorkspaceRoot.StartsWith('/') || localWorkspaceRoot.StartsWith('~')))
-        {
-            if (_pathResolver != null && context.Workspace != null)
-            {
-                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
-            }
-            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
-            {
-                localWorkspaceRoot = context.Workspace.RepositoryPath;
-            }
-        }
-
-        var workspace = context.Workspace ?? throw new InvalidOperationException("Workspace is required for ACP harness execution.");
-        var effectiveEnv = _envProvider.GetEnvironment(workspace, context.Profile.SecurityTier, context.ForgeTask.Id)
-            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
+        var (workspacePath, localWorkspaceRoot) = ResolveWorkspacePaths(context);
+        var hostContext = new AcpHostRpcContext(sessionId, context, workspacePath, localWorkspaceRoot);
 
         try
         {
@@ -274,46 +114,14 @@ public class AcpAgentHarness : IAgentHarness
                     @params = new
                     {
                         cwd = workspacePath,
-                        mcpServers = _mcpManager != null ? await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, localWorkspaceRoot, cancellationToken) : null
+                        mcpServers = await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, localWorkspaceRoot, cancellationToken)
                     }
                 });
                 await stdin.WriteLineAsync(newSessionReq.AsMemory(), cancellationToken);
             }
 
             // 3. Dispatch Prompt Request (incorporating human answer if resuming from permission request)
-            var projectConfig = CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
-            var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
-
-            var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
-                ? context.BootstrapPrompt
-                : (!string.IsNullOrWhiteSpace(context.StageDirective)
-                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
-                    : context.ForgeTask.Description);
-
-            if (isReconstructedHistory)
-            {
-                var historySummary = ConversationHistorySerializer.FormatForPrompt(context.SerializedStateJson!);
-                if (!string.IsNullOrWhiteSpace(historySummary))
-                {
-                    basePromptText = $"{basePromptText}\n\n[Resumed Conversation History]:\n{historySummary}\n\nPlease resume execution from the previous conversation turn.";
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(guidelines))
-            {
-                basePromptText = $"{basePromptText}\n\n{guidelines}";
-            }
-
-            var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
-            var agentWorkingDir = isContainer
-                ? "/workspace"
-                : localWorkspaceRoot;
-            var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
-            basePromptText = $"{basePromptText}\n\n{envInfo}";
-
-            var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
-                ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"
-                : basePromptText;
+            var promptText = BuildEnrichedPrompt(context, localWorkspaceRoot);
 
             var promptReq = JsonSerializer.Serialize(new
             {
@@ -400,149 +208,23 @@ public class AcpAgentHarness : IAgentHarness
                         continue;
                     }
 
-                    // 4.2 Terminal Execution (terminal/create or terminal/run)
-                    if (method == "terminal/create" || method == "terminal/run")
+                    // 4.2 Host-side callbacks (terminal/* and fs/*)
+                    if (method != null && _hostRpcHandler.CanHandle(method))
                     {
-                        FlushTurn();
-                        var cmd = node?["params"]?["command"]?.ToString() ?? "";
-                        var rawCwd = node?["params"]?["cwd"]?.ToString();
-                        string cwd;
-                        if (string.IsNullOrWhiteSpace(rawCwd) ||
-                            string.Equals(rawCwd, "/workspace", StringComparison.OrdinalIgnoreCase) ||
-                            string.Equals(rawCwd, "workspace", StringComparison.OrdinalIgnoreCase))
+                        if (_hostRpcHandler.EndsAssistantTurn(method))
                         {
-                            cwd = workspacePath;
-                        }
-                        else if (rawCwd.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var rel = rawCwd.Substring("/workspace/".Length);
-                            cwd = Path.Combine(workspacePath, rel).Replace('\\', '/');
-                        }
-                        else
-                        {
-                            cwd = rawCwd;
+                            FlushTurn();
                         }
 
-                        if (effectiveEnv == null && OperatingSystem.IsWindows() && (cwd.StartsWith('/') || cwd.StartsWith('~')))
-                        {
-                            cwd = localWorkspaceRoot;
-                        }
-
-                        var terminalId = Guid.NewGuid().ToString("N");
-
-                        string output = "";
-                        int exitCode = 0;
-                        if (effectiveEnv != null)
-                        {
-                            var execRes = await effectiveEnv.ExecuteAsync(cmd, cwd, 300, null, cancellationToken);
-                            output = execRes.StandardOutput;
-                            if (!string.IsNullOrEmpty(execRes.StandardError))
-                            {
-                                output = string.IsNullOrEmpty(output) ? execRes.StandardError : output + Environment.NewLine + execRes.StandardError;
-                            }
-                            exitCode = execRes.ExitCode;
-                        }
-                        else
-                        {
-                            try
-                            {
-                                var fileName = OperatingSystem.IsWindows() ? "cmd.exe" : "bash";
-                                var args = OperatingSystem.IsWindows() ? new[] { "/c", cmd } : new[] { "-c", cmd };
-                                var execRes = await _processRunner.RunAsync(fileName, args, cwd, 300, cancellationToken);
-                                output = execRes.StandardOutput;
-                                if (!string.IsNullOrEmpty(execRes.StandardError))
-                                {
-                                    output = string.IsNullOrEmpty(output) ? execRes.StandardError : output + Environment.NewLine + execRes.StandardError;
-                                }
-                                exitCode = execRes.ExitCode;
-                            }
-                            catch (Exception ex)
-                            {
-                                output = ex.Message;
-                                exitCode = 1;
-                            }
-                        }
-
-                        activeTerminals[terminalId] = (exitCode, output);
-
-                        var terminalResp = JsonSerializer.Serialize(new
-                        {
-                            jsonrpc = "2.0",
-                            id,
-                            result = new { terminalId, exitCode, output }
-                        });
-                        await stdin.WriteLineAsync(terminalResp.AsMemory(), cancellationToken);
+                        var rpcResult = await _hostRpcHandler.HandleAsync(method, node?["params"], hostContext, cancellationToken);
+                        var rpcResp = rpcResult.IsError
+                            ? JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code = JsonRpcInvalidParams, message = rpcResult.ErrorMessage } })
+                            : JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = rpcResult.Result });
+                        await stdin.WriteLineAsync(rpcResp.AsMemory(), cancellationToken);
                         continue;
                     }
 
-                    // 4.3 Terminal Output & Exit Polling
-                    if (method == "terminal/output")
-                    {
-                        var termId = node?["params"]?["terminalId"]?.ToString() ?? "";
-                        var termOut = activeTerminals.TryGetValue(termId, out var cached) ? cached.Output : "";
-                        var outResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { output = termOut } });
-                        await stdin.WriteLineAsync(outResp.AsMemory(), cancellationToken);
-                        continue;
-                    }
-                    if (method == "terminal/wait_for_exit")
-                    {
-                        var termId = node?["params"]?["terminalId"]?.ToString() ?? "";
-                        var exitCode = activeTerminals.TryGetValue(termId, out var cached) ? cached.ExitCode : 0;
-                        var exitResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { exitCode } });
-                        await stdin.WriteLineAsync(exitResp.AsMemory(), cancellationToken);
-                        continue;
-                    }
-                    if (method == "terminal/release" || method == "terminal/kill")
-                    {
-                        var termId = node?["params"]?["terminalId"]?.ToString() ?? "";
-                        activeTerminals.TryRemove(termId, out _);
-                        var relResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { } });
-                        await stdin.WriteLineAsync(relResp.AsMemory(), cancellationToken);
-                        continue;
-                    }
-
-                    // 4.4 Filesystem Operations (fs/read_text_file & fs/write_text_file)
-                    if (method == "fs/read_text_file")
-                    {
-                        FlushTurn();
-                        var filePath = node?["params"]?["path"]?.ToString() ?? "";
-                        int? offset = node?["params"]?["offset"]?.GetValue<int?>();
-                        int? limit = node?["params"]?["limit"]?.GetValue<int?>();
-
-                        try
-                        {
-                            var content = ReadWorkspaceFile(localWorkspaceRoot, filePath, offset, limit, context.Workspace?.Id, context.ForgeTask.Id);
-                            var readResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { content } });
-                            await stdin.WriteLineAsync(readResp.AsMemory(), cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            var errResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code = -32602, message = ex.Message } });
-                            await stdin.WriteLineAsync(errResp.AsMemory(), cancellationToken);
-                        }
-                        continue;
-                    }
-                    if (method == "fs/write_text_file")
-                    {
-                        FlushTurn();
-                        var filePath = node?["params"]?["path"]?.ToString() ?? "";
-                        var content = node?["params"]?["content"]?.ToString() ?? "";
-
-                        try
-                        {
-                            await WriteWorkspaceFileAsync(localWorkspaceRoot, filePath, content, context.Workspace?.Id, context.ForgeTask.Id, cancellationToken);
-                            var writeResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = new { } });
-                            await stdin.WriteLineAsync(writeResp.AsMemory(), cancellationToken);
-                        }
-                        catch (Exception ex)
-                        {
-                            var errResp = JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code = -32602, message = ex.Message } });
-                            await stdin.WriteLineAsync(errResp.AsMemory(), cancellationToken);
-                        }
-                        continue;
-                    }
-
-                    // 4.5 Permission Request (Human-in-the-loop interruption)
+                    // 4.3 Permission Request (Human-in-the-loop interruption)
                     if (method == "session/request_permission")
                     {
                         FlushTurn();
@@ -586,7 +268,7 @@ public class AcpAgentHarness : IAgentHarness
                             summary: "ACP agent paused awaiting developer permission");
                     }
 
-                    // 4.6 Prompt Response Completion
+                    // 4.4 Prompt Response Completion
                     if (node?["result"] != null && (id == "prompt-1" || node["result"]?["stopReason"] != null))
                     {
                         FlushTurn();
@@ -634,141 +316,9 @@ public class AcpAgentHarness : IAgentHarness
             await SaveTranscriptAsync(context, localWorkspaceRoot, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
             throw;
         }
-    }
-
-    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? taskId = null)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
+        finally
         {
-            if (_pathResolver != null && workspaceId.HasValue)
-            {
-                return _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, taskId);
-            }
-            return workspacePath;
-        }
-
-        if (filePath.StartsWith(@"\\") || (filePath.Length >= 2 && filePath[1] == ':'))
-        {
-            return Path.GetFullPath(filePath);
-        }
-
-        if (_pathResolver != null && workspaceId.HasValue)
-        {
-            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, taskId);
-        }
-
-        var normalized = filePath.Replace('\\', '/');
-        if (normalized.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
-        {
-            var rel = normalized.Substring("/workspace/".Length);
-            return Path.GetFullPath(Path.Combine(workspacePath, rel));
-        }
-        if (string.Equals(normalized, "/workspace", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(normalized, "workspace", StringComparison.OrdinalIgnoreCase))
-        {
-            return Path.GetFullPath(workspacePath);
-        }
-        if (normalized.StartsWith("workspace/", StringComparison.OrdinalIgnoreCase))
-        {
-            var rel = normalized.Substring("workspace/".Length);
-            return Path.GetFullPath(Path.Combine(workspacePath, rel));
-        }
-
-        if (Path.IsPathRooted(filePath))
-        {
-            return Path.GetFullPath(filePath);
-        }
-
-        return Path.GetFullPath(Path.Combine(workspacePath, filePath));
-    }
-
-    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId = null)
-    {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId);
-        if (!File.Exists(resolvedPath))
-        {
-            throw new FileNotFoundException($"File not found: {filePath}", filePath);
-        }
-
-        if (!offset.HasValue && !limit.HasValue)
-        {
-            return File.ReadAllText(resolvedPath);
-        }
-
-        var lines = File.ReadAllLines(resolvedPath);
-        int skip = offset.HasValue && offset.Value > 0 ? offset.Value - 1 : 0;
-        int take = limit.HasValue && limit.Value > 0 ? limit.Value : lines.Length - skip;
-        var slice = lines.Skip(skip).Take(take);
-        return string.Join(Environment.NewLine, slice);
-    }
-
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, CancellationToken ct)
-    {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId);
-        var dir = Path.GetDirectoryName(resolvedPath);
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        var editorConfig = await _editorConfigService.GetSettingsForPathAsync(resolvedPath, ct);
-        string? existing = File.Exists(resolvedPath) ? await File.ReadAllTextAsync(resolvedPath, ct) : null;
-        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing, resolvedPath);
-        await File.WriteAllBytesAsync(resolvedPath, bytes, ct);
-    }
-
-    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
-    {
-        if (_activityStreamer != null)
-        {
-            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow);
-            await _activityStreamer.BroadcastAsync(evt, ct);
-        }
-    }
-
-    private async Task SaveTranscriptAsync(
-        AgentSessionContext context,
-        string workspacePath,
-        string promptText,
-        string? summaryText,
-        long elapsedMs,
-        long promptTokens,
-        long completionTokens,
-        AgentRunStatus status,
-        CancellationToken cancellationToken)
-    {
-        if (_transcriptService == null) return;
-
-        try
-        {
-            var entries = new List<TranscriptEntry>();
-            var now = DateTime.UtcNow;
-            if (!string.IsNullOrEmpty(promptText))
-            {
-                entries.Add(new TranscriptEntry(now, "User", promptText, null, null, null));
-            }
-            if (!string.IsNullOrEmpty(summaryText))
-            {
-                entries.Add(new TranscriptEntry(now, "Assistant", summaryText, null, null, null));
-            }
-
-            var meta = new TranscriptMetadata(
-                context.ForgeTask.Id,
-                context.StageId,
-                context.Profile.Name,
-                context.Profile.ModelName,
-                elapsedMs,
-                new AgentRunMetrics(elapsedMs, promptTokens, completionTokens, promptTokens + completionTokens),
-                context.OptimizationFlags ?? new LocalOptimizationFlags(),
-                status);
-
-            var repoRoot = context.Workspace?.RepositoryPath ?? workspacePath;
-            var transcriptDir = Path.Combine(repoRoot, "docs", "transcripts");
-            await _transcriptService.SaveTranscriptAsync(meta, entries, transcriptDir, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to persist markdown transcript in {HarnessId} harness", HarnessId);
+            _hostRpcHandler.EndSession(sessionId);
         }
     }
 
@@ -813,4 +363,3 @@ public class AcpAgentHarness : IAgentHarness
         return 1;
     }
 }
-

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools.EditorConfig;
@@ -26,19 +27,25 @@ public class TestAcpHarnessBuilder
     public SessionTranscriptService TranscriptService { get; set; } = new();
     public IWorkspacePathResolver PathResolver { get; set; } = new Mock<IWorkspacePathResolver>().Object;
     public IProcessRunner ProcessRunner { get; set; } = new Mock<IProcessRunner>().Object;
+    public IAcpHostRpcHandler? HostRpcHandler { get; set; }
+    public IHarnessActivityRecorder? ActivityRecorder { get; set; }
     public ILogger<AcpAgentHarness> Logger { get; set; } = NullLogger<AcpAgentHarness>.Instance;
 
     public AcpAgentHarness Build()
     {
-        return new AcpAgentHarness(
-            Options,
+        var handler = HostRpcHandler ?? new AcpHostRpcHandler(
             EnvProvider,
-            McpManager,
             EditorConfigService,
             EditorConfigFileApplier,
+            PathResolver,
+            NullLogger<AcpHostRpcHandler>.Instance);
+        var recorder = ActivityRecorder ?? new HarnessActivityRecorder(ActivityStreamer, TranscriptService, NullLogger<HarnessActivityRecorder>.Instance);
+        return new AcpAgentHarness(
+            Options,
+            McpManager,
+            handler,
+            recorder,
             AgentsMdService,
-            ActivityStreamer,
-            TranscriptService,
             PathResolver,
             ProcessRunner,
             Logger);

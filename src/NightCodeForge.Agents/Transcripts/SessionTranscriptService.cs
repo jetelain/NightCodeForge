@@ -44,7 +44,7 @@ public record TranscriptMetadata(
 /// full-fidelity environment diagnostics (system prompt in 4-tick fence, available tools catalog),
 /// and ordered conversation steps with safe truncation and icon tags.
 /// </summary>
-public class SessionTranscriptService
+public class SessionTranscriptService : ISessionTranscriptService
 {
     public const int MaxEntryChars = 65536;
 

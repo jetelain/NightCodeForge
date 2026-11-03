@@ -2,10 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using NightCodeForge.Agents.Transcripts;
+using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
@@ -25,174 +23,41 @@ public class PiRpcHarnessOptions
 /// Bridge harness communicating with Pi coding-agent daemon over line-delimited JSON (JSONL).
 /// Supports live streaming via IAgentActivityStreamer and session markdown transcripts.
 /// </summary>
-public class PiRpcAgentHarness : IAgentHarness
+public class PiRpcAgentHarness : ExternalProcessAgentHarnessBase
 {
     private readonly PiRpcHarnessOptions _options;
     private readonly Inference.LlmProviderOptions _llmOptions;
-    private readonly Context.AgentsMdService _agentsMdService;
-    private readonly IAgentActivityStreamer _activityStreamer;
-    private readonly SessionTranscriptService _transcriptService;
-    private readonly IWorkspacePathResolver _pathResolver;
-    private readonly IProcessRunner _processRunner;
     private readonly ILogger<PiRpcAgentHarness> _logger;
 
-    public string HarnessId => StandardHarnessIds.PiRpc;
+    public override string HarnessId => StandardHarnessIds.PiRpc;
+
+    protected override string AgentDisplayName => "Pi daemon";
+    protected override string DefaultExecutablePath => _options.ExecutablePath;
+    protected override string DefaultArguments => _options.Arguments;
+    protected override Func<Process>? CustomProcessFactory => _options.CustomProcessFactory;
 
     public PiRpcAgentHarness(
         Microsoft.Extensions.Options.IOptions<PiRpcHarnessOptions> options,
         Microsoft.Extensions.Options.IOptions<Inference.LlmProviderOptions> llmOptions,
+        IHarnessActivityRecorder recorder,
         Context.AgentsMdService agentsMdService,
-        IAgentActivityStreamer activityStreamer,
-        SessionTranscriptService transcriptService,
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
         ILogger<PiRpcAgentHarness> logger)
+        : base(recorder, agentsMdService, pathResolver, processRunner, logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
         ArgumentNullException.ThrowIfNull(llmOptions);
         _llmOptions = llmOptions.Value ?? throw new ArgumentNullException(nameof(llmOptions));
-        _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
-        _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
-        _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
-        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
-        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
-
-    public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
-    {
-        var sw = Stopwatch.StartNew();
-        var sessionId = Guid.NewGuid().ToString("N");
-        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
-
-        if (_options.CustomProcessFactory != null)
-        {
-            Process process;
-            try
-            {
-                process = _options.CustomProcessFactory();
-                process.Start();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to launch Pi RPC daemon via custom factory");
-                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-                return AgentRunResult.Failed($"Failed to launch Pi daemon: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
-            }
-
-            using var stdin = new StreamWriter(process.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
-            using var stdout = process.StandardOutput;
-
-            try
-            {
-                return await RunSessionStreamAsync(stdin, stdout, context, sessionId, sw, cancellationToken);
-            }
-            finally
-            {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to terminate custom factory process during validation");
-                }
-                process.Dispose();
-            }
-        }
-
-        var exePath = _options.ExecutablePath;
-        var args = _options.Arguments;
-
-        if (!string.IsNullOrWhiteSpace(context.Profile.HarnessConfigurationJson))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(context.Profile.HarnessConfigurationJson);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("executablePath", out var exeProp) ||
-                    root.TryGetProperty("executable", out exeProp) ||
-                    root.TryGetProperty("command", out exeProp))
-                {
-                    var val = exeProp.GetString();
-                    if (!string.IsNullOrWhiteSpace(val)) exePath = val;
-                }
-                if (root.TryGetProperty("arguments", out var argsProp) ||
-                    root.TryGetProperty("args", out argsProp))
-                {
-                    var val = argsProp.GetString();
-                    if (val != null) args = val;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to parse HarnessConfigurationJson on AgentProfile '{ProfileName}', using defaults.", context.Profile.Name);
-            }
-        }
-
-        var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
-        if (OperatingSystem.IsWindows() && (workingDir.StartsWith('/') || workingDir.StartsWith('~')))
-        {
-            if (context.Workspace != null)
-            {
-                workingDir = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
-            }
-            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
-            {
-                workingDir = context.Workspace.RepositoryPath;
-            }
-            else
-            {
-                workingDir = Directory.GetCurrentDirectory();
-            }
-        }
-
-        if (!Directory.Exists(workingDir))
-        {
-            if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath) && Directory.Exists(context.Workspace.RepositoryPath))
-            {
-                workingDir = context.Workspace.RepositoryPath;
-            }
-            else
-            {
-                workingDir = Directory.GetCurrentDirectory();
-            }
-        }
-
-        IProcessStreamSession session;
-        try
-        {
-            var spec = new ProcessStartSpec
-            {
-                FileName = exePath,
-                Arguments = args,
-                WorkingDirectory = workingDir,
-                TimeoutSeconds = 600
-            };
-            session = _processRunner.StartSession(spec);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to launch Pi RPC daemon at {ExecutablePath}", _options.ExecutablePath);
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-            return AgentRunResult.Failed($"Failed to launch Pi daemon: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
-        }
-
-        await using (session.ConfigureAwait(false))
-        {
-            return await RunSessionStreamAsync(session.StandardInput, session.StandardOutput, context, sessionId, sw, cancellationToken);
-        }
+        _logger = logger;
     }
 
     /// <summary>
     /// Executes the Pi JSONL RPC message exchange against input and output streams.
-    /// Internal to allow direct unit testing without spawning external OS processes.
+    /// Public to allow direct unit testing without spawning external OS processes.
     /// </summary>
-    public async Task<AgentRunResult> RunSessionStreamAsync(
+    public override async Task<AgentRunResult> RunSessionStreamAsync(
         StreamWriter stdin,
         StreamReader stdout,
         AgentSessionContext context,
@@ -202,22 +67,7 @@ public class PiRpcAgentHarness : IAgentHarness
     {
         long promptTokens = 0;
         long completionTokens = 0;
-        var workspacePath = !string.IsNullOrEmpty(context.WorkspacePath)
-            ? context.WorkspacePath
-            : (context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
-
-        var localWorkspaceRoot = workspacePath;
-        if (OperatingSystem.IsWindows() && (localWorkspaceRoot.StartsWith('/') || localWorkspaceRoot.StartsWith('~')))
-        {
-            if (context.Workspace != null)
-            {
-                localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
-            }
-            else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
-            {
-                localWorkspaceRoot = context.Workspace.RepositoryPath;
-            }
-        }
+        var (_, localWorkspaceRoot) = ResolveWorkspacePaths(context);
 
         try
         {
@@ -239,39 +89,8 @@ public class PiRpcAgentHarness : IAgentHarness
             }
 
             // 2. Dispatch prompt command (including pending human answer if resuming)
-            var projectConfig = CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
-            var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
+            var promptText = BuildEnrichedPrompt(context, localWorkspaceRoot);
 
-            var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
-                ? context.BootstrapPrompt
-                : (!string.IsNullOrWhiteSpace(context.StageDirective)
-                    ? $"[Stage Directive]: {context.StageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
-                    : context.ForgeTask.Description);
-
-            if (!string.IsNullOrWhiteSpace(guidelines))
-            {
-                basePromptText = $"{basePromptText}\n\n{guidelines}";
-            }
-
-            var isContainer = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox;
-            var agentWorkingDir = isContainer
-                ? "/workspace"
-                : localWorkspaceRoot;
-            var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
-            basePromptText = $"{basePromptText}\n\n{envInfo}";
-
-            if (ConversationHistorySerializer.IsSerializedHistory(context.SerializedStateJson))
-            {
-                var historySummary = ConversationHistorySerializer.FormatForPrompt(context.SerializedStateJson);
-                if (!string.IsNullOrWhiteSpace(historySummary))
-                {
-                    basePromptText = $"{basePromptText}\n\n[Resumed Conversation History]:\n{historySummary}\n\nPlease resume execution from the previous conversation turn.";
-                }
-            }
-
-            var promptText = !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
-                ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"
-                : basePromptText;
 
             var promptCmd = JsonSerializer.Serialize(new
             {
@@ -479,60 +298,4 @@ public class PiRpcAgentHarness : IAgentHarness
             throw;
         }
     }
-
-    private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct)
-    {
-        if (_activityStreamer != null)
-        {
-            var evt = new AgentActivityEvent(sessionId, taskId, stageId, kind, content, DateTime.UtcNow);
-            await _activityStreamer.BroadcastAsync(evt, ct);
-        }
-    }
-
-    private async Task SaveTranscriptAsync(
-        AgentSessionContext context,
-        string workspacePath,
-        string promptText,
-        string? summaryText,
-        long elapsedMs,
-        long promptTokens,
-        long completionTokens,
-        AgentRunStatus status,
-        CancellationToken cancellationToken)
-    {
-        if (_transcriptService == null) return;
-
-        try
-        {
-            var entries = new List<TranscriptEntry>();
-            var now = DateTime.UtcNow;
-            if (!string.IsNullOrEmpty(promptText))
-            {
-                entries.Add(new TranscriptEntry(now, "User", promptText, null, null, null));
-            }
-            if (!string.IsNullOrEmpty(summaryText))
-            {
-                entries.Add(new TranscriptEntry(now, "Assistant", summaryText, null, null, null));
-            }
-
-            var meta = new TranscriptMetadata(
-                context.ForgeTask.Id,
-                context.StageId,
-                context.Profile.Name,
-                context.Profile.ModelName,
-                elapsedMs,
-                new AgentRunMetrics(elapsedMs, promptTokens, completionTokens, promptTokens + completionTokens),
-                context.OptimizationFlags ?? new LocalOptimizationFlags(),
-                status);
-
-            var repoRoot = context.Workspace?.RepositoryPath ?? workspacePath;
-            var transcriptDir = Path.Combine(repoRoot, "docs", "transcripts");
-            await _transcriptService.SaveTranscriptAsync(meta, entries, transcriptDir, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to persist markdown transcript in {HarnessId} harness", HarnessId);
-        }
-    }
 }
-

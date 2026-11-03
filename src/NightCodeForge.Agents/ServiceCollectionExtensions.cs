@@ -59,6 +59,7 @@ public static class ServiceCollectionExtensions
 
         // 3. Transcripts & Diagnostics
         services.TryAddSingleton<SessionTranscriptService>();
+        services.TryAddSingleton<ISessionTranscriptService>(sp => sp.GetRequiredService<SessionTranscriptService>());
         services.TryAddScoped<TranscriptDiagnosticService>();
 
         // 4. Ideation & Triage Services
@@ -68,6 +69,9 @@ public static class ServiceCollectionExtensions
         // 5. Agent Harnesses
         services.AddOptions<Acp.AcpHarnessOptions>();
         services.AddOptions<PiRpc.PiRpcHarnessOptions>();
+        services.TryAddScoped<ExternalProcess.HarnessActivityRecorder>();
+        services.TryAddScoped<ExternalProcess.IHarnessActivityRecorder>(sp => sp.GetRequiredService<ExternalProcess.HarnessActivityRecorder>());
+        services.TryAddScoped<Acp.IAcpHostRpcHandler, Acp.AcpHostRpcHandler>();
         services.TryAddScoped<CrucibleAgentHarness>();
         services.TryAddScoped<PiRpcAgentHarness>();
         services.TryAddScoped<AcpAgentHarness>();

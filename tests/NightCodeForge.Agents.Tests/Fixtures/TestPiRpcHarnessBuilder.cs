@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.PiRpc;
 using NightCodeForge.Agents.Streaming;
@@ -22,16 +23,17 @@ public class TestPiRpcHarnessBuilder
     public SessionTranscriptService TranscriptService { get; set; } = new();
     public IWorkspacePathResolver PathResolver { get; set; } = new Mock<IWorkspacePathResolver>().Object;
     public IProcessRunner ProcessRunner { get; set; } = new Mock<IProcessRunner>().Object;
+    public IHarnessActivityRecorder? ActivityRecorder { get; set; }
     public ILogger<PiRpcAgentHarness> Logger { get; set; } = NullLogger<PiRpcAgentHarness>.Instance;
 
     public PiRpcAgentHarness Build()
     {
+        var recorder = ActivityRecorder ?? new HarnessActivityRecorder(ActivityStreamer, TranscriptService, NullLogger<HarnessActivityRecorder>.Instance);
         return new PiRpcAgentHarness(
             Options,
             LlmOptions,
+            recorder,
             AgentsMdService,
-            ActivityStreamer,
-            TranscriptService,
             PathResolver,
             ProcessRunner,
             Logger);

@@ -1,6 +1,6 @@
 # Step 11.38B — Shared Base Class for `AcpAgentHarness` & `PiRpcAgentHarness` (`ExternalProcessAgentHarnessBase`)
 
-**Status:** Pending (Fix / Code Factorization & Constructor Diet)
+**Status:** Completed (Fix / Code Factorization & Constructor Diet)
 **Prerequisite:** Step 11.38A
 
 ---
@@ -62,6 +62,8 @@ Extract ACP's host-side JSON-RPC tool callbacks (`terminal/*` and `fs/*`) from `
 ### 3.3 Refactored `AcpAgentHarness` & `PiRpcAgentHarness`
 
 - Both inherit from `ExternalProcessAgentHarnessBase`.
+- **`HarnessActivityRecorder` (`IHarnessActivityRecorder`):** To keep constructors within the ceiling, activity broadcasting (`IAgentActivityStreamer`) and transcript persistence are extracted into a single cohesive collaborator, `HarnessActivityRecorder` implementing `IHarnessActivityRecorder` (in `NightCodeForge.Agents.ExternalProcess`, registered scoped in DI). `ExternalProcessAgentHarnessBase` receives `IHarnessActivityRecorder` instead of the streamer and transcript service separately. Transcript persistence failures remain logged warnings (never thrown) and must be covered by unit tests, as must event forwarding, entry composition (empty prompt/summary skipped) and transcript directory resolution (`<repo>/docs/transcripts`, falling back to the workspace path).
+- **`ISessionTranscriptService`:** Introduce `ISessionTranscriptService` (`SaveTranscriptAsync(metadata, entries, outputDirectory, cancellationToken)`) in `NightCodeForge.Agents.Transcripts`, implemented by `SessionTranscriptService` and registered in DI (forwarding to the existing singleton). `HarnessActivityRecorder` depends on the interface so it can be unit tested with a mock. Migrating other consumers of the concrete `SessionTranscriptService` (e.g. `CrucibleAgentHarness`, `IdeationService`) is out of scope for this step.
 - `AcpAgentHarness` constructor parameter count is reduced from **11 to `<= 8`**.
 - `PiRpcAgentHarness` constructor parameter count remains **`<= 8`**.
 - Update `TestAcpHarnessBuilder` so existing `AcpAgentHarnessTests` setups (mutating `EnvProvider`, `PathResolver`, `EditorConfigService`, `EditorConfigFileApplier`) wire into `AcpHostRpcHandler` seamlessly while also allowing an explicit `IAcpHostRpcHandler` override.

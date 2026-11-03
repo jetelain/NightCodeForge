@@ -28,7 +28,6 @@ public class ConstructorParameterCeilingTests
             ["IdeationService"] = 19,
             ["TaskOrchestrator"] = 19,
             ["CanonicalTools"] = 13,
-            ["AcpAgentHarness"] = 11,
             ["StartupRecoveryService"] = 11
         };
 
