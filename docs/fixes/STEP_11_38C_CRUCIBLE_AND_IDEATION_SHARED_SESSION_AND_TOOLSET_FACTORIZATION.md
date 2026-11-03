@@ -2,6 +2,7 @@
 
 **Status:** Pending (Fix / Code Factorization & Constructor Diet)
 **Prerequisite:** Step 11.38B
+**Related Steps:** [Step 11.43A](STEP_11_43A_PMAD_AI_READONLY_COMMAND_VALIDATOR_MIGRATION.md), [Step 11.43B](STEP_11_43B_PMAD_AI_LENIENT_TOOL_DISPATCHER_AND_DELEGATING_CHAT_CLIENT_MIGRATION.md), [Step 11.43C](STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md) (`Pmad.AI` `0.0.2` `ReadOnlyCommandValidator`, `LenientToolDispatcher`, and delegating `IChatClient` middlewares)
 
 ---
 
