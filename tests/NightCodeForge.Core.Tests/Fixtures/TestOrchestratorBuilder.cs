@@ -61,6 +61,10 @@ public class TestOrchestratorBuilder
             .ReturnsAsync(new MergeSyncResult(Success: true, HasConflict: false, ConflictedFiles: Array.Empty<string>(), MergeCommitSha: "base-sha"));
         mock.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("base-sha");
+        mock.Setup(m => m.GenerateLiveDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FakeGitWorkspaceManager().GeneratedDiffStat);
+        mock.Setup(m => m.GenerateDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FakeGitWorkspaceManager().GeneratedDiffStat);
         return mock.Object;
     }
     public ITaskJobQueue JobQueue { get; set; } = new FakeTaskJobQueue();

@@ -327,9 +327,9 @@ public class WorkflowSpecIntegrationTests
             mockGit.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync("commit-sha");
             mockGit.Setup(m => m.GenerateDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(" 2 files changed, 20 insertions(+), 2 deletions(-)");
+                .ReturnsAsync("src/Foo.cs | 2 +-\n 2 files changed, 20 insertions(+), 2 deletions(-)");
             mockGit.Setup(m => m.GenerateLiveDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(" 2 files changed, 20 insertions(+), 2 deletions(-)");
+                .ReturnsAsync("src/Foo.cs | 2 +-\n 2 files changed, 20 insertions(+), 2 deletions(-)");
             mockGit.Setup(m => m.GenerateDiffAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync("diff --git a/File.cs b/File.cs\n+new line");
             mockGit.Setup(m => m.GenerateLiveDiffAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -792,7 +792,7 @@ diff --git a/tests/SyntheticLib.Tests/CalculatorTests.cs b/tests/SyntheticLib.Te
 +        Assert.Equal(6, _calc.Multiply(2, 3));
 +    }
 """;
-        const string featureDiffStat = " 2 files changed, 15 insertions(+), 0 deletions(-)";
+        const string featureDiffStat = "src/Foo.cs | 2 +-\n 2 files changed, 15 insertions(+), 0 deletions(-)";
 
         var mockGit = new Mock<IGitWorkspaceManager>();
         mockGit.Setup(m => m.CheckMergeableAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -1159,9 +1159,9 @@ Build FAILED.
         mockGit.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("commit-sha");
         mockGit.Setup(m => m.GenerateDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 5 insertions(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 5 insertions(+)");
         mockGit.Setup(m => m.GenerateLiveDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 5 insertions(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 5 insertions(+)");
         mockGit.Setup(m => m.GenerateDiffAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("diff --git a/src/Calculator.cs b/src/Calculator.cs\n+new line");
         mockGit.Setup(m => m.GenerateLiveDiffAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -1430,9 +1430,9 @@ Build FAILED.
         mockGit.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("feat-sha-1");
         mockGit.Setup(m => m.GenerateDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 1 insertion(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 1 insertion(+)");
         mockGit.Setup(m => m.GenerateLiveDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 1 insertion(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 1 insertion(+)");
         mockGit.Setup(m => m.GenerateDiffAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("diff --git a/File.cs b/File.cs\n+line");
         mockGit.Setup(m => m.GenerateLiveDiffAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -1710,7 +1710,7 @@ Build FAILED.
         mockGit.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("feat-sha");
         mockGit.Setup(m => m.GenerateDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 1 insertion(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 1 insertion(+)");
         mockGit.Setup(m => m.CreateWipCheckpointAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("checkpoint-sha");
 
@@ -1953,9 +1953,9 @@ Build FAILED.
         mockGit.Setup(m => m.GetBranchShaAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("commit-sha");
         mockGit.Setup(m => m.GenerateDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 5 insertions(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 5 insertions(+)");
         mockGit.Setup(m => m.GenerateLiveDiffStatAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(" 1 file changed, 5 insertions(+)");
+            .ReturnsAsync("src/Foo.cs | 2 +-\n 1 file changed, 5 insertions(+)");
         mockGit.Setup(m => m.CreateWipCheckpointAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync("checkpoint-sha");
 

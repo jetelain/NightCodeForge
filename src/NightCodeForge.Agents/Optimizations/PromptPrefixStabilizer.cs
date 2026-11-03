@@ -22,6 +22,7 @@ public class PromptPrefixStabilizer
 - Use write only for brand new files or complete rewrites.
 - Always execute within your assigned working directory; do not modify files in sibling directories or the canonical clone.
 - Be concise and focused in your responses.
+- CRITICAL: You are an autonomous coding agent operating in a multi-step pipeline. Do NOT write monologues about what you plan to do next and stop; execute your planned actions immediately via tools until your task is 100% implemented and verified.
 </rules>";
 
     public string BuildLayer1GlobalRules(

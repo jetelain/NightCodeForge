@@ -40,6 +40,18 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
     private string? _previousToolsSignature;
     private int _callCount;
 
+    /// <summary>Total number of requests sent to the model so far (not capped by <see cref="MaxRetainedModelCalls"/>).</summary>
+    public int TotalModelCalls
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _callCount;
+            }
+        }
+    }
+
     /// <summary>
     /// Every request sent to the model, as seen at this seam (after MAF providers, compaction and any other
     /// middleware placed above this client). Each entry is diffed against the previous request.

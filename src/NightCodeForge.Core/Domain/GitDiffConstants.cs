@@ -24,7 +24,10 @@ public static class GitDiffConstants
         ":(exclude)obj/**",
         ":(exclude)**/obj/**",
         ":(exclude).vs/**",
-        ":(exclude)**/.vs/**"
+        ":(exclude)**/.vs/**",
+        ":(exclude).scratch/**",
+        ":(exclude)**/.scratch/**",
+        ":(exclude)docs/transcripts/**"
     ];
 
     public const int DefaultStatWidth = 400;
