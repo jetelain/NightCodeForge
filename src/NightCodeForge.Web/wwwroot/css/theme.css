@@ -5,11 +5,13 @@
     --bg-surface: #181b24;
     --bg-card: #202433;
     --bg-card-hover: #272c3d;
+    --bg-elevated: #242938;
     --bg-input: #12141c;
     --bg-glass: rgba(24, 27, 36, 0.85);
 
     /* Borders & Outlines */
     --border-subtle: #2d3345;
+    --border-medium: #3b4256;
     --border-focus: #6366f1;
     --border-accent: rgba(99, 102, 241, 0.35);
 
