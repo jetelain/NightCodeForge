@@ -42,25 +42,48 @@ flowchart LR
         Raw["Ollama / OpenAI / Test Mock<br/>(Native FunctionCallContent)"]
     end
 
-    subgraph Pipeline["Delegating IChatClient Pipeline"]
-        Tracing["ThinkingAndActivityTracingChatClient /<br/>PerServiceCallChatHistoryPersistingChatClient"]
-        Dispatch["LenientToolDispatchChatClient<br/>(Pmad.AI.Tools)<br/>Rewrites aliases &amp; translations<br/>Normalizes arguments in-flight"]
+    subgraph Pipeline["Delegating IChatClient Pipeline (Innermost to Outermost)"]
+        Dispatch["1. LenientToolDispatchChatClient<br/>(Pmad.AI.Tools)<br/>Rewrites aliases &amp; translations<br/>Fully normalizes JSON/arguments in-flight<br/>using AIFunction.JsonSchema"]
+        Tracing["2. ThinkingAndActivityTracingChatClient<br/>Records canonical tool names &amp; args<br/>in Transcript &amp; DB ConversationTurns"]
+        Persist["3. PerServiceCallChatHistoryPersistingChatClient<br/>Snapshots chatHistory per model call"]
     end
 
     subgraph MAF["MAF HarnessAgent"]
-        FIC["FunctionInvokingChatClient<br/>Matches canonical name in ChatOptions.Tools"]
-        Fn["CanonicalAIFunctionFactory AIFunction<br/>(Single Source of Truth)<br/>Rethrows HITL &amp; Loopback Exceptions"]
+        FIC["FunctionInvokingChatClient<br/>Matches canonical name &amp; binds<br/>normalized arguments directly"]
+        Fn["Unwrapped AIFunction<br/>(CanonicalAIFunctionFactory.Create)<br/>No LenientAIFunction wrapper"]
         Tools["CanonicalTools"]
     end
 
-    Raw --> Tracing --> Dispatch --> FIC --> Fn --> Tools
+    Raw --> Dispatch --> Tracing --> Persist --> FIC --> Fn --> Tools
 ```
 
 ---
 
 ## 3. Detailed Requirements & Specifications
 
-### 3.1 Declarative `ToolDispatcherConfiguration` for NightCodeForge
+### 3.1 Prerequisite `Pmad.AI` Change Request (Full In-Flight Schema Normalization & Transparent Exceptions)
+
+To make lenient tool operations completely transparent to `IChatClient` callers using **only** `LenientToolDispatchChatClient` (with standard, unwrapped `AIFunction` instances created by `AIFunctionFactory.Create`), the following changes are required in `Pmad.AI`:
+
+1. **Remove Exception Swallowing from `Pmad.AI.Tools.LenientAIFunction`:**
+   - Remove the `try { ... } catch (OperationCanceledException) { throw; } catch (Exception ex)` block in `LenientAIFunction.InvokeCoreAsync` that converts tool exceptions into `"Error executing tool '{toolName}': ..."` strings.
+   - Any exception thrown by an underlying `AIFunction` (such as NightCodeForge's `HumanInterruptionException`, `RequestChangesException`, `ArgumentException`, or consumer domain exceptions) must propagate naturally to the caller.
+2. **Full Schema-Driven In-Flight Argument Normalization in `LenientToolDispatcher.NormalizeCall`:**
+   - `LenientToolDispatchChatClient` calls `LenientToolDispatcher.NormalizeCall(FunctionCallContent)` in-flight before `FunctionInvokingChatClient` invokes the target `AIFunction`. Using the `JsonSchema` exposed by each registered `AIFunction` (`AIFunction.JsonSchema`), `NormalizeCall` must fully normalize `FunctionCallContent.Arguments` so `Microsoft.Extensions.AI`'s standard parameter binder can deserialize every parameter directly without needing a second pass inside `LenientAIFunction`:
+     - **2a. Null-Valued Canonical Key vs. Non-Null Alias Precedence:** In `NormalizeCall`, when `rawArgs` contains both a canonical parameter key with a `null` value (or `JsonElement` with `JsonValueKind.Null` / `JsonValueKind.Undefined`) and an alias key with a non-null value (e.g., `{"task_id": 5, "merge_mode": null, "mergeMode": "Automatic"}`), treat the `null`/`JsonValueKind.Null` entry as unset so the non-null alias value wins, and unwrap `JsonValueKind.Null` to `null`.
+     - **2b. Top-Level JSON Array Payloads (`JsonValueKind.Array`):** In `ToolCallHealingTransform.ParseArgumentsJson` and `LenientToolDispatcher.NormalizeCall`, when the raw arguments JSON is a top-level array (e.g., `[{"prompt": "Q1"}, {"prompt": "Q2"}]` for `ask` or `[{"task_id": 1, "priority": 2}]` for `rework_priorities`, including truncated arrays repaired by `SanitizeArgumentsJson`), map the parsed root array to the tool's collection parameter identified via the `AIFunction.JsonSchema` (the tool's array-typed property) or `ParameterAliases` (`"items"`), rather than returning an empty dictionary `{}`.
+     - **2c. Recursive Array Element Coercion & `#`-Prefixed Integer Coercion (`"#42"` $\rightarrow$ `42`):**
+       - In `NormalizeValueDeep`, when normalizing array elements whose item schema (`items`) in `AIFunction.JsonSchema` is a scalar type (`integer`, `number`, `boolean`, `string`), apply `CoerceParameterValue` to each element against the item schema (so `int[]? depends_on_ids` with `[1, "#3"]` is coerced to `[1, 3]`).
+       - In `CoerceParameterValue`, when the target schema type is `integer`, strip an optional leading `#` prefix before parsing integers (e.g., `"#42"` $\rightarrow$ `42`) so task IDs and dependency ID arrays bind cleanly to `int` and `int[]`.
+     - **2d. Nested Object & Stringified Array Normalization Against `AIFunction.JsonSchema`:**
+       - Ensure nested object properties inside collection parameters (`questions[]`, `edits[]`, `updates[]`, `tasks[]`) are normalized to the exact property names declared in `AIFunction.JsonSchema` (`prompt`, `rationale`, `options`, `oldText`, `newText`, `replaceAll`, `taskId`, `priority`, etc.).
+       - Because nested alias resolution runs before nested value recursion in `NormalizeValueDeep`, aliasing `optionsJson` / `options_json` $\rightarrow$ `options` resolves the `options` property schema (`type: ["array", "null"], items: { type: "string" }`) from `QuestionItem`, which automatically parses stringified JSON arrays (e.g., `"[\"PostgreSQL\", \"SQLite\"]"`) into actual arrays for `IReadOnlyList<string>? Options`.
+     - **2e. Blank/Empty Collection Placeholder Promotion (`edits: [{}]`):**
+       - In `PromoteFlattenedParametersToArrays`, treat collection elements that are empty or contain only `null`/blank values (whether represented as `IDictionary<string, object?>` or `JsonElement`) as empty so flat shortcut arguments (e.g., `old_text` / `new_text` alongside `"edits": [{}]`) are promoted into `edits`.
+     - **2f. Non-Streaming & Streaming Normalization Parity in `LenientToolDispatchChatClient`:**
+       - Ensure `LenientToolDispatchChatClient.GetResponseAsync` (`NormalizeMessageToolCalls`) and `GetStreamingResponseAsync` handle `NormalizeCall` consistently.
+
+### 3.2 Declarative `ToolDispatcherConfiguration` for NightCodeForge
 
 Define a centralized declarative configuration builder in `NightCodeForge.Agents` (building on the prototype in [`NcfMigrationConfiguration.cs`](file:///C:/Users/Julien/source/repos/jetelain/PmadAI/tests/Pmad.AI.Tests/NightCodeForge/NcfMigrationConfiguration.cs)) that configures `Pmad.AI.Tools.ToolDispatcherConfiguration` and `Pmad.AI.Tools.LenientToolDispatcherOptions`:
 
@@ -113,42 +136,38 @@ Define a centralized declarative configuration builder in `NightCodeForge.Agents
      - `get_file_outline` (and aliases `outline`, `view_outline`, `file_outline`): translates to `bash` with `rg -n "^(public|private|protected|internal|class|interface|record|def|function)" {path}` (supporting parameter aliases `file_path`, `filePath`, `filepath`, `file`, `filename`, `target_file` for `path`).
      - `find_files` (and aliases `find`, `findfiles`, `locate_files`): translates to `bash` with `find {path:.} -maxdepth 4 -iname {pattern:*}` (supporting parameter aliases `query`, `name`, `glob`, `file_pattern`, `filter` for `pattern` and `dir`, `directory`, `folder`, `search_path`, `root` for `path`).
 
-### 3.2 Single-Source-of-Truth `CanonicalAIFunctionFactory` & Special Coercion Rules
+### 3.3 Single-Source-of-Truth `CanonicalAIFunctionFactory` (Unwrapped `AIFunction`s) & Exception Semantics
 
-1. **Eliminate Duplicate Tool Handlers:**
-   - Delete `LenientToolDispatcher.RegisterCanonicalTools`, `LenientToolDispatcher.Backlog.cs`, and `ToolDefinition.cs`.
-   - `CanonicalAIFunctionFactory` must be the **single source of truth** creating the `AIFunction` instances for `CanonicalTools`.
-   - Register the unwrapped `AIFunction`s into `Pmad.AI.Tools.LenientToolDispatcher` via `dispatcher.RegisterTools(...)`.
+1. **Eliminate Duplicate Tool Handlers & `LenientAIFunction` Wrappers:**
+   - Delete `LenientToolDispatcher.RegisterCanonicalTools`, `LenientToolDispatcher.Backlog.cs`, `ToolDefinition.cs`, and the private `LenientAIFunction` wrapper inside `CanonicalAIFunctionFactory`.
+   - `CanonicalAIFunctionFactory` must be the **single source of truth** creating standard, unwrapped `AIFunction` instances via `AIFunctionFactory.Create(...)` for `CanonicalTools`.
+   - Register those unwrapped `AIFunction` instances into `Pmad.AI.Tools.LenientToolDispatcher` so `LenientToolDispatcher` extracts each tool's `AIFunction.JsonSchema` for in-flight normalization inside `LenientToolDispatchChatClient`.
+   - Pass the unwrapped `AIFunction` instances directly in `ChatOptions.Tools` (no `DelegatingAIFunction` / `LenientAIFunction` wrapper around `AIFunction`).
 
-2. **Preserve NightCodeForge Domain & Edge-Case Normalization Contracts:**
-   - **Control-Flow Exception Propagation:**
-     - Note that `Pmad.AI.Tools.LenientAIFunction` catches all non-cancellation exceptions and converts them into `"Error executing tool ..."` strings.
-     - In NightCodeForge, `ask` throws `HumanInterruptionException` (when pausing a headless Crucible stage for HITL input) and `request_changes` throws `RequestChangesException` (when looping back from code review to implementation).
-     - `CanonicalAIFunctionFactory`'s `DelegatingAIFunction` wrapper (and any direct dispatcher invocation helper) **must** rethrow `OperationCanceledException`, `HumanInterruptionException`, and `RequestChangesException` (including when wrapped as `InnerException`) without swallowing them as model-visible error strings.
-   - **Hash-Prefixed Task ID Coercion (`#42`) & `depends_on_ids` Validation:**
-     - Models frequently pass task IDs as `"#42"` or `depends_on_ids: [1, "#3"]`.
-     - Ensure `task_id` (`get_task`, `edit_task`, `set_task_priority`, `remove_task`), `depends_on_ids` (`edit_task`), and `updates` (`rework_priorities`) accept integer values, numeric strings (`"42"`), and `#`-prefixed numeric strings (`"#42"`).
-     - Preserve the `edit_task` `depends_on_ids` distinction required by `BacklogToolWiringTests`:
-       - Omitted or `null` `depends_on_ids` passes `null` (leaving existing dependencies unchanged).
-       - Empty array `[]` passes an empty list/array (clearing dependencies).
-       - Non-numeric invalid entries (e.g., `["not-a-task-id"]`) throw `ArgumentException`.
-   - **Null-Valued Canonical Key vs. Non-Null Alias Key Precedence:**
-     - When an argument payload contains both a canonical key with `null` (or `JsonValueKind.Null`) and an alias key with a non-null value (e.g., `{"task_id": 5, "merge_mode": null, "mergeMode": "Automatic"}`), strip or ignore the `null` entry before alias resolution so the non-null alias value (`"Automatic"`) is preserved.
-   - **Top-Level JSON Array Payloads (`ask` & `rework_priorities`):**
-     - When a model emits a raw top-level JSON array string (including truncated arrays repaired by `SanitizeArgumentsJson`, e.g. `[{"prompt": "Q1"}, {"prompt": "Q2"}` for `ask` or `[{"task_id": 1, "priority": 2}]` for `rework_priorities`), wrap the parsed root array into the tool's collection parameter (`questions` / `updates` / `items`) before normalizing.
-   - **Stringified Nested `optionsJson` on `ask`:**
-     - Ensure `QuestionItemParser.ParseFromObject` (or nested normalization on `ask`) continues to support `QuestionItem` records where `options` / `optionsJson` is passed as a stringified JSON array (e.g., `"[\"A\", \"B\"]"`).
+2. **`FunctionInvokingChatClient` Exception Behavior (`ask`, `request_changes` vs. Model-Visible Tool Errors):**
+   - **How `FunctionInvokingChatClient` Handles Tool Exceptions:**
+     - Internally, `Microsoft.Extensions.AI.FunctionInvokingChatClient` (`FunctionInvocationProcessor.InvokeFunctionAsync`) wraps tool execution in `catch (Exception ex) when (!cancellationToken.IsCancellationRequested)`.
+     - This means `FunctionInvokingChatClient` **does catch and swallow** any non-cancellation exception (when `cancellationToken.IsCancellationRequested == false`), converting it into `FunctionResultContent("Error: Function failed.")` (since `HarnessAgent` leaves `IncludeDetailedErrors = false`) and feeding it back to the LLM up to `MaximumConsecutiveErrorsPerRequest = 3` times before rethrowing.
+   - **Why `ask` and `request_changes` Are Not Swallowed in `CrucibleAgentHarness` & `IdeationService`:**
+     - **In `CrucibleAgentHarness`:** `AskHandler` and `RequestChangesHandler` ([`CrucibleAgentHarness.cs:132-147`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs#L132-L147)) capture the `HumanInterruptionException` / `RequestChangesException`, call `interruptionCts.Cancel()` on the linked token passed to `agent.RunStreamingAsync(..., interruptionCts.Token)`, and throw `OperationCanceledException(interruptionCts.Token)`. Because `cancellationToken.IsCancellationRequested` is `true`, `FunctionInvokingChatClient`'s `when (!cancellationToken.IsCancellationRequested)` filter evaluates to `false`: the exception bypasses `FunctionInvokingChatClient` immediately without emitting a synthetic error `FunctionResultContent`, and `CrucibleAgentHarness` unwraps `capturedInterruption` / `capturedRequestChanges`.
+     - **In `IdeationService`:** `AskHandler` ([`IdeationService.cs:327-360`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs#L327-L360)) does not throw; it pushes `IdeationQuestion` items to `questionChannel` (streamed to the Blazor UI), `await`s the user's answers in-turn, and returns the formatted answers string to `FunctionInvokingChatClient` as a normal tool result.
+     - **For Direct `AIFunction.InvokeAsync` / `LenientToolDispatcher` Callers:** Because `CanonicalAIFunctionFactory` returns plain `AIFunction` instances and `Pmad.AI.Tools.LenientAIFunction` no longer catches exceptions, `HumanInterruptionException` (when `AskHandler == null`), `RequestChangesException` (when `RequestChangesHandler == null`), and `OperationCanceledException` propagate directly to the caller.
+   - **Model-Recoverable Tool Errors Return `"Error: ..."` Strings in `CanonicalTools`:**
+     - Because `FunctionInvokingChatClient` hides thrown exception messages behind `"Error: Function failed."` and aborts the stage after 3 unhandled exceptions, recoverable domain/validation errors that the LLM is expected to read and self-correct from—specifically `EditAsync` (`InvalidOperationException` when `oldText` is not found or matches multiple locations) and backlog mutation methods in `CanonicalTools.Backlog.cs` (`TaskCannotBeModifiedException` / `KeyNotFoundException` from `IBacklogMutationToolService`, while letting `ArgumentException` for malformed argument binding throw when required by direct callers)—must return `"Error: {ex.Message}"` strings directly from `CanonicalTools` (matching `ReadAsync`, `WriteAsync`, and `BashAsync`).
 
-### 3.3 Delegating `IChatClient` Pipeline Integration (`LenientToolDispatchChatClient`)
+### 3.4 Delegating `IChatClient` Pipeline Ordering, UI Feedback & Telemetry (`LenientToolDispatchChatClient` Only)
 
 1. **Removal of `LenientToolCallChatClient`:**
    - Delete [`src/NightCodeForge.Agents/Inference/LenientToolCallChatClient.cs`](../../src/NightCodeForge.Agents/Inference/LenientToolCallChatClient.cs).
    - Note: Plain-text `<tool_call>` / ReAct `Action:` extraction via `Pmad.AI.Healing.ToolCallHealingChatClient` is intentionally **not** wired by default because for 25B+ LLMs native tool calling is standard and text-based tool extraction is more error-prone than useful (e.g., destructively stripping literal `<tool_call>` snippets when working on LLM parser code). Opt-in support for `ToolCallHealingChatClient` (`LocalOptimizationFlags.ToolCallHealing = false`) is specified in [Step 11.43C](STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md).
-2. **Middleware Pipeline Wiring in `CrucibleAgentHarness` and `IdeationService` (and `IHarnessAgentFactory` in Step 11.38C):**
-   - Replace `new LenientToolCallChatClient(...)` with `Pmad.AI.Tools.LenientToolDispatchChatClient` (or `.UseLenientToolDispatch(dispatcher)`) wrapping the inner tracing/persistence client.
-   - `LenientToolDispatchChatClient` intercepts every `FunctionCallContent` in `GetResponseAsync` and `GetStreamingResponseAsync` and rewrites `Name` and `Arguments` via `dispatcher.NormalizeCall(...)` *before* `HarnessAgent` (`FunctionInvokingChatClient`) matches the tool name against `ChatOptions.Tools`.
+2. **Exact Middleware Ordering for UI Feedback, Database Persistence & Telemetry:**
+   - In [`HarnessAgentFactory.CreateAsync`](../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs), place `LenientToolDispatchChatClient` **immediately above `baseClient` and below `ThinkingAndActivityTracingChatClient`**:
+     $$\text{baseClient} \rightarrow \text{LenientToolDispatchChatClient} \rightarrow \text{ThinkingAndActivityTracingChatClient} \rightarrow \text{PerServiceCallChatHistoryPersistingChatClient} \rightarrow \text{HarnessAgent (FunctionInvokingChatClient)}$$
+   - **Why this ordering matters for UI & telemetry:**
+     - `LenientToolDispatchChatClient` rewrites aliased/translated `FunctionCallContent` items (e.g., `ask_question` $\rightarrow$ `ask`, `replace_file_content` $\rightarrow$ `edit`, `list_dir` $\rightarrow$ `bash`) and normalizes `Arguments` *before* `ThinkingAndActivityTracingChatClient` inspects the response stream.
+     - Consequently, `ThinkingAndActivityTracingChatClient`, `RecordTracedEntry` (database `ConversationTurns`), `CompleteWithInterruptionAsync` (which matches `e.ToolName == CanonicalToolNames.Ask`), `CrucibleConversationCoordinator.IsAskToolTurn` (HITL resumption), session markdown transcripts, and live UI activity events (`AgentActivityKind.ToolStarted`, `AgentActivityKind.Interrupted`, and `IdeationStreamUpdate.ToolCall`) all observe the canonical tool names (`ask`, `edit`, `bash`, etc.) and normalized arguments.
 
-### 3.4 Consolidation of `JsonRepairHelper`
+### 3.5 Consolidation of `JsonRepairHelper`
 
 1. Check all callers of [`NightCodeForge.Core.Domain.JsonRepairHelper`](../../src/NightCodeForge.Core/Domain/JsonRepairHelper.cs):
    - In `NightCodeForge.Agents`, use `Pmad.AI.Healing.ToolCallHealingTransform.SanitizeArgumentsJson` / `Pmad.AI.Common.JsonRepairUtilities`.
@@ -159,12 +178,12 @@ Define a centralized declarative configuration builder in `NightCodeForge.Agents
 ## 4. Verification & Test Strategy
 
 1. **Migrate & Expand `LenientToolDispatcherTests` ([`tests/NightCodeForge.Agents.Tests/LenientToolDispatcherTests.cs`](../../tests/NightCodeForge.Agents.Tests/LenientToolDispatcherTests.cs)):**
-   - Verify all existing NightCodeForge tool-name aliases, parameter aliases, computed `read` `offset`/`limit` (`end_line`), `edit` single-chunk and multi-chunk normalization (`replace_all` propagation), `ask` question normalization (including stringified `optionsJson` and truncated JSON repair), `propose_tasks`, `request_changes`, and dropped-tool translations (`list_dir`, `grep_search`, `get_file_outline`, `find_files` and their aliases) pass against the `Pmad.AI.Tools.LenientToolDispatcher`-backed implementation.
+   - Verify all existing NightCodeForge tool-name aliases, parameter aliases, computed `read` `offset`/`limit` (`end_line`), `edit` single-chunk and multi-chunk normalization (`replace_all` propagation and `edits: [{}]` promotion), `ask` question normalization (including stringified `optionsJson` and truncated JSON repair), `propose_tasks`, `request_changes`, and dropped-tool translations (`list_dir`, `grep_search`, `get_file_outline`, `find_files` and their aliases) pass through `LenientToolDispatchChatClient` / `Pmad.AI.Tools.LenientToolDispatcher`.
 2. **Verify `BacklogToolWiringTests` & `Step1131MultiMatchEditTests` & `CodeReviewLoopbackAndPromptOverrideTests`:**
-   - Ensure all tests in `BacklogToolWiringTests` (`#42` task IDs, `[1, "#3"]` `depends_on_ids`, empty array `[]` vs `null` `depends_on_ids`, invalid non-numeric `depends_on_ids` throwing `ArgumentException`, `null` first alias key fallback, top-level JSON array payloads for `rework_priorities` and `ask`) pass without regression.
-   - Ensure `HumanInterruptionException` and `RequestChangesException` propagate through both dispatcher execution and `AIFunction.InvokeAsync`.
-3. **Add `LenientToolDispatchChatClient` Pipeline Tests & Update `IdeationServiceTests`:**
-   - Verify that native `FunctionCallContent` items with aliased tool names (`cat`, `replace_file_content`, `ask_question`, `read_task`) and translated virtual tools (`list_dir`, `grep_search`) are rewritten in-flight to canonical tool names (`read`, `edit`, `ask`, `get_task`, `bash`) with normalized arguments in both `GetResponseAsync` and `GetStreamingResponseAsync`.
+   - Ensure all scenarios in `BacklogToolWiringTests` (`#42` task IDs, `[1, "#3"]` `depends_on_ids`, empty array `[]` vs `null` `depends_on_ids`, invalid non-numeric `depends_on_ids` throwing `ArgumentException`, `null` first alias key fallback, top-level JSON array payloads for `rework_priorities` and `ask`, and model-visible `"Error: ..."` string when `IBacklogMutationToolService` throws `TaskCannotBeModifiedException`) pass when normalized by `LenientToolDispatcher` / `LenientToolDispatchChatClient` and invoked on the unwrapped `AIFunction`.
+   - Ensure `HumanInterruptionException` and `RequestChangesException` propagate transparently through `AIFunction.InvokeAsync` and the `LenientToolDispatchChatClient` pipeline.
+3. **Add `LenientToolDispatchChatClient` End-to-End Pipeline Tests & Update `IdeationServiceTests`:**
+   - Verify that native `FunctionCallContent` items with aliased tool names (`cat`, `replace_file_content`, `ask_question`, `read_task`) and translated virtual tools (`list_dir`, `grep_search`) are rewritten in-flight to canonical tool names (`read`, `edit`, `ask`, `get_task`, `bash`) with schema-normalized arguments in both `GetResponseAsync` and `GetStreamingResponseAsync`, and bind cleanly to the unwrapped `CanonicalAIFunctionFactory` `AIFunction`s.
    - Update existing mock `IChatClient` tests in [`tests/NightCodeForge.Agents.Tests/IdeationServiceTests.cs`](../../tests/NightCodeForge.Agents.Tests/IdeationServiceTests.cs) (`ConverseStreamingAsync_ExecutesToolCalls_AndIncorporatesPendingProposals`, `ConverseStreamingAsync_YieldsToolCallStartedAndCompletedUpdates`, `ConverseStreamingAsync_LogsAndYieldsToolFailure_WhenToolFails`, `ConverseStreamingAsync_ProposeTasks_EstablishesSequentialDependencies_WhenMultipleTasksProposed`) that previously simulated tool calls via raw `<tool_call>` text strings to emit structured `FunctionCallContent` updates (testing `<tool_call>` text extraction with opt-in `ToolCallHealing = true` is covered in [Step 11.43C](STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md)).
    - Verify that `dispatcher.Validate(throwOnError: false)` produces zero `ToolValidationSeverity.Error` issues when all canonical tools are registered.
 
@@ -172,9 +191,10 @@ Define a centralized declarative configuration builder in `NightCodeForge.Agents
 
 ## 5. Definition of Done (DoD) Checklist
 
+- [ ] Upgrade `Pmad.AI` with transparent `LenientAIFunction` exception propagation and full schema-driven in-flight JSON normalization in `LenientToolDispatcher.NormalizeCall` (`#42` integer coercion, scalar array element coercion, top-level JSON array mapping, null-key alias fallback, and nested schema normalization).
 - [ ] Create NightCodeForge's declarative `ToolDispatcherConfiguration` builder covering all canonical tools, backlog mutation tools, parameter aliases, nested collection aliases, computed parameters, propagated parameters, and dropped-tool shell translations (`list_dir`, `grep_search`, `get_file_outline`, `find_files`).
-- [ ] Refactor `CanonicalAIFunctionFactory` to register its `AIFunction` instances directly with `Pmad.AI.Tools.LenientToolDispatcher` (eliminating duplicate tool handler lambdas) while preserving `OperationCanceledException`, `HumanInterruptionException`, and `RequestChangesException` propagation and `#42` / top-level array / null-alias handling.
-- [ ] Delete legacy in-repo `Dispatcher/LenientToolDispatcher.Backlog.cs`, `Dispatcher/ToolDefinition.cs`, and `Inference/LenientToolCallChatClient.cs`, and replace `Dispatcher/LenientToolDispatcher.cs` with `Pmad.AI.Tools.LenientToolDispatcher` (or a thin NCF facade/configuration wrapper around it).
-- [ ] Wire `LenientToolDispatchChatClient` into the `IChatClient` pipeline in `CrucibleAgentHarness` and `IdeationService`.
+- [ ] Refactor `CanonicalAIFunctionFactory` to return standard unwrapped `AIFunction` instances (removing `LenientAIFunction` and duplicate tool handler lambdas) and register them with `Pmad.AI.Tools.LenientToolDispatcher` for schema inspection; return model-visible `"Error: ..."` strings from `CanonicalTools` for recoverable domain errors (`EditAsync` and `TaskCannotBeModifiedException`).
+- [ ] Delete legacy in-repo `Dispatcher/LenientToolDispatcher.Backlog.cs`, `Dispatcher/ToolDefinition.cs`, and `Inference/LenientToolCallChatClient.cs`, and replace `Dispatcher/LenientToolDispatcher.cs` with NightCodeForge's declarative `Pmad.AI.Tools.LenientToolDispatcher` configuration.
+- [ ] Wire `LenientToolDispatchChatClient` into the `IChatClient` pipeline in `HarnessAgentFactory` (serving both `CrucibleAgentHarness` and `IdeationService`).
 - [ ] Update and expand `LenientToolDispatcherTests`, `BacklogToolWiringTests`, `IdeationServiceTests`, and `LenientToolDispatchChatClient` pipeline tests in `tests/NightCodeForge.Agents.Tests`.
 - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
