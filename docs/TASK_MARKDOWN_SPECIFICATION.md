@@ -110,7 +110,7 @@ updated_at: 2026-10-20T08:30:00Z
 | Field | Type | Required for New Tasks? | Default Value | Description & Constraints |
 | :--- | :--- | :--- | :--- | :--- |
 | `title` | `string` | **Yes** | *None* | Imperative, non-blank title describing the task. Used to derive file slugs and human-readable references. |
-| `id` | `integer` | **No** (Omit for new tasks) | Allocated by DB | Unique database primary key. Leave omitted when creating new tasks. NightCodeForge assigns it upon sync and writes it back to disk. |
+| `id` | `integer` | **FORBIDDEN on creation** (Do NOT provide) | Allocated by DB | Unique database primary key. **MUST be omitted when creating new tasks.** Providing a manual `id` causes database collisions, overwrites existing tasks, or triggers duplicate intake errors. NightCodeForge automatically allocates the next unique ID upon sync and writes it back to disk. |
 | `priority` | `integer` | No | `3` (Normal) | Priority level from `1` (highest) to `5` (lowest):<br/>• `1`: **Critical / Urgent** (Blockers, hotfixes)<br/>• `2`: **High** (Architectural milestones)<br/>• `3`: **Normal** (Standard feature development)<br/>• `4`: **Low** (Minor polish)<br/>• `5`: **Lowest / Trivial** (Cosmetic, typos) |
 | `merge_mode` | `string` | No | `"manual_review_required"` | Git merge policy once all quality gates pass:<br/>• `"manual_review_required"`: Requires human maintainer sign-off in Review Room.<br/>• `"automatic"`: Automatically merges to base branch once all pipeline stages, tests, and SAST checks succeed. |
 | `base_branch` | `string` | No | Workspace default (e.g. `"main"`) | Target Git branch from which the feature branch is created and into which it will be merged. |

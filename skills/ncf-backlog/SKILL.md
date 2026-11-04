@@ -42,6 +42,12 @@ Each task created under `docs/tasks/` must contain valid YAML frontmatter follow
 
 ### YAML Frontmatter Schema
 
+> [!CAUTION]
+> **NEVER provide an `id` field when creating new tasks.**
+> Task IDs are allocated and managed exclusively by the NightCodeForge database. Manually guessing, assigning, or copy-pasting an `id` into new task markdown causes database collisions, overwrites existing task baselines, or creates duplicate tasks. Always omit `id` entirely when creating new tasks. NightCodeForge automatically assigns the next available unique numeric ID and rewrites the frontmatter in-place upon ingestion.
+> 
+> Similarly, **never provide `status`**, **`version`**, or **`content_hash`** on creation.
+
 ```yaml
 ---
 title: "Implement ModelLatencyTracker in OllamaRouter"
@@ -65,8 +71,8 @@ depends_on: []
   - `"automatic"`: Automatically merges to base branch once pipeline stages, unit tests, and SAST checks pass.
 - `base_branch` *(string, optional, default: workspace default, e.g. "main")*: Target Git branch for branching and merging.
 - `depends_on` *(list of integers or strings, optional, default: `[]`)*: Prerequisite tasks that must complete first. Supports numeric IDs (`[ 101 ]`), markdown filenames (`[ "2026-10-20-task-alpha.md" ]`, `[ "task-alpha.md" ]`), or task slugs/titles (`[ "task-alpha" ]`, `[ "Task Alpha" ]`). Upon synchronization, NightCodeForge resolves string references to database IDs and normalizes the markdown file in-place to canonical integer IDs.
-- `id` *(integer, omit for new tasks)*: NightCodeForge database ID. Leave omitted when creating new tasks; NightCodeForge populates it upon synchronization.
-- `status` *(string, omit for new tasks)*: Workflow status (`Suggested`, `Open`, `InProgress`, `Review`, `Closed`, `Failed`). Newly created tasks start as `Suggested`.
+- `id` *(FORBIDDEN on creation)*: **DO NOT include this field when authoring new tasks.** NightCodeForge populates and manages `id` automatically upon ingestion. Including a manual `id` can overwrite existing tasks or cause duplicate ID errors.
+- `status` *(FORBIDDEN on creation)*: **DO NOT include this field when authoring new tasks.** Newly created tasks automatically start as `Suggested`. Status transitions must occur through workflow gates, not manual editing.
 
 ### Markdown Body Specification
 
@@ -173,7 +179,7 @@ Engage the developer with focused, clarifying questions to solve all functional 
 Synthesize the requirements into sequential, PR-sized tasks following the contract in §3. Ensure each task has concrete functional checklists and verifiable acceptance criteria. **Do not create tasks with unresolved functional open questions.** (Listing `Affected Files` is optional in ideation; downstream Stage 1 Task Review performs deep symbol analysis and file identification).
 
 ### Step 4: Write Task Markdown Files (or Refine Existing Tasks)
-- **New Tasks:** Create the markdown files directly in `docs/tasks/` with YAML frontmatter. NightCodeForge will immediately synchronize them into the database and assign task IDs.
+- **New Tasks:** Create the markdown files directly in `docs/tasks/` with YAML frontmatter (**WITHOUT an `id` or `status`**). NightCodeForge will immediately synchronize them into the database and assign task IDs.
 - **Refining Existing Tasks:** When refining an existing backlog task (e.g. from NightCodeForge's "Refine in Ideation" entry point), inspect current requirements, resolve missing functional details with the maintainer, and update the existing task specification in-place.
   1. Read the current task file (`docs/tasks/<task>.md`) or its database state, and check its status: only `Suggested` or `Open` tasks that have never been executed may be refined. Never rewrite tasks that are already running, reviewed, implemented, ready, closed, rejected or cancelled; file a follow-up task instead.
   2. Interview the maintainer about every missing functional/business detail before editing.
@@ -233,7 +239,7 @@ When you identify a non-blocking follow-up item while working on an active task:
    - `priority: 5` (Lowest): If it is trivial cosmetic cleanup or comment clarification.
 4. **Author the Markdown File Directly:**
    - Create `docs/tasks/{yyyy-MM-dd}-{slug}.md` (e.g. `docs/tasks/2026-10-20-add-sliding-window-percentiles.md`).
-   - Populate the YAML frontmatter and all sections:
+   - Populate the YAML frontmatter (**WITHOUT an `id` or `status`**, which NightCodeForge automatically assigns on intake) and all sections:
      - **Summary:** State clearly that this was identified during the execution of the parent task, explaining the rationale and technical value.
      - **Implementation Checklist:** Specific, actionable technical steps.
      - **Affected Files:** Paths expected to be modified or created.
