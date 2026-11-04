@@ -178,15 +178,20 @@ public class TaskOrchestratorConversationResumptionTests
         var mockOps = new Mock<IOperationsControlService>();
         mockOps.Setup(m => m.IsPaused).Returns(false);
 
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            gitRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            pathResolver.Object,
+            procRunner.Object,
+            taskRepo,
+            NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         var recoveryService = new StartupRecoveryService(
             wsRepo,
             taskRepo,
-            gitRunner.Object,
-            new Mock<IGitWorkspaceManager>().Object,
+            gitRecovery,
             new DefaultWorkflowPipelineProvider(),
             jobQueue,
-            pathResolver.Object,
-            procRunner.Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
@@ -478,5 +483,239 @@ public class TaskOrchestratorConversationResumptionTests
             e.Kind == AgentActivityKind.ToolCompleted &&
             e.TaskId == task.Id &&
             e.Metadata?.GetValueOrDefault(AgentActivityMetadataKeys.ToolName)?.ToString() == CanonicalToolNames.Ask);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenResumedStageSyncsDiskEditsAndThenFails_PreservesPreResumeSyncedTaskMetadataInPromptAndDatabase()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf_pre_resume_sync_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var repo = new InMemoryTaskRepository();
+            var wsRepo = new InMemoryWorkspaceRepository();
+            var depStore = new InMemoryTaskDependencyStore();
+            var depEngine = new DependencyResolutionEngine(depStore);
+
+            string? capturedBootstrapPrompt = null;
+            string? capturedAgentTaskTitle = null;
+            string? capturedAgentTaskDescription = null;
+
+            var harnessMock = new Mock<IAgentHarness>();
+            harnessMock.SetupGet(h => h.HarnessId).Returns(StandardHarnessIds.NativeCli);
+            harnessMock
+                .Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+                .Callback<AgentSessionContext, CancellationToken>((ctx, _) =>
+                {
+                    capturedBootstrapPrompt = ctx.BootstrapPrompt;
+                    capturedAgentTaskTitle = ctx.ForgeTask.Title;
+                    capturedAgentTaskDescription = ctx.ForgeTask.Description;
+                })
+                .ReturnsAsync(new AgentRunResult(AgentRunStatus.Failed, new AgentRunMetrics(10), Error: "Simulated agent failure after resume"));
+
+            var registry = new HarnessRegistry(new[] { harnessMock.Object });
+
+            var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+            mdSyncMock
+                .Setup(m => m.SyncAllTasksFromDiskAsync(
+                    It.IsAny<Workspace>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string?>(),
+                    null,
+                    It.IsAny<string>(),
+                    TaskSyncConstants.PreserveEditsBeforeResumeReason,
+                    It.IsAny<int?>(),
+                    It.IsAny<CancellationToken>()))
+                .Returns<Workspace, string, string?, IReadOnlyDictionary<int, TaskBaselineEntry>?, string, string?, int?, CancellationToken>(
+                    async (_, _, _, _, _, _, taskId, ct) =>
+                    {
+                        var dbTask = await repo.GetByIdAsync(taskId!.Value, ct);
+                        dbTask!.Title = "Disk-Edited Title Before Pause";
+                        dbTask.Description = "Disk-Edited Specification Body Before Pause";
+                        dbTask.Version += 1;
+                        await repo.UpdateAsync(dbTask, cancellationToken: ct);
+                        return new[] { dbTask };
+                    });
+
+            mdSyncMock
+                .Setup(m => m.SyncAllTasksToDiskAsync(
+                    It.IsAny<Workspace>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(new Dictionary<int, string>(), new Dictionary<int, TaskBaselineEntry>()));
+
+            var stage = new TestWorkflowStage(StandardStageIds.TaskReview, WorkflowStageKind.Agentic)
+            {
+                QueueTier = StageQueueTier.TaskReview
+            };
+            var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new[] { stage }));
+
+            var builder = new TestOrchestratorBuilder
+            {
+                TaskRepository = repo,
+                WorkspaceRepository = wsRepo,
+                DependencyStore = depStore,
+                DependencyEngine = depEngine,
+                HarnessRegistry = registry,
+                MarkdownSyncService = mdSyncMock.Object,
+                PipelineProvider = pipelineProvider
+            };
+
+            var ws = new Workspace
+            {
+                Id = 1,
+                Name = "PreResumeSyncWS",
+                RepositoryPath = tempDir,
+                AgentProfiles = new List<AgentProfile>
+                {
+                    new()
+                    {
+                        Id = StandardStageIds.TaskReview,
+                        WorkspaceId = 1,
+                        Name = "Reviewer",
+                        HarnessId = StandardHarnessIds.NativeCli,
+                        ModelName = "test-model",
+                        Mode = AgentMode.Full
+                    }
+                }
+            };
+            await wsRepo.CreateAsync(ws);
+
+            var bag = new PipelineDataBag();
+            bag.Set(PipelineDataBagKeys.MaxRetries, 1);
+
+            var task = new ForgeTask
+            {
+                Id = 77,
+                WorkspaceId = 1,
+                Title = "Stale Original Title",
+                Description = "Stale Original Description",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = StandardStageIds.TaskReview,
+                InterruptedStageId = StandardStageIds.TaskReview,
+                PipelineDataJson = bag.ToJson(),
+                Version = 1
+            };
+            await repo.CreateAsync(task);
+            depStore.AddTask(task.Id, ws.Id, TaskOverallStatus.Open);
+
+            var orchestrator = builder.Build();
+            await orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None);
+
+            // 1. Agent session and bootstrap prompt must receive the disk-synced metadata, not stale pre-resume metadata
+            Assert.Equal("Disk-Edited Title Before Pause", capturedAgentTaskTitle);
+            Assert.Equal("Disk-Edited Specification Body Before Pause", capturedAgentTaskDescription);
+            Assert.Contains("Disk-Edited Title Before Pause", capturedBootstrapPrompt);
+            Assert.Contains("Disk-Edited Specification Body Before Pause", capturedBootstrapPrompt);
+
+            // 2. When stage failure persists the task to the repository, it must NOT overwrite DB with stale pre-resume Title/Description
+            var persistedTask = await repo.GetByIdAsync(task.Id);
+            Assert.NotNull(persistedTask);
+            Assert.Equal(TaskOverallStatus.Failed, persistedTask.Status);
+            Assert.Equal("Disk-Edited Title Before Pause", persistedTask.Title);
+            Assert.Equal("Disk-Edited Specification Body Before Pause", persistedTask.Description);
+            Assert.True(persistedTask.Version >= 2);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenResumedStageHasNonExistentSyncPath_ClearsIsResumedRunBeforeSubsequentCohortStage()
+    {
+        var repo = new InMemoryTaskRepository();
+        var wsRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+
+        var preparerMock = new Mock<ITaskWorkspacePreparer>();
+        var isResumedRunValuesByStage = new List<(string StageId, bool IsResumedRun)>();
+
+        var ws = new Workspace
+        {
+            Id = 1,
+            Name = "CohortResumptionWS",
+            RepositoryPath = "C:/non_existent_path_" + Guid.NewGuid().ToString("N")
+        };
+        await wsRepo.CreateAsync(ws);
+
+        preparerMock.Setup(p => p.GetWorkspaceAsync(It.IsAny<ForgeTask>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ws);
+        preparerMock.Setup(p => p.AcquireTaskLockAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<IDisposable>());
+        preparerMock.Setup(p => p.ResolveWorkspacePaths(It.IsAny<Workspace>(), It.IsAny<int>()))
+            .Returns(new ResolvedTaskWorkspacePaths(ws.RepositoryPath, ws.RepositoryPath, ws.RepositoryPath, ws.RepositoryPath));
+        preparerMock.Setup(p => p.SyncFromBaseBranchAsync(It.IsAny<Workspace>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MergeSyncResult(true, false, [], "merge-sha"));
+        preparerMock.Setup(p => p.HasImplementationChangesAsync(It.IsAny<Workspace>(), It.IsAny<ForgeTask>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        preparerMock.Setup(p => p.SyncPreStageMarkdownAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<ForgeTask>(),
+                It.IsAny<PipelineContext>(),
+                It.IsAny<IWorkflowStage>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Workspace, ForgeTask, PipelineContext, IWorkflowStage, string?, string?, bool, CancellationToken>(
+                (_, _, _, stg, _, _, isResumed, _) => isResumedRunValuesByStage.Add((stg.StageId, isResumed)))
+            .ReturnsAsync(new PreStageMarkdownSyncOutcome(null, false));
+
+        var stage1 = new TestWorkflowStage(StandardStageIds.PreImplementationBaseline, WorkflowStageKind.Deterministic)
+        {
+            QueueTier = StageQueueTier.Implementation
+        };
+        var stage2 = new TestWorkflowStage(StandardStageIds.PostImplementationGates, WorkflowStageKind.Deterministic)
+        {
+            QueueTier = StageQueueTier.Implementation
+        };
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 }));
+
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = repo,
+            WorkspaceRepository = wsRepo,
+            DependencyStore = depStore,
+            DependencyEngine = depEngine,
+            PipelineProvider = pipelineProvider
+        };
+
+        var mergeCoordinator = builder.BuildMergeAndCascadeCoordinator(preparerMock.Object);
+        var lifecycleCoordinator = builder.BuildLifecycleMutationCoordinator(preparerMock.Object, mergeCoordinator);
+        var orchestrator = new TaskOrchestrator(
+            repo,
+            preparerMock.Object,
+            mergeCoordinator,
+            lifecycleCoordinator,
+            builder.HarnessRegistry,
+            builder.Streamer,
+            builder.OperationsControlService,
+            builder.TelemetryService,
+            builder.Logger);
+
+        var task = new ForgeTask
+        {
+            Id = 88,
+            WorkspaceId = 1,
+            Title = "Resumed Stage Cohort Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.PreImplementationBaseline,
+            InterruptedStageId = StandardStageIds.PreImplementationBaseline
+        };
+        await repo.CreateAsync(task);
+        depStore.AddTask(task.Id, ws.Id, TaskOverallStatus.Open);
+
+        await orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None);
+
+        Assert.Equal(2, isResumedRunValuesByStage.Count);
+        Assert.Equal((StandardStageIds.PreImplementationBaseline, true), isResumedRunValuesByStage[0]);
+        Assert.Equal((StandardStageIds.PostImplementationGates, false), isResumedRunValuesByStage[1]);
     }
 }

@@ -1,6 +1,6 @@
 # Step 11.38D — `TaskOrchestrator` & `StartupRecoveryService` Decomposition and Zero-Exception `<= 10` Constructor Parameter Enforcement
 
-**Status:** Pending (Fix / Code Factorization & Constructor Diet)
+**Status:** Completed (Fix / Code Factorization & Constructor Diet)
 **Prerequisite:** Step 11.38C
 
 ---
@@ -78,4 +78,3 @@ Extract cohesive services in `NightCodeForge.Core.Workflow` (all with `<= 8` req
 - `ConstructorParameterCeilingTests` passes with **zero allowlisted classes** (`MaxConstructorParameters = 10`).
 - All unit tests for `TaskWorkspacePreparer`, `TaskMergeAndCascadeCoordinator`, `TaskLifecycleMutationCoordinator`, `WorkspaceGitRecoveryService`, and `ContainerEnvironmentFactory` pass.
 - Full test suite (including all `TaskOrchestrator*Tests` and `StartupRecovery*Tests`) passes.
-

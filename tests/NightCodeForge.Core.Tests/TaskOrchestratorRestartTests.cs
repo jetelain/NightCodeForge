@@ -58,34 +58,11 @@ public class TaskOrchestratorRestartTests
             DependencyEngine = _depEngine,
             LockProvider = _lockProvider,
             GitWorkspaceManager = gitManager ?? _gitManager,
+            EnvironmentProvider = envProvider,
             JobQueue = _jobQueue,
             DependencyStore = _depStore,
             CancellationManager = _cancellationManagerMock.Object
         };
-
-        if (envProvider != null)
-        {
-            return new TaskOrchestrator(
-                _taskRepo,
-                _workspaceRepo,
-                _depEngine,
-                _lockProvider,
-                gitManager ?? _gitManager,
-                envProvider,
-                builder.PipelineProvider,
-                _jobQueue,
-                _depStore,
-                builder.HarnessRegistry,
-                builder.GitMirrorSyncService,
-                builder.MarkdownSyncService,
-                builder.PathResolver,
-                builder.Streamer,
-                _cancellationManagerMock.Object,
-                builder.ConflictResolutionVerifier,
-                builder.OperationsControlService,
-                builder.TelemetryService,
-                NullLogger<TaskOrchestrator>.Instance);
-        }
 
         return builder.Build();
     }

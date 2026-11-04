@@ -22,20 +22,28 @@ public class TestExecutionEnvironmentProviderBuilder
     public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
     public ICompanionToolInstaller CompanionToolInstaller { get; set; } = new Mock<ICompanionToolInstaller>().Object;
     public ILogger<NightCodeForgeContainerExecutor> Logger { get; set; } = NullLogger<NightCodeForgeContainerExecutor>.Instance;
+    public ILogger<ExecutionEnvironmentProvider> ProviderLogger { get; set; } = NullLogger<ExecutionEnvironmentProvider>.Instance;
 
-    public ExecutionEnvironmentProvider Build()
-    {
-        var bareHost = BareHost ?? new BareHostExecutionEnvironment(ProcessRunner, PathResolver);
-        return new ExecutionEnvironmentProvider(
-            bareHost,
+    public IContainerEnvironmentFactory BuildContainerFactory() =>
+        new ContainerEnvironmentFactory(
             ProcessRunner,
             Options,
             PathResolver,
             SdkDiscoveryService,
-            GitWorkspaceManager,
-            Logger,
             UserIdentityResolver,
             TelemetryService,
-            CompanionToolInstaller);
+            CompanionToolInstaller,
+            Logger);
+
+    public ExecutionEnvironmentProvider Build()
+    {
+        var bareHost = BareHost ?? new BareHostExecutionEnvironment(ProcessRunner, PathResolver);
+        var containerFactory = BuildContainerFactory();
+        return new ExecutionEnvironmentProvider(
+            bareHost,
+            ProcessRunner,
+            GitWorkspaceManager,
+            containerFactory,
+            ProviderLogger);
     }
 }

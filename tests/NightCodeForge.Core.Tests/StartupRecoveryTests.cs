@@ -38,15 +38,20 @@ public class StartupRecoveryTests : IDisposable
             ops = mock.Object;
         }
 
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            _gitCliRunner,
+            _gitWorkspaceManager,
+            new Moq.Mock<IWorkspacePathResolver>().Object,
+            new Moq.Mock<IProcessRunner>().Object,
+            _taskRepo,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         return new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
-            _gitCliRunner,
-            _gitWorkspaceManager,
+            gitRecovery,
             pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
             _jobQueue,
-            new Moq.Mock<IWorkspacePathResolver>().Object,
-            new Moq.Mock<IProcessRunner>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Moq.Mock<IExecutionEnvironment>().Object),
             ops,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StartupRecoveryService>.Instance);

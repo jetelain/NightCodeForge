@@ -1394,4 +1394,68 @@ public class TaskOrchestratorTests
         Assert.Contains("Exceeded max retry limit", history[^1].ChangeReason);
         Assert.DoesNotContain("Unrecoverable stage failure", history[^1].ChangeReason);
     }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenEnteringCodeReviewWithoutPrePopulatedDiffStat_PassesPopulatedReviewDiffStatToAgentSessionContext()
+    {
+        var profile = new AgentProfile
+        {
+            Id = StandardStageIds.CodeReviewAndFix,
+            Name = "Reviewer",
+            HarnessId = "test-review-harness",
+            ModelName = "test-model",
+            Mode = AgentMode.Review
+        };
+        _workspace.AgentProfiles.Add(profile);
+
+        _gitManager.GeneratedDiffStat = " src/Foo.cs | 12 ++++++++++++\n 1 file changed, 12 insertions(+)";
+
+        AgentSessionContext? capturedSessionContext = null;
+        var mockHarness = new Mock<IAgentHarness>();
+        mockHarness.Setup(h => h.HarnessId).Returns("test-review-harness");
+        mockHarness
+            .Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<AgentSessionContext, CancellationToken>((ctx, _) => capturedSessionContext = ctx)
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(10), summary: "LGTM"));
+
+        var harnessRegistry = new HarnessRegistry(new[] { mockHarness.Object });
+
+        var reviewStage = new TestWorkflowStage(StandardStageIds.CodeReviewAndFix, WorkflowStageKind.Agentic)
+        {
+            RequiredMode = AgentMode.Review,
+            QueueTier = StageQueueTier.CodeReview,
+            Handler = null
+        };
+
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { reviewStage });
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 1001,
+            WorkspaceId = _workspace.Id,
+            Title = "Review DiffStat Propagation Task",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.CodeReviewAndFix,
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        _depStore.AddTask(1001, _workspace.Id, TaskOverallStatus.Open);
+
+        var orchestrator = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            HarnessRegistry = harnessRegistry
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        Assert.NotNull(capturedSessionContext);
+        Assert.Equal(" src/Foo.cs | 12 ++++++++++++\n 1 file changed, 12 insertions(+)", capturedSessionContext.ReviewDiffStat);
+    }
 }

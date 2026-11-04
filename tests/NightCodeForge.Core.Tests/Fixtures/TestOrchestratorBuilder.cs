@@ -36,6 +36,7 @@ public class TestOrchestratorBuilder
     public IWorkspaceLockProvider LockProvider { get; set; } = new WorkspaceLockProvider();
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = CreateDefaultGitWorkspaceManager();
     public Mock<IExecutionEnvironmentProvider> EnvironmentProviderMock { get; } = new();
+    public IExecutionEnvironmentProvider? EnvironmentProvider { get; set; }
     public IWorkflowPipelineProvider PipelineProvider { get; set; } = CreateDefaultPipelineProvider();
 
     private static IWorkflowPipelineProvider CreateDefaultPipelineProvider()
@@ -118,24 +119,58 @@ public class TestOrchestratorBuilder
         return mock.Object;
     }
 
-    public TaskOrchestrator Build() => new(
-        TaskRepository,
+    public TaskWorkspacePreparer BuildWorkspacePreparer() => new(
         WorkspaceRepository,
-        DependencyEngine,
         LockProvider,
         GitWorkspaceManager,
-        EnvironmentProviderMock.Object,
-        PipelineProvider,
-        JobQueue,
-        DependencyStore,
-        HarnessRegistry,
         GitMirrorSyncService,
         MarkdownSyncService,
         PathResolver,
-        Streamer,
-        CancellationManager,
+        EnvironmentProvider ?? EnvironmentProviderMock.Object,
+        NullLogger<TaskWorkspacePreparer>.Instance);
+
+    public TaskMergeAndCascadeCoordinator BuildMergeAndCascadeCoordinator(ITaskWorkspacePreparer? workspacePreparer = null) => new(
+        TaskRepository,
+        workspacePreparer ?? BuildWorkspacePreparer(),
+        DependencyEngine,
+        DependencyStore,
+        JobQueue,
+        PipelineProvider,
         ConflictResolutionVerifier,
-        OperationsControlService,
-        TelemetryService,
-        Logger);
+        Streamer,
+        NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
+
+    public TaskLifecycleMutationCoordinator BuildLifecycleMutationCoordinator(
+        ITaskWorkspacePreparer? workspacePreparer = null,
+        ITaskMergeAndCascadeCoordinator? mergeAndCascadeCoordinator = null)
+    {
+        var preparer = workspacePreparer ?? BuildWorkspacePreparer();
+        var mergeCoordinator = mergeAndCascadeCoordinator ?? BuildMergeAndCascadeCoordinator(preparer);
+        return new TaskLifecycleMutationCoordinator(
+            TaskRepository,
+            preparer,
+            mergeCoordinator,
+            PipelineProvider,
+            JobQueue,
+            CancellationManager,
+            Streamer,
+            NullLogger<TaskLifecycleMutationCoordinator>.Instance);
+    }
+
+    public TaskOrchestrator Build()
+    {
+        var workspacePreparer = BuildWorkspacePreparer();
+        var mergeAndCascadeCoordinator = BuildMergeAndCascadeCoordinator(workspacePreparer);
+        var lifecycleMutationCoordinator = BuildLifecycleMutationCoordinator(workspacePreparer, mergeAndCascadeCoordinator);
+        return new TaskOrchestrator(
+            TaskRepository,
+            workspacePreparer,
+            mergeAndCascadeCoordinator,
+            lifecycleMutationCoordinator,
+            HarnessRegistry,
+            Streamer,
+            OperationsControlService,
+            TelemetryService,
+            Logger);
+    }
 }

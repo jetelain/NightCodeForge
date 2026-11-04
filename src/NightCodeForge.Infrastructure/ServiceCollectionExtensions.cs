@@ -61,7 +61,11 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IWorkflowStageFactory, WorkflowStageFactory>();
         services.TryAddScoped<IWorkflowPipelineProvider, DatabaseWorkflowPipelineProvider>();
         services.TryAddScoped<IConflictResolutionVerifier, ConflictResolutionVerifier>();
+        services.TryAddScoped<ITaskWorkspacePreparer, TaskWorkspacePreparer>();
+        services.TryAddScoped<ITaskMergeAndCascadeCoordinator, TaskMergeAndCascadeCoordinator>();
+        services.TryAddScoped<ITaskLifecycleMutationCoordinator, TaskLifecycleMutationCoordinator>();
         services.TryAddScoped<ITaskOrchestrator, TaskOrchestrator>();
+        services.TryAddScoped<IWorkspaceGitRecoveryService, WorkspaceGitRecoveryService>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
 
         // 6. Execution Environments, Process Runner & Path Resolution
@@ -84,6 +88,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IExecutionEnvironment>(sp => sp.GetRequiredService<Execution.BareHostExecutionEnvironment>());
         services.TryAddTransient<Execution.WslExecutionEnvironment>();
         services.TryAddTransient<Execution.NightCodeForgeContainerExecutor>();
+        services.TryAddSingleton<Execution.IContainerEnvironmentFactory, Execution.ContainerEnvironmentFactory>();
         services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
         // 7. LLM inference services are provider-specific: see AddNightCodeForgeInference.

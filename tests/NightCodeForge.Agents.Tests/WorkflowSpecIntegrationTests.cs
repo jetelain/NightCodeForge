@@ -426,27 +426,46 @@ public class WorkflowSpecIntegrationTests
             It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ConflictResolutionVerificationResult(true));
 
-        var orchestrator = new TaskOrchestrator(
-            taskRepo,
+        var pathResolver = TestPathResolver.Create();
+        var streamer = new InMemoryAgentActivityStreamer();
+        var workspacePreparer = new TaskWorkspacePreparer(
             workspaceRepo,
-            depEngine,
             lockProvider,
             gitManager,
-            envProviderMock.Object,
-            pipelineProvider,
-            jobQueue,
-            depStore,
-            registry,
             mockMirrorSync.Object,
             mockMdSync.Object,
-            TestPathResolver.Create(),
-            new InMemoryAgentActivityStreamer(),
-            cancellationManager,
+            pathResolver,
+            envProviderMock.Object,
+            NullLogger<TaskWorkspacePreparer>.Instance);
+        var mergeAndCascadeCoordinator = new TaskMergeAndCascadeCoordinator(
+            taskRepo,
+            workspacePreparer,
+            depEngine,
+            depStore,
+            jobQueue,
+            pipelineProvider,
             mockVerifier.Object,
+            streamer,
+            NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
+        var lifecycleMutationCoordinator = new TaskLifecycleMutationCoordinator(
+            taskRepo,
+            workspacePreparer,
+            mergeAndCascadeCoordinator,
+            pipelineProvider,
+            jobQueue,
+            cancellationManager,
+            streamer,
+            NullLogger<TaskLifecycleMutationCoordinator>.Instance);
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
+            workspacePreparer,
+            mergeAndCascadeCoordinator,
+            lifecycleMutationCoordinator,
+            registry,
+            streamer,
             opsService,
             new Mock<IOperationsTelemetryService>().Object,
             NullLogger<TaskOrchestrator>.Instance);
-
         return new TestWorkflowEnvironment
         {
             Orchestrator = orchestrator,

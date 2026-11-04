@@ -120,15 +120,20 @@ public class TaskContainerLifecycleTests
         var mockOps = new Mock<IOperationsControlService>();
         mockOps.Setup(m => m.IsPaused).Returns(false);
 
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            gitRunner.Object,
+            _gitManager,
+            new Mock<IWorkspacePathResolver>().Object,
+            new Mock<IProcessRunner>().Object,
+            _taskRepo,
+            NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         var service = new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
-            gitRunner.Object,
-            _gitManager,
+            gitRecovery,
             new NightCodeForge.Core.Workflow.DefaultWorkflowPipelineProvider(),
             new FakeTaskJobQueue(),
-            new Mock<IWorkspacePathResolver>().Object,
-            new Mock<IProcessRunner>().Object,
             provider.Object,
             mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
@@ -169,15 +174,20 @@ public class TaskContainerLifecycleTests
         var mockOps = new Mock<IOperationsControlService>();
         mockOps.Setup(m => m.IsPaused).Returns(false);
 
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            gitRunner.Object,
+            _gitManager,
+            new Mock<IWorkspacePathResolver>().Object,
+            new Mock<IProcessRunner>().Object,
+            _taskRepo,
+            NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         var service = new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
-            gitRunner.Object,
-            _gitManager,
+            gitRecovery,
             new NightCodeForge.Core.Workflow.DefaultWorkflowPipelineProvider(),
             new FakeTaskJobQueue(),
-            new Mock<IWorkspacePathResolver>().Object,
-            new Mock<IProcessRunner>().Object,
             provider.Object,
             mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);

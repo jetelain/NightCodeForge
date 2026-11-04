@@ -48,15 +48,20 @@ public class StartupRecoveryServicePauseTests : IDisposable
         IOperationsControlService operationsControlService,
         IWorkflowPipelineProvider? pipelineProvider = null)
     {
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            _gitCliRunner,
+            _gitWorkspaceManager,
+            new Mock<IWorkspacePathResolver>().Object,
+            new Mock<IProcessRunner>().Object,
+            _taskRepo,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         return new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
-            _gitCliRunner,
-            _gitWorkspaceManager,
+            gitRecovery,
             pipelineProvider ?? new DefaultWorkflowPipelineProvider(),
             _jobQueue,
-            new Mock<IWorkspacePathResolver>().Object,
-            new Mock<IProcessRunner>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             operationsControlService,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<StartupRecoveryService>.Instance);

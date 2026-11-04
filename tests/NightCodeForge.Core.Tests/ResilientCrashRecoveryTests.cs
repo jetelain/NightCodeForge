@@ -59,15 +59,20 @@ public class ResilientCrashRecoveryTests
             ops = mockOps.Object;
         }
 
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            _gitCliRunner,
+            new FakeGitWorkspaceManager(),
+            new Mock<IWorkspacePathResolver>().Object,
+            new Mock<IProcessRunner>().Object,
+            _taskRepo,
+            NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         return new StartupRecoveryService(
             _workspaceRepo,
             _taskRepo,
-            _gitCliRunner,
-            new FakeGitWorkspaceManager(),
+            gitRecovery,
             pipelineProvider,
             _jobQueue,
-            new Mock<IWorkspacePathResolver>().Object,
-            new Mock<IProcessRunner>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             ops,
             NullLogger<StartupRecoveryService>.Instance);

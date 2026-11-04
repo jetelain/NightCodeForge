@@ -36,15 +36,29 @@ public class StartupRecoveryIntegrationTests : IDisposable
         var mockOps = new Mock<IOperationsControlService>();
         mockOps.Setup(m => m.IsPaused).Returns(false);
 
+        var gitWorkspaceManager = new GitWorkspaceManager(
+            _runner,
+            _pathResolver,
+            new Mock<IWslMetadataService>().Object,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
+            _processRunner,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        var gitRecovery = new WorkspaceGitRecoveryService(
+            _runner,
+            gitWorkspaceManager,
+            _pathResolver,
+            _processRunner,
+            taskRepo,
+            NullLogger<WorkspaceGitRecoveryService>.Instance);
+
         return new(
             workspaceRepo,
             taskRepo,
-            _runner,
-            new GitWorkspaceManager(_runner, _pathResolver, new Mock<IWslMetadataService>().Object, new Mock<IGitMirrorSyncService>().Object, new Mock<IWorkspaceLockProvider>().Object, _processRunner, NullLogger<GitWorkspaceManager>.Instance),
+            gitRecovery,
             CreatePipelineProvider(),
             jobQueue,
-            _pathResolver,
-            _processRunner,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
             mockOps.Object,
             NullLogger<StartupRecoveryService>.Instance);
@@ -402,17 +416,22 @@ public class StartupRecoveryIntegrationTests : IDisposable
             Assert.Contains(task.Id, jobQueue.TaskReviewQueue);
 
             // 11. Verify ExecutionEnvironmentProvider also normalizes paths
-            var envProvider = new ExecutionEnvironmentProvider(
-                new BareHostExecutionEnvironment(_processRunner, _pathResolver),
+            var containerFactory = new ContainerEnvironmentFactory(
                 _processRunner,
                 Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()),
                 _pathResolver,
                 new Mock<IHostSdkDiscoveryService>().Object,
-                gitManager,
-                NullLogger<NightCodeForgeContainerExecutor>.Instance,
                 new Mock<IHostUserIdentityResolver>().Object,
                 new Mock<IOperationsTelemetryService>().Object,
-                new Mock<ICompanionToolInstaller>().Object);
+                new Mock<ICompanionToolInstaller>().Object,
+                NullLogger<NightCodeForgeContainerExecutor>.Instance);
+
+            var envProvider = new ExecutionEnvironmentProvider(
+                new BareHostExecutionEnvironment(_processRunner, _pathResolver),
+                _processRunner,
+                gitManager,
+                containerFactory,
+                NullLogger<ExecutionEnvironmentProvider>.Instance);
 
             var env = envProvider.GetEnvironment(workspace, taskId: task.Id);
             Assert.NotNull(env);

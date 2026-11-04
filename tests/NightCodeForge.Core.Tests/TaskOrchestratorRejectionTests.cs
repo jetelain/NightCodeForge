@@ -271,6 +271,61 @@ public class TaskOrchestratorRejectionTests
         Assert.False(rejected.IsWaitingForHuman);
         Assert.Null(rejected.LastHangfireJobId);
         Assert.Contains("job-waiting-123", _jobQueue.DeletedJobs);
+        Assert.False(await _depStore.IsTaskWaitingForHumanAsync(task.Id));
+    }
+
+    [Fact]
+    public async Task RequestChangesAsync_WhenTaskWasWaitingForHuman_ClearsDependencyStoreWaitingFlagSoProcessTaskExecutes()
+    {
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = _workspace.Id,
+            Title = "Escalated task receiving change request",
+            Status = TaskOverallStatus.Open,
+            IsWaitingForHuman = true,
+            InterruptedStageId = "stage-impl",
+            CurrentStageId = "stage-verify"
+        }, null, AuditActors.User, "baseline");
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+        await _depStore.SetWaitingForHumanAsync(task.Id, true);
+
+        bool implStageExecuted = false;
+        var implStage = new TestWorkflowStage("stage-impl", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.Implementation,
+            Handler = (_, _) =>
+            {
+                implStageExecuted = true;
+                return Task.FromResult(StageExecutionResult.Success());
+            }
+        };
+        var verifyStage = new TestWorkflowStage("stage-verify", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.CodeReview,
+            LoopBackStageId = "stage-impl",
+            Handler = (_, _) => Task.FromResult(StageExecutionResult.Success())
+        };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[] { implStage, verifyStage });
+
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            CancellationManager = _cancellationManager
+        }.Build();
+
+        await orchestrator.RequestChangesAsync(task.Id, "Rebase and fix null handling");
+
+        Assert.False(await _depStore.IsTaskWaitingForHumanAsync(task.Id));
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+        Assert.True(implStageExecuted);
     }
 
     [Fact]
