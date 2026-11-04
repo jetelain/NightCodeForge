@@ -2,7 +2,7 @@
 
 > **Bug Fix, Security Hardening & Library Consolidation Step (Read-Only Shell Guardrails)**  
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Projects:* [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
 > *Related Steps:* [Step 11.43B: `Pmad.AI` `LenientToolDispatcher` & Delegating Chat Client Migration](STEP_11_43B_PMAD_AI_LENIENT_TOOL_DISPATCHER_AND_DELEGATING_CHAT_CLIENT_MIGRATION.md), [Step 11.38C: Shared Agent Session & Toolset Factorization](STEP_11_38C_CRUCIBLE_AND_IDEATION_SHARED_SESSION_AND_TOOLSET_FACTORIZATION.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -73,7 +73,7 @@ Compared to the hardened [`Pmad.AI.Guardrails.ReadOnlyCommandValidator`](file://
 
 1. In [`CanonicalTools.BashAsync`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs), when the toolset is operating in read-only mode (`_isReadOnly == true`):
    - Validate the incoming command using the configured `Pmad.AI.Guardrails.ReadOnlyCommandValidator`.
-   - When validation fails (`!result.IsAllowed`), log the warning and fail fast by throwing `InvalidOperationException` with the validator's rejection reason (`result.Reason`), matching `WriteAsync` and `EditAsync` read-only fail-fast semantics.
+   - When validation fails (`!result.IsAllowed`), log the warning and return the diagnostic violation message `$"[READ-ONLY VIOLATION]: {result.Reason}"` (without throwing an unhandled exception or invoking `IExecutionEnvironment`), preserving canonical tool message feedback to the agent.
 
 ---
 
@@ -93,15 +93,15 @@ Update [`tests/NightCodeForge.Agents.Tests/ReadOnlyCommandValidatorTests.cs`](..
    - Mutating `find`, `rg`, and `sed` flags (`find . -delete`, `find . -exec rm {} +`, `find . -fprint /tmp/out.txt`, `rg --pre=sh pattern`, `sed -i "s/a/b/" file.cs`, `sed -ni "s/a/b/" file.cs`, `sed --in-place file.cs`).
    - Shell redirection, expansion, and substitution (`echo hi > file.txt`, `cat < /etc/passwd`, `echo $(whoami)`, ``echo `id` ``, `echo $HOME`, `find . $'-exec' rm -rf {} +`, `diff <(ls a) <(ls b)`).
 3. **`CanonicalTools.BashAsync` Read-Only Enforcement:**
-   - Verify that `CanonicalTools.BashAsync` throws `InvalidOperationException` (without invoking `IExecutionEnvironment`) when given a disallowed or mutating command in read-only mode, and executes normally when given a permitted read-only command.
+   - Verify that `CanonicalTools.BashAsync` returns `[READ-ONLY VIOLATION]: ...` (without invoking `IExecutionEnvironment`) when given a disallowed or mutating command in read-only mode, and executes normally when given a permitted read-only command.
 
 ---
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Add `Pmad.AI` (`0.0.2`) package reference in `src/NightCodeForge.Agents/NightCodeForge.Agents.csproj`.
-- [ ] Replace the custom in-repo `ReadOnlyCommandValidator` implementation with `Pmad.AI.Guardrails.ReadOnlyCommandValidator` configured with NightCodeForge's `AllowedBinaries` and `csnav` `CommandValidationRule` (allowing read-only `csnav` subcommands and `server status|start|reload`, while blocking `skills` and `server stop`).
-- [ ] Wire `CanonicalTools.BashAsync` to validate read-only commands via the configured `Pmad.AI` validator and throw `InvalidOperationException` when disallowed.
-- [ ] Update and expand `ReadOnlyCommandValidatorTests` in `tests/NightCodeForge.Agents.Tests` to cover `Pmad.AI` 0.0.2 hardened rules (`git` flags/branch/tag/remote mutations, `find -exec`/`-delete`, `rg --pre`, `sed -i`, `csnav skills`/`server stop`, variable expansion, and process substitution).
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Add `Pmad.AI` (`0.0.2`) package reference in `src/NightCodeForge.Agents/NightCodeForge.Agents.csproj`.
+- [x] Replace the custom in-repo `ReadOnlyCommandValidator` implementation with `Pmad.AI.Guardrails.ReadOnlyCommandValidator` configured with NightCodeForge's `AllowedBinaries` and `csnav` `CommandValidationRule` (allowing read-only `csnav` subcommands and `server status|start|reload`, while blocking `skills` and `server stop`).
+- [x] Wire `CanonicalTools.BashAsync` to validate read-only commands via the configured `Pmad.AI` validator and return `[READ-ONLY VIOLATION]: {reason}` when disallowed.
+- [x] Update and expand `ReadOnlyCommandValidatorTests` in `tests/NightCodeForge.Agents.Tests` to cover `Pmad.AI` 0.0.2 hardened rules (`git` flags/branch/tag/remote mutations, `find -exec`/`-delete`, `rg --pre`, `sed -i`, `csnav skills`/`server stop`, variable expansion, and process substitution).
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

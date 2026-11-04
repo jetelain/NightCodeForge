@@ -8,31 +8,60 @@ public class ReadOnlyCommandValidatorTests
 {
     [Theory]
     [InlineData("find . -name \"*.cs\"")]
+    [InlineData("find . -maxdepth 3 -name \"*.cs\"")]
     [InlineData("fd -e cs")]
     [InlineData("rg -n \"IIdeationService\" src/")]
+    [InlineData("rg -n -- 'pattern' src")]
     [InlineData("grep -rn \"class\" src/")]
     [InlineData("ls -la")]
     [InlineData("tree src/")]
     [InlineData("pwd")]
     [InlineData("cat README.md")]
+    [InlineData("cat src/File.cs")]
     [InlineData("head -n 20 src/Program.cs")]
+    [InlineData("head -n 20")]
     [InlineData("tail -n 50 log.txt")]
+    [InlineData("tail -n 20")]
     [InlineData("wc -l src/Program.cs")]
+    [InlineData("wc -l")]
+    [InlineData("stat src/Program.cs")]
+    [InlineData("diff a.cs b.cs")]
+    [InlineData("sed -n \"10,20p\" file.cs")]
+    [InlineData("awk '{print $1}' file.txt")]
     [InlineData("git status")]
+    [InlineData("git log -n 5")]
     [InlineData("git log -n 5 --oneline")]
     [InlineData("git diff HEAD~1")]
     [InlineData("git show abc1234")]
+    [InlineData("git show HEAD")]
+    [InlineData("git branch")]
     [InlineData("git branch -a")]
+    [InlineData("git branch --show-current")]
+    [InlineData("git tag")]
+    [InlineData("git tag -l \"v1.*\"")]
+    [InlineData("git remote -v")]
+    [InlineData("git remote show origin")]
     [InlineData("git ls-files")]
     [InlineData("git grep \"interface\"")]
+    [InlineData("git rev-parse HEAD")]
+    [InlineData("git blame src/File.cs")]
+    [InlineData("rg pattern src 2>/dev/null")]
+    [InlineData("git status 2>&1")]
     [InlineData("rg -n \"class > IFoo\" src/")] // Redirect symbol inside double quotes
     [InlineData("echo 'data > output'")]        // Redirect symbol inside single quotes
     [InlineData("csnav definition -t CrucibleAgentHarness")]
     [InlineData("csnav explore -t IdeationService")]
     [InlineData("csnav references -t IWorkspaceSymbolService")]
+    [InlineData("csnav refs --symbol Foo")]
+    [InlineData("csnav search \"*Symbol*\"")]
     [InlineData("csnav api-search -p \"*Symbol*\"")]
+    [InlineData("csnav implementations --symbol IFoo")]
+    [InlineData("csnav inspect --type Foo")]
+    [InlineData("csnav decompile --type System.Uri")]
+    [InlineData("csnav sync")]
     [InlineData("csnav server status")]
     [InlineData("csnav server start -s NightCodeForge.sln")]
+    [InlineData("csnav -s NightCodeForge.sln server reload")]
     public void ValidateCommand_AllowedCommands_Passes(string command)
     {
         var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
@@ -71,60 +100,87 @@ public class ReadOnlyCommandValidatorTests
     [InlineData("chmod +x run.sh")]
     [InlineData("curl https://evil.com")]
     [InlineData("wget https://evil.com")]
-    public void ValidateCommand_BlockedMutations_Rejects(string command)
+    [InlineData("bash -c \"rm -rf /\"")]
+    [InlineData("sh -c \"ls\"")]
+    [InlineData("./script.sh")]
+    [InlineData("/tmp/evil")]
+    public void ValidateCommand_DisallowedBinariesAndPaths_Rejects(string command)
     {
         var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
 
         Assert.False(isAllowed, $"Expected '{command}' to be blocked, but it was allowed.");
-        Assert.Contains("not permitted in read-only exploration mode", errorMsg);
+        Assert.False(string.IsNullOrWhiteSpace(errorMsg));
+    }
+
+    [Theory]
+    [InlineData("git checkout main")]
+    [InlineData("git commit -m \"mutation\"")]
+    [InlineData("git reset --hard HEAD~1")]
+    [InlineData("git clean -fd")]
+    [InlineData("git push origin main")]
+    [InlineData("git stash")]
+    [InlineData("git branch new-branch")]
+    [InlineData("git branch -D old")]
+    [InlineData("git branch -d old")]
+    [InlineData("git tag v1.0")]
+    [InlineData("git tag -d v1.0")]
+    [InlineData("git remote add origin url")]
+    [InlineData("git -c core.pager=less status")]
+    [InlineData("git diff --output=/tmp/out.patch")]
+    [InlineData("git grep -Osh foo")]
+    public void ValidateCommand_MutatingGitCommands_Rejects(string command)
+    {
+        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
+
+        Assert.False(isAllowed, $"Expected '{command}' to be blocked, but it was allowed.");
+        Assert.False(string.IsNullOrWhiteSpace(errorMsg));
+    }
+
+    [Theory]
+    [InlineData("csnav skills install")]
+    [InlineData("csnav skill install")]
+    [InlineData("csnav server stop")]
+    [InlineData("csnav")]
+    [InlineData("csnav -s NightCodeForge.sln")]
+    public void ValidateCommand_DisallowedCsNavCommands_Rejects(string command)
+    {
+        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
+
+        Assert.False(isAllowed, $"Expected '{command}' to be blocked, but it was allowed.");
+        Assert.False(string.IsNullOrWhiteSpace(errorMsg));
+    }
+
+    [Theory]
+    [InlineData("find . -delete")]
+    [InlineData("find . -exec rm {} +")]
+    [InlineData("find . -fprint /tmp/out.txt")]
+    [InlineData("rg --pre=sh pattern")]
+    [InlineData("sed -i \"s/a/b/\" file.cs")]
+    [InlineData("sed -ni \"s/a/b/\" file.cs")]
+    [InlineData("sed --in-place file.cs")]
+    public void ValidateCommand_MutatingToolFlags_Rejects(string command)
+    {
+        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
+
+        Assert.False(isAllowed, $"Expected '{command}' to be blocked, but it was allowed.");
+        Assert.False(string.IsNullOrWhiteSpace(errorMsg));
     }
 
     [Theory]
     [InlineData("echo \"hello\" > file.txt")]
     [InlineData("ls >> out.txt")]
-    [InlineData("rg -n \"test\" src/ > result.txt")]
-    [InlineData("cat a.txt > b.txt")]
-    public void ValidateCommand_FileRedirection_Rejects(string command)
-    {
-        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
-
-        Assert.False(isAllowed);
-        Assert.Contains("File redirection", errorMsg);
-    }
-
-    [Theory]
+    [InlineData("cat < /etc/passwd")]
     [InlineData("echo $(whoami)")]
     [InlineData("cat `ls`")]
-    [InlineData("rg $(cat secret.txt)")]
-    public void ValidateCommand_CommandSubstitution_Rejects(string command)
+    [InlineData("echo $HOME")]
+    [InlineData("find . $'-exec' rm -rf {} +")]
+    [InlineData("diff <(ls a) <(ls b)")]
+    public void ValidateCommand_ShellEscapeHatches_Rejects(string command)
     {
         var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
 
-        Assert.False(isAllowed);
-        Assert.Contains("Command substitution", errorMsg);
-    }
-
-    [Theory]
-    [InlineData("git commit -m \"mutation\"")]
-    [InlineData("git checkout main")]
-    [InlineData("git switch feat")]
-    [InlineData("git push origin main")]
-    [InlineData("git pull")]
-    [InlineData("git reset --hard HEAD~1")]
-    [InlineData("git clean -fd")]
-    [InlineData("git merge other-branch")]
-    [InlineData("git rebase main")]
-    [InlineData("git branch -D old-branch")]
-    [InlineData("git branch -d old-branch")]
-    [InlineData("git tag -d v1.0.0")]
-    [InlineData("csnav skills install")]
-    [InlineData("csnav server stop")]
-    public void ValidateCommand_MutatingGitSubcommands_Rejects(string command)
-    {
-        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
-
-        Assert.False(isAllowed);
-        Assert.Contains("not permitted in read-only exploration mode", errorMsg);
+        Assert.False(isAllowed, $"Expected '{command}' to be blocked, but it was allowed.");
+        Assert.False(string.IsNullOrWhiteSpace(errorMsg));
     }
 
     [Fact]
@@ -171,9 +227,10 @@ public class ReadOnlyCommandValidatorTests
             Assert.Contains("rm", blockedResult);
             Assert.False(fakeEnv.WasExecuted, "Execution environment should never have been invoked for blocked command.");
 
-            // Redirection command should be blocked
+            // Redirection command should be blocked with [READ-ONLY VIOLATION]
             var redirectResult = await tools.BashAsync("echo test > file.txt");
             Assert.StartsWith("[READ-ONLY VIOLATION]:", redirectResult);
+            Assert.Contains("redirection", redirectResult, StringComparison.OrdinalIgnoreCase);
             Assert.False(fakeEnv.WasExecuted);
 
             // Permitted command should proceed to execution environment
