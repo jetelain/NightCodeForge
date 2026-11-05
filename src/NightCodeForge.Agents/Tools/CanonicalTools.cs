@@ -717,15 +717,127 @@ public partial class CanonicalTools
             return $"No web search results found for: '{query}'.";
         }
 
+        bool anyItemExceedsInlineCap = false;
         var sb = new StringBuilder();
         sb.AppendLine($"Web search results for: '{query}' ({response.Results.Count} items):");
         for (int i = 0; i < response.Results.Count; i++)
         {
             var r = response.Results[i];
+            var content = r.Content ?? string.Empty;
+            if (content.Length > WorkflowDefaults.MaxWebSearchResultInlineChars)
+            {
+                anyItemExceedsInlineCap = true;
+            }
             sb.AppendLine($"[{i + 1}] {r.Title} ({r.Url})");
-            sb.AppendLine($"    {r.Content}");
+            sb.AppendLine($"    {content}");
         }
-        return sb.ToString().TrimEnd();
+
+        var standardOutput = sb.ToString().TrimEnd();
+        if (!anyItemExceedsInlineCap && standardOutput.Length <= WorkflowDefaults.MaxWebSearchTotalInlineChars)
+        {
+            return standardOutput;
+        }
+
+        // Truncation required: format full untruncated content to /tmp file and cap inline output
+        var fileLines = new List<string>();
+        fileLines.Add($"# Web Search Results for: '{query}' ({response.Results.Count} items)");
+        fileLines.Add(string.Empty);
+
+        var lineRanges = new (int startLine, int endLine)[response.Results.Count];
+        int totalContentChars = 0;
+
+        for (int i = 0; i < response.Results.Count; i++)
+        {
+            var r = response.Results[i];
+            var content = r.Content ?? string.Empty;
+            totalContentChars += content.Length;
+
+            int startLine = fileLines.Count + 1; // 1-indexed
+            fileLines.Add($"## [{i + 1}] {r.Title} ({r.Url})");
+            fileLines.Add(string.Empty);
+
+            var contentLines = NewlineRegex().Split(content);
+            fileLines.AddRange(contentLines);
+            fileLines.Add(string.Empty);
+            int endLine = fileLines.Count; // 1-indexed
+            lineRanges[i] = (startLine, endLine);
+        }
+
+        var fullMarkdown = string.Join("\n", fileLines);
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss");
+        var shortId = Guid.NewGuid().ToString("N")[..8];
+        var virtualTmpPath = $"/tmp/web-search-{timestamp}-{shortId}.md";
+
+        var fullPath = ResolveFullPath(virtualTmpPath);
+        ValidateWithinWorkspace(fullPath, virtualTmpPath);
+
+        var parentDir = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
+        {
+            Directory.CreateDirectory(parentDir);
+        }
+
+        await File.WriteAllTextAsync(fullPath, fullMarkdown, cancellationToken);
+
+        var footer = $"[Full untruncated web search results ({totalContentChars:N0} chars across {response.Results.Count} items) saved to '{virtualTmpPath}'. Use 'read' (with offset/limit) or 'bash' (e.g. grep/rg) on '{virtualTmpPath}' to inspect specific sections without flooding context.]";
+
+        var sbTrunc = new StringBuilder();
+        sbTrunc.AppendLine($"Web search results for: '{query}' ({response.Results.Count} items):");
+
+        for (int i = 0; i < response.Results.Count; i++)
+        {
+            var r = response.Results[i];
+            var content = r.Content ?? string.Empty;
+            var (startLine, endLine) = lineRanges[i];
+
+            var header = $"[{i + 1}] {r.Title} ({r.Url}) [full content: {virtualTmpPath} lines {startLine}-{endLine}, {content.Length:N0} chars]";
+
+            string snippet;
+            if (content.Length > WorkflowDefaults.MaxWebSearchResultInlineChars)
+            {
+                snippet = content[..WorkflowDefaults.MaxWebSearchResultInlineChars] + "... [truncated inline]";
+            }
+            else
+            {
+                snippet = content;
+            }
+
+            var itemWithSnippet = $"{header}\n    {snippet}\n";
+            var headerOnly = $"{header}\n";
+
+            if (sbTrunc.Length + itemWithSnippet.Length + footer.Length + 2 <= WorkflowDefaults.MaxWebSearchTotalInlineChars)
+            {
+                sbTrunc.Append(itemWithSnippet);
+            }
+            else if (sbTrunc.Length + headerOnly.Length + footer.Length + 2 <= WorkflowDefaults.MaxWebSearchTotalInlineChars)
+            {
+                sbTrunc.Append(headerOnly);
+            }
+            else
+            {
+                var remainingBudget = WorkflowDefaults.MaxWebSearchTotalInlineChars - (sbTrunc.Length + footer.Length + 2);
+                if (remainingBudget > 20 && headerOnly.Length > remainingBudget)
+                {
+                    sbTrunc.AppendLine(headerOnly[..(remainingBudget - 3)] + "...");
+                }
+                break;
+            }
+        }
+
+        sbTrunc.AppendLine();
+        sbTrunc.Append(footer);
+        var finalResult = sbTrunc.ToString().TrimEnd();
+
+        if (finalResult.Length > WorkflowDefaults.MaxWebSearchTotalInlineChars)
+        {
+            var allowed = WorkflowDefaults.MaxWebSearchTotalInlineChars - footer.Length - 4;
+            if (allowed > 0 && finalResult.Length > allowed)
+            {
+                finalResult = finalResult[..allowed] + "\n\n" + footer;
+            }
+        }
+
+        return finalResult;
     }
 
     public List<TaskProposal> PendingProposals { get; } = new();

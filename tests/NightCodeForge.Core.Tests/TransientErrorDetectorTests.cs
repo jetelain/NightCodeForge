@@ -148,11 +148,51 @@ public class TransientErrorDetectorTests
     }
 
     [Fact]
-    public void IsTransient_ReturnsFalse_ForTimeoutAndCancellationExceptions()
+    public void IsTransient_And_IsHttpTimeout_Behavior_ForTimeoutAndCancellationExceptions()
     {
-        Assert.False(TransientErrorDetector.IsTransient(new TimeoutException("Request timeout")));
-        Assert.False(TransientErrorDetector.IsTransient(new TaskCanceledException("HttpClient timeout")));
-        Assert.False(TransientErrorDetector.IsTransient(new OperationCanceledException("Cancelled")));
+        var timeoutEx = new TimeoutException("Request timeout");
+        Assert.True(TransientErrorDetector.IsHttpTimeout(timeoutEx));
+        Assert.True(TransientErrorDetector.IsTransient(timeoutEx));
+
+        var httpClientTimeoutEx = new TaskCanceledException(
+            "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.",
+            new TimeoutException("The operation was canceled."));
+        Assert.True(TransientErrorDetector.IsHttpTimeout(httpClientTimeoutEx));
+        Assert.True(TransientErrorDetector.IsTransient(httpClientTimeoutEx));
+
+        // Caller cancellation (without inner TimeoutException) must return false
+        var callerTaskCanceledEx = new TaskCanceledException("HttpClient timeout");
+        Assert.False(TransientErrorDetector.IsHttpTimeout(callerTaskCanceledEx));
+        Assert.False(TransientErrorDetector.IsTransient(callerTaskCanceledEx));
+
+        var callerOpCanceledEx = new OperationCanceledException("Cancelled");
+        Assert.False(TransientErrorDetector.IsHttpTimeout(callerOpCanceledEx));
+        Assert.False(TransientErrorDetector.IsTransient(callerOpCanceledEx));
+    }
+
+    [Fact]
+    public void IsHttpTimeout_ReturnsFalse_And_IsTransient_ReturnsTrue_ForSocketAndConnectTimeouts()
+    {
+        var socketTimedOut = new SocketException((int)SocketError.TimedOut);
+        Assert.False(TransientErrorDetector.IsHttpTimeout(socketTimedOut));
+        Assert.True(TransientErrorDetector.IsTransient(socketTimedOut));
+
+        var connectError = new HttpRequestException(
+            HttpRequestError.ConnectionError,
+            "Connection timed out",
+            new TimeoutException("Connect timeout"));
+        Assert.False(TransientErrorDetector.IsHttpTimeout(connectError));
+        Assert.True(TransientErrorDetector.IsTransient(connectError));
+    }
+
+    [Fact]
+    public void IsTransient_ReturnsFalse_ForTimeoutException_MarkedAsAlreadyRetried()
+    {
+        var timeoutEx = new TimeoutException("The request timed out after 900 seconds (2 attempt(s) exhausted).");
+        timeoutEx.Data[ResilienceConstants.RetriedKey] = true;
+
+        Assert.True(TransientErrorDetector.IsHttpTimeout(timeoutEx));
+        Assert.False(TransientErrorDetector.IsTransient(timeoutEx));
     }
 
     [Fact]

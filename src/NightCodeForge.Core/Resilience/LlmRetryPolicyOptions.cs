@@ -10,7 +10,8 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
     public const int DefaultLlmMaxRetries = 20;
     public const double DefaultLlmBaseDelaySeconds = 1.0;
     public const double DefaultLlmMaxDelaySeconds = 30.0;
-    public const double DefaultLlmMaxRetryDurationSeconds = 300.0; // 5 minutes
+    public const double DefaultLlmMaxRetryDurationSeconds = 1800.0; // 30 minutes
+    public const int DefaultLlmMaxTimeoutRetries = 1;
 
     public LlmRetryPolicyOptions()
     {
@@ -18,6 +19,7 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
         BaseDelay = TimeSpan.FromSeconds(DefaultLlmBaseDelaySeconds);
         MaxDelay = TimeSpan.FromSeconds(DefaultLlmMaxDelaySeconds);
         MaxRetryDuration = TimeSpan.FromSeconds(DefaultLlmMaxRetryDurationSeconds);
+        MaxTimeoutRetries = DefaultLlmMaxTimeoutRetries;
     }
 }
 

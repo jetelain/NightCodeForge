@@ -611,5 +611,100 @@ public class Service
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public async Task WebSearchAsync_SmallResults_ReturnsInlineWithoutOffload()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-websearch-small-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var mockSearch = new MockWebSearchService((query, maxResults) =>
+            {
+                var items = new List<WebSearchResultItem>
+                {
+                    new("Title 1", "https://example.com/1", "Compact content 1"),
+                    new("Title 2", "https://example.com/2", "Compact content 2")
+                };
+                return Task.FromResult(new WebSearchResponse(items));
+            });
+
+            var tools = TestCanonicalToolsBuilder.Create(
+                tempDir,
+                pathResolver: TestPathResolver.Create(),
+                webSearchService: mockSearch);
+
+            var result = await tools.WebSearchAsync("compact test");
+
+            Assert.Contains("Web search results for: 'compact test' (2 items):", result);
+            Assert.Contains("[1] Title 1 (https://example.com/1)", result);
+            Assert.Contains("Compact content 1", result);
+            Assert.Contains("[2] Title 2 (https://example.com/2)", result);
+            Assert.Contains("Compact content 2", result);
+            Assert.DoesNotContain("/tmp/web-search-", result);
+
+            var tmpDir = Path.Combine(tempDir, "tmp");
+            Assert.True(!Directory.Exists(tmpDir) || Directory.GetFiles(tmpDir).Length == 0);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task WebSearchAsync_MassiveResults_CappedInlineAndOffloadedToTmp_EvenWhenReadOnly()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-websearch-large-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var mockSearch = new MockWebSearchService((query, maxResults) =>
+            {
+                var items = new List<WebSearchResultItem>();
+                for (int i = 1; i <= 8; i++)
+                {
+                    // 8 items of 25,000 chars = 200,000 chars total
+                    var massiveContent = $"Section {i} start.\n" + new string((char)('A' + (i % 26)), 25_000) + $"\nSection {i} end.";
+                    items.Add(new WebSearchResultItem($"Large Page {i}", $"https://example.com/page{i}", massiveContent));
+                }
+                return Task.FromResult(new WebSearchResponse(items));
+            });
+
+            var tools = TestCanonicalToolsBuilder.Create(
+                tempDir,
+                pathResolver: TestPathResolver.Create(),
+                webSearchService: mockSearch,
+                isReadOnly: true);
+
+            var result = await tools.WebSearchAsync("massive query", 8);
+
+            // Strictly respects MaxWebSearchTotalInlineChars
+            Assert.True(result.Length <= NightCodeForge.Core.Workflow.WorkflowDefaults.MaxWebSearchTotalInlineChars,
+                $"Output length was {result.Length}, expected <= {NightCodeForge.Core.Workflow.WorkflowDefaults.MaxWebSearchTotalInlineChars}");
+
+            // Contains line ranges and full content path
+            Assert.Contains("lines", result);
+            Assert.Contains("[full content: /tmp/web-search-", result);
+            Assert.Contains("truncated inline", result);
+            Assert.Contains("saved to '/tmp/web-search-", result);
+
+            // Extract the virtual /tmp path
+            var match = System.Text.RegularExpressions.Regex.Match(result, @"/tmp/web-search-[a-zA-Z0-9_-]+\.md");
+            Assert.True(match.Success, "Virtual /tmp path not found in output");
+            var virtualTmpPath = match.Value;
+
+            // Verify full content was written to disk and can be read back via CanonicalTools.ReadAsync
+            var readFirstLines = await tools.ReadAsync(virtualTmpPath, offset: 1, limit: 10);
+            Assert.Contains("# Web Search Results for: 'massive query' (8 items)", readFirstLines);
+            Assert.Contains("## [1] Large Page 1", readFirstLines);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
 }
 

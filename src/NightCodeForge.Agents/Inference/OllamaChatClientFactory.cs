@@ -45,18 +45,31 @@ public static class OllamaChatClientFactory
 
         var endpoint = string.IsNullOrWhiteSpace(options.Endpoint) ? "http://localhost:11434" : options.Endpoint;
         var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
+        var effectiveRetryOptions = retryOptions.PerAttemptTimeout.HasValue
+            ? retryOptions
+            : new RetryPolicyOptions
+            {
+                MaxRetries = retryOptions.MaxRetries,
+                BaseDelay = retryOptions.BaseDelay,
+                MaxDelay = retryOptions.MaxDelay,
+                MaxRetryDuration = retryOptions.MaxRetryDuration,
+                MaxTimeoutRetries = retryOptions.MaxTimeoutRetries,
+                PerAttemptTimeout = TimeSpan.FromMinutes(timeoutMinutes),
+                OnRetry = retryOptions.OnRetry,
+                OnRetryAsync = retryOptions.OnRetryAsync
+            };
         var effectiveModel = !string.IsNullOrWhiteSpace(modelId)
             ? modelId.Trim()
             : (!string.IsNullOrWhiteSpace(options.DefaultModelId) ? options.DefaultModelId.Trim() : KnownDefaultModels.DefaultBaseline);
 
         var retryHandler = operationsControlService != null
-            ? new TransientHttpErrorRetryHandler(innerHandler, logger, timeProvider, retryOptions, operationsControlService)
-            : new TransientHttpErrorRetryHandler(innerHandler, logger, timeProvider, retryOptions);
+            ? new TransientHttpErrorRetryHandler(innerHandler, logger, timeProvider, effectiveRetryOptions, operationsControlService)
+            : new TransientHttpErrorRetryHandler(innerHandler, logger, timeProvider, effectiveRetryOptions);
 
         var httpClient = new HttpClient(retryHandler, disposeHandler: false)
         {
             BaseAddress = new Uri(endpoint),
-            Timeout = TimeSpan.FromMinutes(timeoutMinutes)
+            Timeout = effectiveRetryOptions.PerAttemptTimeout.HasValue ? Timeout.InfiniteTimeSpan : TimeSpan.FromMinutes(timeoutMinutes)
         };
 
         configureRouting(httpClient);

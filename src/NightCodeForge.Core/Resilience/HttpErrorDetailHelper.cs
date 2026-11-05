@@ -2,6 +2,7 @@ namespace NightCodeForge.Core.Resilience;
 
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 /// <summary>
 /// Utility helper for extracting and formatting detailed error messages and JSON payloads from HTTP error responses
@@ -118,6 +119,11 @@ public static class HttpErrorDetailHelper
 
         try
         {
+            if (TransientErrorDetector.IsHttpTimeout(ex))
+            {
+                return FormatTimeoutError(ex);
+            }
+
             // Find HttpRequestException in exception chain
             var httpEx = FindException<HttpRequestException>(ex);
             if (httpEx != null)
@@ -158,6 +164,80 @@ public static class HttpErrorDetailHelper
             // Justification: FormatLlmInvocationError must be 100% fail-safe so error formatting never disrupts exception handling, harness failure, or telemetry.
             return ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Attempts to extract the configured timeout duration in seconds from a timeout exception chain.
+    /// </summary>
+    public static bool TryExtractTimeoutSeconds(Exception? ex, out int seconds)
+    {
+        seconds = 0;
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (!string.IsNullOrWhiteSpace(current.Message))
+            {
+                var match = Regex.Match(current.Message, @"(?:HttpClient\.Timeout of|timed out after)\s+(\d+)\s*(?:seconds|s\b)", RegexOptions.IgnoreCase);
+                if (match.Success && int.TryParse(match.Groups[1].Value, out var s))
+                {
+                    seconds = s;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string FormatTimeoutError(Exception ex)
+    {
+        bool wasRetried = false;
+        int? seconds = TryExtractTimeoutSeconds(ex, out var extractedSeconds) ? extractedSeconds : null;
+        int? attempts = null;
+
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current.Data.Contains(ResilienceConstants.RetriedKey))
+            {
+                wasRetried = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(current.Message) && !attempts.HasValue)
+            {
+                var attMatch = Regex.Match(current.Message, @"\((\d+)\s+attempt\(s\)\s+exhausted\)", RegexOptions.IgnoreCase);
+                if (attMatch.Success && int.TryParse(attMatch.Groups[1].Value, out var a))
+                {
+                    attempts = a;
+                }
+            }
+
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    if (inner.Data.Contains(ResilienceConstants.RetriedKey))
+                    {
+                        wasRetried = true;
+                    }
+                }
+            }
+        }
+
+        bool didRetry = attempts.HasValue ? attempts.Value > 1 : wasRetried;
+        int effectiveAttempts = attempts ?? 2;
+        string retryClause = effectiveAttempts == 2 ? "retried once" : $"retried {effectiveAttempts - 1} times";
+
+        if (seconds.HasValue)
+        {
+            return didRetry
+                ? $"LLM inference request timed out after {seconds.Value} seconds ({retryClause}; {effectiveAttempts} attempts exhausted). The prompt context may be too large or the inference server is overloaded."
+                : $"LLM inference request timed out after {seconds.Value} seconds. The prompt context may be too large or the inference server is overloaded.";
+        }
+
+        return didRetry
+            ? (attempts.HasValue
+                ? $"LLM inference request timed out ({retryClause}; {effectiveAttempts} attempts exhausted). The prompt context may be too large or the inference server is overloaded."
+                : "LLM inference request timed out (retried once; attempts exhausted). The prompt context may be too large or the inference server is overloaded.")
+            : "LLM inference request timed out. The prompt context may be too large or the inference server is overloaded.";
     }
 
     private static Exception? FindRecognizedLlmException(Exception? ex)

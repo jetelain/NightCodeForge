@@ -123,4 +123,27 @@ public class OllamaSharpRetryBehaviorTests
         Assert.False(TransientErrorDetector.IsTransient(ex));
         Assert.True(ex.Data.Contains(ResilienceConstants.RetriedKey));
     }
+
+    [Fact]
+    public void CreateOllama_DoesNotMutateCallerRetryPolicyOptionsPerAttemptTimeout()
+    {
+        var callerRetryOptions = new RetryPolicyOptions
+        {
+            MaxRetries = MaxRetries,
+            PerAttemptTimeout = null
+        };
+
+        var inner = new ScriptedHandler(() => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = OllamaChatClientFactory.CreateOllama(
+            new LlmProviderOptions { Endpoint = "http://localhost:11434", ModelId = "test-model", RequestTimeoutMinutes = 15 },
+            modelId: null,
+            NullLogger.Instance,
+            TimeProvider.System,
+            callerRetryOptions,
+            OllamaRoutingTarget.Auto,
+            inner,
+            http => OllamaRoutingHeaders.Apply(http, OllamaRoutingTarget.Auto, sessionId: null));
+
+        Assert.Null(callerRetryOptions.PerAttemptTimeout);
+    }
 }

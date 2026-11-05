@@ -205,4 +205,44 @@ public class TaskOrchestratorCancellationTests
         // Stage transition must not overwrite out-of-band cancelled status
         Assert.Equal(TaskOverallStatus.Cancelled, updatedTask.Status);
     }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenUnhandledTimeoutOperationCanceledExceptionThrown_MarksStageAsFailedNotCancelled()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 51,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        var pipelineProvider = new CancellingPipelineProvider((ctx, ct) =>
+        {
+            // Simulate uncancelled HttpClient.Timeout throwing TaskCanceledException wrapping TimeoutException
+            var timeoutEx = new TaskCanceledException(
+                "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.",
+                new TimeoutException("The operation was canceled."));
+            throw timeoutEx;
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        // Act
+        await orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None);
+
+        // Assert
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
+
+        var history = await _taskRepo.GetHistoryAsync(task.Id);
+        Assert.NotEmpty(history);
+        Assert.Contains("LLM inference request timed out after 900 seconds", history.Last().ChangeReason);
+
+        var records = _taskRepo.GetAllExecutionRecords().Where(r => r.TaskId == task.Id).ToList();
+        var lastRecord = records.LastOrDefault();
+        Assert.NotNull(lastRecord);
+        Assert.Equal(StageExecutionStatus.Failed, lastRecord.Status);
+    }
 }

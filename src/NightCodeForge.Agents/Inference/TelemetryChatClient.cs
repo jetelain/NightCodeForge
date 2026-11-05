@@ -150,7 +150,7 @@ public class TelemetryChatClient : DelegatingChatClient
             var failedRecord = runningRecord with
             {
                 DurationMs = durationMs,
-                Status = ex is OperationCanceledException ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
+                Status = (ex is OperationCanceledException && !TransientErrorDetector.IsHttpTimeout(ex) && cancellationToken.IsCancellationRequested) ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
                 ErrorMessage = detailedError
             };
 
@@ -233,7 +233,7 @@ public class TelemetryChatClient : DelegatingChatClient
                         CompletionTokens = tokenCount,
                         ReasoningTokens = reasoningTokens,
                         CompletionPreview = BuildCombinedPreview(reasoningBuffer, textBuffer),
-                        Status = ex is OperationCanceledException ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
+                        Status = (ex is OperationCanceledException && !TransientErrorDetector.IsHttpTimeout(ex) && cancellationToken.IsCancellationRequested) ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
                         ErrorMessage = detailedError
                     };
                     completionRecorded = true;

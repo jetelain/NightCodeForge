@@ -20,6 +20,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
@@ -440,7 +441,7 @@ Only tasks that are Suggested or Open, never executed, and not currently running
                     }
                     catch (Exception ex)
                     {
-                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                        await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.Error, HttpErrorDetailHelper.FormatLlmInvocationError(ex), cancellationToken, metadata);
                         throw;
                     }
 
@@ -518,7 +519,7 @@ Only tasks that are Suggested or Open, never executed, and not currently running
             }
             catch (Exception ex)
             {
-                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.Error, ex.Message, cancellationToken, metadata);
+                await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.Error, HttpErrorDetailHelper.FormatLlmInvocationError(ex), cancellationToken, metadata);
                 throw;
             }
 

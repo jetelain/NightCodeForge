@@ -163,4 +163,54 @@ public class HttpErrorDetailHelperTests
         Assert.DoesNotContain('\b', sanitized);
         Assert.Equal("Error with nulls and control chars", sanitized);
     }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenHttpClientTimeout_FormatsActionableTimeoutMessage()
+    {
+        var httpClientTimeoutEx = new TaskCanceledException(
+            "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.",
+            new TimeoutException("The operation was canceled."));
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(httpClientTimeoutEx);
+
+        Assert.DoesNotContain("The request was canceled", formatted);
+        Assert.DoesNotContain("The operation was canceled", formatted);
+        Assert.Contains("LLM inference request timed out after 900 seconds", formatted);
+        Assert.Contains("The prompt context may be too large", formatted);
+    }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenRetriedTimeout_FormatsRetriedActionableTimeoutMessage()
+    {
+        var timeoutEx = new TimeoutException("The request timed out after 900 seconds (2 attempt(s) exhausted).");
+        timeoutEx.Data[ResilienceConstants.RetriedKey] = true;
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(timeoutEx);
+
+        Assert.DoesNotContain("The request was canceled", formatted);
+        Assert.Contains("LLM inference request timed out after 900 seconds (retried once; 2 attempts exhausted)", formatted);
+        Assert.Contains("The prompt context may be too large or the inference server is overloaded.", formatted);
+    }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenGenericTimeoutException_FormatsCleanTimeoutMessage()
+    {
+        var timeoutEx = new TimeoutException("The operation has timed out.");
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(timeoutEx);
+
+        Assert.Equal("LLM inference request timed out. The prompt context may be too large or the inference server is overloaded.", formatted);
+    }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenSingleAttemptTimeoutTaggedAsRetried_DoesNotReportRetriedOnce()
+    {
+        var timeoutEx = new TimeoutException("The request timed out after 30 seconds (1 attempt(s) exhausted).");
+        timeoutEx.Data[ResilienceConstants.RetriedKey] = true;
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(timeoutEx);
+
+        Assert.Equal("LLM inference request timed out after 30 seconds. The prompt context may be too large or the inference server is overloaded.", formatted);
+        Assert.DoesNotContain("retried once", formatted);
+    }
 }

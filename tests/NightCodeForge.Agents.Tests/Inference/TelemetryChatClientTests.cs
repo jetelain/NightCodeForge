@@ -517,6 +517,89 @@ public class TelemetryChatClientTests
         Assert.Equal(effort, TelemetryChatClient.ResolveThinkingEffort(options));
     }
 
+    [Fact]
+    public async Task GetResponseAsync_WhenHttpClientTimeout_RecordsStatusAsFailedNotCancelled()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "test") };
+        var timeoutEx = new TaskCanceledException(
+            "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.",
+            new TimeoutException("The operation was canceled."));
+
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(timeoutEx);
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await Assert.ThrowsAsync<TaskCanceledException>(() => _client.GetResponseAsync(messages, cancellationToken: CancellationToken.None));
+
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Failed, completedRecord.Status);
+        Assert.Contains("LLM inference request timed out after 900 seconds", completedRecord.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WhenHttpClientTimeout_RecordsStatusAsFailedNotCancelled()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "test") };
+        var timeoutEx = new TaskCanceledException(
+            "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.",
+            new TimeoutException("The operation was canceled."));
+
+        async IAsyncEnumerable<ChatResponseUpdate> ThrowingStream()
+        {
+            await Task.Yield();
+            if (bool.TryParse("false", out _))
+            {
+                yield return new ChatResponseUpdate();
+            }
+            throw timeoutEx;
+        }
+
+        _innerClient
+            .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Returns(ThrowingStream());
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await Assert.ThrowsAsync<TaskCanceledException>(async () =>
+        {
+            await foreach (var _ in _client.GetStreamingResponseAsync(messages, cancellationToken: CancellationToken.None)) { }
+        });
+
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Failed, completedRecord.Status);
+        Assert.Contains("LLM inference request timed out after 900 seconds", completedRecord.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WhenCallerCancellationRequested_RecordsStatusAsCancelled()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "test") };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _client.GetResponseAsync(messages, cancellationToken: cts.Token));
+
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Cancelled, completedRecord.Status);
+    }
+
     [Theory]
     [InlineData(false, null, "none")]
     [InlineData(true, null, "default")]

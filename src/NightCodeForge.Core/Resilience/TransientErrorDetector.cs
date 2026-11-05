@@ -24,6 +24,11 @@ public static class TransientErrorDetector
             return false;
         }
 
+        if (IsHttpTimeout(ex))
+        {
+            return true;
+        }
+
         // Unpack aggregate exceptions
         if (ex is AggregateException agg)
         {
@@ -113,6 +118,61 @@ public static class TransientErrorDetector
               or SocketError.OperationAborted                 // 995   (WSA_OPERATION_ABORTED)
               or SocketError.Interrupted;                     // 10004 (WSAEINTR)
 
+    /// <summary>
+    /// Checks whether an exception chain represents an HTTP/LLM request timeout (e.g. HttpClient.Timeout or TimeoutException),
+    /// excluding pre-connection socket/DNS errors and operations pause.
+    /// </summary>
+    public static bool IsHttpTimeout(Exception? ex)
+    {
+        if (ex == null) return false;
+
+        bool hasTimeout = false;
+        var queue = new Queue<Exception>();
+        queue.Enqueue(ex);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+
+            if (current is OperationsPausedException)
+            {
+                return false;
+            }
+
+            if (current is SocketException)
+            {
+                return false;
+            }
+
+            if (current is HttpRequestException httpEx &&
+                httpEx.HttpRequestError is HttpRequestError.ConnectionError
+                    or HttpRequestError.SecureConnectionError
+                    or HttpRequestError.NameResolutionError)
+            {
+                return false;
+            }
+
+            if (current is TimeoutException)
+            {
+                hasTimeout = true;
+            }
+
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    if (inner != null) queue.Enqueue(inner);
+                }
+            }
+            else if (current.InnerException != null)
+            {
+                queue.Enqueue(current.InnerException);
+            }
+        }
+
+        return hasTimeout;
+    }
+
     private static bool HasNonRetryableMarkerOrCancellation(Exception? ex)
     {
         for (var current = ex; current != null; current = current.InnerException)
@@ -122,9 +182,17 @@ public static class TransientErrorDetector
                 return true;
             }
 
-            if (current is OperationCanceledException or TaskCanceledException or OperationsPausedException)
+            if (current is OperationsPausedException)
             {
                 return true;
+            }
+
+            if (current is OperationCanceledException or TaskCanceledException)
+            {
+                if (!IsHttpTimeout(current))
+                {
+                    return true;
+                }
             }
 
             if (current is AggregateException agg)

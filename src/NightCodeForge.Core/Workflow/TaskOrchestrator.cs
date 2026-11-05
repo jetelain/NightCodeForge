@@ -4,6 +4,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;
 
 namespace NightCodeForge.Core.Workflow;
@@ -728,6 +729,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                         result = StageExecutionResult.Cancelled("Operations paused by user (GPU VRAM reclaimed).");
                     }
                     catch (OperationCanceledException ocex)
+                        when (cancellationToken.IsCancellationRequested ||
+                              _lifecycleMutationCoordinator.IsCancelRequested(task.Id) ||
+                              _lifecycleMutationCoordinator.IsPauseRequested(task.Id) ||
+                              _operationsControlService.IsPaused)
                     {
                         _logger.LogInformation(ocex, "Stage '{StageId}' for task #{TaskId} was cancelled.", stage.StageId, taskId);
                         result = StageExecutionResult.Cancelled("Stage execution was cancelled.");
@@ -747,7 +752,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Stage '{StageId}' failed with unhandled exception for task #{TaskId}", stage.StageId, taskId);
-                        result = StageExecutionResult.Failure(ex.Message);
+                        result = StageExecutionResult.Failure(HttpErrorDetailHelper.FormatLlmInvocationError(ex));
                     }
 
                     if (result == null)

@@ -37,6 +37,7 @@ public class TransientHttpErrorRetryHandlerTests
         {
             Invocations.Add(request);
             OnSend?.Invoke();
+            cancellationToken.ThrowIfCancellationRequested();
             if (_responses.Count == 0)
             {
                 throw new InvalidOperationException("No more mock responses configured.");
@@ -545,6 +546,258 @@ public class TransientHttpErrorRetryHandlerTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(2, mockInner.Invocations.Count);
+    }
+
+    [Fact]
+    public void LlmRetryPolicyOptions_Defaults_Include30MinuteWindow_AndSingleTimeoutRetry()
+    {
+        var options = new LlmRetryPolicyOptions();
+        Assert.Equal(TimeSpan.FromMinutes(30), options.MaxRetryDuration);
+        Assert.Equal(1, options.MaxTimeoutRetries);
+        Assert.Null(options.PerAttemptTimeout);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhenAttempt1TimesOut_RetriesOnce_AndSucceedsOnAttempt2()
+    {
+        var virtualTime = new ControllableFakeTimeProvider();
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.OnSend = () =>
+        {
+            if (mockInner.Invocations.Count == 1)
+            {
+                // Advance 15 minutes to trigger Attempt 1 per-attempt timeout
+                virtualTime.Advance(TimeSpan.FromMinutes(15));
+            }
+        };
+        mockInner.EnqueueResponse(HttpStatusCode.OK, "{\"status\":\"ok\"}");
+
+        var options = new LlmRetryPolicyOptions
+        {
+            PerAttemptTimeout = TimeSpan.FromMinutes(15),
+            BaseDelay = TimeSpan.FromMilliseconds(1),
+            MaxDelay = TimeSpan.FromMilliseconds(5)
+        };
+
+        var handler = new TransientHttpErrorRetryHandler(
+            mockInner,
+            NullLogger.Instance,
+            virtualTime,
+            options);
+
+        using var client = new HttpClient(handler);
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(2, mockInner.Invocations.Count);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhenAttempt1AndAttempt2TimeOut_StopsAfterTwoTotalAttempts_AndMarksRetriedKey()
+    {
+        var virtualTime = new ControllableFakeTimeProvider();
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.OnSend = () =>
+        {
+            // Both attempts time out after 15 minutes
+            virtualTime.Advance(TimeSpan.FromMinutes(15));
+        };
+
+        var options = new LlmRetryPolicyOptions
+        {
+            MaxRetries = 20,
+            MaxTimeoutRetries = 1,
+            PerAttemptTimeout = TimeSpan.FromMinutes(15),
+            BaseDelay = TimeSpan.FromMilliseconds(1),
+            MaxDelay = TimeSpan.FromMilliseconds(5)
+        };
+
+        var handler = new TransientHttpErrorRetryHandler(
+            mockInner,
+            NullLogger.Instance,
+            virtualTime,
+            options);
+
+        using var client = new HttpClient(handler);
+        var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
+            client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat")));
+
+        Assert.Equal(2, mockInner.Invocations.Count);
+        Assert.True(ex.Data.Contains(ResilienceConstants.RetriedKey));
+        Assert.Equal(true, ex.Data[ResilienceConstants.RetriedKey]);
+        Assert.Contains("900 seconds", ex.Message);
+        Assert.Contains("2 attempt(s) exhausted", ex.Message);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhenCallerCancellationTokenCancelled_FailsFastWithZeroRetries()
+    {
+        var virtualTime = new ControllableFakeTimeProvider();
+        var mockInner = new MockHttpMessageHandler();
+
+        var options = new LlmRetryPolicyOptions
+        {
+            MaxRetries = 20,
+            MaxTimeoutRetries = 1,
+            PerAttemptTimeout = TimeSpan.FromMinutes(15)
+        };
+
+        var handler = new TransientHttpErrorRetryHandler(
+            mockInner,
+            NullLogger.Instance,
+            virtualTime,
+            options);
+
+        using var client = new HttpClient(handler);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat"), cts.Token));
+
+        Assert.Empty(mockInner.Invocations);
+    }
+
+    [Fact]
+    public async Task SendAsync_WhenPerAttemptTimeoutNull_AndInnerThrowsHttpClientTimeout_ExtractsActualTimeoutSecondsNotMagic900()
+    {
+        var virtualTime = new ControllableFakeTimeProvider();
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.OnSend = () =>
+        {
+            throw new TaskCanceledException(
+                "The request was canceled due to the configured HttpClient.Timeout of 120 seconds elapsing.",
+                new TimeoutException("The operation was canceled."));
+        };
+
+        var options = new RetryPolicyOptions
+        {
+            MaxRetries = 5,
+            MaxTimeoutRetries = 0,
+            PerAttemptTimeout = null
+        };
+
+        var handler = new TransientHttpErrorRetryHandler(
+            mockInner,
+            NullLogger.Instance,
+            virtualTime,
+            options);
+
+        using var client = new HttpClient(handler);
+        var ex = await Assert.ThrowsAsync<TimeoutException>(() =>
+            client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat")));
+
+        Assert.Single(mockInner.Invocations);
+        Assert.Contains("120 seconds", ex.Message);
+        Assert.DoesNotContain("900", ex.Message);
+        Assert.Contains("1 attempt(s) exhausted", ex.Message);
+        Assert.IsType<TaskCanceledException>(ex.InnerException);
+    }
+
+    private sealed class ControllableFakeTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+        private long _timestampTicks;
+        private readonly List<ControllableTimer> _timers = new();
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+        public override long GetTimestamp() => _timestampTicks;
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public void Advance(TimeSpan delta)
+        {
+            if (delta <= TimeSpan.Zero) return;
+            _utcNow = _utcNow.Add(delta);
+            _timestampTicks += delta.Ticks;
+
+            var pending = _timers.ToList();
+            foreach (var timer in pending)
+            {
+                if (timer.DueTicks <= _timestampTicks && !timer.IsDisposed)
+                {
+                    timer.Fire();
+                }
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            // Auto-advance short delays (e.g. backoff delays < 5 minutes) immediately so Task.Delay completes synchronously
+            if (dueTime > TimeSpan.Zero && dueTime < TimeSpan.FromMinutes(5))
+            {
+                Advance(dueTime);
+                callback(state);
+                return new NoOpTimer();
+            }
+
+            if (dueTime == TimeSpan.Zero)
+            {
+                callback(state);
+                return new NoOpTimer();
+            }
+
+            var timer = new ControllableTimer(this, callback, state, dueTime);
+            _timers.Add(timer);
+            return timer;
+        }
+
+        private sealed class ControllableTimer : ITimer
+        {
+            private readonly ControllableFakeTimeProvider _owner;
+            private readonly TimerCallback _callback;
+            private readonly object? _state;
+            public long DueTicks { get; private set; }
+            public bool IsDisposed { get; private set; }
+
+            public ControllableTimer(ControllableFakeTimeProvider owner, TimerCallback callback, object? state, TimeSpan dueTime)
+            {
+                _owner = owner;
+                _callback = callback;
+                _state = state;
+                DueTicks = dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan
+                    ? owner._timestampTicks + dueTime.Ticks
+                    : long.MaxValue;
+            }
+
+            public void Fire()
+            {
+                if (!IsDisposed)
+                {
+                    _callback(_state);
+                }
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                DueTicks = dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan
+                    ? _owner._timestampTicks + dueTime.Ticks
+                    : (dueTime == TimeSpan.Zero ? _owner._timestampTicks : long.MaxValue);
+                if (dueTime == TimeSpan.Zero && !IsDisposed)
+                {
+                    Fire();
+                }
+                return true;
+            }
+
+            public void Dispose()
+            {
+                IsDisposed = true;
+                _owner._timers.Remove(this);
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        private sealed class NoOpTimer : ITimer
+        {
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+            public void Dispose() { }
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class AutoAdvancingFakeTimeProvider : TimeProvider

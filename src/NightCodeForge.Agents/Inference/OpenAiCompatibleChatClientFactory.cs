@@ -115,6 +115,8 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
 
         // 3. Pipeline transport using shared SocketsHttpHandler and TransientHttpErrorRetryHandler
         var effectiveRetryOptions = CreateEffectiveRetryOptions(sessionId);
+        var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
+        effectiveRetryOptions.PerAttemptTimeout ??= TimeSpan.FromMinutes(timeoutMinutes);
 
         var retryHandler = new TransientHttpErrorRetryHandler(
             socketsHandler,
@@ -125,7 +127,7 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
 
         var httpClient = new HttpClient(retryHandler, disposeHandler: false)
         {
-            Timeout = TimeSpan.FromMinutes(Math.Max(1, options.RequestTimeoutMinutes))
+            Timeout = effectiveRetryOptions.PerAttemptTimeout.HasValue ? Timeout.InfiniteTimeSpan : TimeSpan.FromMinutes(timeoutMinutes)
         };
 
         LlmCorrelationHeaders.Apply(httpClient, sessionId);

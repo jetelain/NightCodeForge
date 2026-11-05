@@ -644,6 +644,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             var historySnapshot = chatHistory.ToList();
             var maxTransientRetries = _retryOptions.MaxRetries;
             int streamRetryCount = 0;
+            int streamTimeoutRetries = 0;
             long? streamOutageStartTimestamp = null;
 
             IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
@@ -670,7 +671,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         streamingFailed = true;
                         break;
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException) when (capturedInterruption != null ||
+                                                           capturedRequestChanges != null ||
+                                                           interruptionCts.IsCancellationRequested ||
+                                                           cancellationToken.IsCancellationRequested ||
+                                                           _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
+                                                           _operationsControlService.IsPaused)
                     {
                         if (capturedInterruption != null)
                         {
@@ -705,14 +711,25 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                         streamOutageStartTimestamp ??= _timeProvider.GetTimestamp();
                         var elapsed = _timeProvider.GetElapsedTime(streamOutageStartTimestamp.Value);
-                        if (streamRetryCount >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                        bool isTimeout = TransientErrorDetector.IsHttpTimeout(ex);
+                        bool timeoutExhausted = isTimeout && streamTimeoutRetries >= _retryOptions.MaxTimeoutRetries;
+
+                        if (timeoutExhausted || streamRetryCount >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
                         {
+                            if (streamRetryCount > 0)
+                            {
+                                ex.Data[ResilienceConstants.RetriedKey] = true;
+                            }
                             var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                             _logger.LogError(ex, "Crucible streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
                                 streamRetryCount, maxTransientRetries, elapsed, failMsg);
                             return await FailAsync(failMsg);
                         }
 
+                        if (isTimeout)
+                        {
+                            streamTimeoutRetries++;
+                        }
                         streamRetryCount++;
                         var delay = ResilienceJitterHelper.CalculateJitteredDelay(streamRetryCount, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
                         var remaining = _retryOptions.MaxRetryDuration - elapsed;
@@ -756,9 +773,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                     if (!hasMore) break;
 
-                    // Reset streamRetryCount and outage timer upon successful chunk receipt so subsequent turns have their full retry budget
-                    streamRetryCount = 0;
-                    streamOutageStartTimestamp = null;
+                    // Reset streamRetryCount, streamTimeoutRetries, and outage timer when a tool execution completes
+                    // so subsequent model turns have their full retry budget, without resetting on partial mid-turn chunks
+                    if (enumerator.Current?.Contents?.OfType<FunctionResultContent>().Any() == true)
+                    {
+                        streamRetryCount = 0;
+                        streamTimeoutRetries = 0;
+                        streamOutageStartTimestamp = null;
+                    }
 
                     if (await ProcessUpdateAsync(enumerator.Current, streaming: true))
                     {
@@ -792,6 +814,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 chatHistory.AddRange(historySnapshot);
 
                 int nonStreamingRetries = 0;
+                int nonStreamingTimeoutRetries = 0;
                 long? nonStreamingOutageStartTimestamp = null;
                 while (true)
                 {
@@ -812,7 +835,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         return await CompleteWithInterruptionAsync(interruption);
                     }
-                    catch (OperationCanceledException)
+                    catch (OperationCanceledException) when (capturedInterruption != null ||
+                                                           capturedRequestChanges != null ||
+                                                           interruptionCts.IsCancellationRequested ||
+                                                           cancellationToken.IsCancellationRequested ||
+                                                           _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
+                                                           _operationsControlService.IsPaused)
                     {
                         if (capturedInterruption != null)
                         {
@@ -847,14 +875,25 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                         nonStreamingOutageStartTimestamp ??= _timeProvider.GetTimestamp();
                         var elapsed = _timeProvider.GetElapsedTime(nonStreamingOutageStartTimestamp.Value);
-                        if (nonStreamingRetries >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                        bool isTimeout = TransientErrorDetector.IsHttpTimeout(ex);
+                        bool timeoutExhausted = isTimeout && nonStreamingTimeoutRetries >= _retryOptions.MaxTimeoutRetries;
+
+                        if (timeoutExhausted || nonStreamingRetries >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
                         {
+                            if (nonStreamingRetries > 0)
+                            {
+                                ex.Data[ResilienceConstants.RetriedKey] = true;
+                            }
                             var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                             _logger.LogError(ex, "Crucible non-streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
                                 nonStreamingRetries, maxTransientRetries, elapsed, failMsg);
                             return await FailAsync(failMsg);
                         }
 
+                        if (isTimeout)
+                        {
+                            nonStreamingTimeoutRetries++;
+                        }
                         nonStreamingRetries++;
                         var delay = ResilienceJitterHelper.CalculateJitteredDelay(nonStreamingRetries, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
                         var remaining = _retryOptions.MaxRetryDuration - elapsed;

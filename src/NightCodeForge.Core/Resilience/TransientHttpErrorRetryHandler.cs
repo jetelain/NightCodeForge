@@ -85,6 +85,8 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         byte[]? contentBytes = null;
         if (request.Content != null)
         {
@@ -92,12 +94,15 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
         }
 
         int attempt = 0;
+        int timeoutRetries = 0;
         var maxRetries = Math.Max(0, _options.MaxRetries);
         var maxDuration = _options.MaxRetryDuration;
         long? outageStartTimestamp = null;
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             if (_operationsControlService?.IsPaused == true)
             {
                 throw new OperationsPausedException();
@@ -106,9 +111,37 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
             attempt++;
             var currentRequest = CloneRequest(request, contentBytes);
 
+            CancellationTokenSource? attemptTimeoutCts = null;
+            CancellationTokenSource? linkedCts = null;
+            CancellationToken attemptToken;
+
+            bool hasPerAttemptTimeout = _options.PerAttemptTimeout.HasValue &&
+                                        _options.PerAttemptTimeout.Value > TimeSpan.Zero &&
+                                        _options.PerAttemptTimeout.Value != Timeout.InfiniteTimeSpan;
+
+            if (hasPerAttemptTimeout)
+            {
+                attemptTimeoutCts = new CancellationTokenSource(_options.PerAttemptTimeout!.Value, _timeProvider);
+                if (cancellationToken.CanBeCanceled)
+                {
+                    linkedCts = CancellationTokenSource.CreateLinkedTokenSource(attemptTimeoutCts.Token, cancellationToken);
+                    attemptToken = linkedCts.Token;
+                }
+                else
+                {
+                    attemptToken = attemptTimeoutCts.Token;
+                }
+            }
+            else
+            {
+                attemptToken = cancellationToken;
+            }
+
             try
             {
-                var response = await base.SendAsync(currentRequest, cancellationToken);
+                var response = await base.SendAsync(currentRequest, attemptToken);
+                linkedCts?.Dispose();
+                attemptTimeoutCts?.Dispose();
 
                 if (TransientErrorDetector.IsTransientStatusCode(response.StatusCode))
                 {
@@ -166,48 +199,128 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
                 return response;
             }
-            catch (Exception ex) when (ex is not OperationsPausedException && TransientErrorDetector.IsTransient(ex))
+            catch (Exception ex)
             {
                 currentRequest.Dispose();
-                outageStartTimestamp ??= _timeProvider.GetTimestamp();
-                var elapsed = _timeProvider.GetElapsedTime(outageStartTimestamp.Value);
-                if (attempt <= maxRetries && elapsed < maxDuration)
+
+                bool attemptTimedOut = attemptTimeoutCts?.IsCancellationRequested == true;
+                linkedCts?.Dispose();
+                attemptTimeoutCts?.Dispose();
+
+                if (cancellationToken.IsCancellationRequested)
                 {
-                    var delay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
-                    var remaining = maxDuration - elapsed;
-                    if (remaining > TimeSpan.Zero && delay > remaining)
-                    {
-                        delay = remaining;
-                    }
-
-                    var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
-
-                    _logger.LogWarning(
-                        ex,
-                        "HTTP request {Method} {Uri} failed with transient network error: {ErrorMessage}. Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay (elapsed {ElapsedMs}ms / {MaxDurationMs}ms)...",
-                        request.Method, request.RequestUri, errorMsg, attempt, maxRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
-
-                    var notifyContext = new RetryNotificationContext(
-                        request.RequestUri,
-                        request.Method,
-                        request.Headers,
-                        attempt,
-                        maxRetries,
-                        delay,
-                        elapsed,
-                        maxDuration,
-                        errorMsg,
-                        null);
-
-                    await NotifyRetryAsync(request, notifyContext, cancellationToken);
-                    await WaitBackoffAsync(delay, cancellationToken);
-                }
-                else
-                {
-                    // Tag exception to prevent outer callers (e.g. CrucibleAgentHarness) from multiplying retries
-                    ex.Data[ResilienceConstants.RetriedKey] = true;
                     throw;
                 }
+
+                if (_operationsControlService?.IsPaused == true || ex is OperationsPausedException)
+                {
+                    throw new OperationsPausedException();
+                }
+
+                bool isTimeout = attemptTimedOut || TransientErrorDetector.IsHttpTimeout(ex);
+
+                if (isTimeout)
+                {
+                    outageStartTimestamp ??= _timeProvider.GetTimestamp();
+                    var elapsed = _timeProvider.GetElapsedTime(outageStartTimestamp.Value);
+
+                    if (timeoutRetries < _options.MaxTimeoutRetries && attempt <= maxRetries && elapsed < maxDuration)
+                    {
+                        timeoutRetries++;
+                        var delay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
+                        var remaining = maxDuration - elapsed;
+                        if (remaining > TimeSpan.Zero && delay > remaining)
+                        {
+                            delay = remaining;
+                        }
+
+                        int? timeoutSeconds = _options.PerAttemptTimeout.HasValue
+                            ? (int)Math.Round(_options.PerAttemptTimeout.Value.TotalSeconds)
+                            : (HttpErrorDetailHelper.TryExtractTimeoutSeconds(ex, out var extractedSec) ? extractedSec : null);
+                        var errorMsg = timeoutSeconds.HasValue
+                            ? $"LLM request timed out after {timeoutSeconds.Value}s"
+                            : "LLM request timed out";
+
+                        _logger.LogWarning(
+                            ex,
+                            "HTTP request {Method} {Uri} timed out ({ErrorMessage}). Retrying attempt {Attempt}/{MaxRetries} (timeout retry {TimeoutRetry}/{MaxTimeoutRetries}) after {DelayMs}ms delay (elapsed {ElapsedMs}ms / {MaxDurationMs}ms)...",
+                            request.Method, request.RequestUri, errorMsg, attempt, maxRetries, timeoutRetries, _options.MaxTimeoutRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
+
+                        var notifyContext = new RetryNotificationContext(
+                            request.RequestUri,
+                            request.Method,
+                            request.Headers,
+                            attempt,
+                            maxRetries,
+                            delay,
+                            elapsed,
+                            maxDuration,
+                            errorMsg,
+                            null);
+
+                        await NotifyRetryAsync(request, notifyContext, cancellationToken);
+                        await WaitBackoffAsync(delay, cancellationToken);
+                        continue;
+                    }
+                    else
+                    {
+                        int? timeoutSeconds = _options.PerAttemptTimeout.HasValue
+                            ? (int)Math.Round(_options.PerAttemptTimeout.Value.TotalSeconds)
+                            : (HttpErrorDetailHelper.TryExtractTimeoutSeconds(ex, out var extractedSec) ? extractedSec : null);
+                        var attemptsTried = attempt;
+                        var timeoutMessage = timeoutSeconds.HasValue
+                            ? $"The request timed out after {timeoutSeconds.Value} seconds ({attemptsTried} attempt(s) exhausted)."
+                            : $"The request timed out ({attemptsTried} attempt(s) exhausted).";
+                        var exhaustedEx = new TimeoutException(timeoutMessage, ex);
+                        exhaustedEx.Data[ResilienceConstants.RetriedKey] = true;
+                        throw exhaustedEx;
+                    }
+                }
+
+                if (TransientErrorDetector.IsTransient(ex))
+                {
+                    outageStartTimestamp ??= _timeProvider.GetTimestamp();
+                    var elapsed = _timeProvider.GetElapsedTime(outageStartTimestamp.Value);
+                    if (attempt <= maxRetries && elapsed < maxDuration)
+                    {
+                        var delay = ResilienceJitterHelper.CalculateJitteredDelay(attempt, _options.BaseDelay, _options.MaxDelay);
+                        var remaining = maxDuration - elapsed;
+                        if (remaining > TimeSpan.Zero && delay > remaining)
+                        {
+                            delay = remaining;
+                        }
+
+                        var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+
+                        _logger.LogWarning(
+                            ex,
+                            "HTTP request {Method} {Uri} failed with transient network error: {ErrorMessage}. Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay (elapsed {ElapsedMs}ms / {MaxDurationMs}ms)...",
+                            request.Method, request.RequestUri, errorMsg, attempt, maxRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
+
+                        var notifyContext = new RetryNotificationContext(
+                            request.RequestUri,
+                            request.Method,
+                            request.Headers,
+                            attempt,
+                            maxRetries,
+                            delay,
+                            elapsed,
+                            maxDuration,
+                            errorMsg,
+                            null);
+
+                        await NotifyRetryAsync(request, notifyContext, cancellationToken);
+                        await WaitBackoffAsync(delay, cancellationToken);
+                        continue;
+                    }
+                    else
+                    {
+                        ex.Data[ResilienceConstants.RetriedKey] = true;
+                        throw;
+                    }
+                }
+
+                throw;
             }
         }
     }

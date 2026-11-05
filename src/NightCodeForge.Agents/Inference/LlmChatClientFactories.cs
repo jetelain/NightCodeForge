@@ -114,6 +114,8 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
             BaseDelay = baseOptions.BaseDelay,
             MaxDelay = baseOptions.MaxDelay,
             MaxRetryDuration = baseOptions.MaxRetryDuration,
+            MaxTimeoutRetries = baseOptions.MaxTimeoutRetries,
+            PerAttemptTimeout = baseOptions.PerAttemptTimeout,
             OnRetry = baseOptions.OnRetry,
             OnRetryAsync = async (retryCtx, ct) =>
             {

@@ -33,6 +33,18 @@ public class RetryPolicyOptions
     public TimeSpan MaxRetryDuration { get; set; } = TimeSpan.FromSeconds(DefaultMaxRetryDurationSeconds);
 
     /// <summary>
+    /// Maximum number of retry attempts for HTTP request timeouts before failing fast.
+    /// Defaults to 0 so non-LLM clients fail fast on timeout.
+    /// </summary>
+    public int MaxTimeoutRetries { get; set; } = 0;
+
+    /// <summary>
+    /// Optional per-attempt timeout enforced within the retry handler.
+    /// When set, each attempt is cancelled individually after this duration without aborting the outer HttpClient.
+    /// </summary>
+    public TimeSpan? PerAttemptTimeout { get; set; }
+
+    /// <summary>
     /// Optional synchronous notification callback invoked on each retry attempt.
     /// </summary>
     public Action<RetryNotificationContext>? OnRetry { get; set; }

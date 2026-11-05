@@ -109,7 +109,7 @@ public static class CanonicalAIFunctionFactory
                  [Description("Maximum results to return (1-10)")] int? max_results = null,
                  CancellationToken ct = default) => tools.WebSearchAsync(query, max_results, ct),
                 "web_search",
-                "Searches technical web documentation for APIs, errors, or libraries."));
+                "Searches technical web documentation for APIs, errors, or libraries. Large results are capped inline and saved in full under /tmp/web-search-*.md."));
         }
 
         if (tools.BacklogMutationService != null)

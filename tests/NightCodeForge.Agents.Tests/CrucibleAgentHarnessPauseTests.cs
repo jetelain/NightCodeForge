@@ -137,6 +137,113 @@ public class CrucibleAgentHarnessPauseTests : IDisposable
     }
 
     [Fact]
+    public async Task RunStageAsync_WhenLlmThrowsExhaustedTimeoutException_ReturnsFailedNotCancelled()
+    {
+        var repo = new InMemoryTaskRepository();
+        var cancellationManager = new TaskCancellationManager(Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskCancellationManager>.Instance);
+        var streamer = new RecordingStreamer();
+
+        var task = await repo.CreateAsync(new ForgeTask
+        {
+            Id = 51,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open
+        });
+
+        var timeoutEx = new TaskCanceledException(
+            "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.",
+            new TimeoutException("The operation was canceled."));
+        timeoutEx.Data[NightCodeForge.Core.Resilience.ResilienceConstants.RetriedKey] = true;
+
+        async IAsyncEnumerable<ChatResponseUpdate> Handler(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            throw timeoutEx;
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+
+        var client = new ScriptedChatClient(Handler);
+
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            PathResolver = TestPathResolver.Create(),
+            TaskRepository = repo,
+            CancellationManager = cancellationManager,
+            ActivityStreamer = streamer
+        }.Build();
+
+        var context = CreateContext(task);
+
+        var result = await harness.RunStageAsync(context, CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        Assert.NotNull(result.Error);
+        Assert.Contains("LLM inference request timed out after 900 seconds", result.Error);
+    }
+
+    [Fact]
+    public async Task RunStageAsync_WhenMidStreamTimeoutOccursAfterPartialChunk_RespectsMaxTimeoutRetriesWithoutInfiniteLoop()
+    {
+        var repo = new InMemoryTaskRepository();
+        var cancellationManager = new TaskCancellationManager(Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskCancellationManager>.Instance);
+        var streamer = new RecordingStreamer();
+
+        var task = await repo.CreateAsync(new ForgeTask
+        {
+            Id = 52,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open
+        });
+
+        int invocationCount = 0;
+
+        async IAsyncEnumerable<ChatResponseUpdate> Handler(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            Interlocked.Increment(ref invocationCount);
+            await Task.Yield();
+            yield return new ChatResponseUpdate { Contents = [new TextContent("Partial response token...")] };
+            throw new TimeoutException("The request timed out after 900 seconds.");
+        }
+
+        var client = new ScriptedChatClient(Handler);
+
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            PathResolver = TestPathResolver.Create(),
+            TaskRepository = repo,
+            CancellationManager = cancellationManager,
+            ActivityStreamer = streamer,
+            RetryOptions = Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Resilience.LlmRetryPolicyOptions
+            {
+                MaxRetries = 20,
+                MaxTimeoutRetries = 1,
+                BaseDelay = TimeSpan.FromMilliseconds(1),
+                MaxDelay = TimeSpan.FromMilliseconds(5)
+            })
+        }.Build();
+
+        var context = CreateContext(task);
+
+        var result = await harness.RunStageAsync(context, CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Failed, result.Status);
+        // Attempt 1 + 1 timeout retry = 2 total attempts (must not reset retry counter on partial chunk)
+        Assert.Equal(2, invocationCount);
+        Assert.NotNull(result.Error);
+        Assert.Contains("LLM inference request timed out after 900 seconds (retried once; 2 attempts exhausted)", result.Error);
+    }
+
+    [Fact]
     public void SanitizeInFlightTurns_WhenAssistantTurnHasUnfulfilledToolCall_RollsBackAssistantTurn()
     {
         var messages = new List<ChatMessage>
