@@ -775,14 +775,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                     // Reset streamRetryCount, streamTimeoutRetries, and outage timer when a tool execution completes
                     // so subsequent model turns have their full retry budget, without resetting on partial mid-turn chunks
-                    if (enumerator.Current?.Contents?.OfType<FunctionResultContent>().Any() == true)
+                    var currentUpdate = enumerator.Current;
+                    if (currentUpdate.Contents?.OfType<FunctionResultContent>().Any() == true)
                     {
                         streamRetryCount = 0;
                         streamTimeoutRetries = 0;
                         streamOutageStartTimestamp = null;
                     }
 
-                    if (await ProcessUpdateAsync(enumerator.Current, streaming: true))
+                    if (await ProcessUpdateAsync(currentUpdate, streaming: true))
                     {
                         break;
                     }

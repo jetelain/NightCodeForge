@@ -20,8 +20,8 @@ public static class WorkflowDefaults
     public const string FastTestCategoryFilter = "Category!=Acceptance&Category!=E2E";
     public const string DefaultBaseBranch = "main";
     public const int MaxInlineReviewDiffChars = 20000;
-    public const int MaxWebSearchResultInlineChars = 1500;
-    public const int MaxWebSearchTotalInlineChars = 8000;
+    public const int MaxWebSearchResultInlineChars = 3000;
+    public const int MaxWebSearchTotalInlineChars = 12000;
 
     /// <summary>
     /// Tail-truncates stage output if it exceeds <see cref="MaxStageOutputChars"/> to prevent DataBag bloat.

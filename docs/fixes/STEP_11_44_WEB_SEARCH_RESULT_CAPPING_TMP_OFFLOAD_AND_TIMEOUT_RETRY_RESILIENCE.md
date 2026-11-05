@@ -33,8 +33,8 @@ Investigation of the live logs (`nightcodeforge-20261104.log`) and transcript re
 
 1. **Named Size Ceiling Constants:**
    - Define named constants (no magic numbers per [AGENTS.md](../../AGENTS.md)) in [`WorkflowDefaults`](../../src/NightCodeForge.Core/Workflow/WorkflowDefaults.cs) (or a dedicated constants class):
-     - **Per-result inline content limit:** `MaxWebSearchResultInlineChars = 1_500` characters per individual search result item.
-     - **Total inline tool output limit:** `MaxWebSearchTotalInlineChars = 8_000` characters (~2,000 tokens) across the entire `web_search` response string.
+     - **Per-result inline content limit:** `MaxWebSearchResultInlineChars = 3_000` characters (~750 tokens) per individual search result item.
+     - **Total inline tool output limit:** `MaxWebSearchTotalInlineChars = 12_000` characters (~3,000 tokens) across the entire `web_search` response string.
 
 2. **Automatic Full-Result Offload to `/tmp`:**
    - In [`CanonicalTools.WebSearchAsync`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs#L707-L729):
@@ -148,7 +148,7 @@ Investigation of the live logs (`nightcodeforge-20261104.log`) and transcript re
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [x] Add `MaxWebSearchResultInlineChars` (`1_500`) and `MaxWebSearchTotalInlineChars` (`8_000`) constants and update `CanonicalTools.WebSearchAsync` to cap inline results and offload full untruncated search results to `/tmp/web-search-*.md` with 1-indexed line ranges readable via `read` and `bash`.
+- [x] Add `MaxWebSearchResultInlineChars` (`3_000`) and `MaxWebSearchTotalInlineChars` (`12_000`) constants and update `CanonicalTools.WebSearchAsync` to cap inline results and offload full untruncated search results to `/tmp/web-search-*.md` with 1-indexed line ranges readable via `read` and `bash`.
 - [x] Update `LlmRetryPolicyOptions` defaults to `MaxRetryDuration = 30 minutes` (`1800s`) and `MaxTimeoutRetries = 1`, and add `MaxTimeoutRetries` and `PerAttemptTimeout` to `RetryPolicyOptions`.
 - [x] Update `TransientHttpErrorRetryHandler`, `OllamaChatClientFactory`, and `OpenAiCompatibleChatClientFactory` so per-attempt timeouts (15m default) are enforced per attempt and retried at most once (`MaxTimeoutRetries = 1`) within the 30-minute retry window.
 - [x] Update `TransientErrorDetector` (`IsHttpTimeout`, `IsTransient`, `HasNonRetryableMarkerOrCancellation`) to distinguish `HttpClient.Timeout` (`TaskCanceledException` $\to$ `TimeoutException`) from caller cancellation.
