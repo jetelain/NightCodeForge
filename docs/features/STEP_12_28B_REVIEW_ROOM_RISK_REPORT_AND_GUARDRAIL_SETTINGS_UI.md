@@ -1,8 +1,8 @@
-# 🛡️ Step 12.28C: Review Room Risk Report UI & Security Guardrail Settings (`SecurityGuardrailSettingsTab.razor`)
+# 🛡️ Step 12.28B: Review Room Risk Report UI & Security Guardrail Settings (`SecurityGuardrailSettingsTab.razor`)
 
-> **Feature Implementation Step (Part 3 of 3 — Review Room Risk Alerts, Interactive Findings Panel & Configurable Guardrail Settings UI)**  
+> **Feature Implementation Step (Part 2 of 2 — Review Room Risk Alerts, Interactive Findings Panel & Configurable Guardrail Settings UI)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Companion Steps:* [Step 12.28A: Deterministic Diff, Payload, Supply-Chain & Blast-Radius Risk Scanner](STEP_12_28A_DETERMINISTIC_DIFF_AND_SUPPLY_CHAIN_RISK_SCANNER.md), [Step 12.28B: Cross-Model LLM-as-a-Judge Backdoor Scanner & Post-Review Guardrail Stage](STEP_12_28B_LLM_JUDGE_BACKDOOR_SCANNER_AND_POST_REVIEW_GUARDRAIL.md)  
+> *Companion Step:* [Step 12.28A: DiffGuard CLI Security Scanner, Endpoint Wiring & Post-Review Guardrail Stage](STEP_12_28A_DIFFGUARD_SECURITY_SCANNER_AND_POST_REVIEW_GUARDRAIL.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Web`](../../src/NightCodeForge.Web), [`tests/NightCodeForge.Web.Tests`](../../tests/NightCodeForge.Web.Tests)  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
