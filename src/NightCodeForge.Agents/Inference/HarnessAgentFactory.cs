@@ -2,6 +2,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -114,7 +115,24 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             chatOptions.Temperature = request.DefaultTemperature.Value;
         }
 
-        var explicitContext = await ResolveContextWindowAsync(profile, effectiveModel, cancellationToken);
+        var (explicitContext, resolutionSource) = await ResolveContextWindowAsync(profile, effectiveModel, cancellationToken);
+
+        var compactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
+            profile,
+            _llmOptions,
+            explicitContextWindowTokens: explicitContext,
+            summarizerClient: baseClient,
+            explicitResolutionSource: resolutionSource);
+
+        if (compactionStrategy is PiStyleCrucibleCompactionStrategy piStrategy)
+        {
+            tracingClient.SetMeasuredUsageCallback(usage =>
+                piStrategy.RecordMeasuredCallTokens(
+                    usage.InputTokens,
+                    usage.OutputTokens,
+                    usage.SentMessageCount,
+                    usage.ResponseMessageCount));
+        }
 
         var options = new HarnessAgentOptions
         {
@@ -123,11 +141,7 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             HarnessInstructions = request.Instructions,
             ChatOptions = chatOptions,
             MaximumIterationsPerRequest = request.MaxTurns,
-            CompactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
-                profile,
-                _llmOptions,
-                explicitContextWindowTokens: explicitContext,
-                summarizerClient: baseClient),
+            CompactionStrategy = compactionStrategy,
             DisableTodoProvider = true,
             DisableAgentModeProvider = true,
             DisableFileMemory = true,
@@ -140,12 +154,19 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
         return new HarnessAgentSetup(baseClient, tracingClient, activeClient, options, agent, effectiveModel);
     }
 
-    private async Task<int?> ResolveContextWindowAsync(AgentProfile profile, string? effectiveModel, CancellationToken cancellationToken)
+    private async Task<(int? ContextWindowTokens, string? ResolutionSource)> ResolveContextWindowAsync(
+        AgentProfile profile,
+        string? effectiveModel,
+        CancellationToken cancellationToken)
     {
-        int? explicitContext = profile.ContextWindowTokens;
-        if (explicitContext.HasValue || string.IsNullOrWhiteSpace(effectiveModel))
+        if (profile.ContextWindowTokens.HasValue && profile.ContextWindowTokens.Value > 0)
         {
-            return explicitContext;
+            return (profile.ContextWindowTokens.Value, "AgentProfile");
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveModel))
+        {
+            return (profile.ContextWindowTokens, null);
         }
 
         try
@@ -153,7 +174,7 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             var discovered = await _gatewayService.ResolveContextWindowAsync(effectiveModel, cancellationToken);
             if (discovered > 0)
             {
-                explicitContext = discovered;
+                return (discovered, "GatewayDiscovery");
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -161,7 +182,7 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             _logger.LogWarning(ex, "Failed to resolve context window for '{Model}', falling back to configured options", effectiveModel);
         }
 
-        return explicitContext;
+        return (null, null);
     }
 }
 

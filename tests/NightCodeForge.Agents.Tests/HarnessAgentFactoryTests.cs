@@ -2,6 +2,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Tests.Fixtures;
@@ -88,6 +89,9 @@ public class HarnessAgentFactoryTests
 
         Assert.Equal("configured-model", setup.EffectiveModelId);
         gateway.Verify(g => g.ResolveContextWindowAsync("configured-model", It.IsAny<CancellationToken>()), Times.Once);
+        var piStrategy = Assert.IsType<PiStyleCrucibleCompactionStrategy>(setup.Options.CompactionStrategy);
+        Assert.Equal(8192, piStrategy.Options.ContextWindowTokens);
+        Assert.Equal("GatewayDiscovery", piStrategy.Options.ResolutionSource);
     }
 
     [Fact]
@@ -96,9 +100,47 @@ public class HarnessAgentFactoryTests
         var gateway = new Mock<ILlmGatewayService>();
         var factory = CreateAgentFactory(new Mock<IChatClient>().Object, gateway.Object);
 
-        await factory.CreateAsync(AgentRequest(new AgentProfile { Id = "p", ModelName = "m", ContextWindowTokens = 4096 }), CancellationToken.None);
+        var setup = await factory.CreateAsync(AgentRequest(new AgentProfile { Id = "p", ModelName = "m", ContextWindowTokens = 4096 }), CancellationToken.None);
 
         gateway.Verify(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        var piStrategy = Assert.IsType<PiStyleCrucibleCompactionStrategy>(setup.Options.CompactionStrategy);
+        Assert.Equal(4096, piStrategy.Options.ContextWindowTokens);
+        Assert.Equal("AgentProfile", piStrategy.Options.ResolutionSource);
+    }
+
+    [Fact]
+    public async Task AgentFactory_Create_WiresMeasuredUsageFromTracingClientToCompactionStrategy()
+    {
+        var innerMock = new Mock<IChatClient>();
+        innerMock
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, "done"))
+            {
+                Usage = new UsageDetails
+                {
+                    InputTokenCount = 210_000,
+                    OutputTokenCount = 450
+                }
+            });
+
+        var factory = CreateAgentFactory(innerMock.Object);
+        var setup = await factory.CreateAsync(
+            AgentRequest(new AgentProfile { Id = "p", ModelName = "Qwen3.8-27B:latest", ContextWindowTokens = 262_144 }),
+            CancellationToken.None);
+
+        var piStrategy = Assert.IsType<PiStyleCrucibleCompactionStrategy>(setup.Options.CompactionStrategy);
+        Assert.Equal(0, piStrategy.LastMeasuredInputTokens);
+
+        await setup.TracingClient.GetResponseAsync(
+        [
+            new ChatMessage(ChatRole.User, "Turn 1"),
+            new ChatMessage(ChatRole.Assistant, "Turn 2")
+        ]);
+
+        Assert.Equal(210_000, piStrategy.LastMeasuredInputTokens);
+        Assert.Equal(450, piStrategy.LastMeasuredOutputTokens);
+        Assert.Equal(2, piStrategy.LastMeasuredMessageCount);
+        Assert.Equal(1, piStrategy.LastMeasuredResponseMessageCount);
     }
 
     [Fact]

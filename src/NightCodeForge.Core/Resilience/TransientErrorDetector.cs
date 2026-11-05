@@ -86,6 +86,12 @@ public static class TransientErrorDetector
         return false;
     }
 
+    private static readonly string[] NonRetryablePromptErrorMarkers =
+    [
+        "no user query found in messages",
+        "chat prompt error"
+    ];
+
     /// <summary>
     /// Checks whether an HTTP status code represents a transient server or rate limiting condition.
     /// HTTP 500 is included because Ollama reports many transient conditions (memory pressure, model load, runner crash) as 500.
@@ -97,6 +103,28 @@ public static class TransientErrorDetector
                    or HttpStatusCode.BadGateway               // 502
                    or HttpStatusCode.ServiceUnavailable       // 503
                    or HttpStatusCode.GatewayTimeout;          // 504
+
+    /// <summary>
+    /// Checks whether an HTTP 500 error body contains a deterministic prompt or chat template rendering error
+    /// that will never succeed on retry.
+    /// </summary>
+    public static bool IsNonRetryablePromptError(HttpStatusCode statusCode, string? responseBody)
+    {
+        if (statusCode != HttpStatusCode.InternalServerError || string.IsNullOrWhiteSpace(responseBody))
+        {
+            return false;
+        }
+
+        foreach (var marker in NonRetryablePromptErrorMarkers)
+        {
+            if (responseBody.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Checks whether a socket error code represents a transient connectivity, DNS, or connection reset condition.

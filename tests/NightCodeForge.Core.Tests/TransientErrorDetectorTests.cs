@@ -224,4 +224,23 @@ public class TransientErrorDetectorTests
         Assert.False(TransientErrorDetector.IsTransient(new HttpRequestException("Bad request", inner: null, statusCode: HttpStatusCode.BadRequest)));
         Assert.False(TransientErrorDetector.IsTransient(new HttpRequestException("Forbidden", inner: null, statusCode: HttpStatusCode.Forbidden)));
     }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError, "{\"error\":\"no user query found in messages\"}", true)]
+    [InlineData(HttpStatusCode.InternalServerError, "level=ERROR msg=\"chat prompt error\" error=\"no user query found in messages\"", true)]
+    [InlineData(HttpStatusCode.InternalServerError, "{\"error\":\"CHAT PROMPT ERROR: template failed\"}", true)]
+    [InlineData(HttpStatusCode.InternalServerError, "{\"error\":\"CUDA out of memory\"}", false)]
+    [InlineData(HttpStatusCode.InternalServerError, "{\"error\":\"model runner has unexpectedly stopped\"}", false)]
+    [InlineData(HttpStatusCode.InternalServerError, "", false)]
+    [InlineData(HttpStatusCode.InternalServerError, "   ", false)]
+    [InlineData(HttpStatusCode.InternalServerError, null, false)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "{\"error\":\"no user query found in messages\"}", false)]
+    [InlineData(HttpStatusCode.BadRequest, "{\"error\":\"chat prompt error\"}", false)]
+    public void IsNonRetryablePromptError_ClassifiesDeterministic500PromptErrorsAccurately(
+        HttpStatusCode statusCode,
+        string? responseBody,
+        bool expected)
+    {
+        Assert.Equal(expected, TransientErrorDetector.IsNonRetryablePromptError(statusCode, responseBody));
+    }
 }

@@ -3,9 +3,11 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Workflow;
+using Pmad.AI.Tokens;
 
 namespace NightCodeForge.Agents.Inference;
 
@@ -58,7 +60,8 @@ public class TelemetryChatClient : DelegatingChatClient
         var thinkingEffort = ResolveThinkingEffort(options);
         var messagesList = chatMessages?.ToList() ?? new List<ChatMessage>();
         var promptPreview = ExtractPromptPreview(messagesList);
-        var promptTokens = EstimateTotalContextTokens(messagesList);
+        var estimator = ModelCalibratedTokenEstimator.Resolve(model);
+        var promptTokens = EstimateTotalContextTokens(messagesList, model);
         var startTime = DateTime.UtcNow;
 
         var runningRecord = new LlmCallRecord(
@@ -87,7 +90,7 @@ public class TelemetryChatClient : DelegatingChatClient
             sw.Stop();
 
             var durationMs = sw.Elapsed.TotalMilliseconds;
-            var (completionPreview, extractedReasoningTokens, extractedTextTokens) = ExtractResponseDetails(response);
+            var (completionPreview, extractedReasoningTokens, extractedTextTokens) = ExtractResponseDetails(response, estimator);
 
             var reasoningTokens = extractedReasoningTokens;
             if (response.Usage?.AdditionalCounts != null)
@@ -119,7 +122,7 @@ public class TelemetryChatClient : DelegatingChatClient
                 completionTokens = extractedReasoningTokens + extractedTextTokens;
                 if (completionTokens == 0)
                 {
-                    completionTokens = EstimateTokens(completionPreview);
+                    completionTokens = EstimateTokens(completionPreview, estimator);
                 }
             }
 
@@ -171,7 +174,8 @@ public class TelemetryChatClient : DelegatingChatClient
         var thinkingEffort = ResolveThinkingEffort(options);
         var messagesList = chatMessages?.ToList() ?? new List<ChatMessage>();
         var promptPreview = ExtractPromptPreview(messagesList);
-        var promptTokens = EstimateTotalContextTokens(messagesList);
+        var estimator = ModelCalibratedTokenEstimator.Resolve(model);
+        var promptTokens = EstimateTotalContextTokens(messagesList, model);
         var startTime = DateTime.UtcNow;
 
         var runningRecord = new LlmCallRecord(
@@ -253,7 +257,7 @@ public class TelemetryChatClient : DelegatingChatClient
                     {
                         if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
                         {
-                            var tokens = EstimateTokens(reasoning.Text);
+                            var tokens = EstimateTokens(reasoning.Text, estimator);
                             reasoningTokens += tokens;
                             tokenCount += tokens;
                             if (reasoningBuffer.Length < 1000)
@@ -263,7 +267,7 @@ public class TelemetryChatClient : DelegatingChatClient
                         }
                         else if (content is TextContent text && !string.IsNullOrEmpty(text.Text))
                         {
-                            ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer);
+                            ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                         }
                         else if (content is UsageContent uc && uc.Details != null)
                         {
@@ -294,7 +298,7 @@ public class TelemetryChatClient : DelegatingChatClient
                 }
                 else if (!string.IsNullOrEmpty(update.Text))
                 {
-                    ProcessTextChunk(update.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer);
+                    ProcessTextChunk(update.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                 }
 
                 var elapsedSec = sw.Elapsed.TotalSeconds;
@@ -374,7 +378,7 @@ public class TelemetryChatClient : DelegatingChatClient
         return Truncate(lastMsg.Text?.Trim() ?? string.Empty, 500);
     }
 
-    private static (string Preview, int ReasoningTokens, int TextTokens) ExtractResponseDetails(ChatResponse response)
+    private static (string Preview, int ReasoningTokens, int TextTokens) ExtractResponseDetails(ChatResponse response, HeuristicTokenEstimator estimator)
     {
         var reasoningBuffer = new StringBuilder();
         var textBuffer = new StringBuilder();
@@ -392,26 +396,26 @@ public class TelemetryChatClient : DelegatingChatClient
                     {
                         if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
                         {
-                            var tokens = EstimateTokens(reasoning.Text);
+                            var tokens = EstimateTokens(reasoning.Text, estimator);
                             reasoningTokens += tokens;
                             tokenCount += tokens;
                             if (reasoningBuffer.Length < 1000) reasoningBuffer.Append(reasoning.Text);
                         }
                         else if (content is TextContent text && !string.IsNullOrEmpty(text.Text))
                         {
-                            ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer);
+                            ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                         }
                     }
                 }
                 else if (!string.IsNullOrEmpty(message.Text))
                 {
-                    ProcessTextChunk(message.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer);
+                    ProcessTextChunk(message.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                 }
             }
         }
         else if (!string.IsNullOrEmpty(response.Text))
         {
-            ProcessTextChunk(response.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer);
+            ProcessTextChunk(response.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
         }
 
         var preview = BuildCombinedPreview(reasoningBuffer, textBuffer);
@@ -425,7 +429,8 @@ public class TelemetryChatClient : DelegatingChatClient
         ref int reasoningTokens,
         ref int tokenCount,
         StringBuilder reasoningBuffer,
-        StringBuilder textBuffer)
+        StringBuilder textBuffer,
+        HeuristicTokenEstimator estimator)
     {
         while (!string.IsNullOrEmpty(chunk))
         {
@@ -437,7 +442,7 @@ public class TelemetryChatClient : DelegatingChatClient
                     var before = chunk[..thinkIdx];
                     if (!string.IsNullOrEmpty(before))
                     {
-                        var beforeTokens = EstimateTokens(before);
+                        var beforeTokens = EstimateTokens(before, estimator);
                         tokenCount += beforeTokens;
                         if (textBuffer.Length < 1000) textBuffer.Append(before);
                     }
@@ -446,7 +451,7 @@ public class TelemetryChatClient : DelegatingChatClient
                 }
                 else
                 {
-                    var tokens = EstimateTokens(chunk);
+                    var tokens = EstimateTokens(chunk, estimator);
                     tokenCount += tokens;
                     if (textBuffer.Length < 1000) textBuffer.Append(chunk);
                     chunk = string.Empty;
@@ -460,7 +465,7 @@ public class TelemetryChatClient : DelegatingChatClient
                     var thinkPart = chunk[..endThinkIdx];
                     if (!string.IsNullOrEmpty(thinkPart))
                     {
-                        var thinkTokens = EstimateTokens(thinkPart);
+                        var thinkTokens = EstimateTokens(thinkPart, estimator);
                         reasoningTokens += thinkTokens;
                         tokenCount += thinkTokens;
                         if (reasoningBuffer.Length < 1000) reasoningBuffer.Append(thinkPart);
@@ -470,7 +475,7 @@ public class TelemetryChatClient : DelegatingChatClient
                 }
                 else
                 {
-                    var thinkTokens = EstimateTokens(chunk);
+                    var thinkTokens = EstimateTokens(chunk, estimator);
                     reasoningTokens += thinkTokens;
                     tokenCount += thinkTokens;
                     if (reasoningBuffer.Length < 1000) reasoningBuffer.Append(chunk);
@@ -496,76 +501,11 @@ public class TelemetryChatClient : DelegatingChatClient
         return Truncate(textTrimmed, 500);
     }
 
-    public static int EstimateTotalContextTokens(IEnumerable<ChatMessage>? messages)
-    {
-        if (messages == null) return 0;
-        int totalTokens = 0;
-        bool hasAnyMessage = false;
+    public static int EstimateTotalContextTokens(IEnumerable<ChatMessage>? messages, string? modelId = null) =>
+        ModelCalibratedTokenEstimator.EstimateMessagesTokens(messages, modelId);
 
-        foreach (var message in messages)
-        {
-            hasAnyMessage = true;
-            // Per-message framing overhead (~4 tokens for role and boundary delimiters)
-            totalTokens += 4;
-
-            if (message.Contents != null && message.Contents.Count > 0)
-            {
-                foreach (var content in message.Contents)
-                {
-                    switch (content)
-                    {
-                        case TextContent tc when !string.IsNullOrEmpty(tc.Text):
-                            totalTokens += EstimateTokens(tc.Text);
-                            break;
-                        case TextReasoningContent trc when !string.IsNullOrEmpty(trc.Text):
-                            totalTokens += EstimateTokens(trc.Text);
-                            break;
-                        case FunctionCallContent fcc:
-                            if (!string.IsNullOrEmpty(fcc.Name))
-                            {
-                                totalTokens += EstimateTokens(fcc.Name);
-                            }
-                            if (fcc.Arguments != null && fcc.Arguments.Count > 0)
-                            {
-                                foreach (var (k, v) in fcc.Arguments)
-                                {
-                                    totalTokens += EstimateTokens(k);
-                                    if (v != null)
-                                    {
-                                        var valStr = v is string s ? s : System.Text.Json.JsonSerializer.Serialize(v);
-                                        totalTokens += EstimateTokens(valStr);
-                                    }
-                                }
-                            }
-                            break;
-                        case FunctionResultContent frc:
-                            if (!string.IsNullOrEmpty(frc.CallId))
-                            {
-                                totalTokens += EstimateTokens(frc.CallId);
-                            }
-                            if (frc.Result != null)
-                            {
-                                var resStr = frc.Result is string s ? s : System.Text.Json.JsonSerializer.Serialize(frc.Result);
-                                totalTokens += EstimateTokens(resStr);
-                            }
-                            break;
-                    }
-                }
-            }
-            else if (!string.IsNullOrEmpty(message.Text))
-            {
-                totalTokens += EstimateTokens(message.Text);
-            }
-        }
-
-        return hasAnyMessage ? Math.Max(1, totalTokens) : 0;
-    }
-
-    private static int EstimateTokens(string text)
-    {
-        if (string.IsNullOrEmpty(text)) return 0;
-        return Math.Max(1, (int)Math.Ceiling(text.Length / 4.0));
-    }
+    private static int EstimateTokens(string? text, HeuristicTokenEstimator estimator) =>
+        ModelCalibratedTokenEstimator.EstimateTextTokens(text, estimator);
 
     private static string Truncate(string text, int maxLength)
     {

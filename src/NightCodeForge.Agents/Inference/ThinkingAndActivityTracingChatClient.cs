@@ -8,6 +8,19 @@ using NightCodeForge.Core.Streaming;
 namespace NightCodeForge.Agents.Inference;
 
 /// <summary>
+/// Server-measured token usage from a completed LLM call.
+/// </summary>
+/// <param name="InputTokens">Server-measured prompt token count (<c>InputTokenCount</c> / <c>prompt_eval_count</c>).</param>
+/// <param name="OutputTokens">Server-measured completion token count (<c>OutputTokenCount</c> / <c>eval_count</c>).</param>
+/// <param name="SentMessageCount">Count of included conversation messages sent in the prompt of this call.</param>
+/// <param name="ResponseMessageCount">Number of assistant response messages produced by this call.</param>
+public readonly record struct MeasuredCallTokenUsage(
+    int InputTokens,
+    int OutputTokens,
+    int SentMessageCount,
+    int ResponseMessageCount = 1);
+
+/// <summary>
 /// IChatClient middleware (dual-seam transcript logger) modeled after ComicGen's LiveLogChatClient.
 /// Placed on the inner IChatClient passed to MAF or agent harnesses.
 /// Captures prompt injections, tool schemas, streaming reasoning traces (TextReasoningContent),
@@ -22,10 +35,35 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
     private readonly string? _sessionId;
     private readonly int _taskId;
     private readonly string _stageId;
+    private Action<MeasuredCallTokenUsage>? _onMeasuredUsage;
+    private MeasuredCallTokenUsage? _lastMeasuredUsage;
 
     public string? LastCapturedSystemPrompt { get; private set; }
     public IReadOnlyList<string> LastCapturedTools { get; private set; } = Array.Empty<string>();
     public string? DetectedMafConfiguration { get; private set; }
+
+    /// <summary>Latest server-measured token usage reported by a completed call through this client.</summary>
+    public MeasuredCallTokenUsage? LastMeasuredUsage
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _lastMeasuredUsage;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Registers a listener invoked whenever a completed LLM call reports measured token usage.
+    /// </summary>
+    public void SetMeasuredUsageCallback(Action<MeasuredCallTokenUsage>? callback)
+    {
+        lock (_lock)
+        {
+            _onMeasuredUsage = callback;
+        }
+    }
 
     /// <summary>Separator placed between <c>ChatOptions.Instructions</c> and System messages found in the history.</summary>
     public const string SystemMessageSeparator = "\n\n--- [System message in chat history] ---\n\n";
@@ -109,6 +147,21 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
 
         var response = await base.GetResponseAsync(messages, options, cancellationToken);
         ProcessResponseMessages(response.Messages);
+
+        var usageDetails = response.Usage
+            ?? response.Messages?
+                .SelectMany(m => m.Contents ?? Array.Empty<AIContent>())
+                .OfType<UsageContent>()
+                .Select(uc => uc.Details)
+                .FirstOrDefault(d => d != null);
+
+        if (usageDetails != null)
+        {
+            var (inputTokens, outputTokens) = ExtractUsageTokens(usageDetails);
+            int responseMsgCount = response.Messages is { Count: > 0 } ? response.Messages.Count : 1;
+            RecordMeasuredUsage(inputTokens, outputTokens, messages.Count, responseMsgCount);
+        }
+
         return response;
     }
 
@@ -123,6 +176,9 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         var reasoningBuilder = new StringBuilder();
         var textBuilder = new StringBuilder();
         var functionCalls = new List<FunctionCallContent>();
+        int? measuredInputTokens = null;
+        int? measuredOutputTokens = null;
+        bool sawUsageContent = false;
 
         await using var enumerator = base.GetStreamingResponseAsync(messages, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
         while (true)
@@ -161,6 +217,33 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
                         reasoningBuilder.Append(reasoning.Text);
                         BroadcastStreamDelta(AgentActivityKind.ThinkingDelta, reasoning.Text, cancellationToken);
                     }
+                    else if (content is UsageContent uc && uc.Details != null)
+                    {
+                        sawUsageContent = true;
+                        var (ucInput, ucOutput) = ExtractUsageTokens(uc.Details);
+                        if (ucInput > 0)
+                        {
+                            measuredInputTokens = ucInput;
+                        }
+                        if (ucOutput >= 0 && (uc.Details.OutputTokenCount.HasValue || ucOutput > 0))
+                        {
+                            measuredOutputTokens = ucOutput;
+                        }
+                    }
+                }
+            }
+
+            if (!sawUsageContent && update.AdditionalProperties != null
+                && update.AdditionalProperties.TryGetValue("usage", out var rawUsage)
+                && rawUsage is JsonElement je && je.ValueKind == JsonValueKind.Object)
+            {
+                if (je.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptVal) && ptVal > 0)
+                {
+                    measuredInputTokens = ptVal;
+                }
+                if (je.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt32(out var ctVal) && ctVal >= 0)
+                {
+                    measuredOutputTokens = ctVal;
                 }
             }
 
@@ -174,6 +257,58 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         }
 
         FlushStream(reasoningBuilder, textBuilder, functionCalls);
+        if (measuredInputTokens.HasValue || measuredOutputTokens.HasValue)
+        {
+            RecordMeasuredUsage(measuredInputTokens ?? 0, measuredOutputTokens ?? 0, messages.Count, 1);
+        }
+    }
+
+    private static (int InputTokens, int OutputTokens) ExtractUsageTokens(UsageDetails details)
+    {
+        int inputTokens = details.InputTokenCount.HasValue ? (int)details.InputTokenCount.Value : 0;
+        int outputTokens = details.OutputTokenCount.HasValue ? (int)details.OutputTokenCount.Value : 0;
+        int reasoningTokens = 0;
+
+        if (details.AdditionalCounts != null)
+        {
+            foreach (var (k, v) in details.AdditionalCounts)
+            {
+                if (k.Contains("reason", StringComparison.OrdinalIgnoreCase) && v > reasoningTokens)
+                {
+                    reasoningTokens = (int)v;
+                }
+            }
+        }
+
+        if (outputTokens < reasoningTokens)
+        {
+            outputTokens = reasoningTokens;
+        }
+
+        return (inputTokens, outputTokens);
+    }
+
+    private void RecordMeasuredUsage(int inputTokens, int outputTokens, int sentMessageCount, int responseMessageCount)
+    {
+        if (inputTokens <= 0 && outputTokens <= 0)
+        {
+            return;
+        }
+
+        var usage = new MeasuredCallTokenUsage(
+            Math.Max(0, inputTokens),
+            Math.Max(0, outputTokens),
+            Math.Max(0, sentMessageCount),
+            Math.Max(1, responseMessageCount));
+
+        Action<MeasuredCallTokenUsage>? callback;
+        lock (_lock)
+        {
+            _lastMeasuredUsage = usage;
+            callback = _onMeasuredUsage;
+        }
+
+        callback?.Invoke(usage);
     }
 
     private void InspectIncomingRequest(IReadOnlyList<ChatMessage> messages, ChatOptions? options)

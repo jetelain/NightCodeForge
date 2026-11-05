@@ -143,7 +143,29 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                 linkedCts?.Dispose();
                 attemptTimeoutCts?.Dispose();
 
-                if (TransientErrorDetector.IsTransientStatusCode(response.StatusCode))
+                string? body = null;
+                bool bodyLoaded = false;
+                async ValueTask<string?> GetResponseBodyAsync()
+                {
+                    if (!bodyLoaded)
+                    {
+                        body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
+                        bodyLoaded = true;
+                    }
+                    return body;
+                }
+
+                bool isTransientStatus = TransientErrorDetector.IsTransientStatusCode(response.StatusCode);
+                if (isTransientStatus && response.StatusCode == HttpStatusCode.InternalServerError)
+                {
+                    var responseBody = await GetResponseBodyAsync();
+                    if (TransientErrorDetector.IsNonRetryablePromptError(response.StatusCode, responseBody))
+                    {
+                        isTransientStatus = false;
+                    }
+                }
+
+                if (isTransientStatus)
                 {
                     outageStartTimestamp ??= _timeProvider.GetTimestamp();
                     var elapsed = _timeProvider.GetElapsedTime(outageStartTimestamp.Value);
@@ -158,12 +180,12 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                             delay = remaining;
                         }
 
-                        var body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
-                        var errorMsg = !string.IsNullOrWhiteSpace(body) ? body : response.ReasonPhrase ?? response.StatusCode.ToString();
+                        var responseBody = await GetResponseBodyAsync();
+                        var errorMsg = !string.IsNullOrWhiteSpace(responseBody) ? responseBody : response.ReasonPhrase ?? response.StatusCode.ToString();
 
                         _logger.LogWarning(
                             "HTTP request {Method} {Uri} failed with transient status {StatusCode} (Body: {Body}). Retrying attempt {Attempt}/{MaxRetries} after {DelayMs}ms delay (elapsed {ElapsedMs}ms / {MaxDurationMs}ms)...",
-                            request.Method, request.RequestUri, response.StatusCode, body, attempt, maxRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
+                            request.Method, request.RequestUri, response.StatusCode, responseBody, attempt, maxRetries, delay.TotalMilliseconds, elapsed.TotalMilliseconds, maxDuration.TotalMilliseconds);
 
                         var notifyContext = new RetryNotificationContext(
                             request.RequestUri,
@@ -188,12 +210,12 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var body = response.Content != null ? await response.Content.ReadAsStringAsync(cancellationToken) : null;
+                    var responseBody = await GetResponseBodyAsync();
                     _logger.LogError(
                         "HTTP request {Method} {Uri} failed with status {StatusCode} ({StatusCodeInt}) after {Attempt} attempt(s) (Body: {Body}).",
-                        request.Method, request.RequestUri, response.StatusCode, (int)response.StatusCode, attempt, body);
+                        request.Method, request.RequestUri, response.StatusCode, (int)response.StatusCode, attempt, responseBody);
 
-                    TryEnrichReasonPhrase(response, body);
+                    TryEnrichReasonPhrase(response, responseBody);
                     return response;
                 }
 

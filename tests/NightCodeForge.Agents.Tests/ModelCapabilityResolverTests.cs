@@ -84,6 +84,26 @@ public class ModelCapabilityResolverTests
                 explicitContextWindowTokens: 262144);
 
         Assert.Equal(262144, strategy.Options.ContextWindowTokens);
+        Assert.Equal("AgentProfile", strategy.Options.ResolutionSource);
+    }
+
+    [Fact]
+    public void BuildCompactionStrategy_WhenProfileContextWindowNullAndDiscoveredTokensProvided_ResolvesToGatewayDiscovery()
+    {
+        var profile = new AgentProfile
+        {
+            Id = "coder",
+            ModelName = "Qwen3.8-27B:latest",
+            ContextWindowTokens = null
+        };
+
+        var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)
+            ModelCapabilityResolver.BuildCompactionStrategy(
+                profile,
+                explicitContextWindowTokens: 262144);
+
+        Assert.Equal(262144, strategy.Options.ContextWindowTokens);
+        Assert.Equal("GatewayDiscovery", strategy.Options.ResolutionSource);
     }
 
     [Fact]

@@ -2,7 +2,7 @@
 
 > **Bug Fix & Resiliency Step (Context Overflow Prevention via Server-Measured Token Baselines & Model-Calibrated Delta Estimation)**  
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Implemented  
 > *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
 > *Dependencies:* [Step 11.43A: `Pmad.AI` 0.0.2 Upgrade](STEP_11_43A_PMAD_AI_READONLY_COMMAND_VALIDATOR_MIGRATION.md), [Step 11.44: `web_search` Capping & Timeout Retry Resilience](STEP_11_44_WEB_SEARCH_RESULT_CAPPING_TMP_OFFLOAD_AND_TIMEOUT_RETRY_RESILIENCE.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -130,11 +130,11 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Capture server-measured `InputTokenCount` (`prompt_eval_count`), `OutputTokenCount` (`eval_count`), and sent message count on each completed LLM call in `ThinkingAndActivityTracingChatClient` and feed them into `PiStyleCrucibleCompactionStrategy`.
-- [ ] Integrate `Pmad.AI.Tokens.HeuristicTokenEstimator` (`Qwen`, `Gemma`, `Default`) for estimating message/group token counts (including text, reasoning traces, tool calls, and tool results) in `PiStyleCrucibleCompactionStrategy` and `TelemetryChatClient`.
-- [ ] Update `PiStyleCrucibleCompactionStrategy` (`ShouldCompact` and `CompactCoreAsync`) to project the next request's prompt token count from `LastMeasuredInputTokens + LastMeasuredOutputTokens + EstimatedNewMessageTokens` (with full-history `HeuristicTokenEstimator` fallback and post-compaction baseline reset) and trigger compaction before the next message reaches the limit.
-- [ ] Use model-calibrated `HeuristicTokenEstimator` group token counts for anchor budget, keep-recent window slicing, and debounce calculations in `PiStyleCrucibleCompactionStrategy`, and bypass debounce when projected tokens reach the emergency/context ceiling.
-- [ ] Distinguish `"GatewayDiscovery"` from `"AgentProfile"` in `HarnessAgentFactory` / `ModelCapabilityResolver` when resolving context window tokens.
-- [ ] Guard `TransientHttpErrorRetryHandler` against retrying deterministic `HTTP 500` chat prompt/template errors (`"no user query found in messages"`, `"chat prompt error"`).
-- [ ] Add unit tests in `NightCodeForge.Agents.Tests` and `NightCodeForge.Core.Tests` covering measured-token + `Pmad.AI` delta compaction triggering, streaming/non-streaming usage capture, baseline reset after compaction, and fast-fail on deterministic template errors; verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Capture server-measured `InputTokenCount` (`prompt_eval_count`), `OutputTokenCount` (`eval_count`), and sent message count on each completed LLM call in `ThinkingAndActivityTracingChatClient` and feed them into `PiStyleCrucibleCompactionStrategy`.
+- [x] Integrate `Pmad.AI.Tokens.HeuristicTokenEstimator` (`Qwen`, `Gemma`, `Default`) for estimating message/group token counts (including text, reasoning traces, tool calls, and tool results) in `PiStyleCrucibleCompactionStrategy` and `TelemetryChatClient`.
+- [x] Update `PiStyleCrucibleCompactionStrategy` (`ShouldCompact` and `CompactCoreAsync`) to project the next request's prompt token count from `LastMeasuredInputTokens + LastMeasuredOutputTokens + EstimatedNewMessageTokens` (with full-history `HeuristicTokenEstimator` fallback and post-compaction baseline reset) and trigger compaction before the next message reaches the limit.
+- [x] Use model-calibrated `HeuristicTokenEstimator` group token counts for anchor budget, keep-recent window slicing, and debounce calculations in `PiStyleCrucibleCompactionStrategy`, and bypass debounce when projected tokens reach the emergency/context ceiling.
+- [x] Distinguish `"GatewayDiscovery"` from `"AgentProfile"` in `HarnessAgentFactory` / `ModelCapabilityResolver` when resolving context window tokens.
+- [x] Guard `TransientHttpErrorRetryHandler` against retrying deterministic `HTTP 500` chat prompt/template errors (`"no user query found in messages"`, `"chat prompt error"`).
+- [x] Add unit tests in `NightCodeForge.Agents.Tests` and `NightCodeForge.Core.Tests` covering measured-token + `Pmad.AI` delta compaction triggering, streaming/non-streaming usage capture, baseline reset after compaction, and fast-fail on deterministic template errors; verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

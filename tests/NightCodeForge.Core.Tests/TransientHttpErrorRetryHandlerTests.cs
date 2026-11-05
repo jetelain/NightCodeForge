@@ -226,6 +226,24 @@ public class TransientHttpErrorRetryHandlerTests
         Assert.Contains("unexpectedly stopped", await response.Content.ReadAsStringAsync());
     }
 
+    [Theory]
+    [InlineData("{\"error\":\"no user query found in messages\"}")]
+    [InlineData("{\"error\":\"chat prompt error: no user query found in messages\"}")]
+    [InlineData("level=ERROR source=routes.go:3297 msg=\"chat prompt error\" error=\"no user query found in messages\"")]
+    public async Task SendAsync_DoesNotRetryOn500_WhenBodyContainsDeterministicPromptOrTemplateError(string errorBody)
+    {
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.EnqueueResponse(HttpStatusCode.InternalServerError, errorBody);
+        mockInner.EnqueueResponse(HttpStatusCode.OK, "{\"result\":\"should-not-be-reached\"}");
+
+        using var client = new HttpClient(CreateHandler(mockInner, maxRetries: 20));
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat"));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Single(mockInner.Invocations);
+        Assert.Contains("no user query found in messages", response.ReasonPhrase, StringComparison.OrdinalIgnoreCase);
+    }
+
 
     private static TransientHttpErrorRetryHandler CreateHandler(HttpMessageHandler inner, int maxRetries) =>
         new(inner, NullLogger.Instance, TimeProvider.System, new RetryPolicyOptions

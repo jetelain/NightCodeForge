@@ -353,13 +353,13 @@ public class TelemetryChatClientTests
     [Fact]
     public void EstimateTotalContextTokens_DoesNotDoubleCountTextContentAndMessageText()
     {
-        // "12345678" has 8 chars => ceil(8 / 4.0) = 2 tokens.
+        // "12345678" has 8 chars => Pmad.AI HeuristicTokenEstimator.Default estimates ceil(8 / 3.8) = 3 tokens.
         // Framing overhead for 1 message is 4 tokens.
-        // Total should be exactly 4 + 2 = 6 tokens, not 4 + 2 + 2 = 8 tokens.
+        // Total should be exactly 4 + 3 = 7 tokens, not 4 + 3 + 3 = 10 tokens.
         var message = new ChatMessage(ChatRole.User, "12345678");
         var estimated = TelemetryChatClient.EstimateTotalContextTokens([message]);
 
-        Assert.Equal(6, estimated);
+        Assert.Equal(7, estimated);
     }
 
     [Fact]

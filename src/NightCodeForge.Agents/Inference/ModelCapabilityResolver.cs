@@ -24,10 +24,16 @@ public static class ModelCapabilityResolver
         int? explicitContextWindowTokens = null,
         int? explicitReserveTokens = null,
         int? explicitKeepRecentTokens = null,
-        IChatClient? summarizerClient = null)
+        IChatClient? summarizerClient = null,
+        string? explicitResolutionSource = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         int? windowTokens = explicitContextWindowTokens ?? profile.ContextWindowTokens;
+        var resolutionSource = !string.IsNullOrWhiteSpace(explicitResolutionSource)
+            ? explicitResolutionSource
+            : (profile.ContextWindowTokens.HasValue && profile.ContextWindowTokens.Value > 0
+                ? "AgentProfile"
+                : (explicitContextWindowTokens.HasValue && explicitContextWindowTokens.Value > 0 ? "GatewayDiscovery" : null));
         var modelId = !string.IsNullOrWhiteSpace(profile.ModelName) ? profile.ModelName : options?.DefaultModelId;
         return BuildCompactionStrategy(
             options,
@@ -35,7 +41,8 @@ public static class ModelCapabilityResolver
             explicitContextWindowTokens: windowTokens,
             explicitReserveTokens: explicitReserveTokens,
             explicitKeepRecentTokens: explicitKeepRecentTokens,
-            summarizerClient: summarizerClient);
+            summarizerClient: summarizerClient,
+            explicitResolutionSource: resolutionSource);
     }
 
     /// <summary>
@@ -68,7 +75,8 @@ public static class ModelCapabilityResolver
         int? explicitContextWindowTokens = null,
         int? explicitReserveTokens = null,
         int? explicitKeepRecentTokens = null,
-        IChatClient? summarizerClient = null)
+        IChatClient? summarizerClient = null,
+        string? explicitResolutionSource = null)
     {
         var profile = FindProfile(options, modelId);
         string resolutionSource;
@@ -77,7 +85,7 @@ public static class ModelCapabilityResolver
         if (explicitContextWindowTokens.HasValue && explicitContextWindowTokens.Value > 0)
         {
             contextWindow = explicitContextWindowTokens.Value;
-            resolutionSource = "AgentProfile";
+            resolutionSource = !string.IsNullOrWhiteSpace(explicitResolutionSource) ? explicitResolutionSource : "AgentProfile";
         }
         else if (profile?.ContextWindowTokens is { } profileTokens && profileTokens > 0)
         {

@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Pmad.AI.Tokens;
 
 namespace NightCodeForge.Agents.Compaction;
 
@@ -101,26 +102,198 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     /// <summary>Maximum characters kept per user message in the deterministic fallback summary.</summary>
     public const int MaxDeterministicGoalChars = 500;
 
+    private sealed class MeasuredTokenState
+    {
+        public readonly object Lock = new();
+        public int InputTokens;
+        public int OutputTokens;
+        public int MessageCount;
+        public int ResponseMessageCount;
+    }
+
     private readonly CrucibleCompactionOptions _options;
     private readonly IChatClient? _summarizerClient;
+    private readonly MeasuredTokenState _measurementState;
     private int _lastCompactedTurnCount = -1;
+    private int _lastCompactedIncludedTurnCount = -1;
     private int _lastCompactedTokenCount = 0;
+    private int _lastCompactedIncludedTokenCount = 0;
 
     public CrucibleCompactionOptions Options => _options;
     public int LastCompactedTurnCount => _lastCompactedTurnCount;
     public int LastCompactedTokenCount => _lastCompactedTokenCount;
 
+    public int LastMeasuredInputTokens
+    {
+        get { lock (_measurementState.Lock) { return _measurementState.InputTokens; } }
+    }
+
+    public int LastMeasuredOutputTokens
+    {
+        get { lock (_measurementState.Lock) { return _measurementState.OutputTokens; } }
+    }
+
+    public int LastMeasuredMessageCount
+    {
+        get { lock (_measurementState.Lock) { return _measurementState.MessageCount; } }
+    }
+
+    public int LastMeasuredResponseMessageCount
+    {
+        get { lock (_measurementState.Lock) { return _measurementState.ResponseMessageCount; } }
+    }
+
     public PiStyleCrucibleCompactionStrategy(CrucibleCompactionOptions options, IChatClient? summarizerClient = null)
-        : base(
-            CompactionTriggers.TokensExceed(RequireOptions(options).TriggerThresholdTokens),
-            CompactionTriggers.TokensBelow(options.TriggerThresholdTokens))
+        : this(RequireOptions(options), summarizerClient, new MeasuredTokenState())
+    {
+    }
+
+    private PiStyleCrucibleCompactionStrategy(
+        CrucibleCompactionOptions options,
+        IChatClient? summarizerClient,
+        MeasuredTokenState measurementState)
+        : base(CreateTrigger(options, measurementState))
     {
         _options = options;
         _summarizerClient = summarizerClient;
+        _measurementState = measurementState;
+    }
+
+    private static CompactionTrigger CreateTrigger(
+        CrucibleCompactionOptions options,
+        MeasuredTokenState measurementState)
+    {
+        return index => ShouldCompact(index, options, measurementState);
     }
 
     private static CrucibleCompactionOptions RequireOptions(CrucibleCompactionOptions? options) =>
         options ?? throw new ArgumentNullException(nameof(options));
+
+    /// <summary>
+    /// Evaluates whether the conversation index requires compaction based on the projected prompt token count
+    /// for the next LLM request (<see cref="CalculateProjectedPromptTokens(CompactionMessageIndex)"/> &gt; <see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>).
+    /// </summary>
+    public bool ShouldCompact(CompactionMessageIndex index) =>
+        ShouldCompact(index, _options, _measurementState);
+
+    private static bool ShouldCompact(
+        CompactionMessageIndex index,
+        CrucibleCompactionOptions options,
+        MeasuredTokenState measurementState)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        return options.Enabled
+            && CalculateProjectedPromptTokens(index, options, measurementState) > options.TriggerThresholdTokens;
+    }
+
+    /// <summary>
+    /// Records the server-measured token usage from the latest completed LLM call so the next turn's compaction check
+    /// projects from the authoritative server baseline plus the <c>Pmad.AI</c> delta of newly appended messages.
+    /// </summary>
+    public void RecordMeasuredCallTokens(
+        int inputTokens,
+        int outputTokens,
+        int sentIncludedMessageCount,
+        int responseMessageCount = 1)
+    {
+        lock (_measurementState.Lock)
+        {
+            _measurementState.InputTokens = Math.Max(0, inputTokens);
+            _measurementState.OutputTokens = Math.Max(0, outputTokens);
+            _measurementState.MessageCount = Math.Max(0, sentIncludedMessageCount);
+            _measurementState.ResponseMessageCount = Math.Max(1, responseMessageCount);
+        }
+    }
+
+    /// <summary>
+    /// Resets the server-measured token baseline (e.g. immediately after compaction rewrites the included history).
+    /// </summary>
+    public void ResetMeasuredBaseline()
+    {
+        lock (_measurementState.Lock)
+        {
+            _measurementState.InputTokens = 0;
+            _measurementState.OutputTokens = 0;
+            _measurementState.MessageCount = 0;
+            _measurementState.ResponseMessageCount = 0;
+        }
+    }
+
+    /// <summary>
+    /// Resolves the model-calibrated <see cref="HeuristicTokenEstimator"/> for this strategy's model.
+    /// </summary>
+    public HeuristicTokenEstimator ResolveTokenEstimator() =>
+        ModelCalibratedTokenEstimator.Resolve(_options.SummarizerModelId);
+
+    /// <summary>
+    /// Calculates the projected prompt token count for the next LLM request by combining the previous turn's
+    /// server-measured prompt/output tokens with the model-calibrated <see cref="HeuristicTokenEstimator"/> delta
+    /// for any newly appended messages (or full-history estimation when no baseline is present).
+    /// </summary>
+    public int CalculateProjectedPromptTokens(CompactionMessageIndex index) =>
+        CalculateProjectedPromptTokens(index, _options, _measurementState);
+
+    private static int CalculateProjectedPromptTokens(
+        CompactionMessageIndex index,
+        CrucibleCompactionOptions options,
+        MeasuredTokenState measurementState)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        var estimator = ModelCalibratedTokenEstimator.Resolve(options.SummarizerModelId);
+
+        var includedMessages = new List<ChatMessage>();
+        int fullEstimatedTokens = 0;
+
+        foreach (var group in index.Groups)
+        {
+            if (group.IsExcluded) continue;
+            fullEstimatedTokens += ModelCalibratedTokenEstimator.EstimateGroupTokens(group, estimator);
+            foreach (var msg in group.Messages)
+            {
+                includedMessages.Add(msg);
+            }
+        }
+
+        int measuredInput;
+        int measuredOutput;
+        int measuredMsgCount;
+        int measuredRespMsgCount;
+        lock (measurementState.Lock)
+        {
+            measuredInput = measurementState.InputTokens;
+            measuredOutput = measurementState.OutputTokens;
+            measuredMsgCount = measurementState.MessageCount;
+            measuredRespMsgCount = measurementState.ResponseMessageCount;
+        }
+
+        if (measuredInput > 0 && includedMessages.Count >= measuredMsgCount)
+        {
+            int projected = measuredInput;
+            int responseCount = Math.Min(measuredRespMsgCount, Math.Max(0, includedMessages.Count - measuredMsgCount));
+
+            if (measuredOutput > 0)
+            {
+                projected += measuredOutput;
+            }
+            else if (responseCount > 0)
+            {
+                for (int i = measuredMsgCount; i < measuredMsgCount + responseCount; i++)
+                {
+                    projected += ModelCalibratedTokenEstimator.EstimateMessageTokens(includedMessages[i], estimator);
+                }
+            }
+
+            int accountedMessageCount = measuredMsgCount + responseCount;
+            for (int i = accountedMessageCount; i < includedMessages.Count; i++)
+            {
+                projected += ModelCalibratedTokenEstimator.EstimateMessageTokens(includedMessages[i], estimator);
+            }
+
+            return Math.Max(projected, fullEstimatedTokens);
+        }
+
+        return fullEstimatedTokens;
+    }
 
     /// <summary>
     /// Calculates the dynamic budget of recent tokens to preserve verbatim.
@@ -145,8 +318,10 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     {
         if (!_options.Enabled) return false;
 
-        // Check if active (included) context token count exceeds trigger threshold
-        if (index.IncludedTokenCount <= _options.TriggerThresholdTokens)
+        int projectedPromptTokens = CalculateProjectedPromptTokens(index);
+
+        // Check if projected prompt token count for the next request exceeds trigger threshold
+        if (projectedPromptTokens <= _options.TriggerThresholdTokens)
         {
             return false;
         }
@@ -158,15 +333,40 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             return false;
         }
 
-        // Count assistant turns across all groups in index (strictly monotonic)
+        var estimator = ResolveTokenEstimator();
+
+        // Count assistant turns and estimated tokens across active (non-excluded) groups so deltas remain
+        // invariant whether CompactionMessageIndex retains excluded groups or is rebuilt from included messages.
         int totalAssistantTurns = groups.Sum(g => g.Messages.Count(m => m.Role == ChatRole.Assistant));
+        int includedAssistantTurns = groups
+            .Where(g => !g.IsExcluded)
+            .Sum(g => g.Messages.Count(m => m.Role == ChatRole.Assistant));
+        int includedEstimatedTokens = groups
+            .Where(g => !g.IsExcluded)
+            .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
 
-        // Evaluate emergency context limit on active context window (IncludedTokenCount)
-        bool isEmergency = index.IncludedTokenCount >= (int)(_options.ContextWindowTokens * _options.EmergencyThresholdRatio);
+        bool historyReset = _lastCompactedIncludedTurnCount >= 0
+            && includedAssistantTurns < _lastCompactedIncludedTurnCount;
+        int turnsSinceLastCompaction = (_lastCompactedIncludedTurnCount >= 0 && !historyReset)
+            ? includedAssistantTurns - _lastCompactedIncludedTurnCount
+            : includedAssistantTurns;
+        int tokensAddedSinceLastCompaction = (_lastCompactedIncludedTurnCount >= 0 && !historyReset)
+            ? Math.Max(0, includedEstimatedTokens - _lastCompactedIncludedTokenCount)
+            : includedEstimatedTokens;
 
-        if (!isEmergency && _lastCompactedTurnCount >= 0)
+        // Evaluate emergency context limit on projected prompt tokens
+        int emergencyThresholdTokens = Math.Min(
+            _options.ContextWindowTokens,
+            (int)(_options.ContextWindowTokens * _options.EmergencyThresholdRatio));
+
+        bool hasMeasuredServerBaseline = LastMeasuredInputTokens > 0;
+        bool isEmergency = projectedPromptTokens >= emergencyThresholdTokens
+            || (hasMeasuredServerBaseline
+                && projectedPromptTokens > _options.TriggerThresholdTokens
+                && tokensAddedSinceLastCompaction >= _options.DebounceTokenDelta);
+
+        if (!isEmergency && _lastCompactedTurnCount >= 0 && !historyReset)
         {
-            int turnsSinceLastCompaction = totalAssistantTurns - _lastCompactedTurnCount;
             if (turnsSinceLastCompaction < _options.DebounceTurnCooldown)
             {
                 logger.LogDebug(
@@ -175,7 +375,6 @@ Keep each section concise. Preserve exact file paths, function names, and error 
                 return false;
             }
 
-            int tokensAddedSinceLastCompaction = Math.Max(0, index.TotalTokenCount - _lastCompactedTokenCount);
             if (tokensAddedSinceLastCompaction < _options.DebounceTokenDelta)
             {
                 logger.LogDebug(
@@ -193,7 +392,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         for (int i = 0; i < groups.Count; i++)
         {
             var g = groups[i];
-            if (g.Kind is CompactionGroupKind.System or CompactionGroupKind.User)
+            if (g.Kind is CompactionGroupKind.System or CompactionGroupKind.User && !IsSummaryGroup(g))
             {
                 anchorEndIndex = i;
                 if (g.Kind == CompactionGroupKind.User)
@@ -212,7 +411,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         int tokensAnchor = 0;
         for (int i = 0; i <= anchorEndIndex; i++)
         {
-            tokensAnchor += groups[i].TokenCount;
+            tokensAnchor += ModelCalibratedTokenEstimator.EstimateGroupTokens(groups[i], estimator);
         }
 
         int effectiveKeepRecent = CalculateEffectiveKeepRecentTokens(tokensAnchor);
@@ -222,7 +421,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         string? previousSummary = null;
         for (int i = anchorEndIndex + 1; i < groups.Count; i++)
         {
-            if (groups[i].Kind == CompactionGroupKind.Summary && !groups[i].IsExcluded)
+            if (IsSummaryGroup(groups[i]) && !groups[i].IsExcluded)
             {
                 existingSummaryGroup = groups[i];
                 var rawText = existingSummaryGroup.Messages.FirstOrDefault()?.Text ?? string.Empty;
@@ -240,7 +439,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             var g = groups[i];
             if (g.IsExcluded) continue; // Already compacted groups do not occupy the live context window
 
-            accumulatedRecentTokens += g.TokenCount;
+            accumulatedRecentTokens += ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator);
 
             if (accumulatedRecentTokens >= effectiveKeepRecent)
             {
@@ -277,7 +476,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         for (int i = anchorEndIndex + 1; i < cutIndex; i++)
         {
             var g = groups[i];
-            if (!g.IsExcluded && g.Kind != CompactionGroupKind.Summary)
+            if (!g.IsExcluded && !IsSummaryGroup(g))
             {
                 groupsToSummarize.Add(g);
             }
@@ -347,7 +546,14 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         index.InsertGroup(anchorEndIndex + 1, CompactionGroupKind.Summary, new[] { summaryMessage }, null);
 
         _lastCompactedTurnCount = totalAssistantTurns;
-        _lastCompactedTokenCount = index.TotalTokenCount;
+        _lastCompactedIncludedTurnCount = groups
+            .Where(g => !g.IsExcluded)
+            .Sum(g => g.Messages.Count(m => m.Role == ChatRole.Assistant));
+        _lastCompactedIncludedTokenCount = groups
+            .Where(g => !g.IsExcluded)
+            .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+        _lastCompactedTokenCount = groups.Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+        ResetMeasuredBaseline();
 
         logger.LogInformation(
             "Pi-style context compaction succeeded. Summarized {GroupCount} groups ({MessageCount} messages). Injected summary with {FileOpsLength} file ops characters.",
@@ -380,7 +586,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
                             int targetLen = Math.Min(clampedTargetChars, resStr.Length);
                             logger.LogInformation("Clamping emergency tool result in call {CallId} from {Length} to {Target} characters",
                                 frc.CallId, resStr.Length, targetLen);
-                            frc.Result = resStr[..targetLen] + $"\n... [Output clamped to {targetLen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters]";
+                            frc.Result = resStr[..targetLen] + $"\n{ModelCalibratedTokenEstimator.ClampedOutputMarker}{targetLen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters]";
                         }
                     }
                     else if (content is TextContent tc && tc.Text != null && msg.Role == ChatRole.Tool)
@@ -390,7 +596,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
                             int targetLen = Math.Min(clampedTargetChars, tc.Text.Length);
                             logger.LogInformation("Clamping emergency tool text content from {Length} to {Target} characters",
                                 tc.Text.Length, targetLen);
-                            tc.Text = tc.Text[..targetLen] + $"\n... [Output clamped to {targetLen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters]";
+                            tc.Text = tc.Text[..targetLen] + $"\n{ModelCalibratedTokenEstimator.ClampedOutputMarker}{targetLen.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters]";
                         }
                     }
                 }
@@ -615,6 +821,30 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             }
         }
         return text.Trim();
+    }
+
+    /// <summary>
+    /// Returns true if the group is a compaction checkpoint summary group, either by <see cref="CompactionGroupKind.Summary"/>
+    /// or by containing a checkpoint message after <see cref="CompactionMessageIndex"/> is rebuilt from flat <see cref="ChatMessage"/>s.
+    /// </summary>
+    public static bool IsSummaryGroup(CompactionMessageGroup group)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        if (group.Kind == CompactionGroupKind.Summary)
+        {
+            return true;
+        }
+
+        foreach (var message in group.Messages)
+        {
+            if (!string.IsNullOrWhiteSpace(message.Text)
+                && message.Text.StartsWith("[CONTEXT COMPACTION CHECKPOINT]", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>True only for orphan tool results: a group holding results but not the originating call (call+result groups are atomic and safe to cut at).</summary>
