@@ -16,6 +16,7 @@ public class QualityGateCorrectnessTests
     {
         public ExecutionTier Tier => ExecutionTier.BareHost;
         public CommandResult NextResult { get; set; } = new CommandResult(0, "Passed: 5, Failed: 0, Total: 5", string.Empty, TimeSpan.FromMilliseconds(10));
+        public Queue<CommandResult>? ResultQueue { get; set; }
         public string? LastCommand { get; private set; }
         public string? LastWorkingDir { get; private set; }
 
@@ -33,6 +34,10 @@ public class QualityGateCorrectnessTests
         {
             LastCommand = command;
             LastWorkingDir = workingDirectory;
+            if (ResultQueue != null && ResultQueue.Count > 0)
+            {
+                return Task.FromResult(ResultQueue.Dequeue());
+            }
             return Task.FromResult(NextResult);
         }
     }
@@ -732,6 +737,118 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         Assert.False(context.DataBag.ContainsKey(PipelineDataBagKeys.FormatFailureReason));
         Assert.True(context.DataBag.TryGet<string>(PipelineDataBagKeys.StageOutput("deterministic-format"), out var outStr));
         Assert.Contains("skipped", outStr);
+    }
+
+    [Fact]
+    public async Task DeterministicFormatStage_WhenFormatterFails_AndIgnoreFailuresIsTrue_ReturnsSuccessWithWarning()
+    {
+        const string roslynCrash = "Unhandled exception: System.NullReferenceException: Object reference not set to an instance of an object.\n   at Microsoft.CodeAnalysis.CSharp.Syntax.InternalSyntax.LanguageParser.ResetPoint..ctor";
+        var fakeEnv = new FakeEnv
+        {
+            NextResult = new CommandResult(1, string.Empty, roslynCrash, TimeSpan.FromMilliseconds(50))
+        };
+        // ignoreFormatFailures defaults to true
+        var stage = new DeterministicFormatStage(fakeEnv, "dotnet format", "deterministic-format", "Format Code");
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(context.DataBag.ContainsKey(PipelineDataBagKeys.FormatFailureReason));
+        Assert.True(context.DataBag.TryGet<string>(PipelineDataBagKeys.StageCommand("deterministic-format"), out var cmd));
+        Assert.Equal("dotnet format (failed, ignored)", cmd);
+        Assert.True(context.DataBag.TryGet<string>(PipelineDataBagKeys.StageOutput("deterministic-format"), out var output));
+        Assert.Contains("ignored", output);
+        Assert.Contains("NullReferenceException", output);
+    }
+
+    [Fact]
+    public async Task DeterministicFormatStage_WhenFormatterFails_AndIgnoreFailuresIsFalse_ReturnsFailure()
+    {
+        const string roslynCrash = "Unhandled exception: System.NullReferenceException: Object reference not set to an instance of an object.\n   at Microsoft.CodeAnalysis.CSharp.Syntax.InternalSyntax.LanguageParser.ResetPoint..ctor";
+        var fakeEnv = new FakeEnv
+        {
+            NextResult = new CommandResult(1, string.Empty, roslynCrash, TimeSpan.FromMilliseconds(50))
+        };
+        // Explicitly set ignoreFormatFailures to false
+        var stage = new DeterministicFormatStage(fakeEnv, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicFormatStage>.Instance, "dotnet format", "deterministic-format", "Format Code", ignoreFormatFailures: false);
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.True(context.DataBag.TryGet<string>(PipelineDataBagKeys.FormatFailureReason, out var reason));
+        Assert.Contains("NullReferenceException", reason);
+        Assert.Contains("Code formatter failed with exit code 1", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task DeterministicFormatStage_WhenConfiguredViaDataBag_RespectsIgnoreFormatFailuresFalse()
+    {
+        var fakeEnv = new FakeEnv
+        {
+            NextResult = new CommandResult(1, string.Empty, "Formatting error occurred", TimeSpan.FromMilliseconds(20))
+        };
+        var stage = new DeterministicFormatStage(fakeEnv, "dotnet format", "deterministic-format", "Format Code");
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace);
+        context.DataBag.Set(PipelineDataBagKeys.IgnoreFormatFailures, false);
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.True(context.DataBag.ContainsKey(PipelineDataBagKeys.FormatFailureReason));
+    }
+
+    [Fact]
+    public async Task CompositeDeterministicStage_ContinuesPipeline_WhenFormatFailsAndIgnored()
+    {
+        var queue = new Queue<CommandResult>();
+        // Format fails with Roslyn NRE
+        queue.Enqueue(new CommandResult(1, string.Empty, "Unhandled exception: System.NullReferenceException", TimeSpan.FromMilliseconds(20)));
+        // Build succeeds
+        queue.Enqueue(new CommandResult(0, "Build succeeded.", string.Empty, TimeSpan.FromMilliseconds(30)));
+        // Test succeeds
+        queue.Enqueue(new CommandResult(0, "Passed: 5, Failed: 0, Total: 5", string.Empty, TimeSpan.FromMilliseconds(40)));
+
+        var multiEnv = new FakeEnv { ResultQueue = queue };
+        var sp = new TestServiceProvider();
+        sp.AddService<IExecutionEnvironmentProvider>(multiEnv);
+        sp.AddService<ILlmModelPreloadService>(new FakePreload());
+        sp.AddService<IBackgroundTaskRunner>(new BackgroundTaskRunner(Microsoft.Extensions.Logging.Abstractions.NullLogger<BackgroundTaskRunner>.Instance));
+        sp.AddService<IWorkflowStageRegistry>(new WorkflowStageRegistry());
+        sp.AddService<IAgentActivityStreamer>(new Moq.Mock<IAgentActivityStreamer>().Object);
+        sp.AddService<ITaskRepository>(new Moq.Mock<ITaskRepository>().Object);
+
+        var config = new DeterministicStageConfig
+        {
+            ExtraParameters = new Dictionary<string, string>
+            {
+                ["Stages"] = "format,build,test"
+            }
+        };
+
+        var composite = new CompositeDeterministicStage("deterministic-post-impl", "Post-Impl Gates", config, sp, sp.GetRequiredService<IWorkflowStageRegistry>());
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var context = new PipelineContext(task, workspace);
+
+        var result = await composite.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(context.DataBag.TryGet<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands("deterministic-post-impl"), out var list));
+        Assert.NotNull(list);
+        Assert.Equal(3, list.Count);
+        Assert.Equal("format", list[0].StageName);
+        Assert.Equal("dotnet format (failed, ignored)", list[0].Command);
+        Assert.True(list[0].IsSuccess);
+        Assert.Equal("build", list[1].StageName);
+        Assert.Equal("test", list[2].StageName);
     }
 
     [Fact]

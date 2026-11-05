@@ -39,6 +39,7 @@ public static class ConfigBootstrapper
         config.BuildCommand ??= preset.BuildCommand;
         config.TestCommand ??= preset.TestCommand;
         config.FormatCommand ??= preset.FormatCommand;
+        config.IgnoreFormatFailures ??= true;
         config.BuildTimeoutSeconds ??= Constants.DefaultCliCommandTimeoutSeconds;
         config.TestTimeoutSeconds ??= Constants.DefaultCliCommandTimeoutSeconds;
         config.NcfVersion = Constants.NcfVersion;

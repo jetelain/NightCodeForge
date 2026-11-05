@@ -16,6 +16,7 @@ public class ConfigBootstrapperTests
         Assert.Contains("\"buildCommand\": \"dotnet build\"", json);
         Assert.Contains("\"testCommand\": \"dotnet test --no-build\"", json);
         Assert.Contains("\"formatCommand\": \"dotnet format\"", json);
+        Assert.Contains("\"ignoreFormatFailures\": true", json);
         Assert.Contains("\"buildTimeoutSeconds\": 180", json);
         Assert.Contains("\"testTimeoutSeconds\": 180", json);
         Assert.Contains($"\"ncfVersion\": \"{Constants.NcfVersion}\"", json);
@@ -38,6 +39,7 @@ public class ConfigBootstrapperTests
             Assert.Equal("python -m py_compile", resolved.BuildCommand);
             Assert.Equal("pytest", resolved.TestCommand);
             Assert.Equal("ruff format .", resolved.FormatCommand);
+            Assert.True(resolved.IgnoreFormatFailures);
             Assert.Equal(180, resolved.BuildTimeoutSeconds);
             Assert.Equal(180, resolved.TestTimeoutSeconds);
             Assert.Equal(Constants.NcfVersion, resolved.NcfVersion);

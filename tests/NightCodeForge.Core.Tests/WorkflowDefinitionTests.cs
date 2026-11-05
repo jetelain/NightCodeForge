@@ -201,6 +201,7 @@ public class WorkflowDefinitionTests
         Assert.Equal("implementation", config.LoopBackStageId);
         Assert.True(config.FailOnError);
         Assert.Equal(300, config.TimeoutSeconds);
+        Assert.Null(config.IgnoreFormatFailures);
         Assert.NotNull(config.ExtraParameters);
         Assert.Empty(config.ExtraParameters);
     }
@@ -215,6 +216,7 @@ public class WorkflowDefinitionTests
             LoopBackStageId = "code-review-fix",
             FailOnError = false,
             TimeoutSeconds = 900,
+            IgnoreFormatFailures = true,
             ExtraParameters = new Dictionary<string, string>
             {
                 { "Stages", "format,build,test-with-coverage" },
@@ -231,6 +233,7 @@ public class WorkflowDefinitionTests
         Assert.Equal("code-review-fix", deserialized.LoopBackStageId);
         Assert.False(deserialized.FailOnError);
         Assert.Equal(900, deserialized.TimeoutSeconds);
+        Assert.True(deserialized.IgnoreFormatFailures);
         Assert.Equal(2, deserialized.ExtraParameters.Count);
         Assert.Equal("format,build,test-with-coverage", deserialized.ExtraParameters["Stages"]);
         Assert.Equal("85.5", deserialized.ExtraParameters["MinimumLineCoveragePercent"]);

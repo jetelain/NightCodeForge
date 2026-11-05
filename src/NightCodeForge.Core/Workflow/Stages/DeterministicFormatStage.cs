@@ -16,6 +16,7 @@ public class DeterministicFormatStage : IWorkflowStage
     private readonly IExecutionEnvironmentProvider _envProvider;
     private readonly ILogger<DeterministicFormatStage> _logger;
     private readonly string? _formatCommand;
+    private readonly bool? _ignoreFormatFailures;
 
     public string StageId { get; }
     public string DisplayName { get; }
@@ -51,12 +52,24 @@ public class DeterministicFormatStage : IWorkflowStage
         string? formatCommand,
         string stageId,
         string displayName)
+        : this(envProvider, logger, formatCommand, stageId, displayName, null)
+    {
+    }
+
+    public DeterministicFormatStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILogger<DeterministicFormatStage> logger,
+        string? formatCommand,
+        string stageId,
+        string displayName,
+        bool? ignoreFormatFailures)
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _formatCommand = formatCommand;
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
         DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Code Formatting";
+        _ignoreFormatFailures = ignoreFormatFailures;
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
@@ -76,6 +89,7 @@ public class DeterministicFormatStage : IWorkflowStage
 
         var config = CodeStackPresets.ResolveConfig(repoPath, bag);
         var command = _formatCommand ?? config.FormatCommand;
+        var ignoreFailures = _ignoreFormatFailures ?? config.IgnoreFormatFailures ?? true;
 
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -111,6 +125,16 @@ public class DeterministicFormatStage : IWorkflowStage
                 _logger.LogWarning("{Message}", skipMsg);
                 bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{command} (unavailable)");
                 bag.Set(PipelineDataBagKeys.StageOutput(StageId), skipMsg);
+                return StageExecutionResult.Success();
+            }
+
+            if (ignoreFailures)
+            {
+                var warnMsg = $"Deterministic code formatting command '{command}' failed with exit code {res.ExitCode} (ignored): {errorDetail}".Trim();
+                _logger.LogWarning("{Message}", warnMsg);
+                bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{command} (failed, ignored)");
+                bag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(warnMsg));
+                bag.Remove(PipelineDataBagKeys.FormatFailureReason);
                 return StageExecutionResult.Success();
             }
 

@@ -37,6 +37,7 @@ public static class PipelineDataBagKeys
     public const string FailedTests = "diagnostics.failed_tests";
     public const string FailedTestsTruncated = "diagnostics.failed_tests_truncated";
     public const string AllowNoTests = "tests.allow_no_tests";
+    public const string IgnoreFormatFailures = "format.ignore_failures";
     public const string TestFailureReason = "test.failure.reason";
     public const string BuildFailureReason = "build.failure.reason";
     public const string FormatFailureReason = "format.failure.reason";

@@ -79,7 +79,10 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
             var env = sp.GetRequiredService<IExecutionEnvironmentProvider>();
             var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<DeterministicFormatStage>>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicFormatStage>.Instance;
-            return new DeterministicFormatStage(env, logger, null, def.StageId, def.DisplayName);
+            var config = !string.IsNullOrWhiteSpace(def.ConfigurationJson)
+                ? JsonSerializer.Deserialize<DeterministicStageConfig>(def.ConfigurationJson, JsonOptions)
+                : null;
+            return new DeterministicFormatStage(env, logger, config?.Command, def.StageId, def.DisplayName, config?.IgnoreFormatFailures);
         });
         RegisterHandler(StageImplementationTypes.DeterministicTestWithCoverage, (sp, def) =>
         {

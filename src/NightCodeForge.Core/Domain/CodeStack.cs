@@ -34,6 +34,7 @@ public class WorkspaceProjectConfig
     public int? BuildTimeoutSeconds { get; set; }
     public int? TestTimeoutSeconds { get; set; }
     public bool? AllowNoTests { get; set; }
+    public bool? IgnoreFormatFailures { get; set; }
     public string? NcfVersion { get; set; }
     public string? BaseBranch { get; set; }
     public string? ParseWarning { get; set; }
@@ -364,10 +365,13 @@ public static class CodeStackPresets
                 config.TestTimeoutSeconds = tSec;
             if (dataBag.TryGet<bool>(PipelineDataBagKeys.AllowNoTests, out var aTests) || dataBag.TryGet<bool>("AllowNoTests", out aTests))
                 config.AllowNoTests = aTests;
+            if (dataBag.TryGet<bool>(PipelineDataBagKeys.IgnoreFormatFailures, out var iFail) || dataBag.TryGet<bool>("IgnoreFormatFailures", out iFail))
+                config.IgnoreFormatFailures = iFail;
         }
 
         config.BuildTimeoutSeconds ??= WorkflowDefaults.DefaultBuildTimeoutSeconds;
         config.TestTimeoutSeconds ??= WorkflowDefaults.DefaultTestTimeoutSeconds;
+        config.IgnoreFormatFailures ??= true;
 
         return config;
     }

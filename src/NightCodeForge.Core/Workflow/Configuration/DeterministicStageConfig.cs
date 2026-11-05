@@ -32,6 +32,11 @@ public class DeterministicStageConfig
     public int TimeoutSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Whether format command failures should be ignored. If null, inherited from workspace config or defaults to true.
+    /// </summary>
+    public bool? IgnoreFormatFailures { get; set; }
+
+    /// <summary>
     /// Extensible action-specific key-value parameters.
     /// </summary>
     public Dictionary<string, string> ExtraParameters { get; set; } = new();

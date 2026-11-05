@@ -71,6 +71,16 @@ public class CompositeDeterministicStage : IWorkflowStage
         var stageKeys = stagesCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var commandList = new List<StageCommandExecution>();
 
+        if (Config.IgnoreFormatFailures.HasValue)
+        {
+            context.DataBag.Set(PipelineDataBagKeys.IgnoreFormatFailures, Config.IgnoreFormatFailures.Value);
+        }
+        else if (Config.ExtraParameters.TryGetValue("IgnoreFormatFailures", out var ignoreFormatStr) &&
+                 bool.TryParse(ignoreFormatStr, out var ignoreFormatBool))
+        {
+            context.DataBag.Set(PipelineDataBagKeys.IgnoreFormatFailures, ignoreFormatBool);
+        }
+
         context.DataBag.Remove(PipelineDataBagKeys.StageCommands(StageId));
 
         var convId = context.CurrentConversation?.Id;
