@@ -185,7 +185,7 @@ public class OllamaApiClientTests
     }
 
     [Fact]
-    public async Task OllamaSharpChatClientAdapter_GetResponseAsync_PreservesThinkingOnOutgoingAndIncomingMessages()
+    public async Task OllamaApiClient_GetResponseAsync_PreservesThinkingOnOutgoingAndIncomingMessages()
     {
         string? capturedRequestJson = null;
         var handler = new CapturingHttpMessageHandler(async request =>
@@ -254,7 +254,7 @@ public class OllamaApiClientTests
     }
 
     [Fact]
-    public async Task OllamaSharpChatClientAdapter_GetStreamingResponseAsync_PreservesThinkingInMultiTurnRoundTrip()
+    public async Task OllamaApiClient_GetStreamingResponseAsync_PreservesThinkingInMultiTurnRoundTrip()
     {
         var capturedRequests = new List<string>();
         var callCount = 0;
