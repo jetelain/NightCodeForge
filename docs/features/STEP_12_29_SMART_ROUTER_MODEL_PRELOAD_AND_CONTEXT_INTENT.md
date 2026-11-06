@@ -195,8 +195,7 @@ In `DeterministicBuildStage` (and deterministic post-review quality gate stages)
 2. **Context Intent & Fit-Margin Safety:**
    - Determine desired context intent from:
      1. Explicit `effectiveProfile.ContextWindowTokens` if configured on the profile (`> 0`).
-     2. Or `TaskDifficulty` tier when specified: `Standard` $\to$ `32,768`, `Difficult` $\to$ `65,536`, `Expert` $\to$ `null` (soft intent, using OllamaRouter's `recommendedContextWindow` so `131,072` ceilings are not disqualified by the additive `8,192`-token `contextFitMarginTokens` gate).
-     3. Or `null` (soft intent) when using default/dynamic context sizing so OllamaRouter selects the highest hardware-supported `recommendedContextWindow` (which automatically triggers `>= 65,536` server-class preference).
+     2. Or `null` (soft intent) when using default/dynamic context sizing so OllamaRouter selects the highest hardware-supported `recommendedContextWindow` (which automatically triggers `>= 65,536` server-class preference).
    - If an explicit `ContextIntentTokens` request returns `503 Service Unavailable` because of OllamaRouter's additive `contextFitMarginTokens` (`8,192`) or lower fleet ceiling, `OllamaRouterModelPreloadService` retries once with `contextIntentTokens = null` (soft intent, using the fleet's `recommendedContextWindow`) before reporting qualification failure.
 3. **Target Pinning:** Pass `Target = effectiveProfile.RoutingTarget` when a specific routing target is pinned on the profile.
 
