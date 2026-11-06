@@ -377,8 +377,9 @@ version: 1
 Updated 41 by agent
 ");
 
-        // Simulate git operation in worktree reverting Task 42's file to an older version 1 (even referencing deleted dep 999)
-        await File.WriteAllTextAsync(syncResult.WrittenPaths[42], @"---
+        // Simulate git operation in worktree reverting Task 42's file in docs/tasks to an older version 1 (even referencing deleted dep 999)
+        var revertedActivePath = Path.Combine(_tempWorkspaceDir, "docs", "tasks", Path.GetFileName(syncResult.WrittenPaths[42]));
+        await File.WriteAllTextAsync(revertedActivePath, @"---
 id: 42
 title: Task 42
 status: Open
@@ -411,6 +412,8 @@ Reverted old 42 description
         Assert.Equal(TaskOverallStatus.Closed, reloaded42!.Status);
         Assert.Equal("Final 42 in DB", reloaded42.Description);
         Assert.Equal(2, reloaded42.Version);
+        Assert.False(File.Exists(revertedActivePath), "Reverted stale active file for closed sibling task must be cleaned up from docs/tasks/");
+        Assert.True(File.Exists(syncResult.WrittenPaths[42]), "Archived task file in docs/tasks/archive/ must remain intact");
     }
 
     [Fact]

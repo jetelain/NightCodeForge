@@ -202,10 +202,45 @@ public class DevQueueServiceTests : IDisposable
         var result = await service.CancelJobAsync("job-88", 88);
 
         Assert.True(result);
+        Assert.Single(_markdownSync.SyncedCalls);
+        Assert.Equal(88, _markdownSync.SyncedCalls[0].Task.Id);
+        Assert.Equal(TaskOverallStatus.Cancelled, _markdownSync.SyncedCalls[0].Task.Status);
         Assert.Single(_markdownSync.ArchivedCalls);
         Assert.Equal(88, _markdownSync.ArchivedCalls[0].Task.Id);
         Assert.Equal(_tempDir, _markdownSync.ArchivedCalls[0].WorkspacePath);
         Assert.True(_markdownSync.ArchivedCalls[0].Archive);
+    }
+
+    [Fact]
+    public async Task RetryCurrentStageAsync_WhenCancelledTaskRetried_SyncsReopenedTaskMarkdownToDisk()
+    {
+        var ws = new Workspace
+        {
+            Id = 1,
+            Name = "Test Workspace",
+            RepositoryPath = _tempDir
+        };
+        await _workspaceRepo.CreateAsync(ws);
+
+        var task = new ForgeTask
+        {
+            Id = 89,
+            WorkspaceId = 1,
+            Title = "Cancelled Task to Retry",
+            Status = TaskOverallStatus.Cancelled,
+            CurrentStageId = "coding"
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = CreateService();
+
+        var result = await service.RetryCurrentStageAsync(89);
+
+        Assert.True(result);
+        Assert.Single(_markdownSync.SyncedCalls);
+        Assert.Equal(89, _markdownSync.SyncedCalls[0].Task.Id);
+        Assert.Equal(TaskOverallStatus.Open, _markdownSync.SyncedCalls[0].Task.Status);
+        Assert.Equal(_tempDir, _markdownSync.SyncedCalls[0].WorkspacePath);
     }
 
     [Fact]

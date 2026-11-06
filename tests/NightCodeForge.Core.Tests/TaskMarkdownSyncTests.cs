@@ -533,8 +533,8 @@ Enriched description formulated by review agent directly on disk.
             agentProfileId: null,
             cloneDirectory: cloneDir);
 
-        var cloneTasksDir = Path.Combine(cloneDir, "docs", "tasks");
-        var cloneFilePath = Path.Combine(cloneTasksDir, Path.GetFileName(hostFilePath));
+        var cloneTasksArchiveDir = Path.Combine(cloneDir, "docs", "tasks", "archive");
+        var cloneFilePath = Path.Combine(cloneTasksArchiveDir, Path.GetFileName(hostFilePath));
         Assert.True(File.Exists(hostFilePath));
         Assert.True(File.Exists(cloneFilePath));
 
@@ -543,6 +543,172 @@ Enriched description formulated by review agent directly on disk.
 
         Assert.False(File.Exists(hostFilePath));
         Assert.False(File.Exists(cloneFilePath));
+    }
+
+    [Fact]
+    public async Task AllDiskWrites_EmitUtf8WithoutBom()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "NoBomRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var task = new ForgeTask
+        {
+            Id = 970,
+            WorkspaceId = 1,
+            Title = "UTF8 Without BOM Task",
+            Description = "Verify no 0xEF 0xBB 0xBF preamble is emitted.",
+            Status = TaskOverallStatus.Open
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone-nobom");
+        Directory.CreateDirectory(cloneDir);
+
+        // 1. SyncTaskToDiskAsync
+        var singlePath = await sync.SyncTaskToDiskAsync(task, _tempWorkspaceDir, dependencies: null, agentProfileId: null, cloneDirectory: cloneDir);
+        AssertHasNoUtf8Bom(singlePath);
+        var cloneSinglePath = Path.Combine(cloneDir, "docs", "tasks", Path.GetFileName(singlePath));
+        AssertHasNoUtf8Bom(cloneSinglePath);
+
+        // 2. SyncAllTasksToDiskAsync
+        var hostDir = Path.Combine(_tempWorkspaceDir, "host-nobom");
+        Directory.CreateDirectory(hostDir);
+        var syncAllResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, hostDir, cloneDir);
+        AssertHasNoUtf8Bom(syncAllResult.WrittenPaths[970]);
+        AssertHasNoUtf8Bom(Path.Combine(hostDir, "docs", "tasks", Path.GetFileName(syncAllResult.WrittenPaths[970])));
+
+        // 3. ProcessFileContentAsync (new drop-in task & existing task normalization)
+        var dropInPath = Path.Combine(_tempWorkspaceDir, "docs", "tasks", "2026-10-28-drop-in-nobom.md");
+        await File.WriteAllTextAsync(dropInPath, "---\ntitle: Drop In No BOM\n---\n# Drop In No BOM\nBody text\n", new System.Text.UTF8Encoding(false));
+        await sync.ProcessFileChangedAsync(dropInPath, workspace.Id);
+        AssertHasNoUtf8Bom(dropInPath);
+
+        // 4. SyncAllTasksFromDiskAsync (new task creation & existing task normalization)
+        var batchNewPath = Path.Combine(_tempWorkspaceDir, "docs", "tasks", "batch-new-nobom.md");
+        await File.WriteAllTextAsync(batchNewPath, "---\ntitle: Batch New No BOM\n---\n# Batch New No BOM\nBody\n", new System.Text.UTF8Encoding(false));
+        await sync.SyncAllTasksFromDiskAsync(workspace, _tempWorkspaceDir, hostDir, null, AuditActors.User, "No BOM test");
+        foreach (var file in Directory.GetFiles(Path.Combine(_tempWorkspaceDir, "docs", "tasks"), "*.md"))
+        {
+            AssertHasNoUtf8Bom(file);
+        }
+    }
+
+    [Fact]
+    public async Task TerminalTasks_AreWrittenOnlyToArchive_AndCleanedUpFromActiveTasksFolder()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "ArchivePlacementRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var taskClosed = new ForgeTask { Id = 981, WorkspaceId = 1, Title = "Task Closed", Status = TaskOverallStatus.Open };
+        var taskRejected = new ForgeTask { Id = 982, WorkspaceId = 1, Title = "Task Rejected", Status = TaskOverallStatus.Suggested };
+        var taskCancelled = new ForgeTask { Id = 983, WorkspaceId = 1, Title = "Task Cancelled", Status = TaskOverallStatus.Open };
+        await repo.CreateWithBaselineAsync(taskClosed, null, AuditActors.User, "Init");
+        await repo.CreateWithBaselineAsync(taskRejected, null, AuditActors.User, "Init");
+        await repo.CreateWithBaselineAsync(taskCancelled, null, AuditActors.User, "Init");
+
+        var hostDir = Path.Combine(_tempWorkspaceDir, "host-archive-test");
+        var cloneDir = Path.Combine(_tempWorkspaceDir, "clone-archive-test");
+        Directory.CreateDirectory(hostDir);
+        Directory.CreateDirectory(cloneDir);
+
+        // Initially active -> written to docs/tasks
+        var initialResult = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, hostDir, cloneDir);
+        var activeDir = Path.Combine(_tempWorkspaceDir, "docs", "tasks");
+        var archiveDir = Path.Combine(activeDir, "archive");
+        Assert.Equal(3, Directory.GetFiles(activeDir, "*.md").Length);
+
+        // Transition all three to terminal statuses
+        taskClosed.Status = TaskOverallStatus.Closed;
+        taskRejected.Status = TaskOverallStatus.Rejected;
+        taskCancelled.Status = TaskOverallStatus.Cancelled;
+        await repo.UpdateWithHistoryAsync(taskClosed, null, AuditActors.User, "Close");
+        await repo.UpdateWithHistoryAsync(taskRejected, null, AuditActors.User, "Reject");
+        await repo.UpdateWithHistoryAsync(taskCancelled, null, AuditActors.User, "Cancel");
+
+        // SyncAllTasksToDiskAsync must move them to docs/tasks/archive and leave 0 files in docs/tasks
+        var afterTerminal = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir, hostDir, cloneDir);
+        Assert.Empty(Directory.GetFiles(activeDir, "*.md"));
+        Assert.Equal(3, Directory.GetFiles(archiveDir, "*.md").Length);
+
+        Assert.Empty(Directory.GetFiles(Path.Combine(hostDir, "docs", "tasks"), "*.md"));
+        Assert.Equal(3, Directory.GetFiles(Path.Combine(hostDir, "docs", "tasks", "archive"), "*.md").Length);
+
+        Assert.Empty(Directory.GetFiles(Path.Combine(cloneDir, "docs", "tasks"), "*.md"));
+        Assert.Equal(3, Directory.GetFiles(Path.Combine(cloneDir, "docs", "tasks", "archive"), "*.md").Length);
+
+        // Reopening a cancelled task moves it back to docs/tasks and removes it from docs/tasks/archive
+        taskCancelled.Status = TaskOverallStatus.Open;
+        await repo.UpdateWithHistoryAsync(taskCancelled, null, AuditActors.User, "Reopen");
+        await sync.SyncTaskToDiskAsync(taskCancelled, _tempWorkspaceDir, dependencies: null, agentProfileId: null, cloneDirectory: cloneDir);
+
+        Assert.Single(Directory.GetFiles(activeDir, "*.md"));
+        Assert.Equal(2, Directory.GetFiles(archiveDir, "*.md").Length);
+        Assert.Single(Directory.GetFiles(Path.Combine(cloneDir, "docs", "tasks"), "*.md"));
+        Assert.Equal(2, Directory.GetFiles(Path.Combine(cloneDir, "docs", "tasks", "archive"), "*.md").Length);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksFromDiskAsync_AutoCleansStaleLowerVersionDuplicateFile()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "StaleDupRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var task = new ForgeTask
+        {
+            Id = 990,
+            WorkspaceId = 1,
+            Title = "Original Short Title",
+            Description = "Initial spec",
+            Status = TaskOverallStatus.Suggested,
+            Version = 1,
+            CreatedAt = new DateTime(2026, 10, 16, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        var tasksDir = Path.Combine(_tempWorkspaceDir, "docs", "tasks");
+        Directory.CreateDirectory(tasksDir);
+
+        // Write version 1 under old slug
+        var oldSlugFile = Path.Combine(tasksDir, "2026-10-16-original-short-title.md");
+        await File.WriteAllTextAsync(oldSlugFile, sync.GenerateMarkdown(task));
+
+        // Update task to version 2 with new title and write under new slug (simulating leftover v1 file)
+        task.Title = "Refined Detailed Title After Review";
+        task.Status = TaskOverallStatus.Open;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "Refined");
+        var newSlugFile = Path.Combine(tasksDir, "2026-10-16-refined-detailed-title-after-review.md");
+        await File.WriteAllTextAsync(newSlugFile, sync.GenerateMarkdown(task));
+
+        Assert.True(File.Exists(oldSlugFile));
+        Assert.True(File.Exists(newSlugFile));
+
+        // SyncAllTasksFromDiskAsync must auto-clean the untouched v1 duplicate and keep v2
+        var synced = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: null,
+            baselineSnapshot: null,
+            changeActor: AuditActors.User,
+            changeReason: "Startup sync");
+
+        Assert.Single(synced);
+        Assert.False(File.Exists(oldSlugFile));
+        Assert.True(File.Exists(newSlugFile));
+    }
+
+    private static void AssertHasNoUtf8Bom(string filePath)
+    {
+        Assert.True(File.Exists(filePath), $"Expected file '{filePath}' to exist.");
+        var bytes = File.ReadAllBytes(filePath);
+        if (bytes.Length >= 3)
+        {
+            Assert.False(
+                bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF,
+                $"File '{filePath}' starts with UTF-8 BOM (0xEF 0xBB 0xBF), expected UTF-8 without BOM.");
+        }
     }
 
     [Fact]
@@ -850,6 +1016,221 @@ Task description with updated content.";
         Assert.NotNull(dbTask);
         Assert.Equal(MergeMode.Automatic, dbTask.MergeMode);
         Assert.Equal("Task 961 Updated Title", dbTask.Title);
+    }
+
+    [Fact]
+    public async Task SyncTaskToDiskAsync_WhenArchivingTaskWithStaleFileInArchive_UsesNewerFilenameFromActiveDirAndCleansBoth()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var tasksDir = Path.Combine(_tempWorkspaceDir, "docs", "tasks");
+        var archiveDir = Path.Combine(tasksDir, "archive");
+        Directory.CreateDirectory(tasksDir);
+        Directory.CreateDirectory(archiveDir);
+
+        var task = new ForgeTask
+        {
+            Id = 991,
+            WorkspaceId = 1,
+            Title = "Updated Title For Task 991",
+            Description = "Final description",
+            Status = TaskOverallStatus.Closed,
+            Version = 3,
+            CreatedAt = new DateTime(2026, 10, 20, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        // Stale v1 file under old slug left in archive/
+        var staleArchiveFile = Path.Combine(archiveDir, "2026-10-20-old-stale-slug.md");
+        await File.WriteAllTextAsync(staleArchiveFile, "---\nid: 991\ntitle: Old Stale Slug\nstatus: Cancelled\nversion: 1\n---\n# Old Stale Slug\n");
+
+        // Newer v2 file under current slug in docs/tasks/
+        var activeFile = Path.Combine(tasksDir, "2026-10-20-updated-title-for-task-991.md");
+        await File.WriteAllTextAsync(activeFile, "---\nid: 991\ntitle: Updated Title For Task 991\nstatus: Open\nversion: 2\n---\n# Updated Title For Task 991\n");
+
+        var writtenPath = await sync.SyncTaskToDiskAsync(task, _tempWorkspaceDir);
+
+        var expectedArchivePath = Path.Combine(archiveDir, "2026-10-20-updated-title-for-task-991.md");
+        Assert.Equal(expectedArchivePath, writtenPath);
+        Assert.True(File.Exists(expectedArchivePath));
+        Assert.False(File.Exists(staleArchiveFile), "Stale old-slug file in archive must be deleted");
+        Assert.False(File.Exists(activeFile), "Active file in docs/tasks must be removed when task is archived");
+    }
+
+    [Fact]
+    public async Task SyncAllTasksFromDiskAsync_WhenAgentCopiesAndEditsFileAtSameVersion_AutoCleansUntouchedOriginal()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "SameVersionRenameRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var task = new ForgeTask
+        {
+            Id = 992,
+            WorkspaceId = 1,
+            Title = "Initial Draft Title",
+            Description = "Initial draft body",
+            Status = TaskOverallStatus.Suggested,
+            Version = 1,
+            CreatedAt = new DateTime(2026, 10, 21, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        var initialSync = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir);
+        var originalFile = initialSync.WrittenPaths[992];
+
+        // Simulate agent copying the file to a new slug and editing the title/body in the copy while leaving original untouched (both have version: 1)
+        var tasksDir = Path.Combine(_tempWorkspaceDir, "docs", "tasks");
+        var renamedFile = Path.Combine(tasksDir, "2026-10-21-refined-agent-title.md");
+        var modifiedContent = (await File.ReadAllTextAsync(originalFile))
+            .Replace("title: Initial Draft Title", "title: Refined Agent Title")
+            .Replace("# Initial Draft Title", "# Refined Agent Title")
+            .Replace("Initial draft body", "Refined body by agent");
+        await File.WriteAllTextAsync(renamedFile, modifiedContent);
+
+        var synced = await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: null,
+            baselineSnapshot: initialSync.Baseline,
+            changeActor: "task-review",
+            changeReason: "Refined task");
+
+        Assert.Single(synced);
+        Assert.False(File.Exists(originalFile), "Untouched original file should be auto-cleaned when agent writes modified copy");
+        Assert.True(File.Exists(renamedFile), "Modified renamed file should be kept");
+
+        var dbTask = await repo.GetByIdAsync(992);
+        Assert.NotNull(dbTask);
+        Assert.Equal("Refined Agent Title", dbTask.Title);
+        Assert.Equal("Refined body by agent", dbTask.Description);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksFromDiskAsync_And_ProcessFileContentAsync_ResolveFilenameDependencyOnArchivedTask()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "ArchivedDepRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var closedDepTask = new ForgeTask
+        {
+            Id = 993,
+            WorkspaceId = 1,
+            Title = "Completed Prerequisite Task",
+            Status = TaskOverallStatus.Closed,
+            CreatedAt = new DateTime(2026, 10, 22, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(closedDepTask, null, AuditActors.User, "Created");
+
+        // Write closed prerequisite task to docs/tasks/archive/ under a custom filename
+        var archiveDir = Path.Combine(_tempWorkspaceDir, "docs", "tasks", "archive");
+        Directory.CreateDirectory(archiveDir);
+        var archivedDepFile = Path.Combine(archiveDir, "2026-10-22-custom-archived-prereq.md");
+        await File.WriteAllTextAsync(archivedDepFile, sync.GenerateMarkdown(closedDepTask));
+
+        // Write open dependent task in docs/tasks/ referencing the archived file by filename
+        var tasksDir = Path.Combine(_tempWorkspaceDir, "docs", "tasks");
+        Directory.CreateDirectory(tasksDir);
+        var dependentFile = Path.Combine(tasksDir, "2026-10-22-dependent-task.md");
+        var dependentMarkdown = @"---
+title: Dependent Task
+status: Open
+depends_on:
+  - 2026-10-22-custom-archived-prereq.md
+---
+
+# Dependent Task
+
+## 📋 Requirements & Description
+Depends on archived prerequisite
+";
+        await File.WriteAllTextAsync(dependentFile, dependentMarkdown);
+
+        await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: null,
+            baselineSnapshot: null,
+            changeActor: AuditActors.User,
+            changeReason: "Sync dependent task");
+
+        var allTasks = await repo.GetByWorkspaceIdAsync(workspace.Id);
+        var createdDepTask = allTasks.FirstOrDefault(t => t.Title == "Dependent Task");
+        Assert.NotNull(createdDepTask);
+
+        var deps = await repo.GetDependenciesAsync(createdDepTask.Id);
+        Assert.Equal([993], deps);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksFromDiskAsync_WhenHostRepositoryPathProvided_WritesArchivedTaskToHostArchiveAndCleansHostActiveDir()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "HostArchiveSyncRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var hostDir = Path.Combine(_tempWorkspaceDir, "host-repo");
+        var worktreeDir = Path.Combine(_tempWorkspaceDir, "worktree-repo");
+        Directory.CreateDirectory(hostDir);
+        Directory.CreateDirectory(worktreeDir);
+
+        var task = new ForgeTask
+        {
+            Id = 994,
+            WorkspaceId = 1,
+            Title = "Task Closing On Disk",
+            Description = "Initial open description",
+            Status = TaskOverallStatus.Open,
+            Version = 1,
+            CreatedAt = new DateTime(2026, 10, 23, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        var syncToDisk = await sync.SyncAllTasksToDiskAsync(workspace, worktreeDir, hostRepositoryPath: hostDir);
+        var worktreeActiveFile = syncToDisk.WrittenPaths[994];
+        var hostActiveFile = Path.Combine(hostDir, "docs", "tasks", Path.GetFileName(worktreeActiveFile));
+        Assert.True(File.Exists(worktreeActiveFile));
+        Assert.True(File.Exists(hostActiveFile));
+
+        // Task transitions to Closed in DB (e.g. sibling task closed while worktree still has the active file on disk)
+        task.Status = TaskOverallStatus.Closed;
+        await repo.UpdateWithHistoryAsync(task, null, AuditActors.User, "Closed in DB");
+
+        await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            worktreeDir,
+            hostRepositoryPath: hostDir,
+            baselineSnapshot: syncToDisk.Baseline,
+            changeActor: "implementation",
+            changeReason: "Task closed");
+
+        var worktreeArchiveFile = Path.Combine(worktreeDir, "docs", "tasks", "archive", Path.GetFileName(worktreeActiveFile));
+        var hostArchiveFile = Path.Combine(hostDir, "docs", "tasks", "archive", Path.GetFileName(worktreeActiveFile));
+
+        Assert.False(File.Exists(worktreeActiveFile), "Active file in worktree docs/tasks must be removed when closed");
+        Assert.True(File.Exists(worktreeArchiveFile), "Archive file in worktree docs/tasks/archive must exist");
+        Assert.False(File.Exists(hostActiveFile), "Active file in host docs/tasks must be removed when closed");
+        Assert.True(File.Exists(hostArchiveFile), "Archive file in host docs/tasks/archive must exist");
+    }
+
+    [Fact]
+    public void ParseMarkdown_And_ComputeContentHash_IgnoreLeadingBomCharacterInMemory()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var raw = "---\nid: 50\ntitle: BOM Test\nstatus: Open\n---\n\n# BOM Test\n\n## 📋 Requirements & Description\nHello world\n";
+        var withBom = "\uFEFF" + raw;
+
+        var parsedRaw = sync.ParseMarkdown(raw);
+        var parsedBom = sync.ParseMarkdown(withBom);
+
+        Assert.Equal(50, parsedBom.Frontmatter.Id);
+        Assert.Equal("BOM Test", parsedBom.Frontmatter.Title);
+        Assert.Equal(parsedRaw.Body, parsedBom.Body);
+        Assert.Equal(sync.ComputeContentHash(raw), sync.ComputeContentHash(withBom));
     }
 }
 

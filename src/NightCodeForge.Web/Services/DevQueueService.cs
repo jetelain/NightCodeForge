@@ -301,6 +301,8 @@ public class DevQueueService : IDevQueueService
                         var workspace = await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken);
                         if (workspace != null && !string.IsNullOrWhiteSpace(workspace.RepositoryPath))
                         {
+                            var deps = await taskRepo.GetDependenciesAsync(task.Id, cancellationToken);
+                            await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, deps, cancellationToken: cancellationToken);
                             await markdownSync.ArchiveOrCleanupTaskFileAsync(task, workspace.RepositoryPath, archive: true, cancellationToken);
                             _logger.LogInformation("Archived task file for cancelled Task #{TaskId}", taskId.Value);
                         }
@@ -494,6 +496,21 @@ public class DevQueueService : IDevQueueService
         var jobId = _taskJobQueue.EnqueueStage(taskId, stage.QueueTier, task.Priority);
         task.LastHangfireJobId = jobId;
         await taskRepo.UpdateAsync(task, cancellationToken: cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath))
+        {
+            var markdownSync = scope.ServiceProvider.GetRequiredService<ITaskMarkdownSyncService>();
+            var deps = await taskRepo.GetDependenciesAsync(task.Id, cancellationToken: cancellationToken);
+            try
+            {
+                await markdownSync.SyncTaskToDiskAsync(task, workspace.RepositoryPath, deps, cancellationToken: cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to sync retried task #{TaskId} markdown to disk in {Path}", task.Id, workspace.RepositoryPath);
+            }
+        }
+
         _logger.LogInformation("Retried stage for Task #{TaskId} (Stage: {StageId}, JobId: {JobId}, Tier: {Tier})",
             taskId, stage.StageId, jobId, stage.QueueTier);
         return true;

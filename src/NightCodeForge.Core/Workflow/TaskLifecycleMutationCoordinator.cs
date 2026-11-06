@@ -569,6 +569,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             await _workspacePreparer.RemoveWorktreeSafeAsync(workspace, task.Id, "rejected", cancellationToken);
             await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, "rejected", cancellationToken);
             await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+            await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
         }
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog

@@ -84,7 +84,7 @@ public class TaskSyncHygieneAndAuditTrailTests : IDisposable
         Assert.Equal(3, result.WrittenPaths.Count);
         Assert.Equal(3, result.Baseline.Count);
 
-        // Verify files written on disk in workspace
+        // Verify files written on disk in workspace (active tasks in docs/tasks, closed/cancelled in docs/tasks/archive)
         foreach (var (taskId, path) in result.WrittenPaths)
         {
             Assert.True(File.Exists(path));
@@ -92,9 +92,24 @@ public class TaskSyncHygieneAndAuditTrailTests : IDisposable
             var (fm, _) = sync.ParseMarkdown(content, path);
             Assert.Equal(taskId, fm.Id);
 
+            var expectArchived = taskId is 2 or 3;
+            var expectedWorkspaceDir = expectArchived
+                ? Path.Combine(_tempWorkspaceDir, "docs", "tasks", "archive")
+                : Path.Combine(_tempWorkspaceDir, "docs", "tasks");
+            Assert.Equal(expectedWorkspaceDir, Path.GetDirectoryName(path));
+
             // Verify mirror on host
-            var hostFile = Path.Combine(_tempHostDir, "docs", "tasks", Path.GetFileName(path));
+            var hostFile = expectArchived
+                ? Path.Combine(_tempHostDir, "docs", "tasks", "archive", Path.GetFileName(path))
+                : Path.Combine(_tempHostDir, "docs", "tasks", Path.GetFileName(path));
             Assert.True(File.Exists(hostFile));
+
+            // Ensure closed/cancelled tasks do not remain in top-level docs/tasks
+            if (expectArchived)
+            {
+                Assert.False(File.Exists(Path.Combine(_tempWorkspaceDir, "docs", "tasks", Path.GetFileName(path))));
+                Assert.False(File.Exists(Path.Combine(_tempHostDir, "docs", "tasks", Path.GetFileName(path))));
+            }
         }
 
         // Check dependencies populated in frontmatter
