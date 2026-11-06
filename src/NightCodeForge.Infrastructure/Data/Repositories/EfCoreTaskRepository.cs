@@ -511,6 +511,14 @@ public class EfCoreTaskRepository : ITaskRepository
         var task = await context.Tasks.FindAsync(new object[] { id }, cancellationToken);
         if (task != null)
         {
+            var links = await context.TaskDependencies
+                .Where(d => d.TaskId == id || d.DependsOnTaskId == id)
+                .ToListAsync(cancellationToken);
+            if (links.Count > 0)
+            {
+                context.TaskDependencies.RemoveRange(links);
+            }
+
             context.Tasks.Remove(task);
             await context.SaveChangesAsync(cancellationToken);
         }

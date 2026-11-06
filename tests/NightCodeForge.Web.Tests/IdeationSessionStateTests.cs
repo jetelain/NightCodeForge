@@ -227,5 +227,117 @@ public class IdeationSessionStateTests
         Assert.Equal(OllamaRoutingTarget.Auto, session.SelectedRoutingTarget);
         Assert.Null(session.SelectedModelOverride);
     }
+
+    [Fact]
+    public void FromProposal_WithTaskIdAndDependsOnIds_PopulatesCreatedTaskIdAndDependencies_ExcludingSelf()
+    {
+        var proposal = new IdeationProposal(
+            Title: "Draft Feature",
+            Description: "Details",
+            Priority: 2,
+            DependsOnTitles: null,
+            TaskId: 105,
+            DependsOnIds: [101, 105, 102]);
+
+        var vm = IdeationProposalViewModel.FromProposal(proposal);
+
+        Assert.Equal(105, vm.CreatedTaskId);
+        Assert.Equal([101, 102], vm.SelectedDependencyIds);
+        Assert.False(vm.IsAdded);
+    }
+
+    [Fact]
+    public void ResolveDependencies_WhenDependsOnTitlesIsEmpty_StillRemovesCancelledOrRejectedDependencies()
+    {
+        var proposal = new IdeationProposal(
+            Title: "Draft Feature",
+            Description: "Details",
+            Priority: 2,
+            DependsOnTitles: null,
+            TaskId: 105,
+            DependsOnIds: [101, 102]);
+
+        var vm = IdeationProposalViewModel.FromProposal(proposal);
+        Assert.Equal([101, 102], vm.SelectedDependencyIds);
+
+        var tasks = new List<ForgeTask>
+        {
+            new() { Id = 101, Title = "Active", Status = TaskOverallStatus.Open },
+            new() { Id = 102, Title = "Cancelled", Status = TaskOverallStatus.Cancelled }
+        };
+
+        vm.ResolveDependencies(tasks);
+
+        Assert.Equal([101], vm.SelectedDependencyIds);
+    }
+
+    [Fact]
+    public void SyncProposalsWithWorkspaceTasks_UpdatesEditedDraft_MarksPromotedAsAdded_AndRemovesCancelledDraft()
+    {
+        var session = new IdeationSessionState();
+        var p1 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 1", "Desc 1", 3, TaskId: 101));
+        var p2 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 2", "Desc 2", 3, TaskId: 102, DependsOnIds: [101]));
+        var p3 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 3", "Desc 3", 3, TaskId: 103, DependsOnIds: [102]));
+        session.Proposals.AddRange([p1, p2, p3]);
+
+        var workspaceTasks = new List<ForgeTask>
+        {
+            new()
+            {
+                Id = 101,
+                Title = "Refined Draft 1",
+                Description = "Updated Desc 1",
+                Priority = 1,
+                Status = TaskOverallStatus.Draft,
+                Dependencies = [new TaskDependency { TaskId = 101, DependsOnTaskId = 50 }]
+            },
+            new()
+            {
+                Id = 102,
+                Title = "Cancelled Draft 2",
+                Description = "Desc 2",
+                Priority = 3,
+                Status = TaskOverallStatus.Cancelled
+            },
+            new()
+            {
+                Id = 103,
+                Title = "Promoted Draft 3",
+                Description = "Desc 3",
+                Priority = 2,
+                Status = TaskOverallStatus.Suggested
+            }
+        };
+
+        session.SyncProposalsWithWorkspaceTasks(workspaceTasks);
+
+        Assert.Equal(2, session.Proposals.Count);
+        Assert.Same(p1, session.Proposals[0]);
+        Assert.Equal("Refined Draft 1", p1.Title);
+        Assert.Equal("Updated Desc 1", p1.Description);
+        Assert.Equal(1, p1.Priority);
+        Assert.Equal([50], p1.SelectedDependencyIds);
+        Assert.False(p1.IsAdded);
+
+        Assert.Same(p3, session.Proposals[1]);
+        Assert.True(p3.IsAdded);
+        Assert.DoesNotContain(102, p3.SelectedDependencyIds);
+    }
+
+    [Fact]
+    public void RemoveProposal_UnlinksDismissedTaskIdAndTitleFromRemainingProposals()
+    {
+        var session = new IdeationSessionState();
+        var first = IdeationProposalViewModel.FromProposal(new IdeationProposal("Base Task", "Base", 2, TaskId: 101));
+        var second = IdeationProposalViewModel.FromProposal(new IdeationProposal("Dependent Task", "Dep", 3, DependsOnTitles: ["Base Task"], TaskId: 102, DependsOnIds: [101]));
+        session.AddProposal(first);
+        session.AddProposal(second);
+
+        session.RemoveProposal(first);
+
+        Assert.Single(session.Proposals);
+        Assert.Empty(second.SelectedDependencyIds);
+        Assert.Empty(second.DependsOnTitles);
+    }
 }
 

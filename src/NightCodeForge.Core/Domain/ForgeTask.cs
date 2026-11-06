@@ -63,7 +63,9 @@ public record TaskProposal
         IReadOnlyList<string>? affectedFiles = null,
         IReadOnlyList<string>? acceptanceCriteria = null,
         int priority = TaskPriority.Normal,
-        IReadOnlyList<string>? dependsOnTitles = null)
+        IReadOnlyList<string>? dependsOnTitles = null,
+        IReadOnlyList<int>? dependsOnIds = null,
+        int? taskId = null)
     {
         Title = title;
         Description = description;
@@ -72,10 +74,12 @@ public record TaskProposal
         AcceptanceCriteria = acceptanceCriteria;
         Priority = priority;
         DependsOnTitles = dependsOnTitles;
+        DependsOnIds = dependsOnIds;
+        TaskId = taskId;
     }
 
     public TaskProposal(string title, string description, int priority, IReadOnlyList<string>? dependsOnTitles = null)
-        : this(title, description, "feature", null, null, priority, dependsOnTitles)
+        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null)
     {
     }
 
@@ -86,5 +90,7 @@ public record TaskProposal
     public IReadOnlyList<string>? AcceptanceCriteria { get; init; }
     public int Priority { get; init; } = TaskPriority.Normal;
     public IReadOnlyList<string>? DependsOnTitles { get; init; }
+    public IReadOnlyList<int>? DependsOnIds { get; init; }
+    public int? TaskId { get; init; }
 }
 

@@ -10,6 +10,10 @@
             {
                 <span class="proposal-added-badge">ForgeTask #@Proposal.CreatedTaskId</span>
             }
+            else if (Proposal.CreatedTaskId.HasValue)
+            {
+                <span class="proposal-draft-badge font-mono">Draft #@Proposal.CreatedTaskId</span>
+            }
         </div>
         <div class="proposal-priority-wrapper">
             <label class="form-label-sm">Priority:</label>
@@ -111,14 +115,19 @@
                     </div>
                 }
 
-                @if (WorkspaceTasks == null || WorkspaceTasks.Count == 0)
+                @{
+                    var candidateTasks = WorkspaceTasks?
+                        .Where(t => t.Id != Proposal.CreatedTaskId && t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+                        .ToList();
+                }
+                @if (candidateTasks == null || candidateTasks.Count == 0)
                 {
                     <div class="dependency-empty-hint">No existing workspace tasks available to link.</div>
                 }
                 else
                 {
                     <div class="dependency-items-container">
-                        @foreach (var task in WorkspaceTasks)
+                        @foreach (var task in candidateTasks)
                         {
                             var isSelected = Proposal.SelectedDependencyIds.Contains(task.Id);
                             <label class="dependency-item-checkbox @(isSelected ? "selected" : "")">

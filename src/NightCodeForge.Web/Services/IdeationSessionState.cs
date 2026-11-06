@@ -170,8 +170,20 @@ public class IdeationProposalViewModel
         {
             Title = proposal.Title ?? string.Empty,
             Description = proposal.Description ?? string.Empty,
-            Priority = proposal.Priority > 0 ? proposal.Priority : TaskPriority.Normal
+            Priority = proposal.Priority > 0 ? proposal.Priority : TaskPriority.Normal,
+            CreatedTaskId = proposal.TaskId
         };
+
+        if (proposal.DependsOnIds != null)
+        {
+            foreach (var depId in proposal.DependsOnIds)
+            {
+                if (depId != proposal.TaskId && !vm.SelectedDependencyIds.Contains(depId))
+                {
+                    vm.SelectedDependencyIds.Add(depId);
+                }
+            }
+        }
 
         if (proposal.DependsOnTitles != null)
         {
@@ -184,14 +196,48 @@ public class IdeationProposalViewModel
             }
         }
 
+        if (proposal.TaskId.HasValue && existingTasks != null)
+        {
+            var matchedTask = existingTasks.FirstOrDefault(t => t.Id == proposal.TaskId.Value);
+            if (matchedTask != null)
+            {
+                vm.SyncFromTask(matchedTask);
+            }
+        }
+
         vm.ResolveDependencies(existingTasks);
 
         return vm;
     }
 
+    public void SyncFromTask(ForgeTask task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        CreatedTaskId = task.Id;
+        Title = task.Title ?? string.Empty;
+        Description = task.Description ?? string.Empty;
+        Priority = task.Priority > 0 ? task.Priority : TaskPriority.Normal;
+        IsAdded = task.Status != TaskOverallStatus.Draft &&
+                  task.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected);
+
+        if (task.Dependencies != null)
+        {
+            SelectedDependencyIds = task.Dependencies
+                .Select(d => d.DependsOnTaskId)
+                .Where(id => id != task.Id)
+                .Distinct()
+                .ToList();
+        }
+    }
+
     public void ResolveDependencies(IReadOnlyList<ForgeTask>? existingTasks)
     {
-        if (DependsOnTitles.Count == 0 || existingTasks == null || existingTasks.Count == 0)
+        if (CreatedTaskId.HasValue)
+        {
+            SelectedDependencyIds.RemoveAll(id => id == CreatedTaskId.Value);
+        }
+
+        if (existingTasks == null || existingTasks.Count == 0)
         {
             return;
         }
@@ -205,8 +251,13 @@ public class IdeationProposalViewModel
             SelectedDependencyIds.RemoveAll(cancelledOrRejectedIds.Contains);
         }
 
+        if (DependsOnTitles.Count == 0)
+        {
+            return;
+        }
+
         var activeTasks = existingTasks
-            .Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+            .Where(t => t.Id != CreatedTaskId && t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
             .ToList();
 
         foreach (var depTitle in DependsOnTitles)
@@ -321,7 +372,64 @@ public class IdeationSessionState
     public void RemoveProposal(IdeationProposalViewModel proposal)
     {
         Proposals.Remove(proposal);
+        if (proposal.CreatedTaskId.HasValue)
+        {
+            var removedId = proposal.CreatedTaskId.Value;
+            foreach (var remaining in Proposals)
+            {
+                remaining.SelectedDependencyIds.RemoveAll(id => id == removedId);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(proposal.Title))
+        {
+            foreach (var remaining in Proposals.Where(p => !p.IsAdded))
+            {
+                remaining.DependsOnTitles.RemoveAll(t => string.Equals(t, proposal.Title, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
         NotifyStateChanged();
+    }
+
+    public void SyncProposalsWithWorkspaceTasks(IReadOnlyList<ForgeTask>? workspaceTasks, bool removeMissing = false)
+    {
+        if (workspaceTasks == null)
+        {
+            return;
+        }
+
+        foreach (var proposal in Proposals.ToList())
+        {
+            if (proposal.CreatedTaskId.HasValue)
+            {
+                var matched = workspaceTasks.FirstOrDefault(t => t.Id == proposal.CreatedTaskId.Value);
+                if (matched == null)
+                {
+                    if (removeMissing && !proposal.IsAdded)
+                    {
+                        RemoveProposal(proposal);
+                    }
+                    continue;
+                }
+
+                if (matched.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected)
+                {
+                    if (!proposal.IsAdded)
+                    {
+                        RemoveProposal(proposal);
+                    }
+                    continue;
+                }
+
+                proposal.SyncFromTask(matched);
+            }
+
+            if (!proposal.IsAdded)
+            {
+                proposal.ResolveDependencies(workspaceTasks);
+            }
+        }
     }
 
     public void Reset()

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -8,6 +9,7 @@ using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Tools;
 
@@ -42,6 +44,11 @@ public interface IBacklogMutationToolService
     Task<string> ReworkPrioritiesAsync(BacklogToolScope scope, IReadOnlyList<TaskPriorityUpdate> updates, CancellationToken cancellationToken);
 
     Task<string> RemoveTaskAsync(BacklogToolScope scope, int taskId, string? reason, CancellationToken cancellationToken);
+
+    Task<string> ProposeTasksAsync(
+        BacklogToolScope scope,
+        IReadOnlyList<TaskProposal> proposals,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -313,6 +320,189 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         return $"Task #{task.Id} removed (status Cancelled).";
     }
 
+    public async Task<string> ProposeTasksAsync(
+        BacklogToolScope scope,
+        IReadOnlyList<TaskProposal> proposals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (proposals == null || proposals.Count == 0)
+        {
+            throw new ArgumentException("At least one task proposal must be provided.", nameof(proposals));
+        }
+
+        // Pre-validate every entry before mutating anything so a batch fails fast without partial writes.
+        foreach (var proposal in proposals)
+        {
+            if (proposal == null || string.IsNullOrWhiteSpace(proposal.Title))
+            {
+                throw new ArgumentException("Task title cannot be empty.", nameof(proposals));
+            }
+
+            ValidatePriority(proposal.Priority);
+
+            if (proposal.DependsOnIds is { Count: > 0 })
+            {
+                var distinctIds = proposal.DependsOnIds.Distinct().OrderBy(id => id).ToList();
+                await ValidateDependenciesAsync(scope, taskId: 0, distinctIds, cancellationToken);
+            }
+        }
+
+        IReadOnlyList<ForgeTask>? workspaceTasks = proposals.Any(p => p.DependsOnTitles is { Count: > 0 })
+            ? await _taskRepository.GetByWorkspaceIdAsync(scope.WorkspaceId, cancellationToken)
+            : null;
+
+        if (proposals.Count == 1)
+        {
+            var single = proposals[0];
+            var singleDeps = ResolveProposalDependencies(single, workspaceTasks, Array.Empty<ForgeTask>(), previousTaskId: null);
+            var (_, singleJson) = await ProposeSingleTaskAsync(
+                scope,
+                single.Title,
+                single.Description,
+                single.Priority,
+                singleDeps,
+                cancellationToken);
+            return singleJson;
+        }
+
+        var createdTasks = new List<JsonElement>(proposals.Count);
+        var createdEntities = new List<ForgeTask>(proposals.Count);
+        int? previousTaskId = null;
+
+        foreach (var p in proposals)
+        {
+            var deps = ResolveProposalDependencies(p, workspaceTasks, createdEntities, previousTaskId);
+
+            var (created, singleResultJson) = await ProposeSingleTaskAsync(
+                scope,
+                p.Title,
+                p.Description,
+                p.Priority,
+                deps,
+                cancellationToken);
+
+            createdEntities.Add(created);
+            previousTaskId = created.Id;
+            createdTasks.Add(JsonSerializer.Deserialize<JsonElement>(singleResultJson));
+        }
+
+        return JsonSerializer.Serialize(createdTasks, JsonOptions);
+    }
+
+    private static IReadOnlyList<int>? ResolveProposalDependencies(
+        TaskProposal proposal,
+        IReadOnlyList<ForgeTask>? workspaceTasks,
+        IReadOnlyList<ForgeTask> createdBatchTasks,
+        int? previousTaskId)
+    {
+        var deps = new List<int>();
+        if (proposal.DependsOnIds is { Count: > 0 })
+        {
+            deps.AddRange(proposal.DependsOnIds);
+        }
+
+        bool hasTitleDependencies = proposal.DependsOnTitles is { Count: > 0 };
+        if (hasTitleDependencies)
+        {
+            var activeCandidates = createdBatchTasks
+                .Concat(workspaceTasks?.Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+                    ?? Enumerable.Empty<ForgeTask>())
+                .ToList();
+
+            foreach (var rawTitle in proposal.DependsOnTitles!)
+            {
+                if (string.IsNullOrWhiteSpace(rawTitle))
+                {
+                    continue;
+                }
+
+                var trimmed = rawTitle.Trim();
+                if (int.TryParse(trimmed.TrimStart('#'), NumberStyles.None, CultureInfo.InvariantCulture, out var parsedId) && parsedId > 0)
+                {
+                    deps.Add(parsedId);
+                    continue;
+                }
+
+                var exact = activeCandidates.FirstOrDefault(t => string.Equals(t.Title, trimmed, StringComparison.OrdinalIgnoreCase));
+                if (exact != null)
+                {
+                    deps.Add(exact.Id);
+                    continue;
+                }
+
+                var partial = activeCandidates.FirstOrDefault(t =>
+                    t.Title.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.Contains(t.Title, StringComparison.OrdinalIgnoreCase));
+                if (partial != null)
+                {
+                    deps.Add(partial.Id);
+                }
+            }
+        }
+
+        if (deps.Count == 0 && !hasTitleDependencies && previousTaskId.HasValue)
+        {
+            deps.Add(previousTaskId.Value);
+        }
+
+        return deps.Count > 0 ? deps.Distinct().OrderBy(id => id).ToList() : null;
+    }
+
+    private async Task<(ForgeTask Created, string Json)> ProposeSingleTaskAsync(
+        BacklogToolScope scope,
+        string title,
+        string description,
+        int? priority = null,
+        IReadOnlyList<int>? dependsOnIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        var trimmedTitle = title?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmedTitle))
+        {
+            throw new ArgumentException("Task title cannot be empty.", nameof(title));
+        }
+
+        var effPriority = priority.HasValue ? priority.Value : TaskPriority.Normal;
+        ValidatePriority(effPriority);
+
+        IReadOnlyList<int>? validDependencies = null;
+        if (dependsOnIds != null && dependsOnIds.Count > 0)
+        {
+            var distinct = dependsOnIds.Distinct().OrderBy(id => id).ToList();
+            await ValidateDependenciesAsync(scope, taskId: 0, distinct, cancellationToken);
+            validDependencies = distinct;
+        }
+
+        var task = new ForgeTask
+        {
+            WorkspaceId = scope.WorkspaceId,
+            Title = trimmedTitle,
+            Description = description?.Trim() ?? string.Empty,
+            Status = TaskOverallStatus.Draft,
+            Priority = effPriority,
+            MergeMode = MergeMode.ManualReviewRequired,
+            BaseBranch = WorkflowDefaults.DefaultBaseBranch,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+
+        var created = await _taskRepository.CreateWithBaselineAsync(
+            task,
+            validDependencies,
+            AuditActors.IdeationAgent,
+            "Proposed draft task from ideation",
+            cancellationToken);
+
+        await SyncMarkdownAsync(scope, created, cancellationToken);
+        await BroadcastAsync(created, $"Ideation agent proposed draft task #{created.Id}: {created.Title}", CanonicalToolNames.ProposeTasks, cancellationToken);
+
+        var json = await GetTaskAsync(scope, created.Id, cancellationToken);
+        return (created, json);
+    }
+
     private IDisposable AcquireTaskLockOrThrow(int workspaceId, int taskId)
     {
         if (!_lockProvider.TryAcquireTaskLock(workspaceId, taskId, out var releaser) || releaser == null)
@@ -339,9 +529,9 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     {
         var task = await LoadTaskAsync(scope, taskId, cancellationToken);
 
-        if (task.Status is not (TaskOverallStatus.Suggested or TaskOverallStatus.Open))
+        if (task.Status is not (TaskOverallStatus.Draft or TaskOverallStatus.Suggested or TaskOverallStatus.Open))
         {
-            throw new TaskCannotBeModifiedException(taskId, $"its status is {task.Status}; only Suggested or Open tasks can be changed from ideation.");
+            throw new TaskCannotBeModifiedException(taskId, $"its status is {task.Status}; only Draft, Suggested or Open tasks can be changed from ideation.");
         }
 
         if (task.HasExecutionRun)
@@ -354,7 +544,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
     private async Task ValidateDependenciesAsync(BacklogToolScope scope, int taskId, IReadOnlyList<int> dependsOnIds, CancellationToken cancellationToken)
     {
-        if (dependsOnIds.Contains(taskId))
+        if (taskId > 0 && dependsOnIds.Contains(taskId))
         {
             throw new CircularDependencyException($"Task #{taskId} cannot depend on itself.", [taskId, taskId]);
         }

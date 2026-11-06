@@ -36,7 +36,7 @@ public sealed class IdeationRefinementService
         {
             throw new TaskCannotBeModifiedException(
                 taskId,
-                $"its status is {task.Status}{(task.HasExecutionRun ? " and it has already entered pipeline execution" : string.Empty)}; only unstarted Suggested or Open tasks can be refined.");
+                $"its status is {task.Status}{(task.HasExecutionRun ? " and it has already entered pipeline execution" : string.Empty)}; only unstarted Draft, Suggested or Open tasks can be refined.");
         }
 
         var prefix = IdeationRefinementHelper.BuildConversationTitlePrefix(taskId);

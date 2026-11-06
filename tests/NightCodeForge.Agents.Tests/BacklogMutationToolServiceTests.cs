@@ -434,5 +434,137 @@ public class BacklogMutationToolServiceTests
         Assert.Contains(taskA.Id, lockHeldDuringSync);
         Assert.False(_locks.IsTaskLocked(WorkspaceId, taskA.Id));
     }
+
+    // ---- propose_tasks ----
+
+    [Fact]
+    public async Task ProposeTasks_CreatesDraftTask_ReturnsDraftTaskJson_AndOtherToolsCanSeeIt()
+    {
+        var prereq = await AddTaskAsync("Base Prereq");
+
+        var resultJson = await _service.ProposeTasksAsync(
+            _scope,
+            [new TaskProposal("Draft Migration Task", "Initial migration details", priority: 2, dependsOnIds: [prereq.Id])],
+            cancellationToken: CancellationToken.None);
+
+        using var doc = JsonDocument.Parse(resultJson);
+        var root = doc.RootElement;
+        var createdId = root.GetProperty("id").GetInt32();
+        Assert.True(createdId > 0);
+        Assert.Equal("Draft Migration Task", root.GetProperty("title").GetString());
+        Assert.Equal("Initial migration details", root.GetProperty("description").GetString());
+        Assert.Equal("Draft", root.GetProperty("status").GetString());
+        Assert.Equal(2, root.GetProperty("priority").GetInt32());
+        Assert.Equal([prereq.Id], root.GetProperty("prerequisites").EnumerateArray().Select(e => e.GetInt32()));
+
+        var stored = await _repository.GetByIdAsync(createdId);
+        Assert.NotNull(stored);
+        Assert.Equal(TaskOverallStatus.Draft, stored.Status);
+        VerifyMarkdownSynced(createdId, Times.Once());
+
+        // 1. get_task can see draft task
+        var getJson = await _service.GetTaskAsync(_scope, createdId, CancellationToken.None);
+        using var getDoc = JsonDocument.Parse(getJson);
+        Assert.Equal(createdId, getDoc.RootElement.GetProperty("id").GetInt32());
+        Assert.Equal("Draft", getDoc.RootElement.GetProperty("status").GetString());
+
+        // 2. edit_task can edit draft task
+        var editResult = await _service.EditTaskAsync(
+            _scope,
+            new TaskEditRequest(createdId, Title: "Refined Draft Migration", Priority: 1),
+            CancellationToken.None);
+        Assert.Contains("Refined Draft Migration", editResult);
+
+        var updated = await _repository.GetByIdAsync(createdId);
+        Assert.Equal("Refined Draft Migration", updated!.Title);
+        Assert.Equal(1, updated.Priority);
+        Assert.Equal(TaskOverallStatus.Draft, updated.Status);
+
+        // 3. set_task_priority can change draft task priority
+        await _service.SetTaskPriorityAsync(_scope, createdId, 3, CancellationToken.None);
+        var reprioritized = await _repository.GetByIdAsync(createdId);
+        Assert.Equal(3, reprioritized!.Priority);
+
+        // 4. another task can depend on the draft task
+        var followUpJson = await _service.ProposeTasksAsync(
+            _scope,
+            [new TaskProposal("Follow-up Task", "Depends on draft", priority: 3, dependsOnIds: [createdId])],
+            cancellationToken: CancellationToken.None);
+        using var followDoc = JsonDocument.Parse(followUpJson);
+        var followId = followDoc.RootElement.GetProperty("id").GetInt32();
+        var followDeps = await _repository.GetDependenciesAsync(followId);
+        Assert.Contains(createdId, followDeps);
+
+        // 5. remove_task can cancel draft task after dependents are removed
+        await _service.RemoveTaskAsync(_scope, followId, "remove follow up first", CancellationToken.None);
+        var removeResult = await _service.RemoveTaskAsync(_scope, createdId, "no longer needed", CancellationToken.None);
+        Assert.Contains("status Cancelled", removeResult);
+        var cancelled = await _repository.GetByIdAsync(createdId);
+        Assert.Equal(TaskOverallStatus.Cancelled, cancelled!.Status);
+    }
+
+    [Fact]
+    public async Task ProposeTasks_MultipleProposals_CreatesSequentialDraftTasks_AndReturnsJsonArray()
+    {
+        var proposals = new List<TaskProposal>
+        {
+            new("Task 1", "First step", 2),
+            new("Task 2", "Second step", 3)
+        };
+
+        var json = await _service.ProposeTasksAsync(_scope, proposals, CancellationToken.None);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Array, doc.RootElement.ValueKind);
+        Assert.Equal(2, doc.RootElement.GetArrayLength());
+
+        var id1 = doc.RootElement[0].GetProperty("id").GetInt32();
+        var id2 = doc.RootElement[1].GetProperty("id").GetInt32();
+        Assert.Equal("Draft", doc.RootElement[0].GetProperty("status").GetString());
+        Assert.Equal("Draft", doc.RootElement[1].GetProperty("status").GetString());
+
+        var task2Deps = await _repository.GetDependenciesAsync(id2);
+        Assert.Contains(id1, task2Deps);
+    }
+
+    [Fact]
+    public async Task ProposeTasks_PreValidatesBatch_DoesNotCreatePartialTasksWhenLaterProposalIsInvalid()
+    {
+        var proposals = new List<TaskProposal>
+        {
+            new("Valid First Task", "Step 1", 2),
+            new("   ", "Invalid empty title", 3)
+        };
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _service.ProposeTasksAsync(_scope, proposals, CancellationToken.None));
+
+        var workspaceTasks = await _repository.GetByWorkspaceIdAsync(WorkspaceId);
+        Assert.Empty(workspaceTasks);
+    }
+
+    [Fact]
+    public async Task ProposeTasks_ResolvesDependsOnTitles_ToExistingAndEarlierBatchTaskIds()
+    {
+        var existing = await AddTaskAsync("Existing Auth Service");
+
+        var proposals = new List<TaskProposal>
+        {
+            new("Task A - Core Schema", "Schema", 2, dependsOnTitles: ["Existing Auth Service"]),
+            new("Task B - Worker", "Worker", 3, dependsOnTitles: ["Task A - Core Schema"]),
+            new("Task C - UI", "UI depends on A, not B", 3, dependsOnTitles: ["Task A - Core Schema", $"#{existing.Id}"])
+        };
+
+        var json = await _service.ProposeTasksAsync(_scope, proposals, CancellationToken.None);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(3, doc.RootElement.GetArrayLength());
+
+        var idA = doc.RootElement[0].GetProperty("id").GetInt32();
+        var idB = doc.RootElement[1].GetProperty("id").GetInt32();
+        var idC = doc.RootElement[2].GetProperty("id").GetInt32();
+
+        Assert.Equal([existing.Id], await _repository.GetDependenciesAsync(idA));
+        Assert.Equal([idA], await _repository.GetDependenciesAsync(idB));
+        Assert.Equal(new[] { existing.Id, idA }.OrderBy(x => x), (await _repository.GetDependenciesAsync(idC)).OrderBy(x => x));
+    }
 }
 

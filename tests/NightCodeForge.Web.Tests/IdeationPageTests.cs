@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
@@ -603,6 +603,135 @@ public class IdeationPageTests : BunitContext
             Assert.Contains(_sessionState.Messages, m => m.Role == "assistant" && m.Content.Contains("Inspected RoslynSymbolIndexProvider."));
         });
     }
+
+    [Fact]
+    public async Task AddProposalToBacklog_WhenProposalHasDraftTaskId_PromotesDraftTaskInPlace()
+    {
+        var ws = new Workspace { Id = 12, Name = "DraftPromoRepo", DefaultBaseBranch = "develop", DefaultWorkflowId = 7 };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 12;
+
+        var prereq = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 12,
+                Title = "Prereq Task",
+                Status = TaskOverallStatus.Open,
+                BaseBranch = "develop"
+            },
+            null,
+            AuditActors.User,
+            "Created");
+
+        var draft = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 12,
+                Title = "Initial Draft Title",
+                Description = "Initial Draft Description",
+                Status = TaskOverallStatus.Draft,
+                Priority = 3,
+                BaseBranch = "main"
+            },
+            null,
+            AuditActors.IdeationAgent,
+            "Draft proposed");
+
+        var proposal = new IdeationProposalViewModel
+        {
+            CreatedTaskId = draft.Id,
+            Title = "Promoted Title",
+            Description = "Promoted Description",
+            Priority = 1,
+            SelectedDependencyIds = [prereq.Id]
+        };
+        _sessionState.Proposals.Add(proposal);
+
+        var cut = Render<Ideation>();
+        Assert.Contains($"Draft #{draft.Id}", cut.Markup);
+
+        var addBtn = cut.Find("button.add-backlog-btn");
+        await cut.InvokeAsync(() => addBtn.Click());
+
+        var tasks = await _taskRepository.GetByWorkspaceIdAsync(12);
+        Assert.Equal(2, tasks.Count);
+
+        var promoted = await _taskRepository.GetByIdAsync(draft.Id);
+        Assert.NotNull(promoted);
+        Assert.Equal(TaskOverallStatus.Suggested, promoted.Status);
+        Assert.Equal("Promoted Title", promoted.Title);
+        Assert.Equal("Promoted Description", promoted.Description);
+        Assert.Equal(1, promoted.Priority);
+        Assert.Equal(7, promoted.WorkflowId);
+        Assert.Equal("develop", promoted.BaseBranch);
+        Assert.Equal([prereq.Id], await _taskRepository.GetDependenciesAsync(draft.Id));
+        Assert.True(proposal.IsAdded);
+    }
+
+    [Fact]
+    public async Task DismissProposal_WhenProposalHasDraftTask_DeletesDraftFromDbAndUnlinksRemainingProposals()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "NightCodeForge_DismissTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var ws = new Workspace { Id = 15, Name = "DismissRepo", DefaultBaseBranch = "main", RepositoryPath = tempDir };
+            _workspaceState.SetActiveWorkspace(ws);
+            _sessionState.BoundWorkspaceId = 15;
+
+            var draft1 = await _taskRepository.CreateWithBaselineAsync(
+                new ForgeTask
+                {
+                    WorkspaceId = 15,
+                    Title = "Draft 1",
+                    Description = "Step 1",
+                    Status = TaskOverallStatus.Draft,
+                    Priority = 2
+                },
+                null,
+                AuditActors.IdeationAgent,
+                "Draft proposed");
+
+            var draft2 = await _taskRepository.CreateWithBaselineAsync(
+                new ForgeTask
+                {
+                    WorkspaceId = 15,
+                    Title = "Draft 2",
+                    Description = "Step 2",
+                    Status = TaskOverallStatus.Draft,
+                    Priority = 3
+                },
+                [draft1.Id],
+                AuditActors.IdeationAgent,
+                "Draft proposed");
+
+            var vm1 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 1", "Step 1", 2, TaskId: draft1.Id));
+            var vm2 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 2", "Step 2", 3, DependsOnTitles: ["Draft 1"], TaskId: draft2.Id, DependsOnIds: [draft1.Id]));
+            _sessionState.Proposals.Add(vm1);
+            _sessionState.Proposals.Add(vm2);
+
+            var cut = Render<Ideation>();
+            var dismissButtons = cut.FindAll("button.dismiss-btn");
+            Assert.Equal(2, dismissButtons.Count);
+
+            await cut.InvokeAsync(() => dismissButtons[0].Click());
+
+            Assert.Null(await _taskRepository.GetByIdAsync(draft1.Id));
+            Assert.Empty(await _taskRepository.GetDependenciesAsync(draft2.Id));
+            Assert.Single(_sessionState.Proposals);
+            Assert.Same(vm2, _sessionState.Proposals[0]);
+            Assert.Empty(vm2.SelectedDependencyIds);
+            Assert.Equal((draft1.Id, tempDir, false), Assert.Single(_markdownSync.ArchivedOrCleanedTasks));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
 }
 
 public class MockIdeationService : IIdeationService
@@ -686,6 +815,7 @@ public class MockTaskMarkdownSyncService : ITaskMarkdownSyncService
 {
     public List<ForgeTask> SyncedTasks { get; } = new();
     public List<(ForgeTask Task, string WorkspacePath, IReadOnlyList<int>? Dependencies)> SyncTaskCalls { get; } = new();
+    public List<(int TaskId, string WorkspacePath, bool Archive)> ArchivedOrCleanedTasks { get; } = new();
 
     public Task<string> SyncTaskToDiskAsync(ForgeTask task, string workspacePath, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null, CancellationToken cancellationToken = default)
     {
@@ -700,7 +830,11 @@ public class MockTaskMarkdownSyncService : ITaskMarkdownSyncService
     public void SuppressContentHash(string content) { }
     public Task ProcessFileContentAsync(string filePath, string content, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task ProcessFileChangedAsync(string filePath, int workspaceId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-    public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive = true, CancellationToken cancellationToken = default)
+    {
+        ArchivedOrCleanedTasks.Add((task.Id, workspacePath, archive));
+        return Task.CompletedTask;
+    }
     public void StartWatching(int workspaceId, string workspacePath) { }
     public void StopWatching(int workspaceId) { }
     public void Dispose() { }

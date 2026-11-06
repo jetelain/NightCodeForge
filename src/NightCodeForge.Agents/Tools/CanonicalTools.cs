@@ -854,7 +854,7 @@ public partial class CanonicalTools
     /// </summary>
     public string ProposeTasks(IReadOnlyList<TaskProposal> tasks)
     {
-        return ProposeTasks((object?)tasks, null, null, null);
+        return ProposeTasks((object?)tasks, null, null, null, null);
     }
 
     /// <summary>
@@ -866,6 +866,116 @@ public partial class CanonicalTools
         string? description = null,
         int? priority = null)
     {
+        return ProposeTasks(tasks, title, description, priority, null);
+    }
+
+    public string ProposeTasks(
+        object? tasks = null,
+        string? title = null,
+        string? description = null,
+        int? priority = null,
+        IReadOnlyList<int>? dependsOnIds = null)
+    {
+        return ProposeTasksAsync(tasks, title, description, priority, dependsOnIds).GetAwaiter().GetResult();
+    }
+
+    public async Task<string> ProposeTasksAsync(
+        object? tasks = null,
+        string? title = null,
+        string? description = null,
+        int? priority = null,
+        IReadOnlyList<int>? dependsOnIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds);
+        if (discovered.Count == 0)
+        {
+            return "No tasks proposed.";
+        }
+
+        for (int i = 0; i < discovered.Count; i++)
+        {
+            var task = discovered[i];
+            var deps = task.DependsOnTitles?.ToList() ?? new List<string>();
+            if (deps.Count == 0 && (task.DependsOnIds == null || task.DependsOnIds.Count == 0) && i > 0 && discovered.Count > 1)
+            {
+                deps.Add(discovered[i - 1].Title);
+            }
+            discovered[i] = task with { DependsOnTitles = deps };
+        }
+
+        if (BacklogMutationService != null && _workspaceId.HasValue)
+        {
+            var (service, scope) = RequireBacklogScope(CanonicalToolNames.ProposeTasks);
+            return await ExecuteBacklogActionAsync(async () =>
+            {
+                var result = await service.ProposeTasksAsync(scope, discovered, cancellationToken);
+                if (string.IsNullOrWhiteSpace(result))
+                {
+                    PendingProposals.AddRange(discovered);
+                    return JsonSerializer.Serialize(discovered);
+                }
+
+                try
+                {
+                    using var doc = JsonDocument.Parse(result);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                    {
+                        var id = TryReadIntProperty(doc.RootElement, "id");
+                        var prereqs = TryReadIntArrayProperty(doc.RootElement, "prerequisites") ?? discovered[0].DependsOnIds;
+                        PendingProposals.Add(discovered[0] with { TaskId = id, DependsOnIds = prereqs });
+                    }
+                    else if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                    {
+                        var arr = doc.RootElement.EnumerateArray().ToList();
+                        for (int i = 0; i < discovered.Count; i++)
+                        {
+                            int? id = null;
+                            IReadOnlyList<int>? prereqs = discovered[i].DependsOnIds;
+                            if (i < arr.Count && arr[i].ValueKind == JsonValueKind.Object)
+                            {
+                                id = TryReadIntProperty(arr[i], "id");
+                                prereqs = TryReadIntArrayProperty(arr[i], "prerequisites") ?? prereqs;
+                            }
+                            PendingProposals.Add(discovered[i] with { TaskId = id, DependsOnIds = prereqs });
+                        }
+                    }
+                    else
+                    {
+                        PendingProposals.AddRange(discovered);
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Fallback when a stubbed or custom service returns a non-JSON payload.
+                    PendingProposals.AddRange(discovered);
+                }
+
+                return result;
+            });
+        }
+
+        for (int i = 0; i < discovered.Count; i++)
+        {
+            PendingProposals.Add(discovered[i]);
+        }
+
+        if (discovered.Count == 1)
+        {
+            return JsonSerializer.Serialize(PendingProposals.Last(), new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        var json = JsonSerializer.Serialize(PendingProposals, new JsonSerializerOptions { WriteIndented = true });
+        return $"Proposed {discovered.Count} backlog task(s):\n{json}";
+    }
+
+    private static List<TaskProposal> ExtractTaskProposals(
+        object? tasks = null,
+        string? title = null,
+        string? description = null,
+        int? priority = null,
+        IReadOnlyList<int>? dependsOnIds = null)
+    {
         var discovered = new List<TaskProposal>();
 
         if (!string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(description))
@@ -873,7 +983,7 @@ public partial class CanonicalTools
             var effectiveTitle = !string.IsNullOrWhiteSpace(title) && !string.Equals(title.Trim(), "Task", StringComparison.OrdinalIgnoreCase)
                 ? title.Trim()
                 : DeriveTitleFromDescription(description);
-            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority ?? TaskPriority.Normal));
+            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds));
         }
 
         if (tasks != null)
@@ -895,9 +1005,9 @@ public partial class CanonicalTools
                         using var doc = JsonDocument.Parse(str);
                         discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
                     }
-                    catch
+                    catch (JsonException)
                     {
-                        // Ignore parse error
+                        // Ignore non-JSON string input
                     }
                 }
             }
@@ -909,31 +1019,14 @@ public partial class CanonicalTools
                     using var doc = JsonDocument.Parse(jsonStr);
                     discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
                 }
-                catch
+                catch (JsonException)
                 {
-                    // Ignore parse error
+                    // Ignore non-JSON serialized input
                 }
             }
         }
 
-        if (discovered.Count == 0)
-        {
-            return "No tasks proposed.";
-        }
-
-        for (int i = 0; i < discovered.Count; i++)
-        {
-            var task = discovered[i];
-            var deps = task.DependsOnTitles?.ToList() ?? new List<string>();
-            if (deps.Count == 0 && i > 0 && discovered.Count > 1)
-            {
-                deps.Add(discovered[i - 1].Title);
-            }
-            PendingProposals.Add(task with { DependsOnTitles = deps });
-        }
-
-        var json = JsonSerializer.Serialize(PendingProposals, new JsonSerializerOptions { WriteIndented = true });
-        return $"Proposed {discovered.Count} backlog task(s):\n{json}";
+        return discovered;
     }
 
     private static List<TaskProposal> ParseJsonElementTasks(JsonElement element)
@@ -1013,8 +1106,45 @@ public partial class CanonicalTools
             deps = new List<string>();
             foreach (var dep in depsProp.EnumerateArray())
             {
-                var depStr = dep.GetString();
-                if (!string.IsNullOrEmpty(depStr)) deps.Add(depStr);
+                if (dep.ValueKind == JsonValueKind.String)
+                {
+                    var depStr = dep.GetString();
+                    if (!string.IsNullOrWhiteSpace(depStr)) deps.Add(depStr.Trim());
+                }
+                else if (dep.ValueKind == JsonValueKind.Number && dep.TryGetInt32(out var depNum))
+                {
+                    deps.Add(depNum.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+            }
+        }
+
+        List<int>? depIds = null;
+        if ((item.TryGetProperty("depends_on_ids", out var depIdsProp) || item.TryGetProperty("dependsOnIds", out depIdsProp)) && depIdsProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var dep in depIdsProp.EnumerateArray())
+            {
+                if (dep.ValueKind == JsonValueKind.Number && dep.TryGetInt32(out var parsedId))
+                {
+                    depIds ??= new List<int>();
+                    depIds.Add(parsedId);
+                }
+                else if (dep.ValueKind == JsonValueKind.String)
+                {
+                    var raw = dep.GetString()?.Trim();
+                    if (int.TryParse(raw?.TrimStart('#'), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsedStrId))
+                    {
+                        depIds ??= new List<int>();
+                        depIds.Add(parsedStrId);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        deps ??= new List<string>();
+                        if (!deps.Contains(raw, StringComparer.OrdinalIgnoreCase))
+                        {
+                            deps.Add(raw);
+                        }
+                    }
+                }
             }
         }
 
@@ -1024,7 +1154,33 @@ public partial class CanonicalTools
             type = ty.GetString() ?? "feature";
         }
 
-        return new TaskProposal(title, desc, type, null, null, priority, deps);
+        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds);
+    }
+
+    private static int? TryReadIntProperty(JsonElement obj, string propertyName)
+    {
+        return obj.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var val)
+            ? val
+            : null;
+    }
+
+    private static IReadOnlyList<int>? TryReadIntArrayProperty(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out var prop) || prop.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var list = new List<int>();
+        foreach (var el in prop.EnumerateArray())
+        {
+            if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var id))
+            {
+                list.Add(id);
+            }
+        }
+
+        return list.Count > 0 ? list : null;
     }
 
     private static string DeriveTitleFromDescription(string? description)

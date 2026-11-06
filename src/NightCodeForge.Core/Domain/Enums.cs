@@ -61,6 +61,7 @@ public enum SandboxSecurityTier
 /// </summary>
 public enum TaskOverallStatus
 {
+    Draft = -1,            // Proposed during ideation session; unconfirmed draft
     Suggested = 0,         // Newly created (via triage agent, ideation chat, or docs/tasks/*.md)
     Rejected = 1,          // Manually rejected by maintainer
     Open = 2,              // Approved by maintainer; eligible for processing once dependencies are Closed

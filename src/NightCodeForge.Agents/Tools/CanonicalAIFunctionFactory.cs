@@ -178,15 +178,17 @@ public static class CanonicalAIFunctionFactory
                 "Asks clarifying questions to the human user when blocked. Consolidate all requirements, ambiguities, and architectural questions into a single batched call."),
 
             AIFunctionFactory.Create(
-                ([Description("List of structured backlog task proposals")] object? tasks = null,
+                ([Description("List of structured backlog task proposals, or omit for single task")] object? tasks = null,
                  [Description("Task title if single proposal")] string? title = null,
                  [Description("Task description with functional scope, acceptance criteria, and testing plan if single proposal")] string? description = null,
-                 [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null) =>
+                 [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null,
+                 [Description("Prerequisite task IDs")] IReadOnlyList<int>? depends_on_ids = null,
+                 CancellationToken ct = default) =>
                     tools != null
-                        ? tools.ProposeTasks(tasks, title, description, priority)
+                        ? tools.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, ct)
                         : throw new InvalidOperationException(MissingToolsInstanceMessage),
                 CanonicalToolNames.ProposeTasks,
-                "Proposes structured backlog items for triage and discovery. Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description."),
+                "Proposes structured backlog tasks for triage and discovery. Returns the draft task(s) created with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description. Subsequent tasks can reference earlier created IDs in depends_on_ids."),
 
             AIFunctionFactory.Create(
                 ([Description("Detailed critique and rework feedback for the implementation agent")] string feedback,

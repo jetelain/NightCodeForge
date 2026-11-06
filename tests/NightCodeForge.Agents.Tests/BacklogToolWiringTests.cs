@@ -25,6 +25,7 @@ public class BacklogToolWiringTests
         service.Setup(s => s.SetTaskPriorityAsync(It.IsAny<BacklogToolScope>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync("prio");
         service.Setup(s => s.ReworkPrioritiesAsync(It.IsAny<BacklogToolScope>(), It.IsAny<IReadOnlyList<TaskPriorityUpdate>>(), It.IsAny<CancellationToken>())).ReturnsAsync("rework");
         service.Setup(s => s.RemoveTaskAsync(It.IsAny<BacklogToolScope>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>())).ReturnsAsync("removed");
+        service.Setup(s => s.ProposeTasksAsync(It.IsAny<BacklogToolScope>(), It.IsAny<IReadOnlyList<TaskProposal>>(), It.IsAny<CancellationToken>())).ReturnsAsync("[{\"id\":101,\"title\":\"Draft\"}]");
         if (attachService)
         {
             tools.BacklogMutationService = service.Object;
@@ -295,5 +296,81 @@ public class BacklogToolWiringTests
         Assert.Equal(2, ex.Questions.Count);
         Assert.Equal("Q1", ex.Questions[0].Prompt);
         Assert.Equal("Q2", ex.Questions[1].Prompt);
+    }
+
+    [Fact]
+    public async Task Dispatcher_RoutesProposeTaskAliasToServiceWithWorkspaceScope()
+    {
+        var (tools, service) = CreateTools();
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        var result = await dispatcher.ExecuteAsync(
+            "propose_task",
+            "{\"title\": \"New Feature\", \"description\": \"Feature description\", \"priority\": 2, \"depends_on_ids\": [1, \"#3\"]}");
+
+        Assert.Equal("[{\"id\":101,\"title\":\"Draft\"}]", result);
+        service.Verify(s => s.ProposeTasksAsync(
+            It.Is<BacklogToolScope>(sc => sc.WorkspaceId == WorkspaceId),
+            It.Is<IReadOnlyList<TaskProposal>>(list =>
+                list.Count == 1 &&
+                list[0].Title == "New Feature" &&
+                list[0].Description == "Feature description" &&
+                list[0].Priority == 2 &&
+                list[0].DependsOnIds != null &&
+                list[0].DependsOnIds!.SequenceEqual(new[] { 1, 3 })),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Dispatcher_RoutesProposeTasksToServiceWithWorkspaceScope()
+    {
+        var (tools, service) = CreateTools();
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        var result = await dispatcher.ExecuteAsync(
+            "propose_tasks",
+            "{\"tasks\": [{\"title\": \"Task 1\", \"priority\": 1}, {\"title\": \"Task 2\", \"depends_on_ids\": [1]}]}");
+
+        Assert.Equal("[{\"id\":101,\"title\":\"Draft\"}]", result);
+        service.Verify(s => s.ProposeTasksAsync(
+            It.Is<BacklogToolScope>(sc => sc.WorkspaceId == WorkspaceId),
+            It.Is<IReadOnlyList<TaskProposal>>(list =>
+                list.Count == 2 &&
+                list[0].Title == "Task 1" &&
+                list[0].Priority == 1 &&
+                list[1].Title == "Task 2" &&
+                list[1].Priority == TaskPriority.Normal &&
+                list[1].DependsOnIds != null &&
+                list[1].DependsOnIds!.SequenceEqual(new[] { 1 })),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Dispatcher_ProposeTasks_WithStringTitleInDependsOnAlias_PreservesDependsOnTitlesAndSyncsPrerequisites()
+    {
+        var (tools, service) = CreateTools();
+        service.Setup(s => s.ProposeTasksAsync(It.IsAny<BacklogToolScope>(), It.IsAny<IReadOnlyList<TaskProposal>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("[{\"id\":201,\"title\":\"Task A\",\"prerequisites\":[]},{\"id\":202,\"title\":\"Task B\",\"prerequisites\":[201]}]");
+
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        var result = await dispatcher.ExecuteAsync(
+            "propose_tasks",
+            "{\"tasks\": [{\"title\": \"Task A\", \"priority\": 1}, {\"title\": \"Task B\", \"depends_on\": [\"Task A\"]}]}");
+
+        Assert.Contains("202", result?.ToString());
+        service.Verify(s => s.ProposeTasksAsync(
+            It.Is<BacklogToolScope>(sc => sc.WorkspaceId == WorkspaceId),
+            It.Is<IReadOnlyList<TaskProposal>>(list =>
+                list.Count == 2 &&
+                list[1].Title == "Task B" &&
+                list[1].DependsOnTitles != null &&
+                list[1].DependsOnTitles!.SequenceEqual(new[] { "Task A" })),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        Assert.Equal(2, tools.PendingProposals.Count);
+        Assert.Equal(201, tools.PendingProposals[0].TaskId);
+        Assert.Equal(202, tools.PendingProposals[1].TaskId);
+        Assert.Equal(new[] { 201 }, tools.PendingProposals[1].DependsOnIds);
     }
 }

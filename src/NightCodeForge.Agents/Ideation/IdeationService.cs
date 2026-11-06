@@ -223,23 +223,23 @@ When proposing implementation tasks to the developer, adhere to the following ru
 
 4. TASK PROPOSAL INVOCATION:
    - When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response.
-   - Instead, invoke the 'propose_tasks' tool with your proposed tasks (each having title, description, and optional priority).
+   - Instead, invoke the 'propose_tasks' tool with your proposed task(s). Proposing tasks creates draft task(s) and returns their details and numeric IDs so you can reference them in subsequent calls (e.g. dependencies, edit_task, etc.).
    - Structure each task's description with clear Markdown sections (## Summary, ## Functional Scope / Sub-tasks, ## Acceptance Criteria, ## Testing Plan).
-   - If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically (or via dependsOnTitles).
+   - If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically (or via depends_on_ids / dependsOnTitles).
    - After proposing tasks, explain your proposal and architectural rationale clearly to the developer.
 
 5. EXISTING BACKLOG & ISSUE AWARENESS:
    - Existing backlog tasks and issues are maintained as Markdown specifications in 'docs/tasks/'.
    - Before proposing new tasks, inspect 'docs/tasks/' (using 'read' or 'bash' e.g. ls docs/tasks) to understand currently planned, in-progress, or completed work.
    - Do NOT propose duplicate tasks for issues already present in the backlog.
-   - You may reference existing task IDs or link dependencies (via dependsOnTitles) to existing backlog tasks when planning follow-ups or prerequisite work.
+   - You may reference existing task IDs or link dependencies (via depends_on_ids or dependsOnTitles) to existing backlog tasks when planning follow-ups or prerequisite work.
 
 6. DEPENDENCY IDENTIFICATION:
 <dependency_identification_rules>
 When planning or proposing tasks:
 1. Cross-reference your ideas against the `<existing_workspace_tasks>` list above (which contains top active backlog tasks ordered by priority).
 2. DO NOT propose duplicate tasks for capabilities already captured in existing tasks or already merged in the codebase.
-3. If your proposed task builds on, calls, or extends interfaces or data models introduced in an existing open/suggested task, you MUST set 'dependsOnTitles' in your 'propose_tasks' call with the title or numeric ID (e.g., '#101' or '101') of the prerequisite task.
+3. If your proposed task builds on, calls, or extends interfaces or data models introduced in an existing open, suggested, or draft task, you MUST set 'depends_on_ids' in your 'propose_tasks' call (or 'dependsOnTitles') with the numeric ID (or title) of the prerequisite task.
 4. Explain to the developer why this dependency exists and the recommended order of execution.
 5. AVOID CIRCULAR DEPENDENCIES: Ensure your dependencies form a strict acyclic graph. Circular dependencies will be rejected with an error.
 </dependency_identification_rules>
@@ -251,7 +251,7 @@ You cannot edit repository files or 'docs/tasks/*.md' directly. Existing backlog
 - 'edit_task' (task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?): refine an existing task. Omitted arguments are unchanged; 'description' and 'depends_on_ids' replace the existing value, so start from the 'get_task' output. Resolve functional questions with the maintainer ('ask') BEFORE calling it.
 - 'set_task_priority' (task_id, priority) and 'rework_priorities' (updates: [{ task_id, priority }]): change priority tiers (1 Critical to 5 Trivial) of one or several tasks; prefer 'rework_priorities' when reordering several tasks.
 - 'remove_task' (task_id, reason): cancel a task that is obsolete or duplicated. It is refused while active tasks depend on it; re-link or remove those dependents first.
-Only tasks that are Suggested or Open, never executed, and not currently running can be changed. Tasks that already entered the pipeline (or are Reviewed, Implemented, Ready, Closed, Rejected, Cancelled) are rejected with an error: do not retry, create a follow-up task via 'propose_tasks' instead. Never mutate the backlog without the maintainer's agreement; summarize every change you made afterwards.
+Only tasks that are Draft, Suggested or Open, never executed, and not currently running can be changed. Tasks that already entered the pipeline (or are Reviewed, Implemented, Ready, Closed, Rejected, Cancelled) are rejected with an error: do not retry, create a follow-up task via 'propose_tasks' instead. Never mutate the backlog without the maintainer's agreement; summarize every change you made afterwards.
 </backlog_management_guidelines>";
 
         var toolset = await _toolsetFactory.CreateAsync(
@@ -487,7 +487,7 @@ Only tasks that are Suggested or Open, never executed, and not currently running
                             {
                                 if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
-                                    var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
+                                    var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds);
                                     sessionProposals.Add(ideationProp);
                                     yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                                     await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -564,7 +564,7 @@ Only tasks that are Suggested or Open, never executed, and not currently running
                         {
                             if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                             {
-                                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
+                                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds);
                                 sessionProposals.Add(ideationProp);
                                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                                 await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -611,7 +611,7 @@ Only tasks that are Suggested or Open, never executed, and not currently running
         {
             if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
             {
-                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles);
+                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds);
                 sessionProposals.Add(ideationProp);
                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                 await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);

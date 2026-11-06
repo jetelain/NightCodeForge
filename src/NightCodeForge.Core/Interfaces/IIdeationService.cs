@@ -6,7 +6,9 @@ public record IdeationProposal(
     string Title,
     string Description,
     int Priority = TaskPriority.Normal,
-    IReadOnlyList<string>? DependsOnTitles = null);
+    IReadOnlyList<string>? DependsOnTitles = null,
+    int? TaskId = null,
+    IReadOnlyList<int>? DependsOnIds = null);
 
 public record IdeationToolCallInfo(
     string ToolCallId,

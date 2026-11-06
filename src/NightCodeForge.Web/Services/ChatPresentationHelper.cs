@@ -33,7 +33,7 @@ public static class ChatPresentationHelper
             "grep_search" or "find_files" or "find" or "search" => "🔍",
             "list_dir" or "ls" or "list_directory" => "📁",
             "web_search" or "search_web" or "read_url_content" => "🌐",
-            "propose_tasks" => "📋",
+            "propose_task" or "propose_tasks" => "📋",
             "ask" or "ask_question" => "❓",
             _ => "⚙️"
         };

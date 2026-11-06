@@ -12,10 +12,10 @@ public static class IdeationRefinementHelper
 
     private const string IdeationRoute = "ideation";
 
-    /// <summary>Only unstarted tasks (Suggested/Open without any execution run) can be refined from ideation.</summary>
+    /// <summary>Only unstarted tasks (Draft/Suggested/Open without any execution run) can be refined from ideation.</summary>
     public static bool CanRefine(ForgeTask? task) =>
         task != null
-        && task.Status is TaskOverallStatus.Suggested or TaskOverallStatus.Open
+        && task.Status is TaskOverallStatus.Draft or TaskOverallStatus.Suggested or TaskOverallStatus.Open
         && !task.HasExecutionRun;
 
     public static string BuildRefineUrl(ForgeTask task) =>

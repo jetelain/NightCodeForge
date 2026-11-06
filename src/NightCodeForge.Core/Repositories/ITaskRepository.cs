@@ -466,6 +466,23 @@ public class InMemoryTaskRepository : ITaskRepository
         {
             _tasks.Remove(id);
             _dependencies.Remove(id);
+            foreach (var depList in _dependencies.Values)
+            {
+                depList.RemoveAll(depId => depId == id);
+            }
+            foreach (var remainingTask in _tasks.Values)
+            {
+                if (remainingTask.Dependencies != null)
+                {
+                    var linksToRemove = remainingTask.Dependencies
+                        .Where(d => d.DependsOnTaskId == id || d.TaskId == id)
+                        .ToList();
+                    foreach (var link in linksToRemove)
+                    {
+                        remainingTask.Dependencies.Remove(link);
+                    }
+                }
+            }
             _taskHistories.Remove(id);
             var convsToRemove = _conversations.Values.Where(c => c.TaskId == id).Select(c => c.Id).ToList();
             foreach (var convId in convsToRemove)

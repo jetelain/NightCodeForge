@@ -429,4 +429,44 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Single(reloaded.Checkpoints);
         Assert.Equal(string.Empty, reloaded.Checkpoints.First().SerializedMemory);
     }
+
+    [Fact]
+    public async Task DeleteAsync_WhenTaskHasDependentTasks_RemovesDependencyRowsAndDeletesTask()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
+
+        var workspace = new Workspace { Name = "DeleteWithDepsWs", RepositoryPath = "/tmp/ws" };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var draft1 = await repo.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = "Draft 1",
+                Status = TaskOverallStatus.Draft
+            },
+            null,
+            AuditActors.IdeationAgent,
+            "Draft proposed");
+
+        var draft2 = await repo.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = "Draft 2",
+                Status = TaskOverallStatus.Draft
+            },
+            [draft1.Id],
+            AuditActors.IdeationAgent,
+            "Draft proposed");
+
+        Assert.Equal([draft1.Id], await repo.GetDependenciesAsync(draft2.Id));
+
+        await repo.DeleteAsync(draft1.Id);
+
+        Assert.Null(await repo.GetByIdAsync(draft1.Id));
+        Assert.Empty(await repo.GetDependenciesAsync(draft2.Id));
+    }
 }

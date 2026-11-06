@@ -51,6 +51,7 @@ public class IdeationRefinementTests : BunitContext
     }
 
     [Theory]
+    [InlineData(TaskOverallStatus.Draft, false, true)]
     [InlineData(TaskOverallStatus.Suggested, false, true)]
     [InlineData(TaskOverallStatus.Open, false, true)]
     [InlineData(TaskOverallStatus.Open, true, false)]

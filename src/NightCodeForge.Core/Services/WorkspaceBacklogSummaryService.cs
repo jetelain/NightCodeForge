@@ -39,6 +39,7 @@ public class WorkspaceBacklogSummaryService : IWorkspaceBacklogSummaryService
 
     private static readonly TaskOverallStatus[] ActiveStatuses =
     {
+        TaskOverallStatus.Draft,
         TaskOverallStatus.Suggested,
         TaskOverallStatus.Open,
         TaskOverallStatus.Reviewed,

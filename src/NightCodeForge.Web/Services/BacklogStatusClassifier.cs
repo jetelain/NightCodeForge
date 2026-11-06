@@ -24,7 +24,7 @@ public static class BacklogStatusClassifier
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        if (task.Status == TaskOverallStatus.Suggested)
+        if (task.Status is TaskOverallStatus.Draft or TaskOverallStatus.Suggested)
             return BacklogKanbanColumn.Suggested;
 
         if (task.Status == TaskOverallStatus.Ready)

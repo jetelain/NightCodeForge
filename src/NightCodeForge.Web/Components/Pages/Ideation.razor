@@ -10,6 +10,7 @@
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
 @inject IdeationRefinementService RefinementService
+@inject ILogger<Ideation> Logger
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @implements IDisposable
@@ -487,7 +488,7 @@
                                               Proposal="proposal" 
                                               WorkspaceTasks="_workspaceTasks" 
                                               OnAddToBacklog="AddProposalToBacklogAsync" 
-                                              OnDismiss="DismissProposal" />
+                                              OnDismiss="DismissProposalAsync" />
                     }
                 }
             </div>
@@ -826,7 +827,9 @@
                         {
                             foreach (var p in proposals)
                             {
-                                if (!Session.Proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                if (!Session.Proposals.Any(existing =>
+                                    (p.TaskId.HasValue && existing.CreatedTaskId == p.TaskId) ||
+                                    string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
                                     Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
                                 }
@@ -840,6 +843,8 @@
                 }
             }
         }
+
+        Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks, removeMissing: true);
 
         if (pendingParts.Count > 0 || pendingTools.Count > 0)
         {
@@ -1132,10 +1137,7 @@
                         if (!comp.IsError && ws != null && BacklogMutationCardParser.IsBacklogMutationTool(comp.ToolName))
                         {
                             _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
-                            foreach (var pending in Session.Proposals.Where(p => !p.IsAdded))
-                            {
-                                pending.ResolveDependencies(_workspaceTasks);
-                            }
+                            Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
                         }
                         StateHasChanged();
                         break;
@@ -1169,10 +1171,17 @@
 
                     case IdeationStreamUpdateKind.ProposalDiscovered when update.Proposal != null:
                         discoveredProposalsThisTurn.Add(update.Proposal);
+                        if (update.Proposal.TaskId.HasValue && ws != null)
+                        {
+                            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
+                        }
                         var newVm = IdeationProposalViewModel.FromProposal(update.Proposal, _workspaceTasks);
-                        if (!Session.Proposals.Any(p => string.Equals(p.Title, newVm.Title, StringComparison.OrdinalIgnoreCase)))
+                        if (!Session.Proposals.Any(p =>
+                            (newVm.CreatedTaskId.HasValue && p.CreatedTaskId == newVm.CreatedTaskId) ||
+                            string.Equals(p.Title, newVm.Title, StringComparison.OrdinalIgnoreCase)))
                         {
                             Session.Proposals.Add(newVm);
+                            Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
                             ToastService.Show("New Proposal Discovered", newVm.Title, ToastLevel.Info);
                             StateHasChanged();
                         }
@@ -1186,12 +1195,16 @@
                         {
                             foreach (var p in update.FinalResult.ProposedTasks)
                             {
-                                if (!discoveredProposalsThisTurn.Any(d => string.Equals(d.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                if (!discoveredProposalsThisTurn.Any(d =>
+                                    (p.TaskId.HasValue && d.TaskId == p.TaskId) ||
+                                    string.Equals(d.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
                                     discoveredProposalsThisTurn.Add(p);
                                 }
 
-                                if (!Session.Proposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                if (!Session.Proposals.Any(existing =>
+                                    (p.TaskId.HasValue && existing.CreatedTaskId == p.TaskId) ||
+                                    string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
                                     Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
                                 }
@@ -1401,39 +1414,11 @@
 
         try
         {
-            int? workflowId = workspace.DefaultWorkflowId;
-            if (!workflowId.HasValue || workflowId.Value <= 0)
-            {
-                try
-                {
-                    var defaultWorkflow = await WorkflowRepository.GetDefaultWorkflowWithStagesAsync();
-                    workflowId = defaultWorkflow?.Id;
-                }
-                catch
-                {
-                    // Default fallback
-                }
-            }
-
-            var newTask = new ForgeTask
-            {
-                WorkspaceId = workspace.Id,
-                WorkflowId = workflowId,
-                Title = proposal.Title.Trim(),
-                Description = proposal.Description.Trim(),
-                Status = TaskOverallStatus.Suggested,
-                Priority = proposal.Priority,
-                MergeMode = MergeMode.ManualReviewRequired,
-                BaseBranch = string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? "main" : workspace.DefaultBaseBranch,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            var created = await TaskRepository.CreateWithBaselineAsync(
-                newTask,
-                proposal.SelectedDependencyIds,
-                AuditActors.IdeationAgent,
-                "Created task proposal from Ideation");
+            var created = await IdeationPresentationHelper.PromoteOrCreateProposalTaskAsync(
+                workspace,
+                proposal,
+                TaskRepository,
+                WorkflowRepository);
 
             // Sync markdown task file to docs/tasks/
             if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
@@ -1453,11 +1438,7 @@
 
             // Refresh existing workspace tasks so subsequent proposals can link to this new task
             _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
-
-            foreach (var pending in Session.Proposals.Where(p => !p.IsAdded))
-            {
-                pending.ResolveDependencies(_workspaceTasks);
-            }
+            Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
 
             ToastService.Show("Added to Backlog", $"ForgeTask #{created.Id} created with status Suggested.", ToastLevel.Success);
             StateHasChanged();
@@ -1486,9 +1467,22 @@
         ToastService.Show("All Proposals Ingested", $"Successfully added {addedCount} proposal(s) sequentially into the backlog.", ToastLevel.Success);
     }
 
-    private void DismissProposal(IdeationProposalViewModel proposal)
+    private async Task DismissProposalAsync(IdeationProposalViewModel proposal)
     {
+        var workspace = WorkspaceState.ActiveWorkspace;
+        await IdeationPresentationHelper.PurgeDraftProposalAsync(
+            workspace,
+            proposal,
+            TaskRepository,
+            MarkdownSync,
+            Logger);
+
         Session.RemoveProposal(proposal);
+        if (workspace != null && proposal.CreatedTaskId.HasValue)
+        {
+            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
+        }
+
         ToastService.Show("Proposal Dismissed", $"Proposal '{proposal.Title}' removed.", ToastLevel.Info);
     }
 

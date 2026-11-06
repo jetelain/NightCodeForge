@@ -456,7 +456,9 @@
         _isLoading = true;
         try
         {
-            var tasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
+            var tasks = (await TaskRepository.GetByWorkspaceIdAsync(active.Id))
+                .Where(t => t.Status != TaskOverallStatus.Draft)
+                .ToList();
             _allTasks = tasks.OrderBy(t => t.Priority).ThenBy(t => t.CreatedAt).ToList();
 
             var deps = await DependencyStore.GetDependenciesForWorkspaceAsync(active.Id);

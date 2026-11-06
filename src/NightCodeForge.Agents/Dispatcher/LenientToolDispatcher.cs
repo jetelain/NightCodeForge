@@ -297,7 +297,22 @@ public static class NightCodeForgeToolDispatcher
         var mapping = new ToolMapping
         {
             Aliases = new HashSet<string>(
-                ["create_tasks", "add_tasks", "propose_follow_up", "follow_up_tasks", "new_tasks", "propose_task", "proposetasks", "submit_tasks", "propose_backlog", "create_task", "add_task"],
+                [
+                    "propose_task",
+                    "proposetask",
+                    "propose_single_task",
+                    "create_task",
+                    "create_tasks",
+                    "add_task",
+                    "add_tasks",
+                    "new_task",
+                    "new_tasks",
+                    "proposetasks",
+                    "submit_tasks",
+                    "propose_backlog",
+                    "propose_follow_up",
+                    "follow_up_tasks"
+                ],
                 StringComparer.OrdinalIgnoreCase)
         };
 
@@ -305,11 +320,13 @@ public static class NightCodeForgeToolDispatcher
         mapping.AddParameterAliases("title", ["name", "task_title", "summary", "header"]);
         mapping.AddParameterAliases("description", ["desc", "details", "body", "prompt", "specification", "spec", "content"]);
         mapping.AddParameterAliases("priority", ["prio", "order", "rank", "importance"]);
+        mapping.AddParameterAliases("depends_on_ids", DependsOnIdsAliases);
 
         mapping.AddNestedParameterAlias("tasks", "title", "name", "summary", "task_title", "header");
         mapping.AddNestedParameterAlias("tasks", "description", "desc", "details", "body", "content", "spec", "specification", "prompt");
         mapping.AddNestedParameterAlias("tasks", "priority", "prio", "order", "rank", "importance");
         mapping.AddNestedParameterAlias("tasks", "dependsOnTitles", "depends_on_titles", "dependsOnIndices", "depends_on_indices", "depends_on", "dependsOn", "dependencies", "deps");
+        mapping.AddNestedParameterAlias("tasks", "depends_on_ids", DependsOnIdsAliases);
 
         config.Tools[CanonicalToolNames.ProposeTasks] = mapping;
     }
