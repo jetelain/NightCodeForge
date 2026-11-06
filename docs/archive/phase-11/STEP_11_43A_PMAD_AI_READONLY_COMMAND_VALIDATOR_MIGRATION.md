@@ -1,11 +1,11 @@
 # 🛡️ Step 11.43A: `Pmad.AI` 0.0.2 Upgrade & `ReadOnlyCommandValidator` Guardrail Migration
 
 > **Bug Fix, Security Hardening & Library Consolidation Step (Read-Only Shell Guardrails)**  
-> *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
-> *Target Projects:* [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
+> *Target Projects:* [`src/NightCodeForge.Agents`](../../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)  
 > *Related Steps:* [Step 11.43B: `Pmad.AI` `LenientToolDispatcher` & Delegating Chat Client Migration](STEP_11_43B_PMAD_AI_LENIENT_TOOL_DISPATCHER_AND_DELEGATING_CHAT_CLIENT_MIGRATION.md), [Step 11.38C: Shared Agent Session & Toolset Factorization](STEP_11_38C_CRUCIBLE_AND_IDEATION_SHARED_SESSION_AND_TOOLSET_FACTORIZATION.md)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -13,7 +13,7 @@
 
 ## 1. Problem Statement & Motivation
 
-`NightCodeForge.Agents` currently maintains an in-repo static [`ReadOnlyCommandValidator`](../../src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs) (~382 lines) used to enforce read-only `bash` execution during exploratory stages (`task-review`, `ideation`, and read-only review/diagnostic contexts).
+`NightCodeForge.Agents` currently maintains an in-repo static [`ReadOnlyCommandValidator`](../../../src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs) (~382 lines) used to enforce read-only `bash` execution during exploratory stages (`task-review`, `ideation`, and read-only review/diagnostic contexts).
 
 Compared to the hardened [`Pmad.AI.Guardrails.ReadOnlyCommandValidator`](file:///C:/Users/Julien/source/repos/jetelain/PmadAI/src/Pmad.AI/Guardrails/ReadOnlyCommandValidator.cs) (~1,280 lines) introduced in `Pmad.AI` `0.0.2`, the in-repo validator has several security and maintenance gaps:
 
@@ -30,12 +30,12 @@ Compared to the hardened [`Pmad.AI.Guardrails.ReadOnlyCommandValidator`](file://
 
 ### 2.1 Package Reference (`Pmad.AI` `0.0.2`)
 
-1. Add the `Pmad.AI` `0.0.2` NuGet package reference (`<PackageReference Include="Pmad.AI" Version="0.0.2" />`) to [`src/NightCodeForge.Agents/NightCodeForge.Agents.csproj`](../../src/NightCodeForge.Agents/NightCodeForge.Agents.csproj).
+1. Add the `Pmad.AI` `0.0.2` NuGet package reference (`<PackageReference Include="Pmad.AI" Version="0.0.2" />`) to [`src/NightCodeForge.Agents/NightCodeForge.Agents.csproj`](../../../src/NightCodeForge.Agents/NightCodeForge.Agents.csproj).
 
 ### 2.2 NightCodeForge `ReadOnlyCommandValidator` Configuration
 
 1. **Clean-Break Replacement:**
-   - Remove the custom regex/token parsing implementation in [`src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs`](../../src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs).
+   - Remove the custom regex/token parsing implementation in [`src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs`](../../../src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs).
    - Provide a shared, pre-configured `Pmad.AI.Guardrails.ReadOnlyCommandValidator` instance (or factory/wrapper in `NightCodeForge.Agents.Tools`) configured via `ReadOnlyCommandValidatorOptions` (`Dialect = ShellDialect.Bash`).
 
 2. **Allowed Read-Only Binaries (`AllowedBinaries`):**
@@ -71,7 +71,7 @@ Compared to the hardened [`Pmad.AI.Guardrails.ReadOnlyCommandValidator`](file://
 
 ### 2.3 Integration in `CanonicalTools.BashAsync`
 
-1. In [`CanonicalTools.BashAsync`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs), when the toolset is operating in read-only mode (`_isReadOnly == true`):
+1. In [`CanonicalTools.BashAsync`](../../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs), when the toolset is operating in read-only mode (`_isReadOnly == true`):
    - Validate the incoming command using the configured `Pmad.AI.Guardrails.ReadOnlyCommandValidator`.
    - When validation fails (`!result.IsAllowed`), log the warning and return the diagnostic violation message `$"[READ-ONLY VIOLATION]: {result.Reason}"` (without throwing an unhandled exception or invoking `IExecutionEnvironment`), preserving canonical tool message feedback to the agent.
 
@@ -79,7 +79,7 @@ Compared to the hardened [`Pmad.AI.Guardrails.ReadOnlyCommandValidator`](file://
 
 ## 3. Verification & Test Strategy
 
-Update [`tests/NightCodeForge.Agents.Tests/ReadOnlyCommandValidatorTests.cs`](../../tests/NightCodeForge.Agents.Tests/ReadOnlyCommandValidatorTests.cs) to verify both existing NightCodeForge command expectations and the newly hardened `Pmad.AI` 0.0.2 guardrails:
+Update [`tests/NightCodeForge.Agents.Tests/ReadOnlyCommandValidatorTests.cs`](../../../tests/NightCodeForge.Agents.Tests/ReadOnlyCommandValidatorTests.cs) to verify both existing NightCodeForge command expectations and the newly hardened `Pmad.AI` 0.0.2 guardrails:
 
 1. **Allowed Read-Only Commands:**
    - Standard file/text inspection (`ls -la`, `cat src/File.cs`, `head -n 20`, `tail -n 20`, `wc -l`, `rg -n -- 'pattern' src`, `find . -maxdepth 3 -name "*.cs"`, `sed -n "10,20p" file.cs`, `awk '{print $1}' file.txt`, `fd -e cs`, `tree src/`, `stat`, `diff`, `pwd`).

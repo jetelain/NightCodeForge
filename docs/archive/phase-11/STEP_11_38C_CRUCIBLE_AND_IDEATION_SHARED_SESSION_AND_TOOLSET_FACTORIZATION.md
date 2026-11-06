@@ -2,13 +2,13 @@
 
 **Status:** Completed (Fix / Code Factorization & Constructor Diet)
 **Prerequisite:** Step 11.38B
-**Related Steps:** [Step 11.43A](STEP_11_43A_PMAD_AI_READONLY_COMMAND_VALIDATOR_MIGRATION.md), [Step 11.43B](STEP_11_43B_PMAD_AI_LENIENT_TOOL_DISPATCHER_AND_DELEGATING_CHAT_CLIENT_MIGRATION.md), [Step 11.43C](STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md) (`Pmad.AI` `0.0.2` `ReadOnlyCommandValidator`, `LenientToolDispatcher`, and delegating `IChatClient` middlewares)
+**Related Steps:** [Step 11.43A](STEP_11_43A_PMAD_AI_READONLY_COMMAND_VALIDATOR_MIGRATION.md), [Step 11.43B](STEP_11_43B_PMAD_AI_LENIENT_TOOL_DISPATCHER_AND_DELEGATING_CHAT_CLIENT_MIGRATION.md), [Step 11.43C](../../fixes/STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md) (`Pmad.AI` `0.0.2` `ReadOnlyCommandValidator`, `LenientToolDispatcher`, and delegating `IChatClient` middlewares)
 
 ---
 
 ## 1. Problem Statement
 
-[`CrucibleAgentHarness`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) (2,022 lines, **23 constructor parameters**), [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs) (919 lines, **19 constructor parameters**), and [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) (931 lines, **13 constructor parameters**) suffer from severe constructor bloat and duplicated session-assembly logic:
+[`CrucibleAgentHarness`](../../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) (2,022 lines, **23 constructor parameters**), [`IdeationService`](../../../src/NightCodeForge.Agents/Ideation/IdeationService.cs) (919 lines, **19 constructor parameters**), and [`CanonicalTools`](../../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) (931 lines, **13 constructor parameters**) suffer from severe constructor bloat and duplicated session-assembly logic:
 
 1. **Manual `CanonicalTools` Construction Forces 6–7 Pass-Through Dependencies:**
    - Both `CrucibleAgentHarness` and `IdeationService` manually instantiate `new CanonicalTools(...)`.

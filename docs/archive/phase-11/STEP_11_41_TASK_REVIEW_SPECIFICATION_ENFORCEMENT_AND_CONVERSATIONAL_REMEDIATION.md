@@ -1,11 +1,11 @@
 # 🛡️ Step 11.41: Task Review Specification Enforcement, Conversational Remediation & Unhandled Exception Shielding
 
 > **Bug Fix & Resiliency Step (Workflow Orchestration, HITL / Stage Resumption & HITL Guardrails)**  
-> *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Implemented  
-> *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
+> *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)  
 > *Related Steps (Non-Blocking):* [Step 11.38D: `TaskOrchestrator` Decomposition](STEP_11_38D_TASK_ORCHESTRATOR_AND_STARTUP_RECOVERY_DECOMPOSITION.md), [Step 11.38C: Crucible Session Factorization](STEP_11_38C_CRUCIBLE_AND_IDEATION_SHARED_SESSION_AND_TOOLSET_FACTORIZATION.md)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -38,7 +38,7 @@ Database inspection of the live SQLite store (`nightcodeforge.db`) reveals the e
 
 #### The Orchestrator Failure Cascade:
 1. **Harness Completion:** Because the LLM concluded its text stream without calling tools, `CrucibleAgentHarness` treated the reasoning turn as finished and returned `AgentRunResult.Completed` (`StageExecutionStatus.Completed`).
-2. **Post-Stage Disk Verification:** In [`TaskOrchestrator.cs`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L1490-L1537), post-stage synchronization evaluated `modifiedInThisStage` and `alreadyModifiedByEarlierRun`. Because the specification document on disk was not edited, both flags evaluated to `false`.
+2. **Post-Stage Disk Verification:** In [`TaskOrchestrator.cs`](../../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L1490-L1537), post-stage synchronization evaluated `modifiedInThisStage` and `alreadyModifiedByEarlierRun`. Because the specification document on disk was not edited, both flags evaluated to `false`.
 3. **Unhandled Exception Bypass:** At line 1535, `TaskOrchestrator` directly threw:
    ```csharp
    throw new WorkflowExecutionException($"Stage '{stage.StageId}' completed without producing a modified task specification document.");

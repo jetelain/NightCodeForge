@@ -26,6 +26,7 @@ This document archives the **completed feature steps** from Phase 12. All remain
 | **12.17** | [📜 Step 12.17: Follow Trail Auto-Scroll & Bottom-Right Action in Task Execution Inspector & Reasoning Trace](phase-12/STEP_12_17_FOLLOW_TRAIL_AUTO_SCROLL_INSPECTOR_AND_REASONING_TRACE.md) | Universal reasoning trace auto-scroll tracking in Ideation Chat and Task Execution Inspector, mounting a floating follow-trail button at the bottom-right of `StageConversationViewer`, dual-tier pinning of stream and open `.think-content`, non-intrusive decoupling on manual upward scroll, and bUnit test coverage. | Completed |
 | **12.19** | [🛡️ Step 12.19: Air-Gapped & Offline Web Application Hardening](phase-12/STEP_12_19_AIR_GAPPED_OFFLINE_WEB_APP_HARDENING.md) | Total elimination of external Google Fonts and CDN dependencies; local bundling of Inter and JetBrains Mono WOFF2 typography with native system fallbacks; strict Content Security Policy (CSP) guardrails; zero-telemetry privacy guarantee; and automated static analysis subresource tests. | Completed |
 | **12.24** | [🔍 Step 12.24: Home Page Pending Human Code Review Tasks](phase-12/STEP_12_24_HOME_PAGE_PENDING_HUMAN_CODE_REVIEW_TASKS.md) | `HomePendingReviewItem` aggregation in `HomeDashboardBuilder`, top Command Center **Review Room** button & badge (`#home-review-btn`), independent clickable `🔍 Review: N` badges on workspace summary cards, dedicated **Tasks Awaiting Human Code Review** section (`#home-pending-reviews-section`) with 1-click `🔍 Review & Merge` deep-links, and LLM-free Playwright E2E tests. | Completed |
+| **12.26** | [🎨 Step 12.26: Workspace Visual Identity — Custom Emoji, Color Code & Settings Management](phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md) | Custom workspace emoji and hex color codes across navigation bar, workspace cards, and drawer headers; EF Core migration for `Workspace.Emoji` and `Workspace.ColorCode`; `WorkspacePresentationHelper` with luminance contrast calculation and curated palette swatches; interactive visual identity editor in `WorkspaceSettingsTab.razor`; and browser Playwright E2E tests. | Completed |
 
 ---
 
@@ -101,4 +102,12 @@ This document archives the **completed feature steps** from Phase 12. All remain
   - [x] Add independent clickable `#home-ws-review-{ws.Id}` badge on recent workspace summary cards.
   - [x] Add `#home-pending-reviews-section` in `Home.razor` with 1-click `#home-review-task-btn-{taskId}` links to Review Room.
   - [x] Add Playwright E2E browser tests in `HitlAndObservabilityE2ETests.cs`.
+
+- [x] **Step 12.26 (Workspace Visual Identity — Custom Emoji, Color Code & Settings Management):**
+  - [x] Add `Emoji` and `ColorCode` properties to `Workspace` entity and create EF Core migration `AddWorkspaceEmojiAndColorCode`.
+  - [x] Implement `WorkspacePresentationHelper` with hex color validation, luminance-based text contrast calculation, fallback emoji assignment, and curated preset color palettes.
+  - [x] Update `WorkspaceCreationModel`, `WorkspaceProvisioningService`, and `WorkspaceStateService` to support visual identity defaults and persistence.
+  - [x] Update `TopNavBar.razor`, `Home.razor`, and `WizardStep1PathProbe.razor` to render custom workspace emoji and color badges.
+  - [x] Create visual identity settings UI in `WorkspaceSettingsTab.razor` with real-time preview, emoji picker, and color palette chips.
+  - [x] Author unit tests in `NightCodeForge.Web.Tests` and Playwright E2E tests in `WorkspaceVisualIdentityE2ETests.cs`.
 

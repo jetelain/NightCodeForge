@@ -1,11 +1,11 @@
 # 🛡️ Step 11.45: Measured-Token Compaction Trigger, `Pmad.AI` Next-Turn Token Estimation & Non-Retryable Template Error Guard
 
 > **Bug Fix & Resiliency Step (Context Overflow Prevention via Server-Measured Token Baselines & Model-Calibrated Delta Estimation)**  
-> *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Implemented  
-> *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
+> *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)  
 > *Dependencies:* [Step 11.43A: `Pmad.AI` 0.0.2 Upgrade](STEP_11_43A_PMAD_AI_READONLY_COMMAND_VALIDATOR_MIGRATION.md), [Step 11.44: `web_search` Capping & Timeout Retry Resilience](STEP_11_44_WEB_SEARCH_RESULT_CAPPING_TMP_OFFLOAD_AND_TIMEOUT_RETRY_RESILIENCE.md)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -24,10 +24,10 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
 
 | # | Failure Link | Root Cause in Current Codebase | Observed Telemetry on ForgeTask #51 (`Conversation 503`) |
 | :--- | :--- | :--- | :--- |
-| **1** | **MAF `CompactionMessageIndex` Underestimates Code/Symbol Tokens (`UTF8ByteCount / 4`) and Ignores System/Tool Overhead** | `Microsoft.Agents.AI.Compaction.CompactionProvider` builds `CompactionMessageIndex` with `Tokenizer = null`, which estimates tokens strictly as `UTF8ByteCount / 4` across `RequestMessages` only (excluding `ChatOptions.Instructions`, `ChatOptions.Tools`, and chat-template framing). Both `CompactionStrategy.ShouldCompact` (via `CompactionTriggers.TokensExceed`) and [`PiStyleCrucibleCompactionStrategy.CompactCoreAsync`](../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs#L113-L152) gate compaction on `index.IncludedTokenCount <= TriggerThresholdTokens`. | On Call 133 (`13:00:39 UTC`, 267 messages, `1,018,498` chars, `125,325` words, `126,669` symbols), Ollama measured **`261,833` actual prompt tokens** + **`209` output tokens** = **`262,041` total tokens** in a `262,144` slot (`n_ctx_slot = 262144`). Yet `CompactionMessageIndex.IncludedTokenCount` estimated only **`~251,200` tokens** (`< TriggerThresholdTokens = 253,952`), so compaction never triggered. |
-| **2** | **Server-Measured Token Counts From Previous Calls Are Discarded by Compaction** | [`OllamaSharpChatClientAdapter`](../../src/NightCodeForge.Agents/Inference/OllamaSharpChatClientAdapter.cs#L402-L408) and [`TelemetryChatClient`](../../src/NightCodeForge.Agents/Inference/TelemetryChatClient.cs#L268-L277) receive the exact `prompt_eval_count` (`InputTokenCount`) and `eval_count` (`OutputTokenCount`) on every completed turn, but [`PiStyleCrucibleCompactionStrategy`](../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs) never inspects the previous turn's measured usage. | Calls 123 through 133 all returned actual measured prompt token counts above `255,000` (`255,001` $\to$ `261,833`), exceeding `TriggerThresholdTokens` (`253,952`) for 11 consecutive turns without triggering compaction. |
+| **1** | **MAF `CompactionMessageIndex` Underestimates Code/Symbol Tokens (`UTF8ByteCount / 4`) and Ignores System/Tool Overhead** | `Microsoft.Agents.AI.Compaction.CompactionProvider` builds `CompactionMessageIndex` with `Tokenizer = null`, which estimates tokens strictly as `UTF8ByteCount / 4` across `RequestMessages` only (excluding `ChatOptions.Instructions`, `ChatOptions.Tools`, and chat-template framing). Both `CompactionStrategy.ShouldCompact` (via `CompactionTriggers.TokensExceed`) and [`PiStyleCrucibleCompactionStrategy.CompactCoreAsync`](../../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs#L113-L152) gate compaction on `index.IncludedTokenCount <= TriggerThresholdTokens`. | On Call 133 (`13:00:39 UTC`, 267 messages, `1,018,498` chars, `125,325` words, `126,669` symbols), Ollama measured **`261,833` actual prompt tokens** + **`209` output tokens** = **`262,041` total tokens** in a `262,144` slot (`n_ctx_slot = 262144`). Yet `CompactionMessageIndex.IncludedTokenCount` estimated only **`~251,200` tokens** (`< TriggerThresholdTokens = 253,952`), so compaction never triggered. |
+| **2** | **Server-Measured Token Counts From Previous Calls Are Discarded by Compaction** | [`OllamaSharpChatClientAdapter`](../../../src/NightCodeForge.Agents/Inference/OllamaSharpChatClientAdapter.cs#L402-L408) and [`TelemetryChatClient`](../../../src/NightCodeForge.Agents/Inference/TelemetryChatClient.cs#L268-L277) receive the exact `prompt_eval_count` (`InputTokenCount`) and `eval_count` (`OutputTokenCount`) on every completed turn, but [`PiStyleCrucibleCompactionStrategy`](../../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs) never inspects the previous turn's measured usage. | Calls 123 through 133 all returned actual measured prompt token counts above `255,000` (`255,001` $\to$ `261,833`), exceeding `TriggerThresholdTokens` (`253,952`) for 11 consecutive turns without triggering compaction. |
 | **3** | **Ollama Prompt Truncation Evicts the Sole `User` Message at `num_ctx = 262,144`** | In an autonomous Crucible stage run, `messages[1]` (Turn 0) is the **only** `"role": "user"` message in the conversation; all subsequent turns (`messages[2..269]`) are `"role": "assistant"` (tool calls) and `"role": "tool"` (tool results). When Call 134's prompt crossed `num_ctx = 262,144`, Ollama (`routes.go:3297`) truncated the oldest non-system message (`messages[1]`) to fit the context slot and re-invoked the `qwen3.8` renderer. | With `messages[1]` dropped, zero `"role": "user"` messages remained in the slice passed to the `qwen3.8` chat renderer, which immediately aborted with `level=ERROR source=routes.go:3297 msg="chat prompt error" error="no user query found in messages"` (`HTTP 500`). |
-| **4** | **20x Retry Loop on Deterministic Prompt Error** | [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) treats all `HTTP 500` responses as transient server outages regardless of the error payload. | NightCodeForge retried the identical overflowing Call 134 payload **20 times** (`21` total requests over ~6.5 minutes, `14:00:40` $\to$ `14:07:09 +01:00`), every attempt failing in ~680ms with `"no user query found in messages"`. |
+| **4** | **20x Retry Loop on Deterministic Prompt Error** | [`TransientHttpErrorRetryHandler`](../../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) treats all `HTTP 500` responses as transient server outages regardless of the error payload. | NightCodeForge retried the identical overflowing Call 134 payload **20 times** (`21` total requests over ~6.5 minutes, `14:00:40` $\to$ `14:07:09 +01:00`), every attempt failing in ~680ms with `"no user query found in messages"`. |
 
 ---
 
@@ -44,19 +44,19 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
      - **`LastMeasuredResponseMessageCount`**: The number of assistant response messages produced by Call $N$ (typically `1`) whose tokens are already accounted for in `LastMeasuredOutputTokens`.
 
 2. **Compaction Baseline Reset:**
-   - Whenever [`PiStyleCrucibleCompactionStrategy`](../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs) performs a compaction pass (excluding summarized groups and inserting a checkpoint summary), reset the measured baseline (`LastMeasuredInputTokens`, `LastMeasuredOutputTokens`, `LastMeasuredMessageCount`, `LastMeasuredResponseMessageCount`) so that the post-compaction size is estimated cleanly for the immediate request and re-anchored to actual server measurements once that request completes.
+   - Whenever [`PiStyleCrucibleCompactionStrategy`](../../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs) performs a compaction pass (excluding summarized groups and inserting a checkpoint summary), reset the measured baseline (`LastMeasuredInputTokens`, `LastMeasuredOutputTokens`, `LastMeasuredMessageCount`, `LastMeasuredResponseMessageCount`) so that the post-compaction size is estimated cleanly for the immediate request and re-anchored to actual server measurements once that request completes.
 
 ---
 
 ### 2.2 Estimate Next-Request Additional Tokens via `Pmad.AI.Tokens.HeuristicTokenEstimator`
 
 1. **Model-Calibrated `Pmad.AI` Estimator Selection:**
-   - Use `Pmad.AI.Tokens.HeuristicTokenEstimator` (already referenced via `Pmad.AI` in [`NightCodeForge.Agents.csproj`](../../src/NightCodeForge.Agents/NightCodeForge.Agents.csproj)):
+   - Use `Pmad.AI.Tokens.HeuristicTokenEstimator` (already referenced via `Pmad.AI` in [`NightCodeForge.Agents.csproj`](../../../src/NightCodeForge.Agents/NightCodeForge.Agents.csproj)):
      - Select `HeuristicTokenEstimator.Qwen` when the target model identifier contains `"qwen"` (case-insensitive).
      - Select `HeuristicTokenEstimator.Gemma` when the target model identifier contains `"gemma"` (case-insensitive).
      - Select `HeuristicTokenEstimator.Default` for all other models.
    - Extract all text, reasoning traces (`TextReasoningContent`), tool call names/serialized arguments (`FunctionCallContent`), and tool result payloads (`FunctionResultContent`) when estimating a `ChatMessage` or `CompactionMessageGroup`, including a small per-message framing allowance.
-   - Replace the legacy `text.Length / 4.0` heuristic in [`TelemetryChatClient`](../../src/NightCodeForge.Agents/Inference/TelemetryChatClient.cs) with the model-calibrated `Pmad.AI.Tokens.HeuristicTokenEstimator` so telemetry fallback estimates are consistent with compaction and `OllamaRouter`.
+   - Replace the legacy `text.Length / 4.0` heuristic in [`TelemetryChatClient`](../../../src/NightCodeForge.Agents/Inference/TelemetryChatClient.cs) with the model-calibrated `Pmad.AI.Tokens.HeuristicTokenEstimator` so telemetry fallback estimates are consistent with compaction and `OllamaRouter`.
 
 2. **Next-Request Projected Prompt Token Calculation:**
    - Let `includedMessages` be the ordered list of messages across all currently included (`!g.IsExcluded`) groups in `CompactionMessageIndex`.
@@ -76,7 +76,7 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
 ### 2.3 Trigger Compaction Before Next Message Reaches the Context Limit
 
 1. **Replace MAF's `UTF8ByteCount / 4` `ShouldCompact` Gate:**
-   - In [`PiStyleCrucibleCompactionStrategy`](../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs), do not gate the base `CompactionStrategy` constructor on `CompactionTriggers.TokensExceed(options.TriggerThresholdTokens)` (which reads `CompactionMessageIndex.IncludedTokenCount` computed via `UTF8ByteCount / 4` and prevents `CompactCoreAsync` from being called).
+   - In [`PiStyleCrucibleCompactionStrategy`](../../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs), do not gate the base `CompactionStrategy` constructor on `CompactionTriggers.TokensExceed(options.TriggerThresholdTokens)` (which reads `CompactionMessageIndex.IncludedTokenCount` computed via `UTF8ByteCount / 4` and prevents `CompactCoreAsync` from being called).
    - Instead, configure `ShouldCompact` and `CompactCoreAsync` to evaluate `ProjectedPromptTokens > Options.TriggerThresholdTokens` (`ContextWindowTokens - ReserveTokens`).
 
 2. **Pre-Flight Limit Protection & Debounce Override:**
@@ -91,7 +91,7 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
      - Recompute group token estimates after `ClampOversizedToolResults` so emergency clamping is accurately reflected in `accumulatedRecentTokens`.
 
 4. **Accurate Context Window Resolution Source:**
-   - In [`HarnessAgentFactory`](../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs) and [`ModelCapabilityResolver`](../../src/NightCodeForge.Agents/Inference/ModelCapabilityResolver.cs):
+   - In [`HarnessAgentFactory`](../../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs) and [`ModelCapabilityResolver`](../../../src/NightCodeForge.Agents/Inference/ModelCapabilityResolver.cs):
      - Distinguish between an explicit `AgentProfile.ContextWindowTokens` override (`ResolutionSource = "AgentProfile"`) and a dynamically discovered context window from `ILlmGatewayService.ResolveContextWindowAsync` (`ResolutionSource = "GatewayDiscovery"`).
 
 ---
@@ -99,14 +99,14 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
 ### 2.4 Fail Fast on Deterministic Chat Template / Prompt Errors
 
 1. **Non-Retryable Prompt/Template Error Classification:**
-   - In [`TransientHttpErrorRetryHandler`](../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) / [`TransientErrorDetector`](../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs):
+   - In [`TransientHttpErrorRetryHandler`](../../../src/NightCodeForge.Core/Resilience/TransientHttpErrorRetryHandler.cs) / [`TransientErrorDetector`](../../../src/NightCodeForge.Core/Resilience/TransientErrorDetector.cs):
      - When an `HTTP 500 InternalServerError` response body contains a deterministic chat prompt or template rendering error (specifically `"no user query found in messages"` or `"chat prompt error"`), do **not** classify the response as transient and do **not** enter the 20-attempt retry loop; return/throw immediately on the first response.
 
 ---
 
 ## 3. Verification & Test Strategy
 
-1. **Measured-Token + `Pmad.AI` Delta Compaction Trigger Tests ([`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)):**
+1. **Measured-Token + `Pmad.AI` Delta Compaction Trigger Tests ([`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)):**
    - **ForgeTask #51 Regression Scenario (`UTF8ByteCount / 4` Below Threshold, Measured + Delta Above Threshold):**
      - Construct a `PiStyleCrucibleCompactionStrategy` with `ContextWindowTokens = 262_144`, `ReserveTokens = 8_192` (`TriggerThresholdTokens = 253_952`), and `SummarizerModelId = "Qwen3.8-27B:latest"`.
      - Populate a conversation whose raw `UTF8ByteCount / 4` (`index.IncludedTokenCount`) is below `253,952` (e.g., `~240,000` bytes/4), record a previous call measurement of `InputTokenCount = 253_000`, `OutputTokenCount = 500`, and append a new tool result whose `HeuristicTokenEstimator.Qwen` token estimate is `~1,000` tokens (`ProjectedPromptTokens = 254,500 > 253,952`).
@@ -116,13 +116,13 @@ Cross-referencing `NightCodeForge` (`nightcodeforge-20261105.log`), `OllamaRoute
    - **Baseline Reset on Compaction:**
      - Verify that after compaction succeeds, the previous pre-compaction `LastMeasuredInputTokens` is reset so the next call does not falsely re-trigger using the pre-compaction token count.
 
-2. **`ThinkingAndActivityTracingChatClient` Usage Capture Tests ([`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)):**
+2. **`ThinkingAndActivityTracingChatClient` Usage Capture Tests ([`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)):**
    - Verify that both `GetResponseAsync` (via `ChatResponse.Usage`) and `GetStreamingResponseAsync` (via `UsageContent` in the stream) capture `InputTokenCount`, `OutputTokenCount`, and the sent message count and forward them to the compaction strategy / token tracker.
 
-3. **Model-Calibrated Estimator Selection Tests ([`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)):**
+3. **Model-Calibrated Estimator Selection Tests ([`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)):**
    - Verify that `Qwen*` models resolve `HeuristicTokenEstimator.Qwen`, `Gemma*` models resolve `HeuristicTokenEstimator.Gemma`, and other models resolve `HeuristicTokenEstimator.Default`, and that tool calls (`FunctionCallContent`), tool results (`FunctionResultContent`), and reasoning traces (`TextReasoningContent`) are all included in message token estimation.
 
-4. **Non-Retryable Template Error Tests ([`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests)):**
+4. **Non-Retryable Template Error Tests ([`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests)):**
    - Verify that when a mock backend returns `HTTP 500 InternalServerError` with body `{"error":"no user query found in messages"}`, `TransientHttpErrorRetryHandler` does **not** retry and fails on attempt 1.
    - Verify that standard `HTTP 500` responses (e.g. `{"error":"internal server error"}` or model load failures) continue to be retried normally.
 

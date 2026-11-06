@@ -9,16 +9,16 @@
 
 After Steps 11.38B and 11.38C, only two classes in the entire solution exceed the 10-constructor-parameter limit:
 
-1. [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) (**3,807 lines**, **19 constructor parameters**):
+1. [`TaskOrchestrator`](../../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) (**3,807 lines**, **19 constructor parameters**):
    - Currently acts as a God class handling:
      - Pipeline cohort loop and stage execution (`ProcessTaskAsync`, ~2,200 lines),
      - Ext4 mirror initialization/sync, feature branch & git worktree checkout, relative worktree path normalization, markdown task file syncing, and review diff computation,
      - Merge gate execution, conflict resolution lifecycle initiation, and downstream DAG cascade unblocking (`CompleteTaskAndCascadeAsync`, `CompleteTaskAndCascadeInternalAsync`, `InitiateConflictResolutionAsync`),
      - Human interaction state transitions (`SubmitHumanAnswerAsync`, `SubmitAnswersAsync`, `RequestChangesAsync`, `PromoteSuggestedTaskAsync`, `RejectTaskAsync`, `RestartTaskPipelineAsync`).
-2. [`StartupRecoveryService`](../../src/NightCodeForge.Core/Services/StartupRecoveryService.cs) (**637 lines**, **11 constructor parameters**):
+2. [`StartupRecoveryService`](../../../src/NightCodeForge.Core/Services/StartupRecoveryService.cs) (**637 lines**, **11 constructor parameters**):
    - Combines low-level Git filesystem recovery (WSL availability check, stale `.git/*.lock` purging, ext4 mirror alignment with `host-origin`, dirty worktree auto-commit rescue, worktree relative path normalization, orphaned container reaping) with high-level workflow task status normalization and Hangfire queue re-enqueuing.
 
-Additionally, [`ExecutionEnvironmentProvider`](../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs) and [`DevQueueService`](../../src/NightCodeForge.Web/Services/DevQueueService.cs) sit right at the **10-parameter boundary** (`10` constructor parameters each), leaving zero headroom for future dependencies.
+Additionally, [`ExecutionEnvironmentProvider`](../../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs) and [`DevQueueService`](../../../src/NightCodeForge.Web/Services/DevQueueService.cs) sit right at the **10-parameter boundary** (`10` constructor parameters each), leaving zero headroom for future dependencies.
 
 ---
 

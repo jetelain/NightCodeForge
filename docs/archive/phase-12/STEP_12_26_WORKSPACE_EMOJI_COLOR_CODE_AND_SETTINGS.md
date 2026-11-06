@@ -1,10 +1,10 @@
 # 🎨 Step 12.26: Workspace Visual Identity — Custom Emoji, Color Code & Settings Management
 
 > **Quick-Win Feature Specification (Workspace Identity, Navigation & Settings Ergonomics)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests`  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -16,7 +16,7 @@ Developers frequently maintain multiple active workspaces in NightCodeForge (e.g
 
 Currently:
 1. **Generic Visual Appearance:** All workspaces use an identical default folder icon (`📁`) and unaccented card backgrounds across the Top Navigation Bar, Breadcrumbs, and Home Dashboard summary cards.
-2. **Read-Only / Un-editable Identity in Settings:** In [`WorkspaceSettingsTab.razor`](../../src/NightCodeForge.Web/Components/Workspaces/WorkspaceSettingsTab.razor), the workspace name is displayed as static text and cannot be edited. There are no controls to set an identifying emoji or color code.
+2. **Read-Only / Un-editable Identity in Settings:** In [`WorkspaceSettingsTab.razor`](../../../src/NightCodeForge.Web/Components/Workspaces/WorkspaceSettingsTab.razor), the workspace name is displayed as static text and cannot be edited. There are no controls to set an identifying emoji or color code.
 3. **Cognitive Load When Context Switching:** When switching between workspaces, operators must read the full text title rather than recognizing the workspace instantly by its visual motif (e.g., 🚀 `OllamaRouter` in Indigo, 🎨 `ComicGen` in Amber, 🛡️ `NightCodeForge` in Emerald).
 
 This quick-win step introduces **first-class Workspace Visual Identity**:
@@ -32,7 +32,7 @@ This quick-win step introduces **first-class Workspace Visual Identity**:
 ### 2.1 Domain & Database Schema (`NightCodeForge.Core` & `NightCodeForge.Infrastructure`)
 
 1. **Entity Extensions (`Workspace.cs`):**
-   - Extend [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) with two nullable string properties:
+   - Extend [`Workspace`](../../../src/NightCodeForge.Core/Domain/Workspace.cs) with two nullable string properties:
      - `Emoji` (`string?`): The visual emoji icon representing the workspace (e.g., `"🚀"`, `"🛡️"`, `"🎨"`, `"🌐"`, `"⚡"`). Defaults to `null` (falling back to `"📁"` in the presentation layer).
      - `ColorCode` (`string?`): The hex color code representing the workspace accent (e.g., `"#6366F1"` for indigo, `"#10B981"` for emerald). Defaults to `null` (falling back to the standard theme accent in the presentation layer).
 
@@ -42,7 +42,7 @@ This quick-win step introduces **first-class Workspace Visual Identity**:
 
 ### 2.2 Workspace Presentation & Identity Helper (`WorkspacePresentationHelper`)
 
-To preserve strict Presentation Separation ([AGENTS.md](../../AGENTS.md)) and prevent color/emoji logic from polluting Razor `@code` blocks:
+To preserve strict Presentation Separation ([AGENTS.md](../../../AGENTS.md)) and prevent color/emoji logic from polluting Razor `@code` blocks:
 
 1. **Helper Responsibilities (`NightCodeForge.Web.Services`):**
    - Create `WorkspacePresentationHelper` as a static or cohesive service:

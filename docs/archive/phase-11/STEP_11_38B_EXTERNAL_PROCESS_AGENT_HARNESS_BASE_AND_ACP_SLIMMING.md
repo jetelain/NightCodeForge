@@ -7,7 +7,7 @@
 
 ## 1. Problem Statement
 
-[`AcpAgentHarness`](../../src/NightCodeForge.Agents/Acp/AcpAgentHarness.cs) (816 lines, **11 constructor parameters**) and [`PiRpcAgentHarness`](../../src/NightCodeForge.Agents/PiRpc/PiRpcAgentHarness.cs) (538 lines, **8 constructor parameters**) share ~180 lines of nearly line-for-line identical code:
+[`AcpAgentHarness`](../../../src/NightCodeForge.Agents/Acp/AcpAgentHarness.cs) (816 lines, **11 constructor parameters**) and [`PiRpcAgentHarness`](../../../src/NightCodeForge.Agents/PiRpc/PiRpcAgentHarness.cs) (538 lines, **8 constructor parameters**) share ~180 lines of nearly line-for-line identical code:
 
 1. **Identical Process & Session Lifecycle (`RunStageAsync`):**
    - `Stopwatch` initialization, `sessionId` generation, and `AgentActivityKind.StageStarted` broadcast.
