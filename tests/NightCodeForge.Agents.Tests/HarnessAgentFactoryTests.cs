@@ -180,14 +180,15 @@ public class HarnessAgentFactoryTests
     }
 
     [Fact]
-    public async Task Create_ExposesTracingClientAndWrapsItInLenientClient()
+    public async Task Create_ExposesTracingClientAndWrapsLenientToolDispatchChatClient()
     {
         var factory = CreateAgentFactory(new Mock<IChatClient>().Object);
 
         var setup = await factory.CreateAsync(AgentRequest(new AgentProfile { Id = "p", ModelName = "m", ContextWindowTokens = 4096 }), CancellationToken.None);
 
-        Assert.IsType<LenientToolCallChatClient>(setup.ActiveClient);
+        Assert.Same(setup.TracingClient, setup.ActiveClient);
         Assert.NotNull(setup.TracingClient);
+        Assert.NotNull(setup.TracingClient.GetService<Pmad.AI.Tools.LenientToolDispatchChatClient>());
     }
 
     [Fact]

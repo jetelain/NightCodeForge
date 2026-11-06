@@ -67,27 +67,27 @@ public class Step1131MultiMatchEditTests : IDisposable
     }
 
     [Fact]
-    public async Task EditAsync_WithReplaceAllFalse_WhenMultipleMatches_ThrowsAmbiguityException()
+    public async Task EditAsync_WithReplaceAllFalse_WhenMultipleMatches_ReturnsAmbiguityError()
     {
         var filePath = Path.Combine(_tempDir, "ambiguous.txt");
         await File.WriteAllTextAsync(filePath, "hello world\nhello world\n");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _tools.EditAsync("ambiguous.txt", "hello world", "goodbye world", replaceAll: false));
+        var result = await _tools.EditAsync("ambiguous.txt", "hello world", "goodbye world", replaceAll: false);
 
-        Assert.Contains("matches multiple locations in 'ambiguous.txt'. Please provide more surrounding context to disambiguate or use replaceAll: true.", ex.Message);
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("matches multiple locations in 'ambiguous.txt'. Please provide more surrounding context to disambiguate or use replaceAll: true.", result);
     }
 
     [Fact]
-    public async Task EditAsync_WithReplaceAllTrue_WhenZeroMatches_ThrowsNotFoundException()
+    public async Task EditAsync_WithReplaceAllTrue_WhenZeroMatches_ReturnsNotFoundError()
     {
         var filePath = Path.Combine(_tempDir, "missing.txt");
         await File.WriteAllTextAsync(filePath, "existing text here\n");
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _tools.EditAsync("missing.txt", "does_not_exist", "replacement", replaceAll: true));
+        var result = await _tools.EditAsync("missing.txt", "does_not_exist", "replacement", replaceAll: true);
 
-        Assert.Contains("could not locate target chunk in 'missing.txt'", ex.Message);
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("could not locate target chunk in 'missing.txt'", result);
     }
 
     [Fact]
@@ -96,22 +96,22 @@ public class Step1131MultiMatchEditTests : IDisposable
         var filePath = Path.Combine(_tempDir, "dispatcher_test.txt");
         await File.WriteAllTextAsync(filePath, "alpha beta alpha gamma alpha");
 
-        var dispatcher = new LenientToolDispatcher(_tools);
+        var dispatcher = NightCodeForgeToolDispatcher.Create(_tools);
 
         // Test with replace_all in snake_case
         var jsonSnake = "{\"path\": \"dispatcher_test.txt\", \"old_text\": \"alpha\", \"new_text\": \"delta\", \"replace_all\": true}";
-        var resultSnake = await dispatcher.DispatchAsync("edit", jsonSnake);
+        var resultSnake = await dispatcher.ExecuteAsync("edit", jsonSnake);
 
-        Assert.Contains("Successfully applied 1 edit(s) (3 occurrence(s) replaced)", resultSnake);
+        Assert.Contains("Successfully applied 1 edit(s) (3 occurrence(s) replaced)", resultSnake?.ToString() ?? string.Empty);
 
         var updatedContent = await File.ReadAllTextAsync(filePath);
         Assert.Equal("delta beta delta gamma delta\n", updatedContent);
 
         // Test array edits with "all": true
         var jsonArray = "{\"path\": \"dispatcher_test.txt\", \"edits\": [{\"old_text\": \"delta\", \"new_text\": \"omega\", \"all\": true}]}";
-        var resultArray = await dispatcher.DispatchAsync("edit", jsonArray);
+        var resultArray = await dispatcher.ExecuteAsync("edit", jsonArray);
 
-        Assert.Contains("Successfully applied 1 edit(s) (3 occurrence(s) replaced)", resultArray);
+        Assert.Contains("Successfully applied 1 edit(s) (3 occurrence(s) replaced)", resultArray?.ToString() ?? string.Empty);
 
         var finalContent = await File.ReadAllTextAsync(filePath);
         Assert.Equal("omega beta omega gamma omega\n", finalContent);

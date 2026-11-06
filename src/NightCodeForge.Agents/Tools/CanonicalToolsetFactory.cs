@@ -7,6 +7,7 @@ using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using Pmad.AI.Tools;
 
 namespace NightCodeForge.Agents.Tools;
 
@@ -112,7 +113,11 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
             tools.BacklogMutationService = _backlogContext.BacklogMutationService;
         }
 
-        var dispatcher = new LenientToolDispatcher(tools);
+        var dispatcher = NightCodeForgeToolDispatcher.Create(
+            tools,
+            request.CustomTools,
+            _backlogContext.CanonicalToolsLogger);
+
         RegisterCustomTools(dispatcher, request.CustomTools);
         await RegisterMcpToolsAsync(dispatcher, scope.WorkspaceRoot, cancellationToken);
 
@@ -127,17 +132,18 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
     {
         foreach (var customTool in customTools)
         {
-            var toolName = customTool.Name;
-            dispatcher.RegisterTool(new ToolDefinition
+            if (string.IsNullOrWhiteSpace(customTool.Name))
             {
-                Name = customTool.Name,
-                Description = customTool.Description,
-                Aliases = customTool.Aliases,
-                ParameterAliases = new Dictionary<string, string>(customTool.ParameterAliases, StringComparer.OrdinalIgnoreCase),
-                // Database-defined custom tools carry no executable definition: report that honestly
-                // instead of pretending the call succeeded.
-                Handler = (args, ct) => Task.FromResult(string.Format(CustomToolNotExecutableMessageFormat, toolName))
-            });
+                continue;
+            }
+
+            var toolName = customTool.Name;
+            // Database-defined custom tools carry no executable definition: report that honestly
+            // instead of pretending the call succeeded.
+            dispatcher.RegisterTool(new FreeFormStubAIFunction(
+                toolName,
+                customTool.Description,
+                string.Format(CustomToolNotExecutableMessageFormat, toolName)));
         }
     }
 
@@ -152,17 +158,23 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         foreach (var (serverName, def) in mcpServers)
         {
             var name = serverName;
-            dispatcher.RegisterTool(new ToolDefinition
-            {
-                Name = $"{McpToolNamePrefix}{serverName}",
-                Description = $"External MCP server tool '{serverName}'. Command: {def.Command} {string.Join(" ", def.Args)}",
-                // There is no MCP protocol client yet. Launching the server command once and returning its
-                // stdout is not a tool call (the arguments were ignored and a stdio server never exits),
-                // so report clearly that the call was not executed.
-                Handler = (args, ct) => Task.FromResult(string.Format(McpToolNotSupportedMessageFormat, name))
-            });
+            // There is no MCP protocol client yet. Launching the server command once and returning its
+            // stdout is not a tool call (the arguments were ignored and a stdio server never exits),
+            // so report clearly that the call was not executed.
+            dispatcher.RegisterTool(new FreeFormStubAIFunction(
+                $"{McpToolNamePrefix}{serverName}",
+                $"External MCP server tool '{serverName}'. Command: {def.Command} {string.Join(" ", def.Args)}",
+                string.Format(McpToolNotSupportedMessageFormat, name)));
         }
     }
+
+    public static IList<AITool> BuildAIFunctionList(
+        CanonicalTools tools,
+        IReadOnlySet<string> permittedTools,
+        LenientToolDispatcher dispatcher,
+        IReadOnlyList<CustomToolConfig>? customTools = null,
+        IReadOnlyDictionary<string, string>? toolDirectives = null) =>
+        BuildAIFunctionList(tools, (IReadOnlyList<string>)permittedTools.ToList(), dispatcher, customTools, toolDirectives);
 
     public static IList<AITool> BuildAIFunctionList(
         CanonicalTools tools,
@@ -171,7 +183,8 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         IReadOnlyList<CustomToolConfig>? customTools = null,
         IReadOnlyDictionary<string, string>? toolDirectives = null)
     {
-        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedTools, dispatcher).Cast<AIFunction>().ToList();
+        var permittedSet = new HashSet<string>(permittedTools, StringComparer.OrdinalIgnoreCase);
+        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedSet, dispatcher).Cast<AIFunction>().ToList();
         var knownNames = new HashSet<string>(aiFunctions.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var tool in permittedTools)
         {
@@ -182,11 +195,15 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
                 continue;
             }
 
-            if (!knownNames.Contains(tool) && dispatcher.TryGetTool(tool, out _))
+            if (!knownNames.Contains(tool) && dispatcher.IsToolRegistered(tool))
             {
                 var custom = customTools?.FirstOrDefault(c => string.Equals(c.Name, tool, StringComparison.OrdinalIgnoreCase));
                 var desc = custom?.Description ?? $"Execute tool '{tool}'";
-                aiFunctions.Add(new DispatcherAIFunction(tool, desc, dispatcher));
+                var responseMessage = tool.StartsWith(McpToolNamePrefix, StringComparison.OrdinalIgnoreCase)
+                    ? string.Format(McpToolNotSupportedMessageFormat, tool[McpToolNamePrefix.Length..])
+                    : string.Format(CustomToolNotExecutableMessageFormat, tool);
+                aiFunctions.Add(new FreeFormStubAIFunction(tool, desc, responseMessage));
+                knownNames.Add(tool);
             }
         }
 
@@ -204,11 +221,7 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         return aiFunctions.Cast<AITool>().ToList();
     }
 
-    /// <summary>
-    /// Exposes a dispatcher-registered tool (custom DB tool, MCP server) with a free-form object schema so the
-    /// model's arguments reach the dispatcher as-is, instead of being wrapped under a synthetic parameter.
-    /// </summary>
-    private sealed class DispatcherAIFunction(string name, string description, LenientToolDispatcher dispatcher) : AIFunction
+    private sealed class FreeFormStubAIFunction(string name, string description, string responseMessage) : AIFunction
     {
         private static readonly JsonElement FreeFormObjectSchema =
             JsonDocument.Parse(FreeFormObjectSchemaJson).RootElement.Clone();
@@ -217,31 +230,8 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         public override string Description => description;
         public override JsonElement JsonSchema => FreeFormObjectSchema;
 
-        protected override async ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken)
-        {
-            try
-            {
-                var argsJson = JsonSerializer.Serialize(arguments.ToDictionary(kv => kv.Key, kv => kv.Value));
-                return await dispatcher.DispatchAsync(name, argsJson, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (NightCodeForge.Core.Workflow.HumanInterruptionException)
-            {
-                throw;
-            }
-            catch (NightCodeForge.Core.Workflow.RequestChangesException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                var msg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
-                return $"Error: {msg}";
-            }
-        }
+        protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<object?>(responseMessage);
     }
 
     /// <summary>Overrides the description exposed to the model (database-configured tool directives).</summary>
@@ -250,4 +240,3 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         public override string Description => description;
     }
 }
-

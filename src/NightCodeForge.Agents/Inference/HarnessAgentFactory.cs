@@ -3,17 +3,20 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Compaction;
+using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using Pmad.AI.Tools;
 
 namespace NightCodeForge.Agents.Inference;
 
 /// <summary>Everything needed to assemble the <see cref="HarnessAgent"/> of one agent session.</summary>
-/// <param name="CreateTracingClient">Creates the tracer sitting closest to the model.</param>
-/// <param name="DecorateTracingClient">Optional middleware inserted between the tracer and the lenient tool-call client (e.g. history persistence).</param>
+/// <param name="CreateTracingClient">Creates the tracer sitting above the lenient tool-dispatch client.</param>
+/// <param name="DecorateTracingClient">Optional middleware inserted above the tracer (e.g. history persistence).</param>
 /// <param name="GrammarFlags">When <see cref="LocalOptimizationFlags.GuidedGrammarDecoding"/> is set, grammar constraints are applied to the chat options.</param>
 /// <param name="DefaultTemperature">Temperature applied when neither the profile nor the resolver set one (reasoning models excluded).</param>
+/// <param name="Dispatcher">Optional session <see cref="LenientToolDispatcher"/>; when null, a default NightCodeForge-configured dispatcher is created.</param>
 public sealed record HarnessAgentRequest(
     AgentProfile Profile,
     string SessionId,
@@ -25,7 +28,8 @@ public sealed record HarnessAgentRequest(
     Func<IChatClient, ThinkingAndActivityTracingChatClient> CreateTracingClient,
     Func<ThinkingAndActivityTracingChatClient, IChatClient>? DecorateTracingClient = null,
     LocalOptimizationFlags? GrammarFlags = null,
-    float? DefaultTemperature = null);
+    float? DefaultTemperature = null,
+    LenientToolDispatcher? Dispatcher = null);
 
 /// <summary>The assembled agent of a session with its middlewares and options.</summary>
 public sealed record HarnessAgentSetup(
@@ -91,11 +95,12 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             ? profile.ModelName
             : (baseClient.GetService<ChatClientMetadata>()?.DefaultModelId ?? _llmOptions.ModelId);
 
-        // The tracer sits closest to the model (below persistence and compaction) so that it records the exact
-        // requests sent to the LLM: everything MAF injects, plus the history after compaction.
-        var tracingClient = request.CreateTracingClient(baseClient);
-        var decorated = request.DecorateTracingClient?.Invoke(tracingClient) ?? tracingClient;
-        var activeClient = new LenientToolCallChatClient(decorated);
+        // LenientToolDispatchChatClient sits immediately above baseClient so that the tracing client
+        // and persisted chat history observe the healed, canonical FunctionCallContent items.
+        var effectiveDispatcher = request.Dispatcher ?? CreateDefaultDispatcher(request.Tools, request.SessionId);
+        var dispatchClient = new LenientToolDispatchChatClient(baseClient, effectiveDispatcher, _logger);
+        var tracingClient = request.CreateTracingClient(dispatchClient);
+        var activeClient = request.DecorateTracingClient?.Invoke(tracingClient) ?? tracingClient;
 
         var chatOptions = _capabilityResolver.CreateChatOptions(profile, effectiveModel);
         chatOptions.Tools = request.Tools;
@@ -183,6 +188,13 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
         }
 
         return (null, null);
+    }
+
+    private LenientToolDispatcher CreateDefaultDispatcher(IList<AITool> tools, string sessionId)
+    {
+        var dispatcher = NightCodeForgeToolDispatcher.Create(logger: _logger, sessionId: sessionId);
+        dispatcher.RegisterTools(tools.OfType<AIFunction>());
+        return dispatcher;
     }
 }
 

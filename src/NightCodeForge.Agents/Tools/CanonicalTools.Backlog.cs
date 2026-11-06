@@ -1,4 +1,6 @@
+using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 
 namespace NightCodeForge.Agents.Tools;
 
@@ -25,11 +27,23 @@ public partial class CanonicalTools
         return (BacklogMutationService, new BacklogToolScope(_workspaceId.Value, _workspaceRoot));
     }
 
+    private static async Task<string> ExecuteBacklogActionAsync(Func<Task<string>> action)
+    {
+        try
+        {
+            return await action();
+        }
+        catch (Exception ex) when (ex is TaskCannotBeModifiedException or TaskNotFoundException or CircularDependencyException or InvalidOperationException or ArgumentException or KeyNotFoundException)
+        {
+            return $"Error: {ex.Message}";
+        }
+    }
+
     /// <summary>get_task: fetches the complete details of a backlog task on demand.</summary>
     public Task<string> GetTaskAsync(int taskId, CancellationToken cancellationToken = default)
     {
         var (service, scope) = RequireBacklogScope(CanonicalToolNames.GetTask);
-        return service.GetTaskAsync(scope, taskId, cancellationToken);
+        return ExecuteBacklogActionAsync(() => service.GetTaskAsync(scope, taskId, cancellationToken));
     }
 
     /// <summary>edit_task: updates an unstarted backlog task (null arguments are left unchanged).</summary>
@@ -44,31 +58,31 @@ public partial class CanonicalTools
         CancellationToken cancellationToken = default)
     {
         var (service, scope) = RequireBacklogScope(CanonicalToolNames.EditTask);
-        return service.EditTaskAsync(
+        return ExecuteBacklogActionAsync(() => service.EditTaskAsync(
             scope,
             new TaskEditRequest(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch),
-            cancellationToken);
+            cancellationToken));
     }
 
     /// <summary>set_task_priority: changes the priority tier of an unstarted backlog task.</summary>
     public Task<string> SetTaskPriorityAsync(int taskId, int priority, CancellationToken cancellationToken = default)
     {
         var (service, scope) = RequireBacklogScope(CanonicalToolNames.SetTaskPriority);
-        return service.SetTaskPriorityAsync(scope, taskId, priority, cancellationToken);
+        return ExecuteBacklogActionAsync(() => service.SetTaskPriorityAsync(scope, taskId, priority, cancellationToken));
     }
 
     /// <summary>rework_priorities: changes the priority tier of several unstarted backlog tasks at once.</summary>
     public Task<string> ReworkPrioritiesAsync(IReadOnlyList<TaskPriorityUpdate> updates, CancellationToken cancellationToken = default)
     {
         var (service, scope) = RequireBacklogScope(CanonicalToolNames.ReworkPriorities);
-        return service.ReworkPrioritiesAsync(scope, updates, cancellationToken);
+        return ExecuteBacklogActionAsync(() => service.ReworkPrioritiesAsync(scope, updates, cancellationToken));
     }
 
     /// <summary>remove_task: cancels an unstarted backlog task that has no active dependents.</summary>
     public Task<string> RemoveTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default)
     {
         var (service, scope) = RequireBacklogScope(CanonicalToolNames.RemoveTask);
-        return service.RemoveTaskAsync(scope, taskId, reason, cancellationToken);
+        return ExecuteBacklogActionAsync(() => service.RemoveTaskAsync(scope, taskId, reason, cancellationToken));
     }
 }
 

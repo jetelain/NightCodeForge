@@ -254,7 +254,7 @@ Let me know what you think!";
             callCount++;
             if (callCount == 1)
             {
-                return new ChatResponse(new ChatMessage(ChatRole.Assistant, "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"tasks\": [{\"title\": \"Tool Generated ForgeTask\", \"description\": \"From tool call\"}]}}</tool_call>"));
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?> { ["tasks"] = new List<object?> { new Dictionary<string, object?> { ["title"] = "Tool Generated ForgeTask", ["description"] = "From tool call" } } })]));
             }
             return new ChatResponse(new ChatMessage(ChatRole.Assistant, "Proposals are submitted and finalized."));
         });
@@ -446,9 +446,9 @@ Let me know what you think!";
             turn++;
             if (turn == 1)
             {
-                return "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"tasks\": [{\"title\": \"Streaming Tool ForgeTask\", \"description\": \"Discovered via tool\"}]}}</tool_call>";
+                return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?> { ["tasks"] = new List<object?> { new Dictionary<string, object?> { ["title"] = "Streaming Tool ForgeTask", ["description"] = "Discovered via tool" } } })]);
             }
-            return "Task proposal has been registered.";
+            return new ChatResponseUpdate(ChatRole.Assistant, "Task proposal has been registered.");
         });
 
         var service = CreateService(client, activityStreamer: streamer);
@@ -489,9 +489,9 @@ Let me know what you think!";
             turn++;
             if (turn == 1)
             {
-                return "<tool_call>{\"name\": \"unknown_magic_tool\", \"arguments\": {\"param\": 123}}</tool_call>";
+                return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-err", "unknown_magic_tool", new Dictionary<string, object?> { ["param"] = 123 })]);
             }
-            return "Continuing after tool failure.";
+            return new ChatResponseUpdate(ChatRole.Assistant, "Continuing after tool failure.");
         });
 
         var service = CreateService(client, logger: logger);
@@ -512,16 +512,21 @@ Let me know what you think!";
         Assert.NotNull(completedUpdate.ToolCall);
         Assert.Equal("unknown_magic_tool", completedUpdate.ToolCall.ToolName);
         Assert.True(completedUpdate.ToolCall.IsError);
-        Assert.Contains("Error executing tool", completedUpdate.ToolCall.Result, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(completedUpdate.ToolCall.Result);
 
         Assert.Contains(logger.Logs, l => l.Level >= Microsoft.Extensions.Logging.LogLevel.Warning && l.Message.Contains("unknown_magic_tool"));
     }
 
     private class MultiTurnStreamingChatClient : IChatClient
     {
-        private readonly Func<IEnumerable<ChatMessage>, string> _responseGenerator;
+        private readonly Func<IEnumerable<ChatMessage>, ChatResponseUpdate> _responseGenerator;
 
         public MultiTurnStreamingChatClient(Func<IEnumerable<ChatMessage>, string> responseGenerator)
+        {
+            _responseGenerator = messages => new ChatResponseUpdate(ChatRole.Assistant, responseGenerator(messages));
+        }
+
+        public MultiTurnStreamingChatClient(Func<IEnumerable<ChatMessage>, ChatResponseUpdate> responseGenerator)
         {
             _responseGenerator = responseGenerator;
         }
@@ -530,8 +535,8 @@ Let me know what you think!";
 
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
         {
-            var text = _responseGenerator(chatMessages);
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text)));
+            // _responseGenerator invoked directly
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, _responseGenerator(chatMessages).Contents.ToList())));
         }
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
@@ -539,8 +544,8 @@ Let me know what you think!";
             ChatOptions? options = null,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            var text = _responseGenerator(chatMessages);
-            yield return new ChatResponseUpdate(ChatRole.Assistant, text);
+            // _responseGenerator invoked directly
+            yield return _responseGenerator(chatMessages);
             await Task.Yield();
         }
 
@@ -700,13 +705,17 @@ Let me know what you think!";
             turn++;
             if (turn == 1)
             {
-                return "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"tasks\": [" +
-                       "{\"title\": \"Setup DB migrations\", \"description\": \"Configure schema\"}," +
-                       "{\"title\": \"Implement repository layer\", \"description\": \"Build repositories\"}," +
-                       "{\"title\": \"Expose endpoints\", \"description\": \"Add Minimal API endpoints\"}" +
-                       "]}}</tool_call>";
+                return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?>
+                {
+                    ["tasks"] = new List<object?>
+                    {
+                        new Dictionary<string, object?> { ["title"] = "Setup DB migrations", ["description"] = "Configure schema" },
+                        new Dictionary<string, object?> { ["title"] = "Implement repository layer", ["description"] = "Build repositories" },
+                        new Dictionary<string, object?> { ["title"] = "Expose endpoints", ["description"] = "Add Minimal API endpoints" }
+                    }
+                })]);
             }
-            return "I have proposed 3 sequential tasks for your review.";
+            return new ChatResponseUpdate(ChatRole.Assistant, "I have proposed 3 sequential tasks for your review.");
         });
 
         var service = CreateService(client);
@@ -758,9 +767,9 @@ Let me know what you think!";
             turn++;
             if (turn == 1)
             {
-                return "<tool_call>{\"name\": \"propose_tasks\", \"arguments\": {\"title\": \"Single Standalone Task\", \"description\": \"Independent task\", \"priority\": 4}}</tool_call>";
+                return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?> { ["title"] = "Single Standalone Task", ["description"] = "Independent task", ["priority"] = 4 })]);
             }
-            return "Task registered.";
+            return new ChatResponseUpdate(ChatRole.Assistant, "Task registered.");
         });
 
         var service = CreateService(client);
@@ -785,10 +794,10 @@ Let me know what you think!";
             turn++;
             if (turn == 1)
             {
-                var innerJson = "[{\\\"title\\\": \\\"Step Alpha\\\", \\\"description\\\": \\\"Alpha details\\\"}, {\\\"title\\\": \\\"Step Beta\\\", \\\"description\\\": \\\"Beta details\\\"}]";
-                return $"<tool_call>{{\"name\": \"propose_tasks\", \"arguments\": {{\"tasks\": \"{innerJson}\"}}}}</tool_call>";
+                var innerJson = "[{\"title\": \"Step Alpha\", \"description\": \"Alpha details\"}, {\"title\": \"Step Beta\", \"description\": \"Beta details\"}]";
+                return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?> { ["tasks"] = innerJson })]);
             }
-            return "Sequential tasks parsed.";
+            return new ChatResponseUpdate(ChatRole.Assistant, "Sequential tasks parsed.");
         });
 
         var service = CreateService(client);

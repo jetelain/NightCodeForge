@@ -342,12 +342,19 @@ public partial class CanonicalTools
         bool isStrictWhitespace = IsIndentationSignificant(ext);
         int totalOccurrencesReplaced = 0;
 
-        for (int i = 0; i < edits.Count; i++)
+        try
         {
-            var edit = edits[i];
-            var (updatedContent, occurrences) = ApplySingleEdit(currentContent, edit.OldText, edit.NewText, edit.ReplaceAll, isStrictWhitespace, path, i + 1);
-            currentContent = updatedContent;
-            totalOccurrencesReplaced += occurrences;
+            for (int i = 0; i < edits.Count; i++)
+            {
+                var edit = edits[i];
+                var (updatedContent, occurrences) = ApplySingleEdit(currentContent, edit.OldText, edit.NewText, edit.ReplaceAll, isStrictWhitespace, path, i + 1);
+                currentContent = updatedContent;
+                totalOccurrencesReplaced += occurrences;
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            return $"Error: {ex.Message}";
         }
 
         var rejection = await ValidateTaskSpecificationAsync(path, currentContent, cancellationToken);

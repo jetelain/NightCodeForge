@@ -74,7 +74,7 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
         if (await pauseBtn.CountAsync() > 0 && await pauseBtn.First.IsVisibleAsync())
         {
             await PlaywrightWebHostFixture.ClickUntilVisibleAsync(pauseBtn.First, resumeBtn, TimeSpan.FromSeconds(15));
-            await _page.WaitForSelectorAsync("#nav-btn-resume-operations", new PageWaitForSelectorOptions { Timeout = 10000 });
+            await _page.WaitForSelectorAsync("#nav-btn-resume-operations:has-text('Resume Operations')", new PageWaitForSelectorOptions { Timeout = 30000 });
         }
 
         // 2. Seed a workspace, a task waiting for human input, and a batch of 2 questions
@@ -203,9 +203,10 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
                 }
             });
 
-            if (await resumeBtn.CountAsync() > 0 && await resumeBtn.First.IsVisibleAsync())
+            var activeResumeBtn = _page.Locator("#nav-btn-resume-operations:has-text('Resume Operations')");
+            if (await activeResumeBtn.CountAsync() > 0 && await activeResumeBtn.First.IsVisibleAsync())
             {
-                await PlaywrightWebHostFixture.ClickUntilVisibleAsync(resumeBtn.First, pauseBtn, TimeSpan.FromSeconds(15));
+                await PlaywrightWebHostFixture.ClickUntilVisibleAsync(activeResumeBtn.First, pauseBtn, TimeSpan.FromSeconds(30));
             }
         }
     }

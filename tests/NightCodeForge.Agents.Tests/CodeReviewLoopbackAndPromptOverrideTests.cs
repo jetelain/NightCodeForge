@@ -40,16 +40,16 @@ public class CodeReviewLoopbackAndPromptOverrideTests
         try
         {
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var dispatcher = new LenientToolDispatcher(tools);
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
             // Test canonical name
             var ex1 = await Assert.ThrowsAsync<RequestChangesException>(() =>
-                dispatcher.DispatchAsync("request_changes", "{\"feedback\": \"Re-run tests\"}"));
+                dispatcher.ExecuteAsync("request_changes", "{\"feedback\": \"Re-run tests\"}"));
             Assert.Equal("Re-run tests", ex1.Feedback);
 
             // Test alias reject_implementation
             var ex2 = await Assert.ThrowsAsync<RequestChangesException>(() =>
-                dispatcher.DispatchAsync("reject_implementation", "{\"feedback\": \"Missing Auth module\", \"reason\": \"No code written\"}"));
+                dispatcher.ExecuteAsync("reject_implementation", "{\"feedback\": \"Missing Auth module\", \"reason\": \"No code written\"}"));
             Assert.Equal("Missing Auth module", ex2.Feedback);
             Assert.Equal("No code written", ex2.Reason);
         }

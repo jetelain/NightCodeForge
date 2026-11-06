@@ -1,989 +1,461 @@
-using System.Collections.Concurrent;
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
+using Pmad.AI.Tools;
 
 namespace NightCodeForge.Agents.Dispatcher;
 
-public record DispatchedToolCall(string CanonicalName, Dictionary<string, object?> Arguments);
-
 /// <summary>
-/// Extensible Forgiving Tool Dispatcher: normalizes tool names, parameters, translates dropped/external tools,
-/// repairs malformed JSON payloads, handles type coercions, and executes registered tools.
+/// Declarative configuration and factory for NightCodeForge's <see cref="LenientToolDispatcher"/>
+/// powered by <c>Pmad.AI.Tools</c>.
 /// </summary>
-public partial class LenientToolDispatcher
+public static class NightCodeForgeToolDispatcher
 {
-    private readonly ConcurrentDictionary<string, ToolDefinition> _tools = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, string> _aliasToCanonical = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, ToolTranslationRule> _translations = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ILogger<LenientToolDispatcher>? _logger;
+    private static readonly string[] PathAliases =
+        ["file_path", "filePath", "filepath", "file", "filename", "target_file", "targetFile", "target", "uri", "absolute_path", "relative_path"];
 
-    [GeneratedRegex(@"^```(?:json|xml)?\s*", RegexOptions.IgnoreCase)]
-    private static partial Regex MarkdownFenceStartRegex();
+    private static readonly string[] ReadOffsetAliases =
+        ["start_line", "startLine", "line_start", "from_line", "from", "start", "line_offset", "lineOffset"];
 
-    [GeneratedRegex(@"\s*```$")]
-    private static partial Regex MarkdownFenceEndRegex();
+    private static readonly string[] ReadEndLineAliases =
+        ["end_line", "endLine", "line_end", "lineEnd", "to_line", "toLine", "to", "end"];
 
-    public IReadOnlyCollection<ToolDefinition> RegisteredTools => _tools.Values.ToList();
+    private static readonly string[] ReadLimitAliases =
+        ["max_lines", "maxLines", "line_count", "lineCount", "count", "lines", "num_lines"];
 
-    public LenientToolDispatcher()
-        : this(null, null)
+    private static readonly string[] EditOldTextAliases =
+        ["oldText", "old_text", "old_str", "oldStr", "old_string", "oldString", "search", "target", "find", "original", "target_string", "targetString", "targetContent", "target_content", "from", "old"];
+
+    private static readonly string[] EditNestedOldTextAliases =
+        ["old_text", "oldText", "old_str", "oldStr", "old_string", "oldString", "search", "target", "find", "original", "target_string", "targetString", "targetContent", "target_content", "from", "old"];
+
+    private static readonly string[] EditNewTextAliases =
+        ["newText", "new_text", "new_str", "newStr", "new_string", "newString", "replace", "replacement", "updated", "replacementContent", "replacement_content", "to", "content", "value", "new"];
+
+    private static readonly string[] EditNestedNewTextAliases =
+        ["new_text", "newText", "new_str", "newStr", "new_string", "newString", "replace", "replacement", "updated", "replacementContent", "replacement_content", "to", "content", "value", "new"];
+
+    private static readonly string[] EditReplaceAllAliases =
+        ["replaceAll", "replace_all", "all", "global", "multi", "allowMultiple", "replace_all_occurrences", "replaceAllOccurrences"];
+
+    private static readonly string[] EditNestedReplaceAllAliases =
+        ["replace_all", "replaceAll", "all", "global", "multi", "allowMultiple", "replace_all_occurrences", "replaceAllOccurrences"];
+
+    private static readonly string[] EditChunksAliases =
+        ["replacementChunks", "replacement_chunks", "chunks", "changes", "patches", "modifications", "replacements", "operations", "items"];
+
+    private static readonly string[] TaskIdAliases =
+        ["id", "taskId", "task", "number", "task_number", "taskNumber"];
+
+    private static readonly string[] NestedTaskIdAliases =
+        ["task_id", "id", "task", "number", "task_number", "taskNumber"];
+
+    private static readonly string[] PriorityAliases =
+        ["prio", "order", "rank", "importance", "new_priority", "newPriority"];
+
+    private static readonly string[] DependsOnIdsAliases =
+        ["dependsOnIds", "depends_on", "dependsOn", "dependencies", "dependency_ids", "dependencyIds", "prerequisites", "prerequisite_ids", "deps"];
+
+    private static readonly string[] ListDirPathAliases = ["dir", "directory", "folder", "target", "dir_path", "directory_path"];
+    private static readonly string[] GrepQueryAliases = ["pattern", "search", "regex", "term", "text"];
+    private static readonly string[] GrepPathAliases = ["dir", "directory", "folder", "include", "file"];
+    private static readonly string[] FileOutlinePathAliases = ["file_path", "filepath", "file", "filename", "target", "target_file", "targetFile"];
+    private static readonly string[] FindFilesPathAliases = ["dir", "directory", "folder", "search_path", "root"];
+    private static readonly string[] FindFilesPatternAliases = ["query", "name", "glob", "filter", "file_pattern"];
+
+    /// <summary>
+    /// Creates a configured <see cref="LenientToolDispatcher"/> with all canonical tool schemas,
+    /// dropped-tool shell translations, and optional bound <see cref="CanonicalTools"/> and custom tools.
+    /// </summary>
+    public static LenientToolDispatcher Create(
+        CanonicalTools? tools = null,
+        IReadOnlyList<CustomToolConfig>? customTools = null,
+        ILogger? logger = null,
+        string? sessionId = null,
+        LenientDispatchTelemetry? telemetry = null,
+        bool enableParameterCoercion = true)
     {
-    }
+        var configuration = CreateConfiguration(customTools);
+        var options = CreateOptions(enableParameterCoercion);
+        options.SessionId = sessionId;
+        options.Telemetry = telemetry;
 
-    public LenientToolDispatcher(CanonicalTools canonicalTools)
-        : this(canonicalTools, null)
-    {
-    }
+        var dispatcher = new LenientToolDispatcher(configuration, options);
+        dispatcher.RegisterTools(CanonicalAIFunctionFactory.CreateAllCanonicalFunctions(tools));
 
-    public LenientToolDispatcher(CanonicalTools? canonicalTools, ILogger<LenientToolDispatcher>? logger)
-    {
-        _logger = logger;
-        if (canonicalTools != null)
-        {
-            RegisterCanonicalTools(canonicalTools);
-        }
-    }
-
-    public void RegisterTool(ToolDefinition tool)
-    {
-        ArgumentNullException.ThrowIfNull(tool);
-        _tools[tool.Name] = tool;
-        _aliasToCanonical[tool.Name] = tool.Name;
-
-        foreach (var alias in tool.Aliases)
-        {
-            _aliasToCanonical[alias] = tool.Name;
-        }
+        return dispatcher;
     }
 
     /// <summary>
-    /// Registers an AIFunction (from Microsoft Agent Framework or MCP) into the dispatcher.
+    /// Registers or updates all 14 canonical <see cref="AIFunction"/> instances bound to <paramref name="tools"/>
+    /// on the specified <paramref name="dispatcher"/>.
     /// </summary>
-    public void RegisterAIFunction(Microsoft.Extensions.AI.AIFunction aiFunction, IEnumerable<string>? aliases = null)
+    public static void RegisterCanonicalTools(this LenientToolDispatcher dispatcher, CanonicalTools tools)
     {
-        ArgumentNullException.ThrowIfNull(aiFunction);
-        var toolDef = new ToolDefinition(
-            aiFunction.Name,
-            aiFunction.Description ?? string.Empty,
-            async (args, ct) =>
-            {
-                var funcArgs = new Microsoft.Extensions.AI.AIFunctionArguments();
-                foreach (var (k, v) in args)
-                {
-                    if (v != null) funcArgs[k] = v;
-                }
-                var result = await aiFunction.InvokeAsync(funcArgs, ct);
-                return result?.ToString() ?? string.Empty;
-            },
-            aliases: aliases);
-
-        RegisterTool(toolDef);
+        ArgumentNullException.ThrowIfNull(dispatcher);
+        ArgumentNullException.ThrowIfNull(tools);
+        dispatcher.RegisterTools(CanonicalAIFunctionFactory.CreateAllCanonicalFunctions(tools));
     }
 
     /// <summary>
-    /// Registers multiple AITools (e.g. from Microsoft Agent Framework AIContextProvider or MCP) into the dispatcher.
+    /// Builds NightCodeForge's <see cref="LenientToolDispatcherOptions"/> using <see cref="ReadOnlyCommandValidator.Instance"/>.
     /// </summary>
-    public void RegisterAITools(IEnumerable<Microsoft.Extensions.AI.AITool>? tools)
+    public static LenientToolDispatcherOptions CreateOptions(bool enableParameterCoercion = true)
     {
-        if (tools == null) return;
-        foreach (var tool in tools)
+        return new LenientToolDispatcherOptions
         {
-            if (tool is Microsoft.Extensions.AI.AIFunction aiFunction)
-            {
-                RegisterAIFunction(aiFunction);
-            }
-        }
-    }
-
-    public void RegisterTranslation(ToolTranslationRule rule)
-    {
-        ArgumentNullException.ThrowIfNull(rule);
-        _translations[rule.SourceTool] = rule;
-    }
-
-    public bool TryGetTool(string nameOrAlias, out ToolDefinition? tool)
-    {
-        var canonical = ResolveToolName(nameOrAlias);
-        return _tools.TryGetValue(canonical, out tool);
-    }
-
-    public string ResolveToolName(string rawName)
-    {
-        if (string.IsNullOrWhiteSpace(rawName)) return "read";
-        var clean = rawName.Trim();
-
-        // Strip prefixes like "default_api:" or "tools."
-        var colonIdx = clean.IndexOf(':');
-        if (colonIdx >= 0) clean = clean[(colonIdx + 1)..];
-        var dotIdx = clean.IndexOf('.');
-        if (dotIdx >= 0) clean = clean[(dotIdx + 1)..];
-
-        clean = clean.ToLowerInvariant();
-
-        if (_aliasToCanonical.TryGetValue(clean, out var canonical))
-        {
-            return canonical;
-        }
-
-        return clean;
+            EnableParameterCoercion = enableParameterCoercion,
+            CommandValidator = NightCodeForge.Agents.Tools.ReadOnlyCommandValidator.Instance,
+            ValidateTranslationsWithReadOnlyValidator = true,
+            PropagatedParameters = new HashSet<string>(["replace_all", "replaceAll"], StringComparer.OrdinalIgnoreCase)
+        };
     }
 
     /// <summary>
-    /// Normalizes a tool name and argument dictionary into a canonical call.
+    /// Builds NightCodeForge's declarative <see cref="ToolDispatcherConfiguration"/> for all canonical tools,
+    /// backlog mutation tools, dropped-tool shell translations, and optional custom database tools.
     /// </summary>
-    public DispatchedToolCall NormalizeCall(string rawToolName, Dictionary<string, object?> parsedArgs)
+    public static ToolDispatcherConfiguration CreateConfiguration(IReadOnlyList<CustomToolConfig>? customTools = null)
     {
-        var canonicalName = ResolveToolName(rawToolName);
+        var config = new ToolDispatcherConfiguration();
 
-        // Check if there is a translation rule (e.g. dropped tools -> bash)
-        if (_translations.TryGetValue(canonicalName, out var translationRule))
+        ConfigureRead(config);
+        ConfigureEdit(config);
+        ConfigureWrite(config);
+        ConfigureBash(config);
+        ConfigureLoadSkill(config);
+        ConfigureAsk(config);
+        ConfigureWebSearch(config);
+        ConfigureProposeTasks(config);
+        ConfigureRequestChanges(config);
+        ConfigureBacklogTools(config);
+        ConfigureTranslations(config);
+
+        if (customTools is { Count: > 0 })
         {
-            var transformedArgs = translationRule.TransformArguments(parsedArgs);
-            canonicalName = translationRule.TargetTool;
-            parsedArgs = transformedArgs;
-        }
-
-        var normalizedArgs = NormalizeParameters(canonicalName, parsedArgs);
-        return new DispatchedToolCall(canonicalName, normalizedArgs);
-    }
-
-    /// <summary>
-    /// Parses a raw tool invocation name and payload string into a normalized canonical call.
-    /// </summary>
-    public DispatchedToolCall NormalizeCall(string rawToolName, string rawArgumentsJson)
-    {
-        var sanitizedJson = SanitizeJsonPayload(rawArgumentsJson);
-        var parsedArgs = ParseAndCoerceArguments(sanitizedJson);
-        return NormalizeCall(rawToolName, parsedArgs);
-    }
-
-    /// <summary>
-    /// Normalizes and executes the tool call against registered tool definitions.
-    /// </summary>
-    public async Task<string> DispatchAsync(string rawToolName, string rawArgumentsJson, CancellationToken cancellationToken = default)
-    {
-        var call = NormalizeCall(rawToolName, rawArgumentsJson);
-        return await ExecuteCanonicalCallAsync(call.CanonicalName, call.Arguments, cancellationToken);
-    }
-
-    public async Task<string> ExecuteCanonicalCallAsync(string canonicalName, Dictionary<string, object?> args, CancellationToken cancellationToken = default)
-    {
-        if (_tools.TryGetValue(canonicalName, out var tool) && tool.Handler != null)
-        {
-            try
+            foreach (var customTool in customTools)
             {
-                return await tool.Handler(args, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "LenientToolDispatcher: Error executing handler for tool '{CanonicalName}'", canonicalName);
-                throw;
-            }
-        }
-
-        _logger?.LogWarning("LenientToolDispatcher: Unknown or unregistered tool: '{CanonicalName}'", canonicalName);
-        throw new NotSupportedException($"Unknown or unregistered tool: '{canonicalName}'");
-    }
-
-    public static string SanitizeJsonPayload(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "{}";
-        var clean = raw.Trim();
-
-        // Strip markdown code fences (```json ... ``` or ``` ...)
-        if (clean.StartsWith("```"))
-        {
-            clean = MarkdownFenceStartRegex().Replace(clean, "");
-            clean = MarkdownFenceEndRegex().Replace(clean, "");
-            clean = clean.Trim();
-        }
-
-        // Try direct parse. If fails, attempt auto-repairing malformed JSON
-        try
-        {
-            using var doc = JsonDocument.Parse(clean);
-            return clean;
-        }
-        catch (JsonException)
-        {
-            var repaired = JsonRepairHelper.Repair(clean);
-            try
-            {
-                using var doc = JsonDocument.Parse(repaired);
-                return repaired;
-            }
-            catch (JsonException)
-            {
-                return RepairJsonStringNewlines(clean);
-            }
-        }
-    }
-
-    private static string RepairJsonStringNewlines(string json)
-    {
-        var sb = new StringBuilder();
-        bool inString = false;
-        bool isEscaped = false;
-
-        for (int i = 0; i < json.Length; i++)
-        {
-            char c = json[i];
-            if (c == '\\' && inString)
-            {
-                isEscaped = !isEscaped;
-                sb.Append(c);
-                continue;
-            }
-
-            if (c == '"' && !isEscaped)
-            {
-                inString = !inString;
-                sb.Append(c);
-                continue;
-            }
-
-            if (inString && (c == '\r' || c == '\n'))
-            {
-                if (c == '\r' && i + 1 < json.Length && json[i + 1] == '\n')
+                if (string.IsNullOrWhiteSpace(customTool.Name))
                 {
-                    i++;
+                    continue;
                 }
-                sb.Append("\\n");
-                isEscaped = false;
-                continue;
-            }
 
-            isEscaped = false;
-            sb.Append(c);
-        }
-
-        return sb.ToString();
-    }
-
-    private static Dictionary<string, object?> ParseAndCoerceArguments(string json)
-    {
-        try
-        {
-            var node = JsonNode.Parse(json);
-            if (node is JsonObject obj)
-            {
-                var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                foreach (var (k, v) in obj)
+                var mapping = new ToolMapping();
+                foreach (var alias in customTool.Aliases)
                 {
-                    dict[k] = ConvertJsonNode(v);
-                }
-                return dict;
-            }
-            if (node is JsonArray arr)
-            {
-                return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["items"] = ConvertJsonNode(arr)
-                };
-            }
-        }
-        catch (JsonException)
-        {
-            // Invalid JSON arguments format; return empty dictionary
-        }
-
-        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static object? ConvertJsonNode(JsonNode? node)
-    {
-        if (node == null) return null;
-        if (node is JsonValue val)
-        {
-            if (val.TryGetValue<long>(out var l)) return l;
-            if (val.TryGetValue<int>(out var i)) return i;
-            if (val.TryGetValue<double>(out var d)) return d;
-            if (val.TryGetValue<bool>(out var b)) return b;
-            if (val.TryGetValue<string>(out var s)) return s;
-            return val.ToString();
-        }
-        if (node is JsonArray arr)
-        {
-            return arr.Select(ConvertJsonNode).ToList();
-        }
-        if (node is JsonObject obj)
-        {
-            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (k, v) in obj)
-            {
-                dict[k] = ConvertJsonNode(v);
-            }
-            return dict;
-        }
-        return node.ToString();
-    }
-
-    private Dictionary<string, object?> NormalizeParameters(string canonicalName, Dictionary<string, object?> raw)
-    {
-        var norm = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-
-        // Check tool-specific parameter aliases if tool is registered
-        if (_tools.TryGetValue(canonicalName, out var toolDef) && toolDef.ParameterAliases.Count > 0)
-        {
-            foreach (var (alias, canonParam) in toolDef.ParameterAliases)
-            {
-                if (raw.TryGetValue(alias, out var v) && v != null && !norm.ContainsKey(canonParam))
-                {
-                    norm[canonParam] = v;
-                }
-            }
-        }
-
-        // Global default parameter mappings
-        var pathKeys = new[] { "path", "file_path", "filePath", "filepath", "filename", "file", "target_file", "TargetFile" };
-        foreach (var pk in pathKeys)
-        {
-            if (!norm.ContainsKey("path") && raw.TryGetValue(pk, out var val) && val != null)
-            {
-                norm["path"] = val;
-                break;
-            }
-        }
-
-        var cmdKeys = new[] { "command", "cmd", "command_line", "exec", "script", "CommandLine" };
-        foreach (var ck in cmdKeys)
-        {
-            if (!norm.ContainsKey("command") && raw.TryGetValue(ck, out var val) && val != null)
-            {
-                norm["command"] = val;
-                break;
-            }
-        }
-
-        var contentKeys = new[] { "content", "file_content", "text", "code", "CodeContent", "code_content" };
-        foreach (var ck in contentKeys)
-        {
-            if (!norm.ContainsKey("content") && raw.TryGetValue(ck, out var val) && val != null)
-            {
-                norm["content"] = val;
-                break;
-            }
-        }
-
-        int? resolvedOffset = null;
-        var offsetKeys = new[] { "offset", "start_line", "startLine", "from_line", "line_start", "start", "StartLine" };
-        foreach (var ok in offsetKeys)
-        {
-            if (raw.TryGetValue(ok, out var val) && val != null)
-            {
-                resolvedOffset = CoerceToInt(val);
-                if (resolvedOffset != null)
-                {
-                    norm["offset"] = resolvedOffset;
-                    break;
-                }
-            }
-        }
-
-        if (raw.TryGetValue("limit", out var limVal) && limVal != null)
-        {
-            norm["limit"] = CoerceToInt(limVal);
-        }
-        else
-        {
-            var endLineKeys = new[] { "end_line", "endLine", "to_line", "line_end", "end", "EndLine" };
-            foreach (var elk in endLineKeys)
-            {
-                if (raw.TryGetValue(elk, out var val) && val != null)
-                {
-                    var endLine = CoerceToInt(val);
-                    if (endLine != null)
+                    if (!string.IsNullOrWhiteSpace(alias))
                     {
-                        var start = resolvedOffset ?? 1;
-                        norm["limit"] = Math.Max(1, endLine.Value - start + 1);
-                        break;
-                    }
-                }
-            }
-        }
-
-        var queryKeys = new[] { "query", "q", "search_query", "text", "searchQuery" };
-        foreach (var qk in queryKeys)
-        {
-            if (!norm.ContainsKey("query") && raw.TryGetValue(qk, out var val) && val != null)
-            {
-                norm["query"] = val;
-                break;
-            }
-        }
-
-        var workDirKeys = new[] { "working_directory", "workingDirectory", "workdir", "work_dir", "cwd" };
-        foreach (var wdk in workDirKeys)
-        {
-            if (!norm.ContainsKey("working_directory") && raw.TryGetValue(wdk, out var val) && val != null)
-            {
-                norm["working_directory"] = val;
-                break;
-            }
-        }
-
-        var skillKeys = new[] { "skill_name", "skillName", "skill", "name" };
-        foreach (var sk in skillKeys)
-        {
-            if (!norm.ContainsKey("skill_name") && raw.TryGetValue(sk, out var val) && val != null)
-            {
-                norm["skill_name"] = val;
-                break;
-            }
-        }
-
-        var maxResultsKeys = new[] { "max_results", "maxResults", "limit", "count" };
-        foreach (var mrk in maxResultsKeys)
-        {
-            if (!norm.ContainsKey("max_results") && raw.TryGetValue(mrk, out var val) && val != null)
-            {
-                norm["max_results"] = CoerceToInt(val);
-                break;
-            }
-        }
-
-        if (!norm.ContainsKey("tasks"))
-        {
-            if (raw.TryGetValue("task", out var taskVal) && taskVal != null)
-            {
-                norm["tasks"] = taskVal;
-            }
-            else if (string.Equals(canonicalName, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase) &&
-                     raw.TryGetValue("items", out var itemsVal) && itemsVal != null)
-            {
-                norm["tasks"] = itemsVal;
-            }
-        }
-
-        var questionKeys = new[] { "questions", "question_items", "questionItems", "items" };
-        foreach (var qk in questionKeys)
-        {
-            if (!norm.ContainsKey("questions") && raw.TryGetValue(qk, out var qVal) && qVal != null)
-            {
-                norm["questions"] = qVal;
-                break;
-            }
-        }
-
-        var feedbackKeys = new[] { "feedback", "critique", "message", "comments" };
-        foreach (var fk in feedbackKeys)
-        {
-            if (!norm.ContainsKey("feedback") && raw.TryGetValue(fk, out var fVal) && fVal != null)
-            {
-                norm["feedback"] = fVal;
-                break;
-            }
-        }
-
-        var reasonKeys = new[] { "reason", "comment", "summary" };
-        foreach (var rk in reasonKeys)
-        {
-            if (!norm.ContainsKey("reason") && raw.TryGetValue(rk, out var rVal) && rVal != null)
-            {
-                norm["reason"] = rVal;
-                break;
-            }
-        }
-
-        // Map edits
-        if (raw.TryGetValue("edits", out var editsVal) && editsVal != null)
-        {
-            norm["edits"] = editsVal;
-        }
-        else
-        {
-            var oldKeys = new[] { "oldText", "old_text", "old_str", "search", "target_string", "targetContent", "TargetContent", "target_content" };
-            var newKeys = new[] { "newText", "new_text", "new_str", "replace", "new_string", "replacementContent", "ReplacementContent", "replacement_content" };
-            var replaceAllKeys = new[] { "replaceAll", "replace_all", "all", "ReplaceAll" };
-
-            object? oldVal = null;
-            object? newVal = null;
-            bool replaceAllVal = false;
-            foreach (var ok in oldKeys) if (raw.TryGetValue(ok, out oldVal) && oldVal != null) break;
-            foreach (var nk in newKeys) if (raw.TryGetValue(nk, out newVal) && newVal != null) break;
-            foreach (var rk in replaceAllKeys)
-            {
-                if (raw.TryGetValue(rk, out var ra) && ra != null)
-                {
-                    if (ra is bool b) { replaceAllVal = b; break; }
-                    if (bool.TryParse(ra.ToString(), out var parsedB)) { replaceAllVal = parsedB; break; }
-                }
-            }
-
-            if (oldVal != null && newVal != null)
-            {
-                norm["old_text"] = oldVal;
-                norm["new_text"] = newVal;
-                norm["replace_all"] = replaceAllVal;
-                norm["edits"] = new List<object?>
-                {
-                    new Dictionary<string, object?> { ["oldText"] = oldVal, ["newText"] = newVal, ["replaceAll"] = replaceAllVal }
-                };
-            }
-        }
-
-        // Pass through any other unmapped keys
-        foreach (var (k, v) in raw)
-        {
-            if (!norm.ContainsKey(k))
-            {
-                norm[k] = v;
-            }
-        }
-
-        return norm;
-    }
-
-    private void RegisterCanonicalTools(CanonicalTools tools)
-    {
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.Read,
-            "Read file contents with line slicing (path, offset, limit)",
-            async (args, ct) =>
-            {
-                var path = GetRequiredString(args, "path");
-                var offset = GetOptionalInt(args, "offset") ?? GetOptionalInt(args, "start_line") ?? GetOptionalInt(args, "startLine");
-                var limit = GetOptionalInt(args, "limit");
-                if (!limit.HasValue)
-                {
-                    var endLine = GetOptionalInt(args, "end_line") ?? GetOptionalInt(args, "endLine");
-                    if (endLine.HasValue)
-                    {
-                        var start = offset ?? 1;
-                        limit = Math.Max(1, endLine.Value - start + 1);
-                    }
-                }
-                return await tools.ReadAsync(path, offset, limit, ct);
-            },
-            aliases: ["read_file", "readfile", "read_file_content", "cat", "view_file"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.Edit,
-            "Make precise file edits with exact search-and-replace (path, edits: [{ oldText, newText }])",
-            async (args, ct) =>
-            {
-                var path = GetRequiredString(args, "path");
-                var edits = ExtractEdits(args);
-                if (edits.Count > 0 && edits.Any(c => !string.IsNullOrEmpty(c.OldText) || !string.IsNullOrEmpty(c.NewText)))
-                {
-                    return await tools.EditAsync(path, edits, ct);
-                }
-
-                string? effectiveOld = null;
-                string? effectiveNew = null;
-                bool replaceAll = false;
-                var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "old_str", "search" };
-                var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "new_str", "replace" };
-                var replaceAllKeys = new[] { "replaceAll", "replace_all", "all" };
-                foreach (var k in oldKeys) { if (args.TryGetValue(k, out var ot) && ot != null) { effectiveOld = ot.ToString(); break; } }
-                foreach (var k in newKeys) { if (args.TryGetValue(k, out var nt) && nt != null) { effectiveNew = nt.ToString(); break; } }
-                foreach (var k in replaceAllKeys)
-                {
-                    if (args.TryGetValue(k, out var ra) && ra != null)
-                    {
-                        if (ra is bool b) { replaceAll = b; break; }
-                        if (bool.TryParse(ra.ToString(), out var parsedB)) { replaceAll = parsedB; break; }
+                        mapping.Aliases.Add(alias);
                     }
                 }
 
-                if (effectiveOld != null && effectiveNew != null)
+                foreach (var (alias, canonicalParam) in customTool.ParameterAliases)
                 {
-                    return await tools.EditAsync(path, effectiveOld, effectiveNew, replaceAll, ct);
-                }
-
-                return "Error: provide 'edits' (array of { oldText, newText }) or single-edit replacement ('oldText'/'newText' or 'old_text'/'new_text').";
-            },
-            aliases: ["replace_file_content", "replacefilecontent", "replace_content", "replacecontent", "edit_file", "str_replace", "patch_file", "editfile"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.Write,
-            "Create new files or completely rewrite files (path, content)",
-            async (args, ct) =>
-            {
-                var path = GetRequiredString(args, "path");
-                var content = args.TryGetValue("content", out var c) && c != null
-                    ? c.ToString()!
-                    : (args.TryGetValue("code", out var cd) && cd != null ? cd.ToString()! : GetRequiredString(args, "content"));
-                return await tools.WriteAsync(path, content, ct);
-            },
-            aliases: ["write_file", "writefile", "create_file", "new_file"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.Bash,
-            "Execute shell commands, builds, and file discovery (command, timeout, working_directory)",
-            async (args, ct) =>
-            {
-                var command = GetRequiredString(args, "command");
-                var timeout = GetOptionalInt(args, "timeout");
-                var workDir = args.TryGetValue("working_directory", out var wd) && wd != null
-                    ? wd.ToString()
-                    : (args.TryGetValue("workingDirectory", out var wdCamel) && wdCamel != null
-                        ? wdCamel.ToString()
-                        : (args.TryGetValue("cwd", out var cwd) && cwd != null
-                            ? cwd.ToString()
-                            : (args.TryGetValue("workdir", out var wrk) && wrk != null ? wrk.ToString() : null)));
-                return await tools.BashAsync(command, timeout, workDir, ct);
-            },
-            aliases: ["run_command", "runcommand", "run_cmd", "exec", "execute", "cmd", "terminal", "powershell", "sh"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.LoadSkill,
-            "Loads full instructions and reference documentation for a modular skill on demand (skill_name)",
-            async (args, ct) =>
-            {
-                var skillName = args.TryGetValue("skill_name", out var s) && s != null
-                    ? s.ToString()!
-                    : (args.TryGetValue("skillName", out var sn) && sn != null
-                        ? sn.ToString()!
-                        : (args.TryGetValue("skill", out var sk) && sk != null
-                            ? sk.ToString()!
-                            : (args.TryGetValue("name", out var n) && n != null ? n.ToString()! : null)));
-
-                if (string.IsNullOrWhiteSpace(skillName))
-                {
-                    return "Error: skill_name parameter is required.";
-                }
-
-                return await tools.LoadSkillAsync(skillName, ct);
-            },
-            aliases: ["loadskill", "use_skill", "useskill", "get_skill"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.Ask,
-            "Consolidate and ask all clarifying questions to the user when blocked. Accepts 'questions' list (each with prompt, optional rationale, optional options).",
-            async (args, ct) =>
-            {
-                var questionItems = ExtractQuestionItems(args);
-                return await tools.AskAsync(questionItems, ct);
-            },
-            aliases: ["ask_human_question", "ask_human", "ask_user", "askhumanquestion", "ask_question", "askhuman"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.WebSearch,
-            "Search technical web documentation for APIs, errors, or libraries (query, max_results)",
-            async (args, ct) =>
-            {
-                var query = args.TryGetValue("query", out var q) && q != null
-                    ? q.ToString()!
-                    : (args.TryGetValue("q", out var qShort) && qShort != null ? qShort.ToString()! : GetRequiredString(args, "query"));
-                var maxResults = GetOptionalInt(args, "max_results")
-                    ?? GetOptionalInt(args, "maxResults")
-                    ?? GetOptionalInt(args, "limit")
-                    ?? GetOptionalInt(args, "count");
-                return await tools.WebSearchAsync(query, maxResults, ct);
-            },
-            aliases: ["search_web", "google_search", "bing_search", "brave_search", "websearch", "internet_search", "search"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.ProposeTasks,
-            "Propose structured backlog items (tasks: [{ title, description, priority }])",
-            (args, _) =>
-            {
-                args.TryGetValue("tasks", out var tasks);
-                var title = args.TryGetValue("title", out var t) ? t?.ToString() : null;
-                var description = args.TryGetValue("description", out var d) ? d?.ToString() : null;
-                var priority = GetOptionalInt(args, "priority");
-                return Task.FromResult(tools.ProposeTasks(tasks, title, description, priority));
-            },
-            aliases: ["propose_task", "proposetasks"]));
-
-        RegisterTool(new ToolDefinition(
-            CanonicalToolNames.RequestChanges,
-            "Reject implementation and send task back to the implementation agent for rework (feedback, reason)",
-            (args, _) =>
-            {
-                var feedback = args.TryGetValue("feedback", out var fb) && fb != null
-                    ? fb.ToString()!
-                    : (args.TryGetValue("critique", out var cr) && cr != null ? cr.ToString()! : GetRequiredString(args, "feedback"));
-                var reason = args.TryGetValue("reason", out var r) && r != null
-                    ? r.ToString()
-                    : (args.TryGetValue("comment", out var cm) ? cm?.ToString() : null);
-                return Task.FromResult(tools.RequestChanges(feedback, reason));
-            },
-            aliases: ["reject_implementation", "requestchanges", "rejectimplementation", "send_back", "sendback"]));
-
-        RegisterBacklogTools(tools);
-
-        // Register default translation rules for dropped legacy tools
-        RegisterTranslation(new ToolTranslationRule("list_dir", CanonicalToolNames.Bash, args =>
-        {
-            var p = args.TryGetValue("path", out var val) ? val?.ToString() : ".";
-            return new Dictionary<string, object?> { ["command"] = $"ls -la {p}" };
-        }));
-
-        RegisterTranslation(new ToolTranslationRule("grep_search", CanonicalToolNames.Bash, args =>
-        {
-            var q = args.TryGetValue("query", out var qVal) ? qVal?.ToString() : "";
-            var p = args.TryGetValue("path", out var pVal) ? pVal?.ToString() : ".";
-            return new Dictionary<string, object?> { ["command"] = $"rg -n \"{q}\" {p}" };
-        }));
-
-        RegisterTranslation(new ToolTranslationRule("get_file_outline", CanonicalToolNames.Bash, args =>
-        {
-            var p = args.TryGetValue("path", out var pVal) ? pVal?.ToString() : "";
-            return new Dictionary<string, object?> { ["command"] = $"rg -n \"^(public|private|protected|internal|class|interface|record|def|function)\" {p}" };
-        }));
-
-        RegisterTranslation(new ToolTranslationRule("find_files", CanonicalToolNames.Bash, args =>
-        {
-            var pat = args.TryGetValue("pattern", out var pVal) ? pVal?.ToString() : (args.TryGetValue("name", out var nVal) ? nVal?.ToString() : "*");
-            var p = args.TryGetValue("path", out var pathVal) ? pathVal?.ToString() : ".";
-            return new Dictionary<string, object?> { ["command"] = $"find {p} -name \"{pat}\"" };
-        }));
-
-        _aliasToCanonical["listdir"] = "list_dir";
-        _aliasToCanonical["list_directory"] = "list_dir";
-        _aliasToCanonical["ls"] = "list_dir";
-        _aliasToCanonical["grep"] = "grep_search";
-        _aliasToCanonical["search_files"] = "grep_search";
-        _aliasToCanonical["find_in_files"] = "grep_search";
-        _aliasToCanonical["find"] = "find_files";
-        _aliasToCanonical["findfiles"] = "find_files";
-        _aliasToCanonical["locate_files"] = "find_files";
-        _aliasToCanonical["outline"] = "get_file_outline";
-        _aliasToCanonical["view_outline"] = "get_file_outline";
-        _aliasToCanonical["file_outline"] = "get_file_outline";
-    }
-
-    private static int? CoerceToInt(object? val)
-    {
-        if (val == null) return null;
-        if (val is int i) return i;
-        if (val is long l) return (int)l;
-        if (val is JsonElement je && je.TryGetInt32(out var jeInt)) return jeInt;
-        if (int.TryParse(val.ToString(), out var parsed)) return parsed;
-        return null;
-    }
-
-    private static string GetRequiredString(Dictionary<string, object?> args, string key)
-    {
-        if (args.TryGetValue(key, out var val) && val != null)
-        {
-            if (val is JsonElement je && je.ValueKind == JsonValueKind.String)
-            {
-                var s = je.GetString();
-                if (!string.IsNullOrWhiteSpace(s)) return s;
-            }
-            else if (!string.IsNullOrWhiteSpace(val.ToString()))
-            {
-                return val.ToString()!;
-            }
-        }
-        throw new ArgumentException($"Missing required parameter: '{key}'");
-    }
-
-    private static int? GetOptionalInt(Dictionary<string, object?> args, string key)
-    {
-        if (args.TryGetValue(key, out var val))
-        {
-            return CoerceToInt(val);
-        }
-        return null;
-    }
-
-    private static IReadOnlyList<EditChunk> ExtractEdits(Dictionary<string, object?> args)
-    {
-        var chunks = new List<EditChunk>();
-        bool defaultReplaceAll = false;
-        var replaceAllKeys = new[] { "replaceAll", "replace_all", "all", "ReplaceAll" };
-        foreach (var k in replaceAllKeys)
-        {
-            if (args.TryGetValue(k, out var ra) && ra != null)
-            {
-                if (ra is bool b) { defaultReplaceAll = b; break; }
-                if (bool.TryParse(ra.ToString(), out var parsedB)) { defaultReplaceAll = parsedB; break; }
-            }
-        }
-
-        if (!args.TryGetValue("edits", out var editsObj) || editsObj == null)
-        {
-            return chunks;
-        }
-
-        if (editsObj is string str && !string.IsNullOrWhiteSpace(str) && str.TrimStart().StartsWith("["))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(str);
-                if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var el in doc.RootElement.EnumerateArray())
+                    if (!string.IsNullOrWhiteSpace(alias) && !string.IsNullOrWhiteSpace(canonicalParam))
                     {
-                        if (el.ValueKind == JsonValueKind.Object)
-                        {
-                            chunks.Add(ExtractChunkFromJsonElement(el));
-                        }
+                        mapping.ParameterAliases[alias] = canonicalParam;
                     }
                 }
-            }
-            catch (JsonException)
-            {
-                // Fallback
-            }
-        }
-        else if (editsObj is IEnumerable<EditChunk> typedChunks)
-        {
-            chunks.AddRange(typedChunks);
-        }
-        else if (editsObj is JsonElement je)
-        {
-            if (je.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var el in je.EnumerateArray())
-                {
-                    if (el.ValueKind == JsonValueKind.Object)
-                    {
-                        chunks.Add(ExtractChunkFromJsonElement(el));
-                    }
-                }
-            }
-        }
-        else if (editsObj is IEnumerable<object?> list)
-        {
-            foreach (var item in list)
-            {
-                if (item is EditChunk chunk)
-                {
-                    chunks.Add(chunk);
-                }
-                else if (item is IDictionary<string, object?> d)
-                {
-                    chunks.Add(ExtractChunkFromDictionary(d));
-                }
-                else if (item is JsonElement el && el.ValueKind == JsonValueKind.Object)
-                {
-                    chunks.Add(ExtractChunkFromJsonElement(el));
-                }
-                else if (item is JsonObject jo)
-                {
-                    var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var (k, v) in jo)
-                    {
-                        dict[k] = v?.ToString();
-                    }
-                    chunks.Add(ExtractChunkFromDictionary(dict));
-                }
+
+                config.Tools[customTool.Name] = mapping;
             }
         }
 
-        if (defaultReplaceAll)
-        {
-            return chunks.Select(c => c.ReplaceAll ? c : c with { ReplaceAll = true }).ToList();
-        }
-
-        return chunks;
+        return config;
     }
 
-    private static EditChunk ExtractChunkFromDictionary(IDictionary<string, object?> dict)
+    private static void ConfigureRead(ToolDispatcherConfiguration config)
     {
-        string old = string.Empty;
-        string @new = string.Empty;
-        bool replaceAll = false;
-
-        var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "target_string", "search", "old_str", "old" };
-        var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "replacement_string", "replace", "new_str", "new" };
-        var replaceAllKeys = new[] { "replaceAll", "replace_all", "all" };
-
-        foreach (var k in oldKeys)
+        var mapping = new ToolMapping
         {
-            if (dict.TryGetValue(k, out var ot) && ot != null)
-            {
-                old = ot.ToString()!;
-                break;
-            }
-        }
+            Aliases = new HashSet<string>(
+                ["view_file", "read_file", "readfile", "read_file_content", "cat", "get_file_content", "get_file_contents", "open_file", "view_code"],
+                StringComparer.OrdinalIgnoreCase)
+        };
 
-        foreach (var k in newKeys)
-        {
-            if (dict.TryGetValue(k, out var nt) && nt != null)
-            {
-                @new = nt.ToString()!;
-                break;
-            }
-        }
+        mapping.AddParameterAliases("path", PathAliases);
+        mapping.AddParameterAliases("offset", ReadOffsetAliases);
+        mapping.AddParameterAliases("limit", ReadLimitAliases);
+        mapping.MapEndLineToLimit("offset", "limit", ReadEndLineAliases);
 
-        foreach (var k in replaceAllKeys)
-        {
-            if (dict.TryGetValue(k, out var ra) && ra != null)
-            {
-                if (ra is bool b) { replaceAll = b; break; }
-                if (bool.TryParse(ra.ToString(), out var parsedB)) { replaceAll = parsedB; break; }
-            }
-        }
-
-        return new EditChunk(old, @new, replaceAll);
+        config.Tools[CanonicalToolNames.Read] = mapping;
     }
 
-    private static EditChunk ExtractChunkFromJsonElement(JsonElement el)
+    private static void ConfigureEdit(ToolDispatcherConfiguration config)
     {
-        string old = string.Empty;
-        string @new = string.Empty;
-        bool replaceAll = false;
-
-        var oldKeys = new[] { "oldText", "old_text", "targetContent", "target_content", "target_string", "search", "old_str", "old" };
-        var newKeys = new[] { "newText", "new_text", "replacementContent", "replacement_content", "replacement_string", "replace", "new_str", "new" };
-        var replaceAllKeys = new[] { "replaceAll", "replace_all", "all" };
-
-        foreach (var k in oldKeys)
+        var mapping = new ToolMapping
         {
-            if (el.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.String)
-            {
-                old = p.GetString() ?? string.Empty;
-                break;
-            }
-        }
+            Aliases = new HashSet<string>(
+                ["replace_file_content", "replacefilecontent", "replace_content", "replacecontent", "multi_replace_file_content", "apply_diff", "edit_file", "editfile", "patch_file", "update_file", "modify_file", "str_replace", "replace_in_file", "multi_edit"],
+                StringComparer.OrdinalIgnoreCase),
+            PropagatedParameters = new HashSet<string>(["replace_all", "replaceAll"], StringComparer.OrdinalIgnoreCase)
+        };
 
-        foreach (var k in newKeys)
-        {
-            if (el.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.String)
-            {
-                @new = p.GetString() ?? string.Empty;
-                break;
-            }
-        }
+        mapping.AddParameterAliases("path", PathAliases);
+        mapping.AddParameterAliases("old_text", EditOldTextAliases);
+        mapping.AddParameterAliases("new_text", EditNewTextAliases);
+        mapping.AddParameterAliases("replace_all", EditReplaceAllAliases);
+        mapping.AddParameterAliases("edits", EditChunksAliases);
 
-        foreach (var k in replaceAllKeys)
-        {
-            if (el.TryGetProperty(k, out var p))
-            {
-                if (p.ValueKind == JsonValueKind.True) { replaceAll = true; break; }
-                if (p.ValueKind == JsonValueKind.False) { replaceAll = false; break; }
-                if (p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out var parsedB)) { replaceAll = parsedB; break; }
-            }
-        }
+        mapping.AddNestedParameterAlias("edits", "oldText", [.. EditNestedOldTextAliases]);
+        mapping.AddNestedParameterAlias("edits", "newText", [.. EditNestedNewTextAliases]);
+        mapping.AddNestedParameterAlias("edits", "replaceAll", [.. EditNestedReplaceAllAliases]);
 
-        return new EditChunk(old, @new, replaceAll);
+        mapping.AddPromotedCollectionParameter("edits", "old_text", "new_text", "replace_all");
+        mapping.AddNullAsEmptyStringParameter("new_text", "edits[].newText");
+
+        config.Tools[CanonicalToolNames.Edit] = mapping;
     }
 
-    private static IReadOnlyList<string>? ExtractStringList(Dictionary<string, object?> args, string key)
+    private static void ConfigureWrite(ToolDispatcherConfiguration config)
     {
-        if (args.TryGetValue(key, out var obj) && obj is IEnumerable<object?> list)
+        var mapping = new ToolMapping
         {
-            return list.Select(x => x?.ToString() ?? string.Empty).Where(s => !string.IsNullOrEmpty(s)).ToList();
-        }
-        return null;
+            Aliases = new HashSet<string>(
+                ["write_file", "writefile", "write_to_file", "create_file", "new_file", "save_file", "overwrite_file"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        mapping.AddParameterAliases("path", PathAliases);
+        mapping.AddParameterAliases("content", ["code", "CodeContent", "code_content", "contents", "text", "body", "data", "file_content", "new_content", "value"]);
+
+        config.Tools[CanonicalToolNames.Write] = mapping;
     }
 
-    private static IReadOnlyList<QuestionItem>? ExtractQuestionItems(Dictionary<string, object?> args)
+    private static void ConfigureBash(ToolDispatcherConfiguration config)
     {
-        var questionKeys = new[] { "questions", "Questions", "question", "Question", "items", "Items", "question_items", "questionItems" };
-        foreach (var qk in questionKeys)
+        var mapping = new ToolMapping
         {
-            if (args.TryGetValue(qk, out var qObj) && qObj != null)
-            {
-                var parsed = QuestionItemParser.ParseFromObject(qObj);
-                if (parsed != null && parsed.Count > 0)
-                {
-                    return parsed;
-                }
-            }
-        }
+            Aliases = new HashSet<string>(
+                ["run_command", "runcommand", "run_cmd", "execute", "execute_command", "shell", "terminal", "cmd", "powershell", "exec", "sh", "run_bash"],
+                StringComparer.OrdinalIgnoreCase)
+        };
 
-        return QuestionItemParser.ParseFromObject(args);
+        mapping.AddParameterAliases("command", ["cmd", "command_line", "commandLine", "exec", "script", "bash_command", "shell_command", "input"]);
+        mapping.AddParameterAliases("timeout", ["timeout_ms", "timeout_sec", "timeout_seconds", "wait_ms"]);
+        mapping.AddParameterAliases("working_directory", ["workingDirectory", "cwd", "workdir", "working_dir", "dir", "directory", "folder", "work_dir"]);
+
+        config.Tools[CanonicalToolNames.Bash] = mapping;
+    }
+
+    private static void ConfigureLoadSkill(ToolDispatcherConfiguration config)
+    {
+        var mapping = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["get_skill", "read_skill", "use_skill", "useskill", "loadskill", "activate_skill", "skill"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        mapping.AddParameterAliases("skill_name", ["name", "skill", "skillName", "id", "skill_id"]);
+
+        config.Tools[CanonicalToolNames.LoadSkill] = mapping;
+    }
+
+    private static void ConfigureAsk(ToolDispatcherConfiguration config)
+    {
+        var mapping = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["ask_user", "ask_human", "ask_human_question", "askhumanquestion", "askhuman", "ask_question", "ask_questions", "clarify", "question", "prompt_user", "request_clarification"],
+                StringComparer.OrdinalIgnoreCase),
+            PrimaryCollectionProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["questions"] = "prompt",
+                ["questions[]"] = "prompt"
+            }
+        };
+
+        mapping.AddParameterAliases("questions", ["question_items", "questionItems", "items", "prompts", "queries", "question", "text", "message", "prompt", "query"]);
+
+        mapping.AddNestedParameterAlias("questions", "prompt", "question", "text", "message", "query", "title", "label", "description");
+        mapping.AddNestedParameterAlias("questions", "rationale", "reason", "why", "context", "explanation", "header", "category", "section", "topic", "group");
+        mapping.AddNestedParameterAlias("questions", "options", "choices", "values", "candidates", "items", "answers", "select_options", "selectOptions", "options_json", "optionsJson");
+
+        config.Tools[CanonicalToolNames.Ask] = mapping;
+    }
+
+    private static void ConfigureWebSearch(ToolDispatcherConfiguration config)
+    {
+        var mapping = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["search_web", "websearch", "google", "internet_search", "bing_search", "search"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        mapping.AddParameterAliases("query", ["q", "search_query", "searchQuery", "term", "keywords", "text"]);
+        mapping.AddParameterAliases("max_results", ["limit", "count", "num_results", "maxResults", "top_k"]);
+
+        config.Tools[CanonicalToolNames.WebSearch] = mapping;
+    }
+
+    private static void ConfigureProposeTasks(ToolDispatcherConfiguration config)
+    {
+        var mapping = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["create_tasks", "add_tasks", "propose_follow_up", "follow_up_tasks", "new_tasks", "propose_task", "proposetasks", "submit_tasks", "propose_backlog", "create_task", "add_task"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        mapping.AddParameterAliases("tasks", ["proposals", "items", "follow_up_tasks", "task_list", "task"]);
+        mapping.AddParameterAliases("title", ["name", "task_title", "summary", "header"]);
+        mapping.AddParameterAliases("description", ["desc", "details", "body", "prompt", "specification", "spec", "content"]);
+        mapping.AddParameterAliases("priority", ["prio", "order", "rank", "importance"]);
+
+        mapping.AddNestedParameterAlias("tasks", "title", "name", "summary", "task_title", "header");
+        mapping.AddNestedParameterAlias("tasks", "description", "desc", "details", "body", "content", "spec", "specification", "prompt");
+        mapping.AddNestedParameterAlias("tasks", "priority", "prio", "order", "rank", "importance");
+        mapping.AddNestedParameterAlias("tasks", "dependsOnTitles", "depends_on_titles", "dependsOnIndices", "depends_on_indices", "depends_on", "dependsOn", "dependencies", "deps");
+
+        config.Tools[CanonicalToolNames.ProposeTasks] = mapping;
+    }
+
+    private static void ConfigureRequestChanges(ToolDispatcherConfiguration config)
+    {
+        var mapping = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["reject_changes", "reject_implementation", "request_changes", "requestchanges", "rejectimplementation", "send_back", "sendback", "reject_stage", "loopback", "request_rework", "changes_requested", "fail_review", "reject_review", "reject", "return_to_implementation"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+
+        mapping.AddParameterAliases("feedback", ["comments", "review_feedback", "review", "message", "details", "issues", "findings", "changes", "critique", "text", "body", "description"]);
+        mapping.AddParameterAliases("reason", ["comment", "summary", "rationale", "cause", "why", "title"]);
+
+        config.Tools[CanonicalToolNames.RequestChanges] = mapping;
+    }
+
+    private static void ConfigureBacklogTools(ToolDispatcherConfiguration config)
+    {
+        // get_task
+        var getTask = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["view_task", "read_task", "get_task", "gettask", "show_task", "inspect_task", "fetch_task", "task_details"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+        getTask.AddParameterAliases("task_id", TaskIdAliases);
+        config.Tools[CanonicalToolNames.GetTask] = getTask;
+
+        // edit_task
+        var editTask = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["update_task", "edit_task", "edittask", "updatetask", "modify_task", "patch_task", "change_task"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+        editTask.AddParameterAliases("task_id", TaskIdAliases);
+        editTask.AddParameterAliases("title", ["name", "task_title", "taskTitle", "summary", "header"]);
+        editTask.AddParameterAliases("description", ["desc", "details", "body", "prompt", "specification", "spec", "content"]);
+        editTask.AddParameterAliases("priority", PriorityAliases);
+        editTask.AddParameterAliases("depends_on_ids", DependsOnIdsAliases);
+        editTask.AddParameterAliases("merge_mode", ["mergeMode", "merge", "merge_strategy", "mergeStrategy"]);
+        editTask.AddParameterAliases("base_branch", ["baseBranch", "branch", "target_branch", "targetBranch"]);
+        config.Tools[CanonicalToolNames.EditTask] = editTask;
+
+        // set_task_priority
+        var setTaskPriority = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["change_task_priority", "update_task_priority", "prioritize_task", "set_task_priority", "settaskpriority", "set_priority"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+        setTaskPriority.AddParameterAliases("task_id", TaskIdAliases);
+        setTaskPriority.AddParameterAliases("priority", PriorityAliases);
+        config.Tools[CanonicalToolNames.SetTaskPriority] = setTaskPriority;
+
+        // rework_priorities
+        var reworkPriorities = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["reorder_tasks", "reprioritize_tasks", "reprioritize", "batch_set_priority", "batch_set_priorities", "update_priorities", "set_priorities", "rework_priorities", "reworkpriorities", "rework_priority", "set_task_priorities"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+        reworkPriorities.AddParameterAliases("updates", ["items", "tasks", "priorities", "changes", "entries", "list"]);
+        reworkPriorities.AddNestedParameterAlias("updates", "taskId", [.. NestedTaskIdAliases]);
+        reworkPriorities.AddNestedParameterAlias("updates", "priority", [.. PriorityAliases]);
+        config.Tools[CanonicalToolNames.ReworkPriorities] = reworkPriorities;
+
+        // remove_task
+        var removeTask = new ToolMapping
+        {
+            Aliases = new HashSet<string>(
+                ["delete_task", "remove_task", "removetask", "deletetask", "cancel_task", "drop_task", "discard_task", "archive_task"],
+                StringComparer.OrdinalIgnoreCase)
+        };
+        removeTask.AddParameterAliases("task_id", TaskIdAliases);
+        removeTask.AddParameterAliases("reason", ["rationale", "why", "comment", "message", "note", "explanation"]);
+        config.Tools[CanonicalToolNames.RemoveTask] = removeTask;
+    }
+
+    private static void ConfigureTranslations(ToolDispatcherConfiguration config)
+    {
+        var listDir = new ToolTranslation
+        {
+            SourceTool = "list_dir",
+            TargetTool = CanonicalToolNames.Bash,
+            CommandTemplate = "ls -la {path:.}",
+            EscapeMethod = ParameterEscapeMethod.Bash,
+            Aliases = new HashSet<string>(["listdir", "list_directory", "ls"], StringComparer.OrdinalIgnoreCase)
+        };
+        foreach (var alias in ListDirPathAliases)
+        {
+            listDir.ParameterAliases[alias] = "path";
+        }
+        config.Translations.Add(listDir);
+
+        var grepSearch = new ToolTranslation
+        {
+            SourceTool = "grep_search",
+            TargetTool = CanonicalToolNames.Bash,
+            CommandTemplate = "rg -n -- {query} {path:.}",
+            EscapeMethod = ParameterEscapeMethod.Bash,
+            Aliases = new HashSet<string>(["grep", "search_files", "find_in_files"], StringComparer.OrdinalIgnoreCase)
+        };
+        foreach (var alias in GrepQueryAliases)
+        {
+            grepSearch.ParameterAliases[alias] = "query";
+        }
+        foreach (var alias in GrepPathAliases)
+        {
+            grepSearch.ParameterAliases[alias] = "path";
+        }
+        config.Translations.Add(grepSearch);
+
+        var fileOutline = new ToolTranslation
+        {
+            SourceTool = "get_file_outline",
+            TargetTool = CanonicalToolNames.Bash,
+            CommandTemplate = "rg -n \"^(public|private|protected|internal|class|interface|record|def|function)\" {path}",
+            EscapeMethod = ParameterEscapeMethod.Bash,
+            Aliases = new HashSet<string>(["outline", "view_outline", "file_outline"], StringComparer.OrdinalIgnoreCase)
+        };
+        foreach (var alias in FileOutlinePathAliases)
+        {
+            fileOutline.ParameterAliases[alias] = "path";
+        }
+        config.Translations.Add(fileOutline);
+
+        var findFiles = new ToolTranslation
+        {
+            SourceTool = "find_files",
+            TargetTool = CanonicalToolNames.Bash,
+            CommandTemplate = "find {path:.} -maxdepth 4 -iname {pattern:*}",
+            EscapeMethod = ParameterEscapeMethod.Bash,
+            Aliases = new HashSet<string>(["find", "findfiles", "locate_files"], StringComparer.OrdinalIgnoreCase)
+        };
+        foreach (var alias in FindFilesPathAliases)
+        {
+            findFiles.ParameterAliases[alias] = "path";
+        }
+        foreach (var alias in FindFilesPatternAliases)
+        {
+            findFiles.ParameterAliases[alias] = "pattern";
+        }
+        config.Translations.Add(findFiles);
     }
 }

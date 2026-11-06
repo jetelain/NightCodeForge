@@ -408,7 +408,7 @@ public class Step917AgentsAskToolAndIdeationTests
     public async Task LenientToolDispatcher_Ask_HandlesPascalCaseAndSingleObject()
     {
         var tools = TestCanonicalToolsBuilder.Create(AppContext.BaseDirectory);
-        var dispatcher = new LenientToolDispatcher(tools);
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
         // 1. PascalCase in JSON array
         var pascalJson = """
@@ -424,7 +424,7 @@ public class Step917AgentsAskToolAndIdeationTests
         """;
 
         var ex = await Assert.ThrowsAsync<HumanInterruptionException>(() =>
-            dispatcher.DispatchAsync("ask", pascalJson));
+            dispatcher.ExecuteAsync("ask", pascalJson));
 
         Assert.Single(ex.Questions);
         Assert.Equal("PascalCase prompt?", ex.Questions[0].Prompt);
@@ -442,7 +442,7 @@ public class Step917AgentsAskToolAndIdeationTests
         """;
 
         var exSingle = await Assert.ThrowsAsync<HumanInterruptionException>(() =>
-            dispatcher.DispatchAsync("ask", singleObjJson));
+            dispatcher.ExecuteAsync("ask", singleObjJson));
 
         Assert.Single(exSingle.Questions);
         Assert.Equal("Single object question?", exSingle.Questions[0].Prompt);

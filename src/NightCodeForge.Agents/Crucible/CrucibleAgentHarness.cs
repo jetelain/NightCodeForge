@@ -232,7 +232,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         return Task.CompletedTask;
                     },
                     _logger),
-                GrammarFlags: context.OptimizationFlags),
+                GrammarFlags: context.OptimizationFlags,
+                Dispatcher: toolset.Dispatcher),
             cancellationToken);
 
         var tracingClient = setup.TracingClient;
@@ -528,10 +529,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         sawToolCallInPass = true;
                         FlushTurnToHistory();
-                        var canonicalName = dispatcher.ResolveToolName(fc.Name);
+                        var canonicalName = dispatcher.ResolveCanonicalToolName(fc.Name);
                         if (!string.IsNullOrEmpty(fc.CallId))
                         {
-                            toolNamesByCallId[fc.CallId] = fc.Name;
+                            toolNamesByCallId[fc.CallId] = canonicalName;
                         }
                         var argsJson = fc.Arguments != null ? JsonSerializer.Serialize(fc.Arguments) : "{}";
                         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{canonicalName}: {argsJson}", cancellationToken, new Dictionary<string, object?> { [AgentActivityMetadataKeys.ToolName] = canonicalName });

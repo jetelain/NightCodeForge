@@ -94,8 +94,8 @@ public class CanonicalToolsetFactoryTests : IDisposable
             ToolsetRequest(false, custom, new[] { "company_lookup", mcpToolName }),
             CancellationToken.None);
 
-        Assert.True(session.Dispatcher.TryGetTool("company_lookup", out _));
-        Assert.True(session.Dispatcher.TryGetTool(mcpToolName, out _));
+        Assert.True(session.Dispatcher.IsToolRegistered("company_lookup"));
+        Assert.True(session.Dispatcher.IsToolRegistered(mcpToolName));
         Assert.Equal(new[] { "company_lookup", mcpToolName }.Order(), session.AITools.Select(t => ((AIFunction)t).Name).Order());
     }
 
@@ -120,11 +120,11 @@ public class CanonicalToolsetFactoryTests : IDisposable
         var custom = new List<CustomToolConfig> { new() { Name = "company_lookup", Description = "d" } };
         var session = await factory.CreateAsync(ToolsetRequest(false, custom), CancellationToken.None);
 
-        var customResult = await session.Dispatcher.DispatchAsync("company_lookup", "{}", CancellationToken.None);
-        var mcpResult = await session.Dispatcher.DispatchAsync(CanonicalToolsetFactory.McpToolNamePrefix + "docs", "{}", CancellationToken.None);
+        var customResult = await session.Dispatcher.ExecuteAsync("company_lookup", "{}", CancellationToken.None);
+        var mcpResult = await session.Dispatcher.ExecuteAsync(CanonicalToolsetFactory.McpToolNamePrefix + "docs", "{}", CancellationToken.None);
 
-        Assert.Equal(string.Format(CanonicalToolsetFactory.CustomToolNotExecutableMessageFormat, "company_lookup"), customResult);
-        Assert.Equal(string.Format(CanonicalToolsetFactory.McpToolNotSupportedMessageFormat, "docs"), mcpResult);
+        Assert.Equal(string.Format(CanonicalToolsetFactory.CustomToolNotExecutableMessageFormat, "company_lookup"), customResult?.ToString());
+        Assert.Equal(string.Format(CanonicalToolsetFactory.McpToolNotSupportedMessageFormat, "docs"), mcpResult?.ToString());
     }
 
     [Fact]

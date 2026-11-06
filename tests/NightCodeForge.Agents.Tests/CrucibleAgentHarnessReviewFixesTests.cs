@@ -67,16 +67,20 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
     public async Task BuildAIFunctionList_DispatcherTool_ReceivesModelArgumentsWithoutWrapper()
     {
         var tools = TestCanonicalToolsBuilder.Create(_tempDir, pathResolver: TestPathResolver.Create());
-        var dispatcher = new LenientToolDispatcher(tools);
-        dispatcher.RegisterTool(new ToolDefinition("my_tool", "Echo", (args, ct) =>
-            Task.FromResult(string.Join(",", args.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}")))));
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+        dispatcher.RegisterTool(AIFunctionFactory.Create(
+            (int a, string b) => $"a={a},b={b}",
+            "my_tool",
+            "Echo"));
 
         var list = CanonicalToolsetFactory.BuildAIFunctionList(tools, new[] { "my_tool" }, dispatcher);
 
         var fn = Assert.IsAssignableFrom<AIFunction>(Assert.Single(list, t => t.Name == "my_tool"));
-        var result = await fn.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["a"] = 1, ["b"] = "x" }));
+        Assert.Equal("object", fn.JsonSchema.GetProperty("type").GetString());
+        Assert.True(fn.JsonSchema.GetProperty("additionalProperties").GetBoolean());
 
-        Assert.Equal("a=1,b=x", result?.ToString());
+        var result = await fn.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?> { ["a"] = 1, ["b"] = "x" }));
+        Assert.Equal(string.Format(CanonicalToolsetFactory.CustomToolNotExecutableMessageFormat, "my_tool"), result?.ToString());
     }
 
     [Fact]

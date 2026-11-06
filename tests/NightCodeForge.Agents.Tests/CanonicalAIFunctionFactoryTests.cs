@@ -1,3 +1,5 @@
+using Microsoft.Extensions.AI;
+using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
@@ -94,15 +96,14 @@ public class CanonicalAIFunctionFactoryTests
             await File.WriteAllTextAsync(filePath, "Hello World\nLine 2");
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var editTool = allTools.Single(t => t.Name == "edit");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("edit", new Dictionary<string, object?>
             {
                 ["path"] = "file.txt",
                 ["oldText"] = "Hello World",
                 ["newText"] = "Hello Universe"
-            }));
+            });
 
             Assert.Contains("Successfully applied 1 edit(s)", result?.ToString());
             var content = await File.ReadAllTextAsync(filePath);
@@ -126,9 +127,9 @@ public class CanonicalAIFunctionFactoryTests
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var editTool = allTools.Single(t => t.Name == "edit");
+            var editTool = allTools.OfType<AIFunction>().Single(t => t.Name == "edit");
 
-            var result = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await editTool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
             {
                 ["path"] = "file.txt",
                 ["old_text"] = "Hello World",
@@ -157,11 +158,11 @@ public class CanonicalAIFunctionFactoryTests
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var editTool = allTools.Single(t => t.Name == "edit");
+            var editTool = allTools.OfType<AIFunction>().Single(t => t.Name == "edit");
 
             var editsJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
                 "[{\"oldText\": \"Hello World\", \"newText\": \"Hello Multiverse\"}]");
-            var result = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await editTool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
             {
                 ["path"] = "file.txt",
                 ["edits"] = editsJson
@@ -188,16 +189,15 @@ public class CanonicalAIFunctionFactoryTests
             await File.WriteAllTextAsync(filePath, "Hello World\nLine 2");
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var editTool = allTools.Single(t => t.Name == "edit");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
             var editsJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
                 "[{\"old_text\": \"Hello World\", \"new_text\": \"Hello Galaxy\"}]");
-            var result = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("edit", new Dictionary<string, object?>
             {
                 ["path"] = "file.txt",
                 ["edits"] = editsJson
-            }));
+            });
 
             Assert.Contains("Successfully applied 1 edit(s)", result?.ToString());
             var content = await File.ReadAllTextAsync(filePath);
@@ -221,14 +221,14 @@ public class CanonicalAIFunctionFactoryTests
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
             var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var editTool = allTools.Single(t => t.Name == "edit");
+            var editTool = allTools.OfType<AIFunction>().Single(t => t.Name == "edit");
 
-            var result = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await editTool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
             {
                 ["path"] = "file.txt"
             }));
 
-            Assert.Equal("Error: provide 'edits' (array of { oldText, newText }) or single-edit replacement ('oldText'/'newText' or 'old_text'/'new_text').", result?.ToString());
+            Assert.StartsWith("Error: Edit failed:", result?.ToString() ?? string.Empty);
         }
         finally
         {
@@ -258,14 +258,13 @@ public class CanonicalAIFunctionFactoryTests
             executionEnv: mockEnv.Object,
             pathResolver: TestPathResolver.Create());
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var bashTool = allTools.Single(t => t.Name == "bash");
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-        var result = await bashTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+        await dispatcher.ExecuteAsync("bash", new Dictionary<string, object?>
         {
             ["command"] = "echo test",
             ["workingDirectory"] = "sub/folder"
-        }));
+        });
 
         Assert.NotNull(passedWorkDir);
         Assert.Contains("sub", passedWorkDir);
@@ -283,13 +282,12 @@ public class CanonicalAIFunctionFactoryTests
         try
         {
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var loadSkillTool = allTools.Single(t => t.Name == "load_skill");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await loadSkillTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("load_skill", new Dictionary<string, object?>
             {
                 ["skillName"] = "test-skill"
-            }));
+            });
 
             Assert.Contains("Test Skill Instructions", result?.ToString());
         }
@@ -319,14 +317,13 @@ public class CanonicalAIFunctionFactoryTests
             pathResolver: TestPathResolver.Create(),
             webSearchService: configuredSearch);
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var searchTool = allTools.Single(t => t.Name == CanonicalToolNames.WebSearch);
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-        var result = await searchTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+        var result = await dispatcher.ExecuteAsync(CanonicalToolNames.WebSearch, new Dictionary<string, object?>
         {
             ["query"] = "c# 13 params collections",
             ["maxResults"] = 7
-        }));
+        });
 
         Assert.Equal(7, receivedMax);
         Assert.Contains("Title", result?.ToString());
@@ -343,15 +340,14 @@ public class CanonicalAIFunctionFactoryTests
             await File.WriteAllLinesAsync(filePath, new[] { "Line 1", "Line 2", "Line 3", "Line 4", "Line 5" });
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var readTool = allTools.Single(t => t.Name == "read");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await readTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("read", new Dictionary<string, object?>
             {
                 ["path"] = "sample.txt",
                 ["start_line"] = 2,
                 ["end_line"] = 4
-            }));
+            });
 
             var text = result?.ToString() ?? "";
             Assert.Contains("Line 2", text);
@@ -374,14 +370,13 @@ public class CanonicalAIFunctionFactoryTests
         try
         {
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var writeTool = allTools.Single(t => t.Name == "write");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await writeTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("write", new Dictionary<string, object?>
             {
                 ["filePath"] = "written.txt",
                 ["text"] = "Hello from text alias"
-            }));
+            });
 
             Assert.Contains("Successfully wrote", result?.ToString());
             var content = await File.ReadAllTextAsync(Path.Combine(tempDir, "written.txt"));
@@ -401,14 +396,13 @@ public class CanonicalAIFunctionFactoryTests
         try
         {
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var writeTool = allTools.Single(t => t.Name == "write");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await writeTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("write", new Dictionary<string, object?>
             {
                 ["path"] = "code.cs",
                 ["code"] = "public class Foo {}"
-            }));
+            });
 
             Assert.Contains("Successfully wrote", result?.ToString());
             var content = await File.ReadAllTextAsync(Path.Combine(tempDir, "code.cs"));
@@ -431,16 +425,15 @@ public class CanonicalAIFunctionFactoryTests
             return Task.FromResult("Q1: Answered");
         };
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var askTool = allTools.Single(t => t.Name == "ask");
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
         var questionsJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
             "[{\"prompt\": \"Which database?\", \"options\": [\"PostgreSQL\", \"SQLite\"]}]");
 
-        var result = await askTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+        var result = await dispatcher.ExecuteAsync("ask", new Dictionary<string, object?>
         {
             ["question_items"] = questionsJson
-        }));
+        });
 
         Assert.Equal("Q1: Answered", result?.ToString());
         Assert.NotNull(capturedQuestions);
@@ -459,16 +452,15 @@ public class CanonicalAIFunctionFactoryTests
             return Task.FromResult("Items: Answered");
         };
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var askTool = allTools.Single(t => t.Name == "ask");
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
         var itemsJson = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
             "[{\"prompt\": \"Proceed with plan?\"}]");
 
-        var result = await askTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+        var result = await dispatcher.ExecuteAsync("ask", new Dictionary<string, object?>
         {
             ["items"] = itemsJson
-        }));
+        });
 
         Assert.Equal("Items: Answered", result?.ToString());
         Assert.NotNull(capturedQuestions);
@@ -488,15 +480,14 @@ public class CanonicalAIFunctionFactoryTests
             passedReason = r;
         };
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var reqTool = allTools.Single(t => t.Name == "request_changes");
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
         var ex = await Assert.ThrowsAsync<NightCodeForge.Core.Workflow.RequestChangesException>(async () =>
-            await reqTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            await dispatcher.ExecuteAsync("request_changes", new Dictionary<string, object?>
             {
                 ["critique"] = "Missing unit tests for edge cases",
                 ["comment"] = "TDD requirement not met"
-            })));
+            }));
 
         Assert.Equal("Missing unit tests for edge cases", ex.Feedback);
         Assert.Equal("TDD requirement not met", ex.Reason);
@@ -526,14 +517,13 @@ public class CanonicalAIFunctionFactoryTests
             pathResolver: TestPathResolver.Create(),
             webSearchService: configuredSearch);
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var searchTool = allTools.Single(t => t.Name == CanonicalToolNames.WebSearch);
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-        var result = await searchTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+        var result = await dispatcher.ExecuteAsync(CanonicalToolNames.WebSearch, new Dictionary<string, object?>
         {
             ["q"] = "system.text.json source generator",
             ["count"] = 3
-        }));
+        });
 
         Assert.Equal("system.text.json source generator", passedQuery);
         Assert.Equal(3, passedMax);
@@ -562,14 +552,13 @@ public class CanonicalAIFunctionFactoryTests
             executionEnv: mockEnv.Object,
             pathResolver: TestPathResolver.Create());
 
-        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var bashTool = allTools.Single(t => t.Name == "bash");
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-        await bashTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+        await dispatcher.ExecuteAsync("bash", new Dictionary<string, object?>
         {
             ["command"] = "ls",
             ["cwd"] = "src/Domain"
-        }));
+        });
 
         Assert.NotNull(passedWorkDir);
         Assert.Contains("Domain", passedWorkDir);
@@ -586,13 +575,12 @@ public class CanonicalAIFunctionFactoryTests
         try
         {
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var loadSkillTool = allTools.Single(t => t.Name == "load_skill");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await loadSkillTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("load_skill", new Dictionary<string, object?>
             {
                 ["skill"] = "dotnet-migration"
-            }));
+            });
 
             Assert.Contains("Migration Instructions", result?.ToString());
         }
@@ -613,14 +601,13 @@ public class CanonicalAIFunctionFactoryTests
             await File.WriteAllTextAsync(filePath, "alpha beta gamma");
 
             var tools = TestCanonicalToolsBuilder.Create(tempDir, pathResolver: TestPathResolver.Create());
-            var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-            var editTool = allTools.Single(t => t.Name == "edit");
+            var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
 
-            var result = await editTool.InvokeAsync(new Microsoft.Extensions.AI.AIFunctionArguments(new Dictionary<string, object?>
+            var result = await dispatcher.ExecuteAsync("edit", new Dictionary<string, object?>
             {
                 ["path"] = "file.txt",
                 ["edits"] = "[{\"oldText\": \"beta\", \"newText\": \"DELTA\"}]"
-            }));
+            });
 
             Assert.Contains("Successfully applied 1 edit(s)", result?.ToString());
             var content = await File.ReadAllTextAsync(filePath);
@@ -637,7 +624,7 @@ public class CanonicalAIFunctionFactoryTests
     {
         var tools = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
         var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
-        var editTool = allTools.Single(t => t.Name == "edit");
+        var editTool = allTools.OfType<AIFunction>().Single(t => t.Name == "edit");
 
         var schema = editTool.JsonSchema.GetRawText();
 
@@ -651,4 +638,3 @@ public class CanonicalAIFunctionFactoryTests
         Assert.Contains("\"newText\"", schema);
     }
 }
-

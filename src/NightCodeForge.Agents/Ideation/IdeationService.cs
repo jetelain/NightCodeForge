@@ -375,7 +375,8 @@ Only tasks that are Suggested or Open, never executed, and not currently running
                 Tools: toolset.AITools,
                 MaxTurns: maxTurns,
                 CreateTracingClient: baseClient => new ThinkingAndActivityTracingChatClient(baseClient),
-                DefaultTemperature: DefaultTemperature),
+                DefaultTemperature: DefaultTemperature,
+                Dispatcher: toolset.Dispatcher),
             cancellationToken);
 
         var tracingClient = setup.TracingClient;
