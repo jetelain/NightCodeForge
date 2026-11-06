@@ -441,6 +441,43 @@ public class GitWorkspaceManagerTests : IDisposable
     }
 
     [Fact]
+    public void GetWorktreePath_WhenExt4MirrorPathEndsWithClone_DerivesSiblingWorktreeFromExt4MirrorPath()
+    {
+        // Arrange: Simulate a mismatch between WslMetadataService fallback user ("julien") and Ext4MirrorPath user ("gruearbre")
+        var wslMetaMock = new Mock<IWslMetadataService>();
+        wslMetaMock.Setup(w => w.GetDefaultDistributionName()).Returns("Ubuntu");
+        wslMetaMock.Setup(w => w.GetDefaultUserName()).Returns("julien");
+
+        var pathResolver = new WorkspacePathResolver(
+            wslMetaMock.Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride: true);
+
+        var customManager = new GitWorkspaceManager(
+            _runner,
+            pathResolver,
+            wslMetaMock.Object,
+            new Mock<IGitMirrorSyncService>().Object,
+            new Mock<IWorkspaceLockProvider>().Object,
+            new Mock<IProcessRunner>().Object,
+            NullLogger<GitWorkspaceManager>.Instance);
+
+        var wslWorkspace = new Workspace
+        {
+            Id = 1,
+            Name = "OllamaRouter",
+            Ext4MirrorPath = "/home/gruearbre/.nightcodeforge/wks/1/clone",
+            RepositoryPath = _repo.RepositoryPath
+        };
+
+        // Act
+        var wtPath = customManager.GetWorktreePath(wslWorkspace, 60);
+
+        // Assert: Must derive sibling path under /home/gruearbre, not /home/julien
+        Assert.Equal("/home/gruearbre/.nightcodeforge/wks/1/task-60", wtPath);
+    }
+
+    [Fact]
     public async Task GitCommands_SucceedInWorktreeWithRelativePointers()
     {
         // Arrange

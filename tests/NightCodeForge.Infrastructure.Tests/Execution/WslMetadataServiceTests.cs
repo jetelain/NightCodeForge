@@ -208,6 +208,73 @@ public class WslMetadataServiceTests
     }
 
     [Fact]
+    public void GetDefaultUserName_WhenFirstCallTimesOut_DoesNotCacheFallbackAndSucceedsOnRetry()
+    {
+        // Arrange
+        var attempt = 0;
+        var mockRunner = new MockProcessRunner
+        {
+            Handler = (file, args) =>
+            {
+                attempt++;
+                if (attempt == 1)
+                {
+                    return new ProcessExecutionResult(124, string.Empty, "Process timed out after 15s.");
+                }
+                return new ProcessExecutionResult(0, "gruearbre\n", string.Empty);
+            }
+        };
+
+        var service = CreateService(mockRunner, isWindowsOverride: true);
+
+        // Act
+        var fallbackUser = service.GetDefaultUserName();
+        var recoveredUser = service.GetDefaultUserName();
+        var cachedUser = service.GetDefaultUserName();
+
+        // Assert
+        var expectedFallback = !string.IsNullOrWhiteSpace(Environment.UserName)
+            ? Environment.UserName.ToLowerInvariant()
+            : "user";
+        Assert.Equal(expectedFallback, fallbackUser);
+        Assert.Equal("gruearbre", recoveredUser);
+        Assert.Equal("gruearbre", cachedUser);
+        Assert.Equal(2, mockRunner.CallCount);
+    }
+
+    [Fact]
+    public void GetDefaultDistributionName_WhenFirstCallTimesOut_DoesNotCacheFallbackAndSucceedsOnRetry()
+    {
+        // Arrange
+        var attempt = 0;
+        var mockRunner = new MockProcessRunner
+        {
+            Handler = (file, args) =>
+            {
+                attempt++;
+                if (attempt == 1)
+                {
+                    return new ProcessExecutionResult(124, string.Empty, "Process timed out after 15s.");
+                }
+                return new ProcessExecutionResult(0, "  NAME    STATE\n* Debian  Running\n", string.Empty);
+            }
+        };
+
+        var service = CreateService(mockRunner, isWindowsOverride: true);
+
+        // Act
+        var fallbackDistro = service.GetDefaultDistributionName();
+        var recoveredDistro = service.GetDefaultDistributionName();
+        var cachedDistro = service.GetDefaultDistributionName();
+
+        // Assert
+        Assert.Equal("Ubuntu", fallbackDistro);
+        Assert.Equal("Debian", recoveredDistro);
+        Assert.Equal("Debian", cachedDistro);
+        Assert.Equal(2, mockRunner.CallCount);
+    }
+
+    [Fact]
     public void GetDefaultDistributionName_EnvironmentVariableOverride_TakesPrecedenceWithoutProcessCall()
     {
         var envVarName = "NCF_WSL_DISTRIBUTION";

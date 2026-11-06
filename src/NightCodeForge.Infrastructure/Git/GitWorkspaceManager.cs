@@ -383,6 +383,20 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
+            var mirrorTrimmed = workspace.Ext4MirrorPath.TrimEnd('/', '\\');
+            var mirrorParent = Path.GetDirectoryName(mirrorTrimmed);
+            var mirrorDirName = Path.GetFileName(mirrorTrimmed);
+            if (!string.IsNullOrEmpty(mirrorParent) &&
+                (mirrorDirName.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
+                 mirrorDirName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
+                 mirrorDirName.Equals("mirror", StringComparison.OrdinalIgnoreCase)))
+            {
+                var wt = Path.Combine(mirrorParent, $"task-{taskId}");
+                return workspace.Ext4MirrorPath.Contains('/') && !workspace.Ext4MirrorPath.Contains('\\')
+                    ? wt.Replace('\\', '/')
+                    : wt;
+            }
+
             return _pathResolver.GetAgentWorktreePath(workspace.Id, taskId);
         }
 

@@ -17,6 +17,10 @@ public partial class WslMetadataService : IWslMetadataService
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
 
+    private const int WslDiscoveryTimeoutSeconds = 15;
+    private const string DefaultFallbackDistribution = "Ubuntu";
+    private const string DefaultFallbackUser = "user";
+
     private readonly IProcessRunner _processRunner;
     private readonly ExecutionEnvironmentProviderOptions _options;
     private readonly bool? _isWindowsOverride;
@@ -72,7 +76,7 @@ public partial class WslMetadataService : IWslMetadataService
             {
                 try
                 {
-                    var result = _processRunner.Run("wsl.exe", ["--list", "--verbose"], timeoutSeconds: 5);
+                    var result = _processRunner.Run("wsl.exe", ["--list", "--verbose"], timeoutSeconds: WslDiscoveryTimeoutSeconds);
                     if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
                     {
                         var parsed = ParseDefaultDistribution(result.StandardOutput);
@@ -92,16 +96,21 @@ public partial class WslMetadataService : IWslMetadataService
                 {
                     _logger.LogWarning(ex, "Failed to query wsl.exe --list --verbose");
                 }
+
+                // Do not cache fallback when WSL discovery failed transiently (e.g., cold start timeout)
+                return ResolveFallbackDistribution();
             }
 
-            // 3. Fallback to configured option or Ubuntu default
-            _cachedDistributionName = !string.IsNullOrWhiteSpace(_options.DefaultWslDistribution)
-                ? _options.DefaultWslDistribution.Trim()
-                : "Ubuntu";
-
+            // 3. Fallback to configured option or Ubuntu default on non-Windows
+            _cachedDistributionName = ResolveFallbackDistribution();
             return _cachedDistributionName;
         }
     }
+
+    private string ResolveFallbackDistribution() =>
+        !string.IsNullOrWhiteSpace(_options.DefaultWslDistribution)
+            ? _options.DefaultWslDistribution.Trim()
+            : DefaultFallbackDistribution;
 
     public string GetDefaultUserName()
     {
@@ -125,7 +134,7 @@ public partial class WslMetadataService : IWslMetadataService
             {
                 try
                 {
-                    var result = _processRunner.Run("wsl.exe", ["bash", "-c", "echo $USER"], timeoutSeconds: 5);
+                    var result = _processRunner.Run("wsl.exe", ["bash", "-c", "echo $USER"], timeoutSeconds: WslDiscoveryTimeoutSeconds);
                     if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.StandardOutput))
                     {
                         var username = result.StandardOutput.Trim().Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
@@ -145,16 +154,23 @@ public partial class WslMetadataService : IWslMetadataService
                 {
                     _logger.LogWarning(ex, "Failed to query wsl.exe bash -c \"echo $USER\"");
                 }
+
+                // Do not cache fallback when WSL discovery failed transiently (e.g., cold start timeout)
+                return ResolveFallbackUserName();
             }
 
-            // 3. Fallback to Windows username or "user"
-            var hostUser = Environment.UserName;
-            _cachedUserName = !string.IsNullOrWhiteSpace(hostUser)
-                ? hostUser.Trim().ToLowerInvariant()
-                : "user";
-
+            // 3. Fallback to Windows username or "user" on non-Windows
+            _cachedUserName = ResolveFallbackUserName();
             return _cachedUserName;
         }
+    }
+
+    private static string ResolveFallbackUserName()
+    {
+        var hostUser = Environment.UserName;
+        return !string.IsNullOrWhiteSpace(hostUser)
+            ? hostUser.Trim().ToLowerInvariant()
+            : DefaultFallbackUser;
     }
 
     public void ClearCache()
