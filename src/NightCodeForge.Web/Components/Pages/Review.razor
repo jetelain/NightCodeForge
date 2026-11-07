@@ -13,6 +13,7 @@
 @inject ToastService ToastService
 @inject NavigationManager NavigationManager
 @inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
 @implements IDisposable
 
 <PageTitle>Review Room - NightCodeForge</PageTitle>
@@ -187,11 +188,13 @@
     private bool _showApproveModal;
     private bool _isLoading = true;
     private bool _disposed;
+    private int _lastKnownPendingReviewCount = -1;
 
     protected override void OnInitialized()
     {
         CommentState.OnCommentsChanged += HandleCommentsChanged;
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
     }
 
     private void HandleCommentsChanged()
@@ -287,6 +290,10 @@
             {
                 _selectedFile = null;
             }
+
+            var (_, globalReviewCount) = await TaskBadgeCounter.ComputeCountsAsync(TaskRepository);
+            _lastKnownPendingReviewCount = globalReviewCount;
+            WorkerState.UpdatePendingReviews(globalReviewCount);
         }
         finally
         {
@@ -338,6 +345,21 @@
     private static string Truncate(string value, int maxLen) =>
         value.Length <= maxLen ? value : value[..maxLen] + "…";
 
+    private void HandleWorkerStateChanged()
+    {
+        if (_disposed || _isLoading) return;
+
+        if (WorkerState.Current.PendingReviewCount != _lastKnownPendingReviewCount)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                if (_disposed) return;
+                await LoadReviewDataAsync();
+                StateHasChanged();
+            });
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -345,5 +367,6 @@
 
         CommentState.OnCommentsChanged -= HandleCommentsChanged;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
     }
 }

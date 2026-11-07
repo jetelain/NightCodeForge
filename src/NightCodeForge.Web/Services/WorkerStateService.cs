@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
@@ -23,7 +24,8 @@ public record WorkerStatusSnapshot(
     string? BranchName = null,
     string? Harness = "Crucible",
     string? Model = "qwen2.5-coder:32b",
-    DateTime? StartedAt = null);
+    DateTime? StartedAt = null,
+    int PendingReviewCount = 0);
 
 /// <summary>
 /// Singleton service providing real-time snapshot and event dispatch for worker execution state and questions.
@@ -42,6 +44,7 @@ public class WorkerStateService : IWorkerStateService, IDisposable
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _telemetryService.OnActiveTaskChanged += HandleTelemetryActiveTaskChanged;
+        _telemetryService.OnPendingCountsChanged += HandleTelemetryPendingCountsChanged;
 
         var active = _telemetryService.GetActiveTask();
         if (AutonomousTaskClassifier.IsAutonomousTask(active))
@@ -223,6 +226,48 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         OnWorkerStateChanged?.Invoke();
     }
 
+    public void UpdatePendingReviews(int count)
+    {
+        lock (_lock)
+        {
+            if (_current.PendingReviewCount == count)
+            {
+                return;
+            }
+
+            _current = _current with { PendingReviewCount = count };
+        }
+        OnWorkerStateChanged?.Invoke();
+    }
+
+    public void UpdatePendingCounts(int pendingQuestionCount, int pendingReviewCount)
+    {
+        bool changed = false;
+        lock (_lock)
+        {
+            if (_current.PendingQuestionCount != pendingQuestionCount || _current.PendingReviewCount != pendingReviewCount)
+            {
+                _current = _current with
+                {
+                    PendingQuestionCount = pendingQuestionCount,
+                    PendingReviewCount = pendingReviewCount
+                };
+                changed = true;
+            }
+        }
+        if (changed)
+        {
+            OnWorkerStateChanged?.Invoke();
+        }
+    }
+
+    public async Task RefreshCountsFromRepositoryAsync(ITaskRepository taskRepository, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(taskRepository);
+        var (qCount, rCount) = await TaskBadgeCounter.ComputeCountsAsync(taskRepository, cancellationToken);
+        UpdatePendingCounts(qCount, rCount);
+    }
+
     public void HandleWorkerStatus(string status, int? activeTaskId, string? stageId, string hardwareTarget, string? taskTitle = null, string? branchName = null)
     {
         if (activeTaskId.HasValue && !AutonomousTaskClassifier.IsAutonomousTask(activeTaskId, stageId))
@@ -277,8 +322,14 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         OnWorkerStateChanged?.Invoke();
     }
 
+    private void HandleTelemetryPendingCountsChanged(int questionCount, int reviewCount)
+    {
+        UpdatePendingCounts(questionCount, reviewCount);
+    }
+
     public void Dispose()
     {
         _telemetryService.OnActiveTaskChanged -= HandleTelemetryActiveTaskChanged;
+        _telemetryService.OnPendingCountsChanged -= HandleTelemetryPendingCountsChanged;
     }
 }

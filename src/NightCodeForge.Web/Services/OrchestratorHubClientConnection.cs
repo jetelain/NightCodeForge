@@ -49,6 +49,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<NightCodeForge.Core.Workflow.ShellCommandRecord>? OnShellCommandCompleted;
     public event Action<bool, string?, string?>? OnOperationsStatusChanged;
     public event Action<NightCodeForge.Core.Workflow.ActiveTaskSummary?>? OnActiveTaskReceived;
+    public event Action<int, int>? OnPendingCountsReceived;
     public event Action<HubConnectionState>? OnConnectionStateChanged;
 
     public OrchestratorHubClientConnection(
@@ -244,6 +245,13 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         hub.On<NightCodeForge.Core.Workflow.ShellCommandRecord>("ReceiveShellCommandCompleted", TriggerShellCommandCompleted);
         hub.On<bool, string?, string?>("ReceiveOperationsStatusChanged", TriggerOperationsStatusChanged);
         hub.On<NightCodeForge.Core.Workflow.ActiveTaskSummary?>("ReceiveActiveTask", TriggerActiveTask);
+        hub.On<int, int>("ReceivePendingCounts", TriggerPendingCounts);
+    }
+
+    public void TriggerPendingCounts(int pendingQuestionCount, int pendingReviewCount)
+    {
+        _workerStateService.UpdatePendingCounts(pendingQuestionCount, pendingReviewCount);
+        OnPendingCountsReceived?.Invoke(pendingQuestionCount, pendingReviewCount);
     }
 
     public void TriggerActiveTask(NightCodeForge.Core.Workflow.ActiveTaskSummary? activeTask)

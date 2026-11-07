@@ -43,6 +43,7 @@ public class ReviewPageConflictBannerTests : BunitContext
         Services.AddSingleton<ITaskReviewService>(_reviewService);
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton<ITaskMutationService>(_mutationService.Object);
+        Services.AddSingleton(new WorkerStateService(new Mock<IOperationsTelemetryService>().Object));
         Services.AddSingleton(_commentState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_workspaceState);

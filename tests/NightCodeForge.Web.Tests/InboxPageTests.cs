@@ -352,4 +352,193 @@ public class InboxPageTests : BunitContext
         Assert.NotNull(cut.Find("#inbox-empty-state"));
         Assert.Equal(0, _workerState.Current.PendingQuestionCount);
     }
+
+    [Fact]
+    public async Task WorkspaceFilter_DoesNotOverwriteGlobalPendingQuestionCount()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Workspace One" };
+        var ws2 = new Workspace { Id = 2, Name = "Workspace Two" };
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 601,
+            WorkspaceId = 1,
+            Title = "Task in WS 1",
+            Questions = new List<Question>
+            {
+                new() { Id = 701, TaskId = 601, Prompt = "WS 1 question", Status = QuestionStatus.Pending }
+            }
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 602,
+            WorkspaceId = 2,
+            Title = "Task in WS 2",
+            Questions = new List<Question>
+            {
+                new() { Id = 702, TaskId = 602, Prompt = "WS 2 question", Status = QuestionStatus.Pending }
+            }
+        });
+
+        var cut = Render<Inbox>();
+
+        // Total questions across workspaces = 2
+        Assert.Equal(2, _workerState.Current.PendingQuestionCount);
+        Assert.Equal(2, cut.FindAll(".question-card").Count);
+
+        // Check filter workspace
+        cut.Find("#filter-workspace-checkbox").Change(true);
+
+        // Only 1 question card rendered in filtered view
+        Assert.Single(cut.FindAll(".question-card"));
+
+        // Global PendingQuestionCount must remain 2
+        Assert.Equal(2, _workerState.Current.PendingQuestionCount);
+    }
+
+    [Fact]
+    public async Task ExternalPendingQuestionCountChange_ReloadsInboxAutomatically()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Workspace One" };
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var task = new ForgeTask
+        {
+            Id = 801,
+            WorkspaceId = 1,
+            Title = "Task 801",
+            Questions = new List<Question>()
+        };
+        await _taskRepository.CreateAsync(task);
+
+        var cut = Render<Inbox>();
+        Assert.NotNull(cut.Find("#inbox-empty-state"));
+
+        // New question added externally to DB
+        task.Questions.Add(new Question
+        {
+            Id = 901,
+            TaskId = 801,
+            Prompt = "External Question?",
+            Status = QuestionStatus.Pending
+        });
+        await _taskRepository.UpdateAsync(task);
+
+        // Signal external question count change
+        await cut.InvokeAsync(() => _workerState.UpdatePendingQuestions(1));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("External Question?", cut.Markup);
+            Assert.Single(cut.FindAll(".question-card"));
+        });
+    }
+
+    [Fact]
+    public async Task AnswerSubmitted_WhenMultipleQuestionsExist_DecrementsCountByExactAmount_WithoutDoubleDecrement()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 910,
+            WorkspaceId = 1,
+            Title = "Task One",
+            Status = TaskOverallStatus.Open,
+            Questions = new List<Question>
+            {
+                new() { Id = 1001, TaskId = 910, Prompt = "First question?", Status = QuestionStatus.Pending }
+            }
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 911,
+            WorkspaceId = 1,
+            Title = "Task Two",
+            Status = TaskOverallStatus.Open,
+            Questions = new List<Question>
+            {
+                new() { Id = 1002, TaskId = 911, BatchId = "batch-911", Prompt = "Batch Q1?", Status = QuestionStatus.Pending },
+                new() { Id = 1003, TaskId = 911, BatchId = "batch-911", Prompt = "Batch Q2?", Status = QuestionStatus.Pending }
+            }
+        });
+
+        var cut = Render<Inbox>();
+        Assert.Equal(3, _workerState.Current.PendingQuestionCount);
+        Assert.Equal(2, cut.FindAll(".question-card").Count);
+
+        // Answer the single question (1001): count must drop from 3 to 2 (not 1 or 0)
+        cut.Find("#clarification-input-1001").Input("Single answer");
+        cut.Find("#submit-answer-btn-1001").Click();
+
+        Assert.Equal(2, _workerState.Current.PendingQuestionCount);
+        Assert.Single(cut.FindAll(".question-card"));
+
+        // Add another pending question to verify batch submission also decrements by exact batch size (2), leaving 1
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 912,
+            WorkspaceId = 2,
+            Title = "Task Three",
+            Status = TaskOverallStatus.Open,
+            Questions = new List<Question>
+            {
+                new() { Id = 1004, TaskId = 912, Prompt = "Remaining question in WS2?", Status = QuestionStatus.Pending }
+            }
+        });
+        await cut.InvokeAsync(() => _workerState.UpdatePendingQuestions(3));
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindAll(".question-card").Count));
+
+        cut.Find("#clarification-input-1002").Input("Batch answer 1");
+        cut.Find("#clarification-input-1003").Input("Batch answer 2");
+        cut.Find("#submit-all-btn-batch-911").Click();
+
+        Assert.Equal(1, _workerState.Current.PendingQuestionCount);
+        Assert.Single(cut.FindAll(".question-card"));
+    }
+
+    [Fact]
+    public async Task LoadQuestions_ExcludesPendingQuestionsFromTerminalTasks()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 920,
+            WorkspaceId = 1,
+            Title = "Cancelled Task With Orphaned Question",
+            Status = TaskOverallStatus.Cancelled,
+            Questions = new List<Question>
+            {
+                new() { Id = 1010, TaskId = 920, Prompt = "Orphaned cancelled question?", Status = QuestionStatus.Pending }
+            }
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 921,
+            WorkspaceId = 1,
+            Title = "Closed Task With Orphaned Question",
+            Status = TaskOverallStatus.Closed,
+            Questions = new List<Question>
+            {
+                new() { Id = 1011, TaskId = 921, Prompt = "Orphaned closed question?", Status = QuestionStatus.Pending }
+            }
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 922,
+            WorkspaceId = 1,
+            Title = "Active Open Task",
+            Status = TaskOverallStatus.Open,
+            Questions = new List<Question>
+            {
+                new() { Id = 1012, TaskId = 922, Prompt = "Valid pending question?", Status = QuestionStatus.Pending }
+            }
+        });
+
+        var cut = Render<Inbox>();
+
+        Assert.Equal(1, _workerState.Current.PendingQuestionCount);
+        Assert.Single(cut.FindAll(".question-card"));
+        Assert.Contains("Valid pending question?", cut.Markup);
+        Assert.DoesNotContain("Orphaned cancelled question?", cut.Markup);
+        Assert.DoesNotContain("Orphaned closed question?", cut.Markup);
+    }
 }

@@ -22,6 +22,7 @@ public class TaskMergeAndCascadeCoordinatorTests
     private readonly Mock<ITaskWorkspacePreparer> _preparerMock = new();
     private readonly Mock<IConflictResolutionVerifier> _verifierMock = new();
     private readonly Mock<IAgentActivityStreamer> _streamerMock = new();
+    private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly Workspace _workspace;
 
@@ -64,21 +65,23 @@ public class TaskMergeAndCascadeCoordinatorTests
         _pipelineProvider,
         _verifierMock.Object,
         _streamerMock.Object,
+        _telemetryMock.Object,
         NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
 
     [Fact]
     public void Constructor_WhenAnyDependencyIsNull_ThrowsArgumentNullException()
     {
         var logger = NullLogger<TaskMergeAndCascadeCoordinator>.Instance;
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(null!, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, null!, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, null!, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, null!, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, null!, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, null!, _verifierMock.Object, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, null!, _streamerMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, null!, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, null!));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(null!, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, null!, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, null!, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, null!, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, null!, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, null!, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, null!, _streamerMock.Object, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, null!, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskMergeAndCascadeCoordinator(_taskRepo, _preparerMock.Object, _depEngine, _depStore, _jobQueue, _pipelineProvider, _verifierMock.Object, _streamerMock.Object, _telemetryMock.Object, null!));
     }
 
     [Fact]

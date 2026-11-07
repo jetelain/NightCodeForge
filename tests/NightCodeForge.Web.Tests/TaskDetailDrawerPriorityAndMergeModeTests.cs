@@ -1,6 +1,8 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Backlog;
@@ -32,6 +34,7 @@ public class TaskDetailDrawerPriorityAndMergeModeTests : BunitContext
             new InMemoryWorkspaceRepository(),
             new MockTaskMarkdownSyncService(),
             mockOrchestrator,
+            new Mock<IOperationsTelemetryService>().Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 

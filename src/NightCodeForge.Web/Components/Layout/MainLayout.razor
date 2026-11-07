@@ -1,5 +1,6 @@
 @inherits LayoutComponentBase
 @inject IWorkspaceRepository WorkspaceRepo
+@inject NightCodeForge.Core.Repositories.ITaskRepository TaskRepository
 @inject WorkspaceStateService WorkspaceState
 @inject NavigationManager Navigation
 @inject WorkerStateService WorkerState
@@ -73,6 +74,7 @@
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
 
         await HydrateWorkspaceFromUrlAsync(Navigation.Uri);
+        await WorkerState.RefreshCountsFromRepositoryAsync(TaskRepository);
         _isWorkspaceReady = true;
     }
 
@@ -207,7 +209,12 @@
     {
         if (_disposed) return;
         WorkerState.RefreshFromTelemetry();
-        _ = InvokeAsync(StateHasChanged);
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await WorkerState.RefreshCountsFromRepositoryAsync(TaskRepository);
+            StateHasChanged();
+        });
     }
 
     public async ValueTask DisposeAsync()

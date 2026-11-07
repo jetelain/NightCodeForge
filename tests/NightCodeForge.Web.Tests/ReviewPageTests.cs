@@ -21,6 +21,7 @@ public class ReviewPageTests : BunitContext
     private readonly ReviewCommentStateService _commentState;
     private readonly ToastService _toastService;
     private readonly WorkspaceStateService _workspaceState;
+    private readonly WorkerStateService _workerState;
 
     public ReviewPageTests()
     {
@@ -35,10 +36,12 @@ public class ReviewPageTests : BunitContext
         _commentState = new ReviewCommentStateService();
         _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();
+        _workerState = new WorkerStateService(new Mock<IOperationsTelemetryService>().Object);
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<ITaskReviewService>(_reviewService);
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
+        Services.AddSingleton(_workerState);
         Services.AddSingleton(_commentState);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_workspaceState);
@@ -291,5 +294,37 @@ public class ReviewPageTests : BunitContext
 
         cut.WaitForState(() => cut.Markup.Contains("Task in Workspace 2"));
         Assert.Contains("Task in Workspace 2", cut.Markup);
+        // Global PendingReviewCount must remain 2 across both workspaces even when filtered to WS2
+        Assert.Equal(2, _workerState.Current.PendingReviewCount);
+    }
+
+    [Fact]
+    public async Task ReviewRoom_WhenExternalPendingReviewCountChanges_ReloadsPendingReviewsAutomatically()
+    {
+        _workspaceState.SetActiveWorkspace(new Workspace { Id = 1, Name = "WS1" });
+
+        var cut = Render<Review>();
+        Assert.NotNull(cut.Find("#review-empty-state"));
+        Assert.Equal(0, _workerState.Current.PendingReviewCount);
+
+        // External stage transition makes a task Ready for review
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 99,
+            WorkspaceId = 1,
+            Title = "Newly Ready Task",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
+            BaseBranch = "main",
+            PipelineDataJson = new PipelineDataBag().ToJson()
+        });
+
+        await cut.InvokeAsync(() => _workerState.UpdatePendingReviews(1));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("Newly Ready Task", cut.Markup);
+            Assert.Equal(1, _workerState.Current.PendingReviewCount);
+        });
     }
 }

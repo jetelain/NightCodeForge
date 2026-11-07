@@ -484,6 +484,14 @@ public class InMemoryTaskRepository : ITaskRepository
                 }
             }
             _taskHistories.Remove(id);
+            var questionsToRemove = _questions.Values
+                .Where(q => q.TaskId == id || q.ForgeTask?.Id == id)
+                .Select(q => q.Id)
+                .ToList();
+            foreach (var questionId in questionsToRemove)
+            {
+                _questions.Remove(questionId);
+            }
             var convsToRemove = _conversations.Values.Where(c => c.TaskId == id).Select(c => c.Id).ToList();
             foreach (var convId in convsToRemove)
             {

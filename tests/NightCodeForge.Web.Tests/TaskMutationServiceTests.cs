@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Web.Services;
@@ -28,6 +30,7 @@ public class TaskMutationServiceTests
             _workspaceRepository,
             _markdownSync,
             _taskOrchestrator,
+            new Mock<IOperationsTelemetryService>().Object,
             NullLogger<TaskMutationService>.Instance);
 
         _workspace = new Workspace

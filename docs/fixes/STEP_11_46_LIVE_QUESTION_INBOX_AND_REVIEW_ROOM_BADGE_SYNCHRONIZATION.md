@@ -141,11 +141,11 @@ flowchart LR
 
 ## 5. Definition of Done (DoD) Checklist
 
-- [ ] Add `PendingReviewCount` to `WorkerStatusSnapshot` and `UpdatePendingReviews(int count)` to `WorkerStateService` with change deduplication.
-- [ ] Render `<span class="nav-badge">@WorkerState.Current.PendingReviewCount</span>` on the **Review Room** link in `NavMenu.razor` when `PendingReviewCount > 0`.
-- [ ] Hydrate `PendingQuestionCount` and `PendingReviewCount` from `ITaskRepository` on layout initialization (`MainLayout.razor`) and tab foregrounding (`OnTabForegrounded`).
-- [ ] Synchronize `PendingQuestionCount` and `PendingReviewCount` in real time after database persistence whenever questions are raised (`ask`), answered, or skipped, and whenever tasks enter or leave `TaskOverallStatus.Ready` (Gate 2 completion, Approve & Merge, Request Changes, Reject, Cancel, Restart, or manual mutation).
-- [ ] Mark pending questions as `QuestionStatus.Skipped` when a task is rejected (`RejectTaskAsync`) or cancelled (`ProcessTaskAsync`).
-- [ ] Preserve global `PendingQuestionCount` when workspace filtering is toggled in `Inbox.razor`, and auto-refresh `Inbox.razor` and `Review.razor` when `WorkerState` counts change.
-- [ ] Add unit and bUnit component tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Web.Tests`, and verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Add `PendingReviewCount` to `WorkerStatusSnapshot` and `UpdatePendingReviews(int count)` to `WorkerStateService` with change deduplication.
+- [x] Render `<span class="nav-badge">@WorkerState.Current.PendingReviewCount</span>` on the **Review Room** link in `NavMenu.razor` when `PendingReviewCount > 0`.
+- [x] Hydrate `PendingQuestionCount` and `PendingReviewCount` from `ITaskRepository` on layout initialization (`MainLayout.razor`) and tab foregrounding (`OnTabForegrounded`).
+- [x] Synchronize `PendingQuestionCount` and `PendingReviewCount` in real time after database persistence whenever questions are raised (`ask`), answered, or skipped, and whenever tasks enter or leave `TaskOverallStatus.Ready` (Gate 2 completion, Approve & Merge, Request Changes, Reject, Cancel, Restart, or manual mutation).
+- [x] Mark pending questions as `QuestionStatus.Skipped` when a task is rejected (`RejectTaskAsync`) or cancelled (`ProcessTaskAsync`).
+- [x] Preserve global `PendingQuestionCount` when workspace filtering is toggled in `Inbox.razor`, and auto-refresh `Inbox.razor` and `Review.razor` when `WorkerState` counts change.
+- [x] Add unit and bUnit component tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Web.Tests`, and verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

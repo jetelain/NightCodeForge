@@ -437,6 +437,7 @@ public class WorkflowSpecIntegrationTests
             pathResolver,
             envProviderMock.Object,
             NullLogger<TaskWorkspacePreparer>.Instance);
+        var mockTelemetryService = new Mock<IOperationsTelemetryService>();
         var mergeAndCascadeCoordinator = new TaskMergeAndCascadeCoordinator(
             taskRepo,
             workspacePreparer,
@@ -446,6 +447,7 @@ public class WorkflowSpecIntegrationTests
             pipelineProvider,
             mockVerifier.Object,
             streamer,
+            mockTelemetryService.Object,
             NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
         var lifecycleMutationCoordinator = new TaskLifecycleMutationCoordinator(
             taskRepo,
@@ -455,6 +457,7 @@ public class WorkflowSpecIntegrationTests
             jobQueue,
             cancellationManager,
             streamer,
+            mockTelemetryService.Object,
             NullLogger<TaskLifecycleMutationCoordinator>.Instance);
         var orchestrator = new TaskOrchestrator(
             taskRepo,

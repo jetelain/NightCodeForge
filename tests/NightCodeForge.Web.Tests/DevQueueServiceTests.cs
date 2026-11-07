@@ -29,6 +29,7 @@ public class DevQueueServiceTests : IDisposable
     private readonly Mock<ITaskCancellationManager> _cancellationManager;
     private readonly Mock<IWorkspacePathResolver> _pathResolver;
     private readonly Mock<ITaskOrchestrator> _taskOrchestrator;
+    private readonly Mock<IOperationsTelemetryService> _telemetryService;
     private readonly InMemoryTaskDependencyStore _dependencyStore;
     private readonly IDevQueueSkippedJobRegistry _skippedJobRegistry = new DevQueueSkippedJobRegistry();
     private readonly ServiceProvider _serviceProvider;
@@ -47,6 +48,7 @@ public class DevQueueServiceTests : IDisposable
         _cancellationManager = new Mock<ITaskCancellationManager>();
         _pathResolver = new Mock<IWorkspacePathResolver>();
         _taskOrchestrator = new Mock<ITaskOrchestrator>();
+        _telemetryService = new Mock<IOperationsTelemetryService>();
         _dependencyStore = new InMemoryTaskDependencyStore();
 
         var services = new ServiceCollection();
@@ -54,6 +56,7 @@ public class DevQueueServiceTests : IDisposable
         services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
         services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
         services.AddSingleton<ITaskDependencyStore>(_dependencyStore);
+        services.AddSingleton<IOperationsTelemetryService>(_telemetryService.Object);
 
         var mockStage = new Mock<IWorkflowStage>();
         mockStage.Setup(s => s.StageId).Returns("task-review");
@@ -175,6 +178,36 @@ public class DevQueueServiceTests : IDisposable
         var updated = await _taskRepo.GetByIdAsync(55);
         Assert.NotNull(updated);
         Assert.Equal(TaskOverallStatus.Cancelled, updated.Status);
+    }
+
+    [Fact]
+    public async Task CancelJobAsync_MarksPendingQuestionsSkipped_AndSynchronizesBadgeCounts()
+    {
+        var task = new ForgeTask
+        {
+            Id = 56,
+            WorkspaceId = 1,
+            Title = "Task Waiting For Clarification",
+            Status = TaskOverallStatus.Open,
+            IsWaitingForHuman = true,
+            Questions = new List<Question>
+            {
+                new() { Id = 560, TaskId = 56, Prompt = "Pending question?", Status = QuestionStatus.Pending }
+            }
+        };
+        await _taskRepo.CreateAsync(task);
+
+        var service = CreateService();
+
+        var result = await service.CancelJobAsync("job-56", 56);
+
+        Assert.True(result);
+        var updated = await _taskRepo.GetByIdAsync(56);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Cancelled, updated.Status);
+        Assert.False(updated.IsWaitingForHuman);
+        Assert.All(updated.Questions, q => Assert.Equal(QuestionStatus.Skipped, q.Status));
+        _telemetryService.Verify(t => t.RecordPendingCounts(0, 0), Times.Once);
     }
 
     [Fact]

@@ -67,6 +67,7 @@ public class NavMenuShellTests : BunitContext
 
     private void RegisterMainLayoutServices()
     {
+        Services.AddSingleton<NightCodeForge.Core.Repositories.ITaskRepository>(new NightCodeForge.Core.Repositories.InMemoryTaskRepository());
         Services.AddSingleton<NightCodeForge.Core.Repositories.IWorkspaceRepository>(new NightCodeForge.Core.Repositories.InMemoryWorkspaceRepository());
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton(TestServices.CreateOperationsControlService());
@@ -223,5 +224,96 @@ public class NavMenuShellTests : BunitContext
 
         var pill = cut.Find("#mobile-worker-pill");
         Assert.Equal("w/7/inspector/42", pill.GetAttribute("href"));
+    }
+
+    [Fact]
+    public void NavMenu_WhenPendingReviewCountZero_DoesNotRenderReviewBadge()
+    {
+        var workerState = Services.GetRequiredService<WorkerStateService>();
+        workerState.UpdatePendingReviews(0);
+
+        var cut = Render<NavMenu>();
+
+        var reviewLink = cut.Find("a[href*='review']");
+        Assert.DoesNotContain("nav-badge", reviewLink.InnerHtml);
+    }
+
+    [Fact]
+    public void NavMenu_WhenPendingReviewCountGreaterThanZero_RendersReviewBadge()
+    {
+        var workerState = Services.GetRequiredService<WorkerStateService>();
+        workerState.UpdatePendingReviews(4);
+
+        var cut = Render<NavMenu>();
+
+        var reviewLink = cut.Find("a[href*='review']");
+        var badge = reviewLink.QuerySelector(".nav-badge");
+        Assert.NotNull(badge);
+        Assert.Equal("4", badge.TextContent.Trim());
+    }
+
+    [Fact]
+    public void NavMenu_DynamicPendingReviewCountUpdate_ReRendersBadgeWithoutNavigation()
+    {
+        var workerState = Services.GetRequiredService<WorkerStateService>();
+        workerState.UpdatePendingReviews(0);
+
+        var cut = Render<NavMenu>();
+        var reviewLink = cut.Find("a[href*='review']");
+        Assert.Null(reviewLink.QuerySelector(".nav-badge"));
+
+        cut.InvokeAsync(() => workerState.UpdatePendingReviews(2));
+
+        var updatedBadge = cut.Find("a[href*='review'] .nav-badge");
+        Assert.NotNull(updatedBadge);
+        Assert.Equal("2", updatedBadge.TextContent.Trim());
+    }
+
+    [Fact]
+    public async Task MainLayout_HydratesBadgeCountsOnInit_AndRefreshesOnTabForegrounded()
+    {
+        RegisterMainLayoutServices();
+        var taskRepo = Services.GetRequiredService<NightCodeForge.Core.Repositories.ITaskRepository>();
+        var workerState = Services.GetRequiredService<WorkerStateService>();
+
+        await taskRepo.CreateAsync(new NightCodeForge.Core.Domain.ForgeTask
+        {
+            Id = 1,
+            WorkspaceId = 1,
+            Title = "Task Waiting For Question",
+            Status = NightCodeForge.Core.Domain.TaskOverallStatus.Open,
+            Questions = new List<NightCodeForge.Core.Domain.Question>
+            {
+                new() { Id = 10, TaskId = 1, Prompt = "Clarify?", Status = NightCodeForge.Core.Domain.QuestionStatus.Pending }
+            }
+        });
+        await taskRepo.CreateAsync(new NightCodeForge.Core.Domain.ForgeTask
+        {
+            Id = 2,
+            WorkspaceId = 1,
+            Title = "Task Ready For Review",
+            Status = NightCodeForge.Core.Domain.TaskOverallStatus.Ready,
+            HasExecutionRun = true
+        });
+
+        var cut = Render<MainLayout>();
+
+        Assert.Equal(1, workerState.Current.PendingQuestionCount);
+        Assert.Equal(1, workerState.Current.PendingReviewCount);
+
+        // Simulate background DB change while tab was backgrounded, then fire OnTabForegrounded
+        await taskRepo.CreateAsync(new NightCodeForge.Core.Domain.ForgeTask
+        {
+            Id = 3,
+            WorkspaceId = 1,
+            Title = "Second Ready Task",
+            Status = NightCodeForge.Core.Domain.TaskOverallStatus.Ready,
+            HasExecutionRun = true
+        });
+
+        await cut.InvokeAsync(() => cut.Instance.OnTabForegrounded());
+
+        Assert.Equal(1, workerState.Current.PendingQuestionCount);
+        Assert.Equal(2, workerState.Current.PendingReviewCount);
     }
 }

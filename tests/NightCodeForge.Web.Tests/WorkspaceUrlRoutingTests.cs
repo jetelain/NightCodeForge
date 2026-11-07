@@ -259,6 +259,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
             workspaceRepo,
             markdownSync,
             orchestrator,
+            new Mock<IOperationsTelemetryService>().Object,
             NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton<ITaskReviewService>(reviewService);
         Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));
@@ -308,6 +309,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         Services.AddSingleton(workspaceState);
         Services.AddSingleton<ITaskMutationService>(new Mock<ITaskMutationService>().Object);
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
+        Services.AddSingleton(new WorkerStateService(new Mock<IOperationsTelemetryService>().Object));
 
         var nav = Services.GetRequiredService<NavigationManager>();
         nav.NavigateTo($"http://localhost/w/{ws1.Id}/review/{task.Id}");
@@ -356,6 +358,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
     private void RegisterLayoutServices(IWorkspaceRepository workspaceRepo, WorkspaceStateService workspaceState)
     {
         Services.AddSingleton(new WorkerStateService(new Mock<IOperationsTelemetryService>().Object));
+        Services.AddSingleton<ITaskRepository>(new InMemoryTaskRepository());
         Services.AddSingleton(workspaceRepo);
         Services.AddSingleton(workspaceState);
         Services.AddSingleton(TestServices.CreateToastService());

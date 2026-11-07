@@ -329,6 +329,24 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     private readonly Dictionary<int, ActiveTaskSummary> _activeTasks = new();
 
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
+    public event Action<int, int>? OnPendingCountsChanged;
+
+    public void RecordPendingCounts(int pendingQuestionCount, int pendingReviewCount)
+    {
+        OnPendingCountsChanged?.Invoke(pendingQuestionCount, pendingReviewCount);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _hubContext.Clients.All.ReceivePendingCounts(pendingQuestionCount, pendingReviewCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to broadcast ReceivePendingCounts");
+            }
+        });
+    }
 
     public void RecordActiveTask(ActiveTaskSummary summary)
     {

@@ -98,10 +98,11 @@ public static class HomeDashboardBuilder
         var workspaceById = workspaces.ToDictionary(w => w.Id);
         var allTasksById = new Dictionary<int, ForgeTask>();
 
-        var pendingQuestions = await taskRepository.GetQuestionsByStatusAsync(
+        var rawPendingQuestions = await taskRepository.GetQuestionsByStatusAsync(
             QuestionStatus.Pending,
             workspaceId: null,
             cancellationToken: cancellationToken);
+        var pendingQuestions = rawPendingQuestions.Where(TaskBadgeCounter.IsPendingQuestion).ToList();
 
         DevQueueSnapshot? queueSnapshot = null;
         try
@@ -249,7 +250,7 @@ public static class HomeDashboardBuilder
     }
 
     public static bool IsPendingHumanReview(ForgeTask task) =>
-        task.Status == TaskOverallStatus.Ready && task.HasExecutionRun;
+        TaskBadgeCounter.IsPendingHumanReview(task);
 
     public static IReadOnlyList<HomePendingReviewItem> BuildPendingReviewTasks(
         IEnumerable<ForgeTask> tasks,

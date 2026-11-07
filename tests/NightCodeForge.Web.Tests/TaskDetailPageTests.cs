@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -42,6 +43,7 @@ public class TaskDetailPageTests : BunitContext
             _workspaceRepository,
             _markdownSync,
             _orchestrator,
+            new Mock<IOperationsTelemetryService>().Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance);
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);

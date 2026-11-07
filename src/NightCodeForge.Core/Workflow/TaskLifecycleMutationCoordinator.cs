@@ -22,6 +22,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
     private readonly ITaskJobQueue _jobQueue;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IAgentActivityStreamer _streamer;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly ILogger<TaskLifecycleMutationCoordinator> _logger;
 
     public TaskLifecycleMutationCoordinator(
@@ -32,6 +33,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         ITaskJobQueue jobQueue,
         ITaskCancellationManager cancellationManager,
         IAgentActivityStreamer streamer,
+        IOperationsTelemetryService telemetryService,
         ILogger<TaskLifecycleMutationCoordinator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -41,6 +43,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         _jobQueue = jobQueue ?? throw new ArgumentNullException(nameof(jobQueue));
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -158,6 +161,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         {
             // Partial submission: keep task waiting
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
                 TaskId = task.Id,
@@ -172,6 +176,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         if (!task.IsWaitingForHuman)
         {
             await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
             return;
         }
 
@@ -268,6 +273,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
         await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
         await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
         var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
         var blockedStage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
@@ -417,6 +423,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         // Enqueue to target stage queue tier
         task.LastHangfireJobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
     }
 
     public async Task PromoteSuggestedTaskAsync(
@@ -529,6 +536,14 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         task.InterruptedAgentProfileId = null;
         task.UpdatedAt = DateTime.UtcNow;
 
+        if (task.Questions != null)
+        {
+            foreach (var question in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            {
+                question.Status = QuestionStatus.Skipped;
+            }
+        }
+
         var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
         bag.Remove(PipelineDataBagKeys.HasResolvedConflict);
         bag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
@@ -562,6 +577,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
 
         await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Rejected, cancellationToken);
         await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
         var workspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
         if (workspace != null)
@@ -736,6 +752,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
 
         await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
         await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
         // 11. Execution Log
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog

@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -44,6 +45,7 @@ public class TaskInspectorPageTests : BunitContext
             new InMemoryWorkspaceRepository(),
             new MockTaskMarkdownSyncService(),
             mockOrchestrator,
+            new Mock<IOperationsTelemetryService>().Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton(_workerState);

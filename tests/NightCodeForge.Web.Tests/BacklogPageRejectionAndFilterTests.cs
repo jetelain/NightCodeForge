@@ -1,7 +1,9 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -42,6 +44,7 @@ public class BacklogPageRejectionAndFilterTests : BunitContext
             _workspaceRepository,
             _markdownSync,
             _orchestrator,
+            new Mock<IOperationsTelemetryService>().Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance);
 
         Services.AddSingleton(_workspaceState);

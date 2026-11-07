@@ -361,5 +361,81 @@ public class WorkerStateServiceTests
         Assert.Equal(42, service.Current.ActiveTaskId);
         Assert.Equal("Refactor Parser", service.Current.ActiveTaskTitle);
     }
+
+    [Fact]
+    public void InitialState_PendingReviewCount_ShouldDefaultToZero()
+    {
+        _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary?)null);
+        var service = new WorkerStateService(_telemetryMock.Object);
+
+        Assert.Equal(0, service.Current.PendingReviewCount);
+    }
+
+    [Fact]
+    public void UpdatePendingReviews_ShouldUpdateSnapshotAndNotify()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        var eventFired = false;
+        service.OnWorkerStateChanged += () => eventFired = true;
+
+        service.UpdatePendingReviews(5);
+
+        Assert.Equal(5, service.Current.PendingReviewCount);
+        Assert.True(eventFired);
+    }
+
+    [Fact]
+    public void UpdatePendingReviews_SameCount_ShouldDeduplicateAndNotNotify()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.UpdatePendingReviews(3);
+
+        var eventFired = false;
+        service.OnWorkerStateChanged += () => eventFired = true;
+
+        service.UpdatePendingReviews(3);
+
+        Assert.Equal(3, service.Current.PendingReviewCount);
+        Assert.False(eventFired);
+    }
+
+    [Fact]
+    public void UpdatePendingCounts_ShouldUpdateBothAndNotifyOnce()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        var fireCount = 0;
+        service.OnWorkerStateChanged += () => fireCount++;
+
+        service.UpdatePendingCounts(4, 7);
+
+        Assert.Equal(4, service.Current.PendingQuestionCount);
+        Assert.Equal(7, service.Current.PendingReviewCount);
+        Assert.Equal(1, fireCount);
+    }
+
+    [Fact]
+    public void UpdatePendingCounts_SameValues_ShouldDeduplicateAndNotNotify()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+        service.UpdatePendingCounts(4, 7);
+
+        var fireCount = 0;
+        service.OnWorkerStateChanged += () => fireCount++;
+
+        service.UpdatePendingCounts(4, 7);
+
+        Assert.Equal(0, fireCount);
+    }
+
+    [Fact]
+    public void TelemetryOnPendingCountsChanged_ShouldUpdateWorkerState()
+    {
+        var service = new WorkerStateService(_telemetryMock.Object);
+
+        _telemetryMock.Raise(t => t.OnPendingCountsChanged += null, 3, 6);
+
+        Assert.Equal(3, service.Current.PendingQuestionCount);
+        Assert.Equal(6, service.Current.PendingReviewCount);
+    }
 }
 

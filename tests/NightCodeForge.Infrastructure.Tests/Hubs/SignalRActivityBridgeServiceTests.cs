@@ -739,6 +739,13 @@ public class SignalRActivityBridgeServiceTests
         public Task ReceiveShellCommandCompleted(NightCodeForge.Core.Workflow.ShellCommandRecord command) => Task.CompletedTask;
         public List<(bool IsPaused, string? ReclaimStatus, string? LastReclaimError)> OperationsStatusChanges { get; } = new();
         public List<NightCodeForge.Core.Workflow.ActiveTaskSummary?> ActiveTasks { get; } = new();
+        public List<(int PendingQuestionCount, int PendingReviewCount)> PendingCounts { get; } = new();
+
+        public Task ReceivePendingCounts(int pendingQuestionCount, int pendingReviewCount)
+        {
+            PendingCounts.Add((pendingQuestionCount, pendingReviewCount));
+            return Task.CompletedTask;
+        }
 
         public Task ReceiveActiveTask(NightCodeForge.Core.Workflow.ActiveTaskSummary? activeTask)
         {

@@ -54,6 +54,7 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
             new InMemoryWorkspaceRepository(),
             _markdownSync,
             _orchestrator,
+            telemetryMock.Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 

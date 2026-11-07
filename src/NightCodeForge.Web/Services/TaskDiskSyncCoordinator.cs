@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -32,15 +34,21 @@ public class TaskDiskSyncCoordinator : ITaskDiskSyncCoordinator
 {
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly ITaskRepository _taskRepository;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly ILogger<TaskDiskSyncCoordinator> _logger;
 
     public TaskDiskSyncCoordinator(
         ITaskMarkdownSyncService markdownSyncService,
         IWorkspacePathResolver pathResolver,
+        ITaskRepository taskRepository,
+        IOperationsTelemetryService telemetryService,
         ILogger<TaskDiskSyncCoordinator> logger)
     {
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -105,6 +113,8 @@ public class TaskDiskSyncCoordinator : ITaskDiskSyncCoordinator
         _logger.LogInformation(
             "Completed docs/tasks sync for workspace #{WorkspaceId}: {IngestedCount} processed from disk, {WrittenCount} mirrored to disk (clone: {ClonePath}).",
             workspace.Id, fromDiskTasks.Count, writtenCount, hostCloneDir ?? "none");
+
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
         return new TaskDiskSyncResult(
             TasksIngestedOrUpdatedFromDisk: fromDiskTasks.Count,

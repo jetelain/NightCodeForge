@@ -94,4 +94,9 @@ public interface IOrchestratorHubClient
     /// Live operations telemetry: an autonomous task is currently active or cleared.
     /// </summary>
     Task ReceiveActiveTask(NightCodeForge.Core.Workflow.ActiveTaskSummary? activeTask);
+
+    /// <summary>
+    /// Live operations telemetry: authoritative pending clarification question and pending review task counts.
+    /// </summary>
+    Task ReceivePendingCounts(int pendingQuestionCount, int pendingReviewCount);
 }

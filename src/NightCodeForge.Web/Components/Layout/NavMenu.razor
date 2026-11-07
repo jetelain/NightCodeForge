@@ -64,6 +64,10 @@
         <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("review")">
             <span class="nav-icon">🔍</span>
             <span>Review Room</span>
+            @if (WorkerState.Current.PendingReviewCount > 0)
+            {
+                <span class="nav-badge">@WorkerState.Current.PendingReviewCount</span>
+            }
         </NavLink>
 
         <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("git-sync")">

@@ -174,6 +174,8 @@ public class HomePendingReviewTests : BunitContext
         Assert.Contains("Conflict Resolved", cut.Find($"#home-pending-review-{critical.Id}").TextContent);
         Assert.DoesNotContain("Conflict Resolved", cut.Find($"#home-pending-review-{newer.Id}").TextContent);
         Assert.Equal($"/w/{ws.Id}/review/{newer.Id}", cut.Find($"#home-review-task-btn-{newer.Id}").GetAttribute("href"));
+        Assert.Equal(3, workerState.Current.PendingReviewCount);
+        Assert.Equal(1, workerState.Current.PendingQuestionCount);
     }
 }
 

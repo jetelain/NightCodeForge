@@ -22,6 +22,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
     private readonly IWorkflowPipelineProvider _pipelineProvider;
     private readonly IConflictResolutionVerifier _conflictResolutionVerifier;
     private readonly IAgentActivityStreamer _streamer;
+    private readonly IOperationsTelemetryService _telemetryService;
     private readonly ILogger<TaskMergeAndCascadeCoordinator> _logger;
 
     public TaskMergeAndCascadeCoordinator(
@@ -33,6 +34,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
         IWorkflowPipelineProvider pipelineProvider,
         IConflictResolutionVerifier conflictResolutionVerifier,
         IAgentActivityStreamer streamer,
+        IOperationsTelemetryService telemetryService,
         ILogger<TaskMergeAndCascadeCoordinator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -43,6 +45,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
         _pipelineProvider = pipelineProvider ?? throw new ArgumentNullException(nameof(pipelineProvider));
         _conflictResolutionVerifier = conflictResolutionVerifier ?? throw new ArgumentNullException(nameof(conflictResolutionVerifier));
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
+        _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -181,6 +184,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                 cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
             await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
@@ -378,6 +382,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                 reason: $"ForgeTask #{task.Id} completed and squash-merged to {task.BaseBranch}.",
                 cancellationToken: cancellationToken);
             await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
+            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
             // Push succeeded and Closed status persisted! Remove task worktree now
             await _workspacePreparer.RemoveWorktreeSafeAsync(workspace, task.Id, "completed", CancellationToken.None);
@@ -521,6 +526,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
         await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
         await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {

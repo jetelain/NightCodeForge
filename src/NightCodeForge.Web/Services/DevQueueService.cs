@@ -277,6 +277,10 @@ public class DevQueueService : IDevQueueService
                 {
                     task.Status = TaskOverallStatus.Cancelled;
                     task.IsWaitingForHuman = false;
+                    foreach (var q in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+                    {
+                        q.Status = QuestionStatus.Skipped;
+                    }
                     await taskRepo.UpdateWithHistoryAsync(
                         task,
                         dependsOn: null,
@@ -284,6 +288,9 @@ public class DevQueueService : IDevQueueService
                         reason: "Job cancelled via DevQueue",
                         cancellationToken: cancellationToken);
                     _logger.LogInformation("Marked Task #{TaskId} status as Cancelled after job cancellation", taskId.Value);
+
+                    var telemetryService = scope.ServiceProvider.GetRequiredService<IOperationsTelemetryService>();
+                    await TaskBadgeCounter.SynchronizeBadgeCountsAsync(taskRepo, telemetryService, cancellationToken);
 
                     var convs = await taskRepo.GetConversationsAsync(task.Id, cancellationToken);
                     foreach (var c in convs.Where(c =>
@@ -486,6 +493,9 @@ public class DevQueueService : IDevQueueService
         var dependencyStore = scope.ServiceProvider.GetRequiredService<ITaskDependencyStore>();
         await dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status, cancellationToken);
         await dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
+
+        var telemetryService = scope.ServiceProvider.GetRequiredService<IOperationsTelemetryService>();
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(taskRepo, telemetryService, cancellationToken);
 
         var pipelineProvider = scope.ServiceProvider.GetRequiredService<IWorkflowPipelineProvider>();
         var pipeline = await pipelineProvider.GetPipelineAsync(task, cancellationToken);

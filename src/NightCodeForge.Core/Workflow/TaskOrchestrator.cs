@@ -1304,6 +1304,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                         {
                             task.Status = TaskOverallStatus.Cancelled;
                             task.IsWaitingForHuman = false;
+                            if (task.Questions != null)
+                            {
+                                foreach (var q in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+                                {
+                                    q.Status = QuestionStatus.Skipped;
+                                }
+                            }
                             pipelineContext.SyncDataBagToTask();
                             await _taskRepository.UpdateWithHistoryAsync(
                                 task,
@@ -1312,6 +1319,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 reason: $"Stage '{stage.StageId}' was cancelled.",
                                 cancellationToken: ct);
                             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, ct);
+                            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, ct);
                         }
                     }
                     else
@@ -1394,6 +1402,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
                     await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, true, cancellationToken);
                     await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+                    await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
                     await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                     {
@@ -1417,6 +1426,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                         {
                             task.Status = TaskOverallStatus.Cancelled;
                             task.IsWaitingForHuman = false;
+                            if (task.Questions != null)
+                            {
+                                foreach (var q in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+                                {
+                                    q.Status = QuestionStatus.Skipped;
+                                }
+                            }
                             await _taskRepository.UpdateWithHistoryAsync(
                                 task,
                                 dependsOn: null,
@@ -1424,6 +1440,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 reason: $"Execution cancelled after stage '{stage.StageId}'.",
                                 cancellationToken: CancellationToken.None);
                             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, CancellationToken.None);
                         }
                         cohortExitReason = CohortExitReason.Cancelled;
                         return;
@@ -1473,6 +1490,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                     task.Status = TaskOverallStatus.Cancelled;
                     task.IsWaitingForHuman = false;
                     await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                    await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, CancellationToken.None);
                     cohortExitReason = CohortExitReason.Cancelled;
                     return;
                 }
@@ -1715,6 +1733,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
 
                             await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+                            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
                             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                             {
                                 TaskId = task.Id,
@@ -1779,6 +1798,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         currentTask.Status = TaskOverallStatus.Cancelled;
                         currentTask.IsWaitingForHuman = false;
+                        if (currentTask.Questions != null)
+                        {
+                            foreach (var q in currentTask.Questions.Where(q => q.Status == QuestionStatus.Pending))
+                            {
+                                q.Status = QuestionStatus.Skipped;
+                            }
+                        }
                         await _taskRepository.UpdateWithHistoryAsync(
                             currentTask,
                             dependsOn: null,
@@ -1786,6 +1812,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             reason: "Cancelled by user.",
                             cancellationToken: ct);
                         await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(taskId, TaskOverallStatus.Cancelled, ct);
+                        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, ct);
                     }
                     return;
                 }
@@ -1852,6 +1879,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                         cancellationToken: CancellationToken.None);
                     await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(taskId, TaskOverallStatus.Failed, CancellationToken.None);
                     await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(taskId, false, CancellationToken.None);
+                    await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, CancellationToken.None);
                 }
 
                 await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -2319,6 +2347,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             reason: reason,
             cancellationToken: cancellationToken);
         await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Failed, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
         await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {

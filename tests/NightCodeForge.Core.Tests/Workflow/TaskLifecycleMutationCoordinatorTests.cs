@@ -20,6 +20,7 @@ public class TaskLifecycleMutationCoordinatorTests
     private readonly FakeTaskJobQueue _jobQueue = new();
     private readonly Mock<ITaskCancellationManager> _cancellationManagerMock = new();
     private readonly InMemoryAgentActivityStreamer _streamer = new();
+    private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
     private readonly Workspace _workspace;
 
     public TaskLifecycleMutationCoordinatorTests()
@@ -54,20 +55,22 @@ public class TaskLifecycleMutationCoordinatorTests
         _jobQueue,
         _cancellationManagerMock.Object,
         _streamer,
+        _telemetryMock.Object,
         NullLogger<TaskLifecycleMutationCoordinator>.Instance);
 
     [Fact]
     public void Constructor_WhenAnyDependencyIsNull_ThrowsArgumentNullException()
     {
         var logger = NullLogger<TaskLifecycleMutationCoordinator>.Instance;
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(null!, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, null!, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, null!, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, null!, _jobQueue, _cancellationManagerMock.Object, _streamer, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, null!, _cancellationManagerMock.Object, _streamer, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, null!, _streamer, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, null!, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, null!));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(null!, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, null!, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, null!, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, null!, _jobQueue, _cancellationManagerMock.Object, _streamer, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, null!, _cancellationManagerMock.Object, _streamer, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, null!, _streamer, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, null!, _telemetryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskLifecycleMutationCoordinator(_taskRepo, _preparerMock.Object, _mergeCoordinatorMock.Object, _pipelineProvider, _jobQueue, _cancellationManagerMock.Object, _streamer, _telemetryMock.Object, null!));
     }
 
     [Fact]
@@ -312,6 +315,36 @@ public class TaskLifecycleMutationCoordinatorTests
 
         // Rejecting an already terminal task throws InvalidOperationException
         await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RejectTaskAsync(40, "Again"));
+    }
+
+    [Fact]
+    public async Task RejectTaskAsync_MarksPendingQuestionsAsSkipped_AndBroadcastsCounts()
+    {
+        var sut = CreateSut();
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 41,
+            WorkspaceId = 1,
+            Title = "Task with pending question",
+            Status = TaskOverallStatus.Open,
+            Questions = new List<Question>
+            {
+                new() { Id = 100, TaskId = 41, Prompt = "Clarify?", Status = QuestionStatus.Pending },
+                new() { Id = 101, TaskId = 41, Prompt = "Already answered?", Status = QuestionStatus.Answered }
+            }
+        }, null, AuditActors.User, "init");
+
+        await sut.RejectTaskAsync(41, "Not doing this");
+
+        var updatedTask = await _taskRepo.GetByIdAsync(41);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Rejected, updatedTask.Status);
+        var q100 = Assert.Single(updatedTask.Questions, q => q.Id == 100);
+        var q101 = Assert.Single(updatedTask.Questions, q => q.Id == 101);
+        Assert.Equal(QuestionStatus.Skipped, q100.Status);
+        Assert.Equal(QuestionStatus.Answered, q101.Status);
+
+        _telemetryMock.Verify(t => t.RecordPendingCounts(It.IsAny<int>(), It.IsAny<int>()), Times.Once);
     }
 
     [Fact]

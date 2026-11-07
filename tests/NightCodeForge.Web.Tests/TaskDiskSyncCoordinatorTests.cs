@@ -3,6 +3,7 @@ using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -26,6 +27,8 @@ public class TaskDiskSyncCoordinatorTests : IDisposable
         _coordinator = new TaskDiskSyncCoordinator(
             _mockMarkdownSync.Object,
             _mockPathResolver.Object,
+            new InMemoryTaskRepository(),
+            new Mock<IOperationsTelemetryService>().Object,
             NullLogger<TaskDiskSyncCoordinator>.Instance);
     }
 

@@ -78,4 +78,15 @@ public interface IOperationsTelemetryService
     /// Event fired whenever the active task changes (starts, advances, or clears).
     /// </summary>
     event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
+
+    /// <summary>
+    /// Records the authoritative count of pending clarification questions and pending code reviews,
+    /// notifying local event subscribers and connected SignalR clients.
+    /// </summary>
+    void RecordPendingCounts(int pendingQuestionCount, int pendingReviewCount);
+
+    /// <summary>
+    /// Event fired whenever pending question or review counts change.
+    /// </summary>
+    event Action<int, int>? OnPendingCountsChanged;
 }

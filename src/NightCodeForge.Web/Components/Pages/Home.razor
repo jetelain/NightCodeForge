@@ -530,6 +530,7 @@
             try
             {
                 WorkerState.UpdatePendingQuestions(_snapshot.PendingQuestionCount);
+                WorkerState.UpdatePendingReviews(_snapshot.PendingReviewCount);
             }
             finally
             {

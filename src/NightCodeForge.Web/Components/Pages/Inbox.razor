@@ -85,6 +85,7 @@
     private bool _filterCurrentWorkspaceOnly;
     private bool _isLoading = true;
     private bool _disposed;
+    private int _lastKnownPendingQuestionCount = -1;
 
     private record QuestionGroup(string Key, IReadOnlyList<Question> Questions);
 
@@ -109,6 +110,7 @@
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
         if (TaskId.HasValue)
         {
             // A deep-linked task must be visible regardless of the active workspace filter.
@@ -169,10 +171,12 @@
         {
             int? workspaceFilter = _filterCurrentWorkspaceOnly ? WorkspaceState.ActiveWorkspaceId : null;
             var list = await TaskRepository.GetQuestionsByStatusAsync(QuestionStatus.Pending, workspaceFilter);
-            _pendingQuestions = list.ToList();
+            _pendingQuestions = list.Where(TaskBadgeCounter.IsPendingQuestion).ToList();
             
-            // Sync WorkerState pending count
-            WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
+            // Sync WorkerState pending count across all workspaces (authoritative global count)
+            var (globalQuestionCount, _) = await TaskBadgeCounter.ComputeCountsAsync(TaskRepository);
+            _lastKnownPendingQuestionCount = globalQuestionCount;
+            WorkerState.UpdatePendingQuestions(globalQuestionCount);
         }
         catch (Exception ex)
         {
@@ -196,22 +200,50 @@
 
     private async Task HandleAnswerSubmitted(int questionId)
     {
+        foreach (var q in _pendingQuestions.Where(q => q.Id == questionId))
+        {
+            q.Status = QuestionStatus.Answered;
+        }
         _pendingQuestions.RemoveAll(q => q.Id == questionId);
-        WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
+        var (globalQuestionCount, _) = await TaskBadgeCounter.ComputeCountsAsync(TaskRepository);
+        _lastKnownPendingQuestionCount = globalQuestionCount;
+        WorkerState.UpdatePendingQuestions(globalQuestionCount);
         await InvokeAsync(StateHasChanged);
     }
 
     private async Task HandleBatchSubmitted(IReadOnlyList<int> questionIds)
     {
         var idSet = new HashSet<int>(questionIds);
+        foreach (var q in _pendingQuestions.Where(q => idSet.Contains(q.Id)))
+        {
+            q.Status = QuestionStatus.Answered;
+        }
         _pendingQuestions.RemoveAll(q => idSet.Contains(q.Id));
-        WorkerState.UpdatePendingQuestions(_pendingQuestions.Count);
+        var (globalQuestionCount, _) = await TaskBadgeCounter.ComputeCountsAsync(TaskRepository);
+        _lastKnownPendingQuestionCount = globalQuestionCount;
+        WorkerState.UpdatePendingQuestions(globalQuestionCount);
         await InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleWorkerStateChanged()
+    {
+        if (_disposed || _isLoading) return;
+
+        if (WorkerState.Current.PendingQuestionCount != _lastKnownPendingQuestionCount)
+        {
+            _ = InvokeAsync(async () =>
+            {
+                if (_disposed) return;
+                await LoadQuestionsAsync();
+                StateHasChanged();
+            });
+        }
     }
 
     public void Dispose()
     {
         _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
     }
 }

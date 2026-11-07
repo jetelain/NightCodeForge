@@ -82,10 +82,15 @@ else if (EffectiveQuestions.Count > 1)
 
         try
         {
+            var countBefore = WorkerState.Current.PendingQuestionCount;
             await TaskOrchestrator.SubmitHumanAnswerAsync(q.Id, answer);
+            q.Status = QuestionStatus.Answered;
             ToastService.Show("Clarification Submitted", $"ForgeTask #{q.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
-            WorkerState.UpdatePendingQuestions(Math.Max(0, WorkerState.Current.PendingQuestionCount - 1));
             await OnAnswerSubmitted.InvokeAsync(q.Id);
+            if (WorkerState.Current.PendingQuestionCount == countBefore)
+            {
+                WorkerState.UpdatePendingQuestions(Math.Max(0, countBefore - 1));
+            }
         }
         catch (Exception ex)
         {
@@ -116,15 +121,30 @@ else if (EffectiveQuestions.Count > 1)
                 return;
             }
 
+            var countBefore = WorkerState.Current.PendingQuestionCount;
             await TaskOrchestrator.SubmitAnswersAsync(firstQ.TaskId, dict);
+            foreach (var q in EffectiveQuestions)
+            {
+                q.Status = QuestionStatus.Answered;
+            }
             ToastService.Show("Clarification Submitted", $"ForgeTask #{firstQ.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
-            WorkerState.UpdatePendingQuestions(Math.Max(0, WorkerState.Current.PendingQuestionCount - EffectiveQuestions.Count));
 
             var submittedIds = dict.Keys.ToList();
-            await OnBatchSubmitted.InvokeAsync(submittedIds);
-            foreach (var id in submittedIds)
+            if (OnBatchSubmitted.HasDelegate)
             {
-                await OnAnswerSubmitted.InvokeAsync(id);
+                await OnBatchSubmitted.InvokeAsync(submittedIds);
+            }
+            else
+            {
+                foreach (var id in submittedIds)
+                {
+                    await OnAnswerSubmitted.InvokeAsync(id);
+                }
+            }
+
+            if (WorkerState.Current.PendingQuestionCount == countBefore)
+            {
+                WorkerState.UpdatePendingQuestions(Math.Max(0, countBefore - EffectiveQuestions.Count));
             }
         }
         catch (Exception ex)

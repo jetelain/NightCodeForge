@@ -138,6 +138,7 @@ public class TestOrchestratorBuilder
         PipelineProvider,
         ConflictResolutionVerifier,
         Streamer,
+        TelemetryService,
         NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
 
     public TaskLifecycleMutationCoordinator BuildLifecycleMutationCoordinator(
@@ -154,6 +155,7 @@ public class TestOrchestratorBuilder
             JobQueue,
             CancellationManager,
             Streamer,
+            TelemetryService,
             NullLogger<TaskLifecycleMutationCoordinator>.Instance);
     }
 
