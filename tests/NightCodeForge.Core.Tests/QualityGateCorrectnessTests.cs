@@ -44,15 +44,13 @@ public class QualityGateCorrectnessTests
 
     private class FakePreload : ILlmModelPreloadService
     {
-        public List<(string Model, string KeepAlive)> Calls { get; } = new();
+        public List<(string Model, ModelPreloadOptions? Options)> Calls { get; } = new();
 
-        public Task<bool> PreloadModelAsync(string modelName, string keepAlive = "15m", CancellationToken cancellationToken = default)
+        public Task<ModelPreloadResult> PreloadModelAsync(string modelName, ModelPreloadOptions? options = null, CancellationToken cancellationToken = default)
         {
-            Calls.Add((modelName, keepAlive));
-            return Task.FromResult(true);
+            Calls.Add((modelName, options));
+            return Task.FromResult(new ModelPreloadResult(true, modelName, LoadAccepted: true));
         }
-
-        public Task<bool> EvictModelAsync(string modelName, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 
     private class TestServiceProvider : IServiceProvider

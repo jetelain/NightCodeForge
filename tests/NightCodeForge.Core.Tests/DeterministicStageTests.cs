@@ -57,18 +57,24 @@ public class DeterministicStageTests
 
     private class FakePreloadService : ILlmModelPreloadService
     {
-        public List<(string ModelName, string KeepAlive)> PreloadedModels { get; } = new();
+        public List<(string ModelName, ModelPreloadOptions? Options)> PreloadedModels { get; } = new();
 
-        public Task<bool> PreloadModelAsync(string modelName, string keepAlive = "15m", CancellationToken cancellationToken = default)
+        public Task<ModelPreloadResult> PreloadModelAsync(string modelName, ModelPreloadOptions? options = null, CancellationToken cancellationToken = default)
         {
-            PreloadedModels.Add((modelName, keepAlive));
-            return Task.FromResult(true);
+            PreloadedModels.Add((modelName, options));
+            return Task.FromResult(new ModelPreloadResult(true, modelName, LoadAccepted: true));
         }
+    }
 
-        public Task<bool> EvictModelAsync(string modelName, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(true);
-        }
+    private class TestWorkflowStage : IWorkflowStage
+    {
+        public string StageId { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public WorkflowStageKind Kind { get; set; }
+        public StageQueueTier QueueTier { get; set; } = StageQueueTier.Implementation;
+        public string? LoopBackStageId { get; set; }
+        public Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default) =>
+            Task.FromResult(StageExecutionResult.Success());
     }
 
     [Fact]
@@ -134,6 +140,140 @@ public class DeterministicStageTests
         Assert.True(result.IsSuccess);
         Assert.Single(preload.PreloadedModels);
         Assert.Equal("qwen2.5-coder:32b", preload.PreloadedModels[0].ModelName);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_PropagatesContextIntentAndTarget_ToPreloadOptions()
+    {
+        var fakeEnv = new FakeExecutionEnvironment();
+        var preload = new FakePreloadService();
+        var stage = CreateBuildStage(fakeEnv, preload);
+
+        var task = new ForgeTask { Id = 10, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var profile = new AgentProfile
+        {
+            Id = "p1",
+            ModelName = "qwen2.5-coder:32b",
+            ContextWindowTokens = 65536,
+            RoutingTarget = OllamaRoutingTarget.Remote,
+            OptimizationFlags = new LocalOptimizationFlags { JitModelPreload = true }
+        };
+        var context = new PipelineContext(task, workspace) { CurrentProfile = profile };
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(preload.PreloadedModels);
+        Assert.Equal("qwen2.5-coder:32b", preload.PreloadedModels[0].ModelName);
+        var options = preload.PreloadedModels[0].Options;
+        Assert.NotNull(options);
+        Assert.Equal(65536, options.ContextIntentTokens);
+        Assert.Equal("Remote", options.Target);
+        Assert.Equal(10, options.TaskId);
+        Assert.Equal(stage.StageId, options.StageId);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_DoesNotPreload_WhenJitModelPreloadDisabled()
+    {
+        var fakeEnv = new FakeExecutionEnvironment();
+        var preload = new FakePreloadService();
+        var stage = CreateBuildStage(fakeEnv, preload);
+
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var profile = new AgentProfile
+        {
+            Id = "p1",
+            ModelName = "qwen2.5-coder:32b",
+            OptimizationFlags = new LocalOptimizationFlags { JitModelPreload = false }
+        };
+        var context = new PipelineContext(task, workspace) { CurrentProfile = profile };
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(preload.PreloadedModels);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_ResolvesGlobalProfileFromWorkspaceRepository_WhenWorkspaceOverrideMissing()
+    {
+        var fakeEnv = new FakeExecutionEnvironment();
+        var preload = new FakePreloadService();
+        var wsRepoMock = new Moq.Mock<NightCodeForge.Core.Repositories.IWorkspaceRepository>();
+        var globalProfile = new AgentProfile
+        {
+            Id = StandardStageIds.Implementation,
+            ModelName = "deepseek-coder:33b",
+            ContextWindowTokens = 32768,
+            RoutingTarget = OllamaRoutingTarget.Local
+        };
+        wsRepoMock.Setup(r => r.GetEffectiveAgentProfileAsync(1, StandardStageIds.Implementation, Moq.It.IsAny<CancellationToken>()))
+            .Returns(Task.FromResult<AgentProfile?>(globalProfile));
+
+        var stage = new DeterministicBuildStage(
+            fakeEnv,
+            preload,
+            TestRunner,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance,
+            "dotnet build",
+            DeterministicBuildStage.DefaultStageId,
+            "Deterministic Build",
+            wsRepoMock.Object,
+            null);
+
+        var task = new ForgeTask { Id = 5, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo", AgentProfiles = new List<AgentProfile>() };
+        var pipeline = new WorkflowPipeline(new IWorkflowStage[]
+        {
+            new TestWorkflowStage { StageId = DeterministicBuildStage.DefaultStageId, DisplayName = "Build", Kind = WorkflowStageKind.Deterministic },
+            new TestWorkflowStage { StageId = StandardStageIds.Implementation, DisplayName = "Implementation", Kind = WorkflowStageKind.Agentic }
+        });
+        var context = new PipelineContext(task, workspace) { Pipeline = pipeline };
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(preload.PreloadedModels);
+        Assert.Equal("deepseek-coder:33b", preload.PreloadedModels[0].ModelName);
+        var options = preload.PreloadedModels[0].Options;
+        Assert.NotNull(options);
+        Assert.Equal(32768, options.ContextIntentTokens);
+        Assert.Equal("Local", options.Target);
+    }
+
+    [Fact]
+    public async Task DeterministicBuildStage_DoesNotPreload_WhenGlobalOptimizationSettingsDisablesJitPreload_AndProfileFlagsNull()
+    {
+        var fakeEnv = new FakeExecutionEnvironment();
+        var preload = new FakePreloadService();
+        var globalOptMock = new Moq.Mock<IGlobalOptimizationSettingsService>();
+        globalOptMock.Setup(g => g.GetFlags()).Returns(new LocalOptimizationFlags { JitModelPreload = false });
+
+        var stage = new DeterministicBuildStage(
+            fakeEnv,
+            preload,
+            TestRunner,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance,
+            null,
+            globalOptMock.Object);
+
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1 };
+        var workspace = new Workspace { Id = 1, RepositoryPath = @"C:\repo" };
+        var profile = new AgentProfile
+        {
+            Id = "p1",
+            ModelName = "qwen2.5-coder:32b",
+            OptimizationFlags = null
+        };
+        var context = new PipelineContext(task, workspace) { CurrentProfile = profile };
+
+        var result = await stage.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(preload.PreloadedModels);
     }
 
     [Fact]

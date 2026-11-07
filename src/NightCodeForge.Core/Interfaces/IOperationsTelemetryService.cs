@@ -89,4 +89,34 @@ public interface IOperationsTelemetryService
     /// Event fired whenever pending question or review counts change.
     /// </summary>
     event Action<int, int>? OnPendingCountsChanged;
+
+    /// <summary>
+    /// Records the initiation or completion of a JIT model preload.
+    /// </summary>
+    void RecordModelPreload(ModelPreloadTelemetryRecord record);
+
+    /// <summary>
+    /// Retrieves the most recent model preload telemetry record, if any.
+    /// </summary>
+    ModelPreloadTelemetryRecord? GetLatestModelPreload();
+
+    /// <summary>
+    /// Event fired whenever model preload telemetry changes.
+    /// </summary>
+    event Action<ModelPreloadTelemetryRecord?>? OnModelPreloadChanged;
 }
+
+/// <summary>
+/// Telemetry record capturing JIT model preload and hardware residency events.
+/// </summary>
+public record ModelPreloadTelemetryRecord(
+    string Model,
+    string? SelectedTarget,
+    bool Success,
+    int? NumCtx,
+    int? KeepAliveSeconds,
+    long? DurationMs,
+    string? Reason,
+    DateTime Timestamp,
+    bool IsActive = false);
+

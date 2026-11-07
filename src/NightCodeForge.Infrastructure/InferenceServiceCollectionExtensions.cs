@@ -36,7 +36,7 @@ public static class InferenceServiceCollectionExtensions
                 services.TryAddSingleton<IDefaultModelSelector, OllamaDefaultModelSelector>();
                 services.AddHttpClient<ILlmGatewayService, OllamaRouterGatewayService>();
                 services.AddHttpClient<ILlmModelCatalogService, OllamaRouterModelCatalogService>();
-                services.AddHttpClient<ILlmModelPreloadService, OllamaModelPreloadService>().AddTransientHttpErrorRetry();
+                services.AddHttpClient<ILlmModelPreloadService, OllamaRouterModelPreloadService>().AddTransientHttpErrorRetry();
                 break;
             case LlmProviderType.OpenAiCompatible:
                 services.TryAddSingleton<IDefaultModelSelector, OpenAiDefaultModelSelector>();

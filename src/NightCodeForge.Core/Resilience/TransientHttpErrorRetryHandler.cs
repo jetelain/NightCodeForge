@@ -156,10 +156,11 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                 }
 
                 bool isTransientStatus = TransientErrorDetector.IsTransientStatusCode(response.StatusCode);
-                if (isTransientStatus && response.StatusCode == HttpStatusCode.InternalServerError)
+                if (isTransientStatus && response.StatusCode is HttpStatusCode.InternalServerError or HttpStatusCode.ServiceUnavailable)
                 {
                     var responseBody = await GetResponseBodyAsync();
-                    if (TransientErrorDetector.IsNonRetryablePromptError(response.StatusCode, responseBody))
+                    if (TransientErrorDetector.IsNonRetryablePromptError(response.StatusCode, responseBody) ||
+                        TransientErrorDetector.IsNonRetryablePreloadQualificationError(response.StatusCode, responseBody))
                     {
                         isTransientStatus = false;
                     }

@@ -21,6 +21,7 @@ public class OperationsTelemetryUiService : IDisposable
     public LlmCallRecord? ActiveLlmCall { get; private set; }
     public ShellCommandRecord? ActiveShellCommand { get; private set; }
     public ActiveTaskSummary? ActiveTask { get; private set; }
+    public ModelPreloadTelemetryRecord? LatestModelPreload { get; private set; }
 
     public IReadOnlyList<LlmCallRecord> RecentLlmCalls { get; private set; } = Array.Empty<LlmCallRecord>();
     public IReadOnlyList<ShellCommandRecord> RecentShellCommands { get; private set; } = Array.Empty<ShellCommandRecord>();
@@ -52,12 +53,14 @@ public class OperationsTelemetryUiService : IDisposable
         _hubConnection.OnActiveTaskReceived += HandleActiveTaskChanged;
         _hubConnection.OnWorkerStatusReceived += HandleWorkerStatusReceived;
         _telemetryService.OnActiveTaskChanged += HandleActiveTaskChanged;
+        _telemetryService.OnModelPreloadChanged += HandleModelPreloadChanged;
     }
 
     public void HydrateFromService()
     {
         lock (_lock)
         {
+            LatestModelPreload = _telemetryService.GetLatestModelPreload();
             _recentLlmCalls.Clear();
             _recentLlmCalls.AddRange(_telemetryService.GetRecentLlmCalls(50));
             RecentLlmCalls = _recentLlmCalls.ToArray();
@@ -370,6 +373,62 @@ public class OperationsTelemetryUiService : IDisposable
         return exitCode.Value == 0 ? "badge-teal" : "badge-crimson";
     }
 
+    public static bool IsPreloadActive(ModelPreloadTelemetryRecord? record) =>
+        record?.IsActive == true;
+
+    public static string GetPreloadBadgeClass(ModelPreloadTelemetryRecord? record)
+    {
+        if (record == null) return "badge-gray";
+        if (record.IsActive) return "badge-amber";
+        if (record.Success) return "badge-emerald";
+        return "badge-crimson";
+    }
+
+    public static string GetPreloadStatusText(ModelPreloadTelemetryRecord? record)
+    {
+        if (record == null) return "Idle";
+        if (record.IsActive) return "⚡ JIT Warmup";
+        if (record.Success) return "● Resident";
+        return "⚠️ Warmup Issue";
+    }
+
+    public static string FormatPreloadBadgeLabel(ModelPreloadTelemetryRecord? record)
+    {
+        if (record == null) return string.Empty;
+        var status = GetPreloadStatusText(record);
+        var target = !string.IsNullOrWhiteSpace(record.SelectedTarget) ? $" ({record.SelectedTarget})" : string.Empty;
+        return $"{status}: {record.Model}{target}";
+    }
+
+    public static string FormatPreloadSummary(ModelPreloadTelemetryRecord? record)
+    {
+        if (record == null) return "No active preload";
+        if (record.IsActive)
+        {
+            var target = !string.IsNullOrWhiteSpace(record.SelectedTarget) ? $" → {record.SelectedTarget}" : string.Empty;
+            return $"Warming up '{record.Model}'{target}...";
+        }
+
+        if (record.Success)
+        {
+            var target = !string.IsNullOrWhiteSpace(record.SelectedTarget) ? record.SelectedTarget : "Fleet Target";
+            var tokens = record.NumCtx.HasValue ? $" ({record.NumCtx.Value.ToString("N0", CultureInfo.InvariantCulture)} ctx)" : string.Empty;
+            var duration = record.DurationMs.HasValue ? $" in {record.DurationMs.Value.ToString("N0", CultureInfo.InvariantCulture)}ms" : string.Empty;
+            return $"'{record.Model}' on {target}{tokens}{duration}";
+        }
+
+        return !string.IsNullOrWhiteSpace(record.Reason) ? record.Reason : $"Warmup failed for '{record.Model}'";
+    }
+
+    private void HandleModelPreloadChanged(ModelPreloadTelemetryRecord? record)
+    {
+        lock (_lock)
+        {
+            LatestModelPreload = record;
+        }
+        NotifyStateChanged();
+    }
+
     private void HandleActiveTaskChanged(ActiveTaskSummary? task)
     {
         lock (_lock)
@@ -451,5 +510,6 @@ public class OperationsTelemetryUiService : IDisposable
         _hubConnection.OnActiveTaskReceived -= HandleActiveTaskChanged;
         _hubConnection.OnWorkerStatusReceived -= HandleWorkerStatusReceived;
         _telemetryService.OnActiveTaskChanged -= HandleActiveTaskChanged;
+        _telemetryService.OnModelPreloadChanged -= HandleModelPreloadChanged;
     }
 }

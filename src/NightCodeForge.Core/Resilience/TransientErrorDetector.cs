@@ -127,6 +127,20 @@ public static class TransientErrorDetector
     }
 
     /// <summary>
+    /// Checks whether an HTTP 503 response body represents a structured OllamaRouter preload qualification rejection
+    /// (which should be handled immediately by the caller's soft-intent fallback rather than retried with backoff).
+    /// </summary>
+    public static bool IsNonRetryablePreloadQualificationError(HttpStatusCode statusCode, string? responseBody)
+    {
+        if (statusCode != HttpStatusCode.ServiceUnavailable || string.IsNullOrWhiteSpace(responseBody))
+        {
+            return false;
+        }
+
+        return responseBody.Contains("\"loadAccepted\"", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Checks whether a socket error code represents a transient connectivity, DNS, or connection reset condition.
     /// Includes ConnectionRefused (to wait during local service restarts) and transient DNS/interface transitions.
     /// </summary>

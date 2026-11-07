@@ -330,6 +330,29 @@ public class OperationsTelemetryService : IOperationsTelemetryService
 
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
     public event Action<int, int>? OnPendingCountsChanged;
+    public event Action<ModelPreloadTelemetryRecord?>? OnModelPreloadChanged;
+
+    private readonly object _preloadLock = new();
+    private ModelPreloadTelemetryRecord? _latestModelPreload;
+
+    public void RecordModelPreload(ModelPreloadTelemetryRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        lock (_preloadLock)
+        {
+            _latestModelPreload = record;
+        }
+
+        OnModelPreloadChanged?.Invoke(record);
+    }
+
+    public ModelPreloadTelemetryRecord? GetLatestModelPreload()
+    {
+        lock (_preloadLock)
+        {
+            return _latestModelPreload;
+        }
+    }
 
     public void RecordPendingCounts(int pendingQuestionCount, int pendingReviewCount)
     {

@@ -110,6 +110,21 @@
                 Context: Local Ollama / Crucible VFS
             </div>
         </div>
+
+        @if (WorkerState.LatestModelPreload != null)
+        {
+            <div class="worker-metric-group" id="worker-preload-group">
+                <div class="worker-metric-label">JIT Warmup &amp; Model Residency</div>
+                <div class="worker-metric-value" style="font-size: 0.82rem; flex-wrap: wrap; gap: 0.35rem;">
+                    <span id="worker-preload-badge" class="forge-badge @OperationsTelemetryUiService.GetPreloadBadgeClass(WorkerState.LatestModelPreload)" style="font-size: 0.72rem;">
+                        @OperationsTelemetryUiService.GetPreloadStatusText(WorkerState.LatestModelPreload)
+                    </span>
+                    <span class="font-mono text-secondary" style="font-size: 0.76rem;">
+                        @OperationsTelemetryUiService.FormatPreloadSummary(WorkerState.LatestModelPreload)
+                    </span>
+                </div>
+            </div>
+        }
     </div>
 </div>
 

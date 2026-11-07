@@ -56,4 +56,12 @@ public static class AgentActivityMetadataKeys
     public const string BranchName = "BranchName";
     public const string Attempt = "Attempt";
     public const string MaxRetries = "MaxRetries";
+    public const string ActionTypeJitModelPreload = "JitModelPreload";
+    public const string Model = "Model";
+    public const string SelectedTarget = "SelectedTarget";
+    public const string NumCtx = "NumCtx";
+    public const string KeepAliveSeconds = "KeepAliveSeconds";
+    public const string KeepAlive = "KeepAlive";
+    public const string Reason = "Reason";
+    public const string Warning = "Warning";
 }

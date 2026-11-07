@@ -75,10 +75,16 @@
         </div>
     }
 
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
-        <div style="display: flex; align-items: center; gap: 0.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
             <span style="font-size: 1.25rem;">⚡</span>
             <h3 style="margin: 0; font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">Active System Operations</h3>
+            @if (TelemetryUi.LatestModelPreload != null)
+            {
+                <span id="badge-jit-warmup" class="forge-badge @OperationsTelemetryUiService.GetPreloadBadgeClass(TelemetryUi.LatestModelPreload)" style="font-size: 0.75rem;" title="@OperationsTelemetryUiService.FormatPreloadSummary(TelemetryUi.LatestModelPreload)">
+                    @OperationsTelemetryUiService.FormatPreloadBadgeLabel(TelemetryUi.LatestModelPreload)
+                </span>
+            }
         </div>
         <div style="font-size: 0.8rem; color: var(--text-muted);">
             Universal runtime interception across all tasks, background jobs &amp; CLI tools

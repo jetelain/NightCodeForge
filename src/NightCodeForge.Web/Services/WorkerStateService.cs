@@ -39,12 +39,14 @@ public class WorkerStateService : IWorkerStateService, IDisposable
 
     public int? ActiveTaskId => Current.ActiveTaskId;
     public bool IsRunning => Current.Status == WorkerExecutionStatus.Running;
+    public ModelPreloadTelemetryRecord? LatestModelPreload => _telemetryService.GetLatestModelPreload();
 
     public WorkerStateService(IOperationsTelemetryService telemetryService)
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _telemetryService.OnActiveTaskChanged += HandleTelemetryActiveTaskChanged;
         _telemetryService.OnPendingCountsChanged += HandleTelemetryPendingCountsChanged;
+        _telemetryService.OnModelPreloadChanged += HandleTelemetryModelPreloadChanged;
 
         var active = _telemetryService.GetActiveTask();
         if (AutonomousTaskClassifier.IsAutonomousTask(active))
@@ -327,9 +329,15 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         UpdatePendingCounts(questionCount, reviewCount);
     }
 
+    private void HandleTelemetryModelPreloadChanged(ModelPreloadTelemetryRecord? record)
+    {
+        OnWorkerStateChanged?.Invoke();
+    }
+
     public void Dispose()
     {
         _telemetryService.OnActiveTaskChanged -= HandleTelemetryActiveTaskChanged;
         _telemetryService.OnPendingCountsChanged -= HandleTelemetryPendingCountsChanged;
+        _telemetryService.OnModelPreloadChanged -= HandleTelemetryModelPreloadChanged;
     }
 }

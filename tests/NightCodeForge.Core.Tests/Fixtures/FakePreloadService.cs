@@ -4,16 +4,11 @@ using NightCodeForge.Core.Interfaces;
 
 public class FakePreloadService : ILlmModelPreloadService
 {
-    public List<(string ModelName, string KeepAlive)> PreloadedModels { get; } = new();
+    public List<(string ModelName, ModelPreloadOptions? Options)> PreloadedModels { get; } = new();
 
-    public Task<bool> PreloadModelAsync(string modelName, string keepAlive = "15m", CancellationToken cancellationToken = default)
+    public Task<ModelPreloadResult> PreloadModelAsync(string modelName, ModelPreloadOptions? options = null, CancellationToken cancellationToken = default)
     {
-        PreloadedModels.Add((modelName, keepAlive));
-        return Task.FromResult(true);
-    }
-
-    public Task<bool> EvictModelAsync(string modelName, CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(true);
+        PreloadedModels.Add((modelName, options));
+        return Task.FromResult(new ModelPreloadResult(true, modelName, LoadAccepted: true));
     }
 }

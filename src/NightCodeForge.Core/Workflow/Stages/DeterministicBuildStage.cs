@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 
 namespace NightCodeForge.Core.Workflow.Stages;
 
@@ -13,6 +14,8 @@ namespace NightCodeForge.Core.Workflow.Stages;
 public partial class DeterministicBuildStage : IWorkflowStage
 {
     public const string DefaultStageId = StageImplementationTypes.DeterministicBuild;
+    public const string DefaultBuildCommand = "dotnet build";
+    public const string DefaultDisplayName = "Deterministic Build & Compilation Gate";
     public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 
     [GeneratedRegex(@"(?:warning\s+([A-Za-z0-9_-]+):\s*(.+?)\s*\[|\((\d+),(\d+)\):\s*warning\s*([A-Za-z0-9_-]+):)")]
@@ -26,6 +29,8 @@ public partial class DeterministicBuildStage : IWorkflowStage
     private readonly IBackgroundTaskRunner _backgroundTaskRunner;
     private readonly ILogger<DeterministicBuildStage> _logger;
     private readonly string _buildCommand;
+    private readonly IWorkspaceRepository? _workspaceRepository;
+    private readonly IGlobalOptimizationSettingsService? _globalOptimizationSettings;
 
     public string StageId { get; }
     public string DisplayName { get; }
@@ -33,13 +38,24 @@ public partial class DeterministicBuildStage : IWorkflowStage
     public StageQueueTier QueueTier { get; set; } = StageQueueTier.Implementation;
     public string LoopBackStageId { get; set; } = FallbackLoopBackStageId;
 
-    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public DeterministicBuildStage(
         IExecutionEnvironmentProvider envProvider,
         ILlmModelPreloadService? preloadService,
         IBackgroundTaskRunner backgroundTaskRunner,
         ILogger<DeterministicBuildStage> logger)
-        : this(envProvider, preloadService, backgroundTaskRunner, logger, "dotnet build", DefaultStageId, "Deterministic Build & Compilation Gate")
+        : this(envProvider, preloadService, backgroundTaskRunner, logger, DefaultBuildCommand, DefaultStageId, DefaultDisplayName, null, null)
+    {
+    }
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public DeterministicBuildStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILlmModelPreloadService? preloadService,
+        IBackgroundTaskRunner backgroundTaskRunner,
+        ILogger<DeterministicBuildStage> logger,
+        IWorkspaceRepository? workspaceRepository,
+        IGlobalOptimizationSettingsService? globalOptimizationSettings)
+        : this(envProvider, preloadService, backgroundTaskRunner, logger, DefaultBuildCommand, DefaultStageId, DefaultDisplayName, workspaceRepository, globalOptimizationSettings)
     {
     }
 
@@ -51,14 +67,30 @@ public partial class DeterministicBuildStage : IWorkflowStage
         string buildCommand,
         string stageId,
         string displayName)
+        : this(envProvider, preloadService, backgroundTaskRunner, logger, buildCommand, stageId, displayName, null, null)
+    {
+    }
+
+    public DeterministicBuildStage(
+        IExecutionEnvironmentProvider envProvider,
+        ILlmModelPreloadService? preloadService,
+        IBackgroundTaskRunner backgroundTaskRunner,
+        ILogger<DeterministicBuildStage> logger,
+        string buildCommand,
+        string stageId,
+        string displayName,
+        IWorkspaceRepository? workspaceRepository,
+        IGlobalOptimizationSettingsService? globalOptimizationSettings)
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _preloadService = preloadService;
         _backgroundTaskRunner = backgroundTaskRunner ?? throw new ArgumentNullException(nameof(backgroundTaskRunner));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _buildCommand = !string.IsNullOrWhiteSpace(buildCommand) ? buildCommand : "dotnet build";
+        _buildCommand = !string.IsNullOrWhiteSpace(buildCommand) ? buildCommand : DefaultBuildCommand;
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
-        DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Build & Compilation Gate";
+        DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : DefaultDisplayName;
+        _workspaceRepository = workspaceRepository;
+        _globalOptimizationSettings = globalOptimizationSettings;
     }
 
     public async Task<StageExecutionResult> ExecuteAsync(PipelineContext context, CancellationToken cancellationToken = default)
@@ -87,7 +119,7 @@ public partial class DeterministicBuildStage : IWorkflowStage
         // Trigger JIT model preloading asynchronously for the next agentic stage's model
         if (_preloadService != null)
         {
-            string? nextModelName = null;
+            AgentProfile? nextProfile = null;
             if (context.Pipeline != null)
             {
                 // Find matching pipeline stage: exact match or prefix of composite sub-stage
@@ -103,16 +135,24 @@ public partial class DeterministicBuildStage : IWorkflowStage
 
                 if (nextStage != null)
                 {
-                    var nextProfile = context.Workspace?.AgentProfiles?.FirstOrDefault(p =>
+                    nextProfile = context.Workspace?.AgentProfiles?.FirstOrDefault(p =>
                         string.Equals(p.Id, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(p.Name, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
                         (p.StageDirectives != null && p.StageDirectives.ContainsKey(nextStage.StageId)));
 
-                    if (nextProfile != null)
+                    if (nextProfile == null && _workspaceRepository != null && context.Workspace != null)
                     {
-                        nextModelName = nextProfile.ModelName;
+                        try
+                        {
+                            nextProfile = await _workspaceRepository.GetEffectiveAgentProfileAsync(context.Workspace.Id, nextStage.StageId, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Failed resolving effective agent profile for next stage '{StageId}' via workspace repository.", nextStage.StageId);
+                        }
                     }
-                    else
+
+                    if (nextProfile == null)
                     {
                         _logger.LogInformation("No matching agent profile found for next stage '{StageId}'. Skipping JIT model preload.", nextStage.StageId);
                     }
@@ -123,16 +163,27 @@ public partial class DeterministicBuildStage : IWorkflowStage
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(nextModelName) && context.CurrentProfile != null)
-            {
-                nextModelName = context.CurrentProfile.ModelName;
-            }
+            var effectiveProfile = nextProfile ?? context.CurrentProfile;
+            var effectiveOptimizationFlags = effectiveProfile?.OptimizationFlags
+                ?? bag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
+                ?? _globalOptimizationSettings?.GetFlags();
+            var isPreloadEnabled = effectiveOptimizationFlags?.JitModelPreload ?? true;
 
-            if (!string.IsNullOrWhiteSpace(nextModelName))
+            if (isPreloadEnabled && effectiveProfile != null && !string.IsNullOrWhiteSpace(effectiveProfile.ModelName))
             {
-                var modelToPreload = nextModelName;
+                var modelToPreload = effectiveProfile.ModelName;
+                int? contextIntent = effectiveProfile.ContextWindowTokens is > 0 ? effectiveProfile.ContextWindowTokens : null;
+                string? target = effectiveProfile.RoutingTarget != OllamaRoutingTarget.Auto ? effectiveProfile.RoutingTarget.ToString() : null;
+
+                var preloadOptions = new ModelPreloadOptions(
+                    KeepAliveSeconds: null,
+                    ContextIntentTokens: contextIntent,
+                    Target: target,
+                    TaskId: context.ForgeTask?.Id,
+                    StageId: StageId);
+
                 _backgroundTaskRunner.RunTracked(
-                    async ct => await _preloadService.PreloadModelAsync(modelToPreload, WorkflowDefaults.ModelPreloadKeepAlive, ct).ConfigureAwait(false),
+                    async ct => await _preloadService.PreloadModelAsync(modelToPreload, preloadOptions, ct).ConfigureAwait(false),
                     $"PreloadModel.{modelToPreload}",
                     cancellationToken);
             }

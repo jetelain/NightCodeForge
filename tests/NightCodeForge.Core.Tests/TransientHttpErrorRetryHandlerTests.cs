@@ -712,6 +712,23 @@ public class TransientHttpErrorRetryHandlerTests
         Assert.IsType<TaskCanceledException>(ex.InnerException);
     }
 
+    [Fact]
+    public async Task SendAsync_DoesNotRetry503_WhenOllamaRouterPreloadQualificationRejected()
+    {
+        var mockInner = new MockHttpMessageHandler();
+        mockInner.EnqueueResponse(
+            HttpStatusCode.ServiceUnavailable,
+            """{"model":"qwen2.5-coder:32b","loadAccepted":false,"reason":"Context ceiling too low"}""");
+
+        var handler = CreateHandler(mockInner, maxRetries: 3);
+        using var client = new HttpClient(handler);
+
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/router/models/qwen2.5-coder:32b/preload"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Single(mockInner.Invocations);
+    }
+
     private sealed class ControllableFakeTimeProvider : TimeProvider
     {
         private DateTimeOffset _utcNow = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);

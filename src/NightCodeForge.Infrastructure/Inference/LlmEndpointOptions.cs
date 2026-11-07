@@ -68,4 +68,7 @@ internal static class OllamaApiPaths
     public const string RouterFleet = "api/router/fleet";
     public const string RouterModels = "api/router/models";
     public const string RouterVramReclaim = "api/router/vram/reclaim";
+    public const string PreloadSuffix = "preload";
+
+    public static string RouterModelPreload(string modelName) => $"{RouterModels}/{modelName.TrimStart('/')}/{PreloadSuffix}";
 }

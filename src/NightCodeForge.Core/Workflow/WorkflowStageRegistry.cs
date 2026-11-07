@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow.Configuration;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -65,7 +66,9 @@ public class WorkflowStageRegistry : IWorkflowStageRegistry
             var runner = sp.GetRequiredService<IBackgroundTaskRunner>();
             var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<DeterministicBuildStage>>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicBuildStage>.Instance;
-            return new DeterministicBuildStage(env, preload, runner, logger, "dotnet build", def.StageId, def.DisplayName);
+            var wsRepo = sp.GetService<IWorkspaceRepository>();
+            var globalOpt = sp.GetService<IGlobalOptimizationSettingsService>();
+            return new DeterministicBuildStage(env, preload, runner, logger, DeterministicBuildStage.DefaultBuildCommand, def.StageId, def.DisplayName, wsRepo, globalOpt);
         });
         RegisterHandler(StageImplementationTypes.DeterministicTest, (sp, def) =>
         {

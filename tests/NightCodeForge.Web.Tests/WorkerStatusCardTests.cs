@@ -9,12 +9,14 @@ namespace NightCodeForge.Web.Tests;
 
 public class WorkerStatusCardTests : BunitContext
 {
+    private readonly Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService> _telemetryMock;
     private readonly WorkerStateService _workerState;
     private readonly WorkspaceStateService _workspaceState;
 
     public WorkerStatusCardTests()
     {
-        _workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
+        _telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        _workerState = new WorkerStateService(_telemetryMock.Object);
         _workspaceState = new WorkspaceStateService();
 
         Services.AddSingleton(_workerState);
@@ -115,5 +117,29 @@ public class WorkerStatusCardTests : BunitContext
         var cut = Render<WorkerStatusCard>();
 
         Assert.Contains("NightCodeForge Core", cut.Markup);
+    }
+
+    [Fact]
+    public void WorkerStatusCard_WhenPreloadActive_RendersJitWarmupBadgeAndSummary()
+    {
+        var preloadRecord = new NightCodeForge.Core.Interfaces.ModelPreloadTelemetryRecord(
+            Model: "qwen2.5-coder:32b",
+            SelectedTarget: "Server-Rack-1",
+            Success: true,
+            NumCtx: 65536,
+            KeepAliveSeconds: -1,
+            DurationMs: 1420,
+            Reason: "Preload complete",
+            Timestamp: DateTime.UtcNow,
+            IsActive: false);
+
+        _telemetryMock.Setup(t => t.GetLatestModelPreload()).Returns(preloadRecord);
+
+        var cut = Render<WorkerStatusCard>();
+
+        Assert.Contains("JIT Warmup &amp; Model Residency", cut.Markup);
+        Assert.Contains("● Resident", cut.Markup);
+        Assert.Contains("qwen2.5-coder:32b", cut.Markup);
+        Assert.Contains("Server-Rack-1", cut.Markup);
     }
 }
