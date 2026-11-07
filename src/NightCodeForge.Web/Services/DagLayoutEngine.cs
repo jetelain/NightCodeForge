@@ -19,7 +19,8 @@ public class DagLayoutEngine : IDagLayoutEngine
     public DagGraphLayout ComputeLayout(
         IReadOnlyList<ForgeTask> tasks,
         IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies,
-        int? activeTaskId = null)
+        int? activeTaskId = null,
+        IReadOnlyList<ForgeTask>? allWorkspaceTasks = null)
     {
         var layout = new DagGraphLayout();
         if (tasks == null || tasks.Count == 0)
@@ -28,26 +29,38 @@ public class DagLayoutEngine : IDagLayoutEngine
         }
 
         var taskMap = tasks.ToDictionary(t => t.Id);
+        var fullTaskMap = (allWorkspaceTasks ?? tasks).ToDictionary(t => t.Id);
 
-        // Filter valid dependencies where both endpoints exist in active workspace
+        // Filter valid dependencies where both endpoints exist in the visible task set (for layout ranking and SVG edges)
         var validDeps = (dependencies ?? Array.Empty<(int, int)>())
             .Where(d => taskMap.ContainsKey(d.TaskId) && taskMap.ContainsKey(d.DependsOnTaskId))
             .ToList();
 
-        // Build prereq map: TaskId -> List of DependsOnTaskId
-        // Build dependent map: DependsOnTaskId -> List of TaskId
+        // Build prereq map: TaskId -> List of visible DependsOnTaskId (for topological ranking)
+        // Build dependent map: DependsOnTaskId -> List of visible TaskId
+        // Build allPrereqMap: TaskId -> List of all DependsOnTaskId (for blocker evaluation against fullTaskMap)
         var prereqMap = new Dictionary<int, List<int>>();
         var dependentMap = new Dictionary<int, List<int>>();
+        var allPrereqMap = new Dictionary<int, List<int>>();
         foreach (var task in tasks)
         {
             prereqMap[task.Id] = new List<int>();
             dependentMap[task.Id] = new List<int>();
+            allPrereqMap[task.Id] = new List<int>();
         }
 
         foreach (var (taskId, dependsOnId) in validDeps)
         {
             prereqMap[taskId].Add(dependsOnId);
             dependentMap[dependsOnId].Add(taskId);
+        }
+
+        foreach (var (taskId, dependsOnId) in dependencies ?? Array.Empty<(int, int)>())
+        {
+            if (allPrereqMap.TryGetValue(taskId, out var allPrereqs))
+            {
+                allPrereqs.Add(dependsOnId);
+            }
         }
 
         // Identify connected tasks (tasks that have prerequisites or dependents)
@@ -122,7 +135,7 @@ public class DagLayoutEngine : IDagLayoutEngine
                     if (x + NodeWidth > currentMaxX) currentMaxX = x + NodeWidth;
                     if (y + NodeHeight > currentMaxY) currentMaxY = y + NodeHeight;
 
-                    var node = CreateLayoutNode(t, x, y, rank, prereqMap[t.Id], taskMap, activeTaskId);
+                    var node = CreateLayoutNode(t, x, y, rank, allPrereqMap[t.Id], taskMap, activeTaskId, fullTaskMap);
                     layout.Nodes.Add(node);
                 }
             }
@@ -161,7 +174,7 @@ public class DagLayoutEngine : IDagLayoutEngine
                 if (x + NodeWidth > currentMaxX) currentMaxX = x + NodeWidth;
                 if (y + NodeHeight > currentMaxY) currentMaxY = y + NodeHeight;
 
-                var node = CreateLayoutNode(t, x, y, 0, Array.Empty<int>(), taskMap, activeTaskId);
+                var node = CreateLayoutNode(t, x, y, 0, allPrereqMap[t.Id], taskMap, activeTaskId, fullTaskMap);
                 layout.Nodes.Add(node);
             }
         }
@@ -231,13 +244,24 @@ public class DagLayoutEngine : IDagLayoutEngine
         int rank,
         IReadOnlyList<int> prereqIds,
         Dictionary<int, ForgeTask> taskMap,
-        int? activeTaskId = null)
+        int? activeTaskId = null,
+        Dictionary<int, ForgeTask>? fullTaskMap = null)
     {
-        var blockers = prereqIds.Count(p => taskMap.TryGetValue(p, out var pt) && pt.Status != TaskOverallStatus.Closed);
+        var lookupMap = fullTaskMap ?? taskMap;
+        var blockers = prereqIds.Count(p =>
+        {
+            if (lookupMap.TryGetValue(p, out var pt))
+            {
+                return pt.Status != TaskOverallStatus.Closed;
+            }
+            // If the prerequisite task is outside the visible set (and not in fullTaskMap), treat it as satisfied
+            return false;
+        });
         var isRunning = activeTaskId.HasValue && task.Id == activeTaskId.Value;
         var isInFlight = isRunning || IsInFlight(task, activeTaskId);
         var isBlocked = task.Status == TaskOverallStatus.Open && !isInFlight && blockers > 0;
         var isReadyToExecute = task.Status == TaskOverallStatus.Open && !isInFlight && blockers == 0;
+        var isRecentTerminal = TaskRecencyAndRetentionHelper.IsRecentTerminal(task);
 
         return new DagLayoutNode
         {
@@ -251,6 +275,8 @@ public class DagLayoutEngine : IDagLayoutEngine
             IsInFlight = isInFlight,
             IsRunning = isRunning,
             IsReadyToExecute = isReadyToExecute,
+            IsRecentTerminal = isRecentTerminal,
+            RecentBadgeText = isRecentTerminal ? TaskRecencyAndRetentionHelper.RecentBadgeText : null,
             FillColor = GetNodeFillColor(task, isBlocked, isInFlight, isRunning),
             StrokeColor = GetNodeStrokeColor(task, isBlocked, isInFlight, isRunning),
             StatusTextColor = isRunning ? "#6ee7b7" : GetStatusTextColor(task, isInFlight),

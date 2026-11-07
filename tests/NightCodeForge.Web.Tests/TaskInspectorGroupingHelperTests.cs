@@ -7,47 +7,65 @@ namespace NightCodeForge.Web.Tests;
 public class TaskInspectorGroupingHelperTests
 {
     [Fact]
-    public void GroupTasks_CategorizesIntoProperOptgroupsAndOrdersByPriority()
+    public void GroupTasks_CategorizesIntoProperOptgroupsAndOrdersByIdAscending()
     {
         var tasks = new List<ForgeTask>
         {
-            new() { Id = 1, Title = "Running Task P2", Status = TaskOverallStatus.Open, Priority = 2 },
-            new() { Id = 2, Title = "Running Task P1", Status = TaskOverallStatus.Open, Priority = 1 },
+            new() { Id = 20, Title = "Running Task P1 High ID", Status = TaskOverallStatus.Open, Priority = 1 },
+            new() { Id = 5, Title = "Running Task P2 Low ID", Status = TaskOverallStatus.Open, Priority = 2 },
             new() { Id = 3, Title = "Waiting for Human Task", Status = TaskOverallStatus.Open, IsWaitingForHuman = true, Priority = 1 },
+            new() { Id = 12, Title = "Failed Task 12", Status = TaskOverallStatus.Failed, Priority = 1 },
+            new() { Id = 7, Title = "Failed Task 7", Status = TaskOverallStatus.Failed, Priority = 3 },
             new() { Id = 4, Title = "Queued In Flight Task", Status = TaskOverallStatus.Ready, HasExecutionRun = true, Priority = 3 },
-            new() { Id = 5, Title = "Open Backlog Task", Status = TaskOverallStatus.Open, Priority = 2 },
-            new() { Id = 6, Title = "Closed Task", Status = TaskOverallStatus.Closed, Priority = 1 }
+            new() { Id = 9, Title = "Open Backlog Task 9", Status = TaskOverallStatus.Open, Priority = 1 },
+            new() { Id = 2, Title = "Open Backlog Task 2", Status = TaskOverallStatus.Open, Priority = 2 },
+            new() { Id = 15, Title = "Closed Task 15", Status = TaskOverallStatus.Closed, Priority = 1 },
+            new() { Id = 6, Title = "Closed Task 6", Status = TaskOverallStatus.Closed, Priority = 2 }
         };
 
-        var groups = TaskInspectorGroupingHelper.GroupTasks(tasks, runningTaskIds: new HashSet<int> { 1, 2 });
+        var groups = TaskInspectorGroupingHelper.GroupTasks(tasks, runningTaskIds: new HashSet<int> { 5, 20 });
 
-        Assert.Equal(5, groups.Count);
+        Assert.Equal(6, groups.Count);
 
-        // Group 1: Running
-        var runningGroup = groups.First(g => g.Label == TaskInspectorGroupingHelper.GroupRunning);
+        // Group 1: Running (ordered by Id ASC: 5, 20)
+        var runningGroup = groups[0];
+        Assert.Equal(TaskInspectorGroupingHelper.GroupRunning, runningGroup.Label);
         Assert.Equal(2, runningGroup.Tasks.Count);
-        Assert.Equal(2, runningGroup.Tasks[0].Id); // P1 first
-        Assert.Equal(1, runningGroup.Tasks[1].Id); // P2 second
+        Assert.Equal(5, runningGroup.Tasks[0].Id);
+        Assert.Equal(20, runningGroup.Tasks[1].Id);
 
         // Group 2: Waiting for Human
-        var humanGroup = groups.First(g => g.Label == TaskInspectorGroupingHelper.GroupWaitingForHuman);
+        var humanGroup = groups[1];
+        Assert.Equal(TaskInspectorGroupingHelper.GroupWaitingForHuman, humanGroup.Label);
         Assert.Single(humanGroup.Tasks);
         Assert.Equal(3, humanGroup.Tasks[0].Id);
 
-        // Group 3: Waiting for Slot
-        var slotGroup = groups.First(g => g.Label == TaskInspectorGroupingHelper.GroupWaitingForSlot);
+        // Group 3: Failed (ordered by Id ASC: 7, 12)
+        var failedGroup = groups[2];
+        Assert.Equal(TaskInspectorGroupingHelper.GroupFailed, failedGroup.Label);
+        Assert.Equal(2, failedGroup.Tasks.Count);
+        Assert.Equal(7, failedGroup.Tasks[0].Id);
+        Assert.Equal(12, failedGroup.Tasks[1].Id);
+
+        // Group 4: Waiting for Slot
+        var slotGroup = groups[3];
+        Assert.Equal(TaskInspectorGroupingHelper.GroupWaitingForSlot, slotGroup.Label);
         Assert.Single(slotGroup.Tasks);
         Assert.Equal(4, slotGroup.Tasks[0].Id);
 
-        // Group 4: Open Backlog
-        var openGroup = groups.First(g => g.Label == TaskInspectorGroupingHelper.GroupOpen);
-        Assert.Single(openGroup.Tasks);
-        Assert.Equal(5, openGroup.Tasks[0].Id);
+        // Group 5: Open Backlog (ordered by Id ASC: 2, 9)
+        var openGroup = groups[4];
+        Assert.Equal(TaskInspectorGroupingHelper.GroupOpen, openGroup.Label);
+        Assert.Equal(2, openGroup.Tasks.Count);
+        Assert.Equal(2, openGroup.Tasks[0].Id);
+        Assert.Equal(9, openGroup.Tasks[1].Id);
 
-        // Group 5: Closed
-        var closedGroup = groups.First(g => g.Label == TaskInspectorGroupingHelper.GroupClosed);
-        Assert.Single(closedGroup.Tasks);
+        // Group 6: Closed (ordered by Id ASC: 6, 15)
+        var closedGroup = groups[5];
+        Assert.Equal(TaskInspectorGroupingHelper.GroupClosed, closedGroup.Label);
+        Assert.Equal(2, closedGroup.Tasks.Count);
         Assert.Equal(6, closedGroup.Tasks[0].Id);
+        Assert.Equal(15, closedGroup.Tasks[1].Id);
     }
 
     [Fact]
@@ -78,5 +96,20 @@ public class TaskInspectorGroupingHelperTests
 
         Assert.Single(groups);
         Assert.Equal(TaskInspectorGroupingHelper.GroupClosed, groups[0].Label);
+    }
+
+    [Fact]
+    public void GroupTasks_FailedTaskWithStaleActiveIdOrWaitingFlag_StaysInFailedGroup()
+    {
+        var tasks = new List<ForgeTask>
+        {
+            new() { Id = 99, Title = "Failed with stale flags", Status = TaskOverallStatus.Failed, IsWaitingForHuman = true, Priority = 1 }
+        };
+
+        var groups = TaskInspectorGroupingHelper.GroupTasks(tasks, activeTaskId: 99, runningTaskIds: new HashSet<int> { 99 });
+
+        Assert.Single(groups);
+        Assert.Equal(TaskInspectorGroupingHelper.GroupFailed, groups[0].Label);
+        Assert.Equal(99, groups[0].Tasks[0].Id);
     }
 }

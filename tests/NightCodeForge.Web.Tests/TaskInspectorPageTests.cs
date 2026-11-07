@@ -355,6 +355,67 @@ public class TaskInspectorPageTests : BunitContext
         Assert.Equal(TaskInspectorGroupingHelper.GroupRunning, optgroup.GetAttribute("label"));
     }
 
+    [Fact]
+    public async Task TaskInspector_Dropdown_GroupsFailedTasksInDedicatedSection_AndOrdersByIdAscending()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 50,
+            WorkspaceId = 1,
+            Title = "Failed Task High ID",
+            Status = TaskOverallStatus.Failed,
+            Priority = TaskPriority.Critical,
+            HasExecutionRun = true
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 12,
+            WorkspaceId = 1,
+            Title = "Failed Task Low ID",
+            Status = TaskOverallStatus.Failed,
+            Priority = TaskPriority.Low,
+            HasExecutionRun = true
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 30,
+            WorkspaceId = 1,
+            Title = "Closed Task 30",
+            Status = TaskOverallStatus.Closed,
+            Priority = TaskPriority.Critical,
+            HasExecutionRun = true
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 8,
+            WorkspaceId = 1,
+            Title = "Closed Task 8",
+            Status = TaskOverallStatus.Closed,
+            Priority = TaskPriority.Normal,
+            HasExecutionRun = true
+        });
+
+        var cut = Render<TaskInspector>();
+        cut.WaitForState(() => cut.Markup.Contains("Failed Task Low ID"));
+
+        var optgroups = cut.FindAll("optgroup");
+        Assert.Equal(2, optgroups.Count);
+
+        // First optgroup: Failed, ordered by ID ascending (#12 then #50)
+        Assert.Equal(TaskInspectorGroupingHelper.GroupFailed, optgroups[0].GetAttribute("label"));
+        var failedOptions = optgroups[0].QuerySelectorAll("option");
+        Assert.Equal(2, failedOptions.Length);
+        Assert.Equal("12", failedOptions[0].GetAttribute("value"));
+        Assert.Equal("50", failedOptions[1].GetAttribute("value"));
+
+        // Second optgroup: Closed, ordered by ID ascending (#8 then #30)
+        Assert.Equal(TaskInspectorGroupingHelper.GroupClosed, optgroups[1].GetAttribute("label"));
+        var closedOptions = optgroups[1].QuerySelectorAll("option");
+        Assert.Equal(2, closedOptions.Length);
+        Assert.Equal("8", closedOptions[0].GetAttribute("value"));
+        Assert.Equal("30", closedOptions[1].GetAttribute("value"));
+    }
+
     #region Fakes
 
     private class FakeDevQueueService : IDevQueueService

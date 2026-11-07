@@ -662,4 +662,175 @@ public class HomeDashboardTests : BunitContext
             Assert.Contains("Added During In-Flight Load", cut.Markup);
         });
     }
+
+    [Fact]
+    public async Task BuildSnapshotAsync_PopulatesRecentFailedAndClosedTasks_Within24h_FailedFirst_ThenUpdatedAtDesc()
+    {
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var taskRepo = new InMemoryTaskRepository();
+
+        var ws = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Name = "Forge Core",
+            RepositoryPath = "/repos/core",
+            CreatedAt = DateTime.UtcNow.AddDays(-10)
+        });
+
+        // 1. Failed task within 24h
+        var failedTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Syntax error in parser",
+            Status = TaskOverallStatus.Failed,
+            Priority = TaskPriority.Critical,
+            UpdatedAt = DateTime.UtcNow.AddHours(-2)
+        });
+
+        // 2. Closed task within 24h (newer than failed task)
+        var closedTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Refactor logging facade",
+            Status = TaskOverallStatus.Closed,
+            Priority = TaskPriority.Normal,
+            SquashCommitSha = "abcdef123456",
+            UpdatedAt = DateTime.UtcNow.AddHours(-1)
+        });
+
+        // 3. Closed task older than 24h (should be excluded)
+        await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Historical closed task",
+            Status = TaskOverallStatus.Closed,
+            Priority = TaskPriority.Normal,
+            UpdatedAt = DateTime.UtcNow.AddHours(-26)
+        });
+
+        // 4. Open task within 24h (should be excluded)
+        await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Open task",
+            Status = TaskOverallStatus.Open,
+            Priority = TaskPriority.High,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-30)
+        });
+
+        var devQueueMock = new Mock<IDevQueueService>();
+        devQueueMock
+            .Setup(s => s.GetSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DevQueueSnapshot(
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<ActiveLockSnapshot>(),
+                Array.Empty<SkippedJobItem>()));
+
+        var snapshot = await HomeDashboardBuilder.BuildSnapshotAsync(
+            workspaceRepo,
+            taskRepo,
+            devQueueMock.Object,
+            NullLogger.Instance);
+
+        Assert.Equal(2, snapshot.RecentFailedAndClosedTasks.Count);
+
+        // Failed task must be ordered first, even though Closed task is newer
+        var first = snapshot.RecentFailedAndClosedTasks[0];
+        Assert.Equal(failedTask.Id, first.TaskId);
+        Assert.Equal(TaskOverallStatus.Failed, first.Status);
+        Assert.Equal(failedTask.Title, first.Title);
+        Assert.Equal("Forge Core", first.WorkspaceName);
+        Assert.Contains($"/inspector/{failedTask.Id}", first.InspectorUrl);
+        Assert.Contains($"/tasks/{failedTask.Id}", first.TaskDetailUrl);
+
+        var second = snapshot.RecentFailedAndClosedTasks[1];
+        Assert.Equal(closedTask.Id, second.TaskId);
+        Assert.Equal(TaskOverallStatus.Closed, second.Status);
+        Assert.Equal("abcdef123456", second.SquashCommitSha);
+    }
+
+    [Fact]
+    public async Task Home_RendersRecentTerminalTasksSection_WithInspectorAndDetailLinks()
+    {
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var taskRepo = new InMemoryTaskRepository();
+
+        var ws = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Name = "Web Dashboard",
+            RepositoryPath = "/repos/web",
+            CreatedAt = DateTime.UtcNow.AddDays(-2)
+        });
+
+        var failedTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Build compilation broke",
+            Status = TaskOverallStatus.Failed,
+            Priority = TaskPriority.Critical,
+            UpdatedAt = DateTime.UtcNow.AddHours(-1)
+        });
+
+        var devQueueMock = new Mock<IDevQueueService>();
+        devQueueMock
+            .Setup(s => s.GetSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DevQueueSnapshot(
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<QueuedJobItem>(),
+                Array.Empty<ActiveLockSnapshot>(),
+                Array.Empty<SkippedJobItem>()));
+
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        telemetryMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
+        telemetryMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
+
+        var workspaceState = new WorkspaceStateService();
+        var workerState = new WorkerStateService(telemetryMock.Object);
+        var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
+        var gatewayMock = new Mock<ILlmGatewayService>();
+        gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
+
+        Services.AddSingleton<IWorkspaceRepository>(workspaceRepo);
+        Services.AddSingleton<ITaskRepository>(taskRepo);
+        Services.AddSingleton(devQueueMock.Object);
+        Services.AddSingleton(workspaceState);
+        Services.AddSingleton(workerState);
+        Services.AddSingleton(new OperationsTelemetryUiService(hubConnection, telemetryMock.Object));
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
+        Services.AddSingleton(gatewayMock.Object);
+        Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton(NullLogger<Home>.Instance);
+        Services.AddSingleton(NullLogger<ActiveOperationsHero>.Instance);
+
+        var cut = Render<Home>();
+
+        cut.WaitForState(() => cut.FindAll("#home-recent-terminal-tasks-section").Count > 0);
+
+        var section = cut.Find("#home-recent-terminal-tasks-section");
+        Assert.NotNull(section);
+        Assert.Contains("Recent Failed & Closed Tasks (Last 24h)", section.TextContent);
+
+        var taskRow = cut.Find($"#home-recent-terminal-task-{failedTask.Id}");
+        Assert.NotNull(taskRow);
+        Assert.Contains("Build compilation broke", taskRow.TextContent);
+        Assert.Contains("❌ Failed", taskRow.TextContent);
+
+        var inspectorLink = cut.Find($"#home-recent-inspector-{failedTask.Id}");
+        Assert.Contains($"/inspector/{failedTask.Id}", inspectorLink.GetAttribute("href"));
+
+        var detailsLink = cut.Find($"#home-recent-details-{failedTask.Id}");
+        Assert.Contains($"/tasks/{failedTask.Id}", detailsLink.GetAttribute("href"));
+    }
 }

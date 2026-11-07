@@ -13,7 +13,8 @@ public interface IDagLayoutEngine
     DagGraphLayout ComputeLayout(
         IReadOnlyList<ForgeTask> tasks,
         IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies,
-        int? activeTaskId = null);
+        int? activeTaskId = null,
+        IReadOnlyList<ForgeTask>? allWorkspaceTasks = null);
 }
 
 /// <summary>
@@ -49,6 +50,8 @@ public class DagLayoutNode
     public bool IsInFlight { get; set; }
     public bool IsRunning { get; set; }
     public bool IsReadyToExecute { get; set; }
+    public bool IsRecentTerminal { get; set; }
+    public string? RecentBadgeText { get; set; }
 
     public string FillColor { get; set; } = "#162238";
     public string StrokeColor { get; set; } = "#6366f1";

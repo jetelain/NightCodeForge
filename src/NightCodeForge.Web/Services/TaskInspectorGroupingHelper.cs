@@ -9,13 +9,14 @@ public record TaskInspectorGroup(string Label, IReadOnlyList<ForgeTask> Tasks);
 
 /// <summary>
 /// Categorizes tasks for the Task Inspector dropdown into clean semantic optgroups:
-/// Running, Waiting for Human, In Flight (Waiting for Slot), Backlog / Open, and Closed,
-/// sorted by Priority ASC, then UpdatedAt/CreatedAt DESC.
+/// Running, Waiting for Human, Failed, In Flight (Waiting for Slot), Backlog / Open, and Closed,
+/// sorted strictly by Task ID ascending.
 /// </summary>
 public static class TaskInspectorGroupingHelper
 {
     public const string GroupRunning = "🚀 Running";
     public const string GroupWaitingForHuman = "💬 Waiting for Human";
+    public const string GroupFailed = "❌ Failed";
     public const string GroupWaitingForSlot = "⏳ In Flight (Waiting for Slot)";
     public const string GroupOpen = "📋 Backlog / Open";
     public const string GroupClosed = "✅ Closed";
@@ -34,6 +35,7 @@ public static class TaskInspectorGroupingHelper
 
         var running = new List<ForgeTask>();
         var waitingForHuman = new List<ForgeTask>();
+        var failed = new List<ForgeTask>();
         var waitingForSlot = new List<ForgeTask>();
         var open = new List<ForgeTask>();
         var closed = new List<ForgeTask>();
@@ -43,6 +45,10 @@ public static class TaskInspectorGroupingHelper
             if (task.Status is TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled)
             {
                 closed.Add(task);
+            }
+            else if (task.Status == TaskOverallStatus.Failed)
+            {
+                failed.Add(task);
             }
             else if (task.IsWaitingForHuman)
             {
@@ -69,6 +75,7 @@ public static class TaskInspectorGroupingHelper
 
         AddGroupIfNotEmpty(groups, GroupRunning, running);
         AddGroupIfNotEmpty(groups, GroupWaitingForHuman, waitingForHuman);
+        AddGroupIfNotEmpty(groups, GroupFailed, failed);
         AddGroupIfNotEmpty(groups, GroupWaitingForSlot, waitingForSlot);
         AddGroupIfNotEmpty(groups, GroupOpen, open);
         AddGroupIfNotEmpty(groups, GroupClosed, closed);
@@ -80,11 +87,7 @@ public static class TaskInspectorGroupingHelper
     {
         if (tasks.Count > 0)
         {
-            var sorted = tasks
-                .OrderBy(t => t.Priority)
-                .ThenByDescending(t => t.UpdatedAt)
-                .ThenByDescending(t => t.CreatedAt)
-                .ToList();
+            var sorted = tasks.OrderBy(t => t.Id).ToList();
             groups.Add(new TaskInspectorGroup(label, sorted));
         }
     }

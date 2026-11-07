@@ -128,6 +128,14 @@
                             {
                                 @SvgText(12, 64, node.StatusLabel, fill: node.StatusTextColor, fontSize: 10)
                             }
+
+                            @if (node.IsRecentTerminal)
+                            {
+                                <g class="dag-node-recent-badge" id="dag-node-recent-@task.Id">
+                                    <rect x="150" y="52" width="58" height="16" rx="3" fill="rgba(245, 158, 11, 0.25)" stroke="#f59e0b" stroke-width="0.8" />
+                                    @SvgText(179, 64, node.RecentBadgeText ?? TaskRecencyAndRetentionHelper.RecentBadgeText, fill: "#fde68a", fontSize: 9, fontWeight: "700", textAnchor: "middle")
+                                </g>
+                            }
                         </g>
                     }
                 </g>
@@ -138,6 +146,7 @@
 
 @code {
     [Parameter] public IReadOnlyList<ForgeTask> Tasks { get; set; } = Array.Empty<ForgeTask>();
+    [Parameter] public IReadOnlyList<ForgeTask>? AllTasks { get; set; }
     [Parameter] public IReadOnlyList<(int TaskId, int DependsOnTaskId)> Dependencies { get; set; } = Array.Empty<(int, int)>();
     [Parameter] public int? ActiveTaskId { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
@@ -151,7 +160,7 @@
 
     protected override void OnParametersSet()
     {
-        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies, ActiveTaskId);
+        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies, ActiveTaskId, AllTasks ?? Tasks);
     }
 
     private void ZoomIn() => _zoomScale = Math.Min(2.0f, _zoomScale + 0.15f);

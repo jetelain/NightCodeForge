@@ -2,7 +2,7 @@
 
 > **Feature & Developer Ergonomics Specification (Priority Tier 2)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Planned  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Projects:* [`src/NightCodeForge.Web`](../../src/NightCodeForge.Web), [`tests/NightCodeForge.Web.Tests`](../../tests/NightCodeForge.Web.Tests)  
 > *Related Steps:* [Step 11.17: Portal Task Scoping & Pipeline State Hygiene](../archive/phase-11/STEP_11_17_PORTAL_TASK_SCOPING_AND_EXECUTION_STATE_HYGIENE.md), [Step 12.24: Home Page Pending Code Reviews](../archive/phase-12/STEP_12_24_HOME_PAGE_PENDING_CODE_REVIEWS.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -138,10 +138,10 @@ In [`TaskInspectorGroupingHelper.cs`](../../src/NightCodeForge.Web/Services/Task
 
 ## 5. Definition of Done (DoD) Checklist
 
-- [ ] Add `TaskInspectorGroupingHelper.GroupFailed` (`"❌ Failed"`) for `TaskOverallStatus.Failed` tasks and sort tasks within all `TaskInspectorGroupingHelper` optgroups by `Task.Id` ascending.
-- [ ] Add 24-hour recency detection for `Failed` and `Closed` tasks and render a compact recent badge in `KanbanCard.razor` and `DagVisualizer.razor` / `DagLayoutEngine.cs`.
-- [ ] Add `RecentFailedAndClosedTasks` (last 24 hours) to `HomeDashboardSnapshot` / `HomeDashboardBuilder` and render the dedicated **Recent Failed & Closed Tasks (Last 24h)** section in `Home.razor`.
-- [ ] Exclude tasks closed more than 7 days ago from Kanban and DAG in `Backlog.razor` while preserving accurate prerequisite satisfaction checks for dependent `Open` tasks.
-- [ ] Create the **All Tasks** list page (`Tasks.razor` at `/tasks` and `/w/{WorkspaceId:int}/tasks`) with search, status/priority/recency filters, and column sorting, and link it in `NavMenu.razor` and `Backlog.razor`.
-- [ ] Update and add unit/bUnit tests in `NightCodeForge.Web.Tests` and verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Add `TaskInspectorGroupingHelper.GroupFailed` (`"❌ Failed"`) for `TaskOverallStatus.Failed` tasks and sort tasks within all `TaskInspectorGroupingHelper` optgroups by `Task.Id` ascending.
+- [x] Add 24-hour recency detection for `Failed` and `Closed` tasks and render a compact recent badge in `KanbanCard.razor` and `DagVisualizer.razor` / `DagLayoutEngine.cs`.
+- [x] Add `RecentFailedAndClosedTasks` (last 24 hours) to `HomeDashboardSnapshot` / `HomeDashboardBuilder` and render the dedicated **Recent Failed & Closed Tasks (Last 24h)** section in `Home.razor`.
+- [x] Exclude tasks closed more than 7 days ago from Kanban and DAG in `Backlog.razor` while preserving accurate prerequisite satisfaction checks for dependent `Open` tasks.
+- [x] Create the **All Tasks** list page (`Tasks.razor` at `/tasks` and `/w/{WorkspaceId:int}/tasks`) with search, status/priority/recency filters, and column sorting, and link it in `NavMenu.razor` and `Backlog.razor`.
+- [x] Update and add unit/bUnit tests in `NightCodeForge.Web.Tests` and verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

@@ -105,32 +105,40 @@
         <div class="backlog-stats-bar">
             <div class="stat-chip @(_statusFilter == null ? "active" : "")" @onclick="() => FilterByStatus(null)">
                 <span class="stat-chip-label">Total</span>
-                <span class="stat-chip-val">@_allTasks.Count</span>
+                <span class="stat-chip-val">@RetainedTasks.Count</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Suggested ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Suggested)">
                 <span class="stat-chip-label">💡 Suggested</span>
-                <span class="stat-chip-val text-amber">@_allTasks.Count(t => t.Status == TaskOverallStatus.Suggested)</span>
+                <span class="stat-chip-val text-amber">@RetainedTasks.Count(t => t.Status == TaskOverallStatus.Suggested)</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
                 <span class="stat-chip-label">📂 Open</span>
-                <span class="stat-chip-val text-indigo">@_allTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, WorkerState.Current.ActiveTaskId))</span>
+                <span class="stat-chip-val text-indigo">@RetainedTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, WorkerState.Current.ActiveTaskId))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Reviewed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
                 <span class="stat-chip-label">⚡ In-Flight</span>
-                <span class="stat-chip-val text-purple">@_allTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, WorkerState.Current.ActiveTaskId))</span>
+                <span class="stat-chip-val text-purple">@RetainedTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, WorkerState.Current.ActiveTaskId))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
                 <span class="stat-chip-label">🔍 Ready</span>
-                <span class="stat-chip-val text-teal">@_allTasks.Count(t => t.Status == TaskOverallStatus.Ready)</span>
+                <span class="stat-chip-val text-teal">@RetainedTasks.Count(t => t.Status == TaskOverallStatus.Ready)</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Closed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Closed)">
                 <span class="stat-chip-label">✅ Closed</span>
-                <span class="stat-chip-val text-emerald">@_allTasks.Count(t => t.Status == TaskOverallStatus.Closed)</span>
+                <span class="stat-chip-val text-emerald">@RetainedTasks.Count(t => t.Status == TaskOverallStatus.Closed)</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Rejected ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Rejected)">
                 <span class="stat-chip-label">🗑️ Rejected</span>
-                <span class="stat-chip-val text-red">@_allTasks.Count(t => t.Status == TaskOverallStatus.Rejected)</span>
+                <span class="stat-chip-val text-red">@RetainedTasks.Count(t => t.Status == TaskOverallStatus.Rejected)</span>
             </div>
+
+            <a href="@WorkspaceState.GetPath("tasks")"
+               id="backlog-all-tasks-link"
+               class="stat-chip"
+               style="text-decoration: none; color: var(--accent-indigo); margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem;"
+               title="View full historical task archive on the All Tasks page">
+                <span>📜 View All Tasks @(ArchivedCutoffCount > 0 ? $"({ArchivedCutoffCount} archived >7d)" : "") ➔</span>
+            </a>
         </div>
 
         <!-- Filter & Search Toolbar -->
@@ -219,6 +227,7 @@
             else if (_currentView == BacklogViewMode.Kanban)
             {
                 <KanbanBoard Tasks="filtered"
+                             AllTasks="_allTasks"
                              TaskDependencies="_dependenciesMap"
                              ActiveTaskId="@WorkerState.Current.ActiveTaskId"
                              OnTaskSelected="OpenTask"
@@ -231,6 +240,7 @@
             else
             {
                 <DagVisualizer Tasks="filtered"
+                               AllTasks="_allTasks"
                                Dependencies="_allDependencies"
                                ActiveTaskId="@WorkerState.Current.ActiveTaskId"
                                OnTaskSelected="OpenTask"
@@ -284,6 +294,12 @@
     private List<ForgeTask> _allTasks = new();
     private List<(int TaskId, int DependsOnTaskId)> _allDependencies = new();
     private Dictionary<int, IReadOnlyList<int>> _dependenciesMap = new();
+
+    private IReadOnlyList<ForgeTask> RetainedTasks =>
+        _allTasks.Where(t => TaskRecencyAndRetentionHelper.IsRetainedInBacklog(t)).ToList();
+
+    private int ArchivedCutoffCount =>
+        _allTasks.Count(t => TaskRecencyAndRetentionHelper.IsExcludedFromBacklog(t));
 
     private string _searchQuery = string.Empty;
     private TaskOverallStatus? _statusFilter;
@@ -557,7 +573,8 @@
 
     private List<ForgeTask> GetFilteredTasks()
     {
-        var query = _allTasks.AsEnumerable();
+        var query = _allTasks
+            .Where(t => TaskRecencyAndRetentionHelper.IsRetainedInBacklog(t));
 
         if (_statusFilter.HasValue)
         {

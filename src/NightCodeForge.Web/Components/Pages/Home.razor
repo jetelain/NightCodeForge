@@ -266,6 +266,95 @@
         }
     </section>
 
+    <!-- 2c. Recent Failed & Closed Tasks (Last 24h) -->
+    <section id="home-recent-terminal-tasks-section" class="forge-card" style="padding: 1.5rem;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; flex-wrap: wrap; gap: 0.75rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span style="font-size: 1.35rem;">⚡</span>
+                <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Recent Failed &amp; Closed Tasks (Last 24h)</h2>
+                <span class="forge-badge badge-gray">@_snapshot.RecentFailedAndClosedTasks.Count</span>
+            </div>
+            <a href="/tasks"
+               id="home-view-all-tasks-link"
+               class="forge-btn forge-btn-secondary"
+               style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
+                📜 View All Tasks ➔
+            </a>
+        </div>
+
+        @if (_snapshot.RecentFailedAndClosedTasks.Count == 0)
+        {
+            <div id="home-no-recent-terminal-tasks" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
+                No failed or closed tasks in the last 24 hours.
+            </div>
+        }
+        else
+        {
+            <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                @foreach (var task in _snapshot.RecentFailedAndClosedTasks)
+                {
+                    <div class="recent-terminal-task-row"
+                         id="home-recent-terminal-task-@task.TaskId"
+                         style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.85rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; flex: 1;">
+                            @if (task.Status == TaskOverallStatus.Failed)
+                            {
+                                <span class="forge-badge badge-crimson font-mono" style="font-size: 0.75rem;">
+                                    ❌ Failed
+                                </span>
+                            }
+                            else
+                            {
+                                <span class="forge-badge badge-emerald font-mono" style="font-size: 0.75rem;">
+                                    ✅ Closed
+                                </span>
+                            }
+
+                            <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
+                                P@(task.Priority)
+                            </span>
+
+                            <a href="@task.TaskDetailUrl"
+                               style="font-weight: 700; color: var(--text-primary); text-decoration: none; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                #@task.TaskId: @task.Title
+                            </a>
+
+                            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
+                                🏢 @task.WorkspaceName
+                            </span>
+
+                            <span class="forge-badge badge-gray font-mono" style="font-size: 0.75rem;" title="@task.UpdatedAt.ToString("u")">
+                                🕒 @TaskRecencyAndRetentionHelper.FormatRelativeAge(task.UpdatedAt)
+                            </span>
+
+                            @if (!string.IsNullOrWhiteSpace(task.SquashCommitSha))
+                            {
+                                <span class="forge-badge badge-purple font-mono" style="font-size: 0.72rem;" title="Squash commit: @task.SquashCommitSha">
+                                    Commit: @(task.SquashCommitSha.Length > 8 ? task.SquashCommitSha[..8] : task.SquashCommitSha)
+                                </span>
+                            }
+                        </div>
+
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <a href="@task.InspectorUrl"
+                               id="home-recent-inspector-@task.TaskId"
+                               class="forge-btn forge-btn-secondary btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                🔍 Inspector
+                            </a>
+                            <a href="@task.TaskDetailUrl"
+                               id="home-recent-details-@task.TaskId"
+                               class="forge-btn forge-btn-outline btn-xs"
+                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                📋 Details
+                            </a>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
     <!-- 3. Running Tasks & Next Scheduled Tasks (Limit 5) -->
     <section id="home-scheduled-tasks-section" class="forge-card" style="padding: 1.5rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
@@ -380,7 +469,8 @@
         0,
         0,
         Array.Empty<HomePendingReviewItem>(),
-        0);
+        0,
+        Array.Empty<HomeRecentTerminalTaskItem>());
     private HomeStateChangeDebouncer? _stateChangeDebouncer;
     private bool _isLoading;
     private bool _refreshRequestedWhileLoading;

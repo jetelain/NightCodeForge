@@ -101,6 +101,12 @@
             <span class="forge-badge badge-emerald" style="font-size: 0.75rem;">
                 ✅ Closed
             </span>
+            @if (TaskRecencyAndRetentionHelper.IsRecentTerminal(Task))
+            {
+                <span class="forge-badge badge-amber badge-recent-terminal" id="badge-recent-@Task.Id" style="font-size: 0.72rem; padding: 2px 6px;">
+                    @TaskRecencyAndRetentionHelper.RecentBadgeText
+                </span>
+            }
         }
         else if (Task.Status == TaskOverallStatus.Rejected)
         {
@@ -111,8 +117,14 @@
         else if (Task.Status == TaskOverallStatus.Failed)
         {
             <span class="forge-badge badge-crimson" style="font-size: 0.75rem;">
-                Failed
+                ❌ Failed
             </span>
+            @if (TaskRecencyAndRetentionHelper.IsRecentTerminal(Task))
+            {
+                <span class="forge-badge badge-amber badge-recent-terminal" id="badge-recent-@Task.Id" style="font-size: 0.72rem; padding: 2px 6px;">
+                    @TaskRecencyAndRetentionHelper.RecentBadgeText
+                </span>
+            }
         }
         else if (Task.Status == TaskOverallStatus.Ready)
         {
@@ -280,10 +292,15 @@
         foreach (var prereqId in PrerequisiteIds)
         {
             var prereq = AllTasks.FirstOrDefault(t => t.Id == prereqId);
-            if (prereq == null || prereq.Status != TaskOverallStatus.Closed)
+            if (prereq != null)
             {
-                blockers.Add(prereq ?? new ForgeTask { Id = prereqId, Title = $"Task #{prereqId}" });
+                if (prereq.Status != TaskOverallStatus.Closed)
+                {
+                    blockers.Add(prereq);
+                }
             }
+            // If prereq is not found in AllTasks (e.g. if AllTasks was scoped to visible items and prereq is an older closed task),
+            // treat prerequisites outside the visible set that are Closed as satisfied (not a blocker).
         }
         return blockers;
     }

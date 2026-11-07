@@ -222,7 +222,7 @@ else if (!_isLoadingTasks)
                     .ToList();
             }
 
-            _availableTasks = allTasks.OrderByDescending(t => t.UpdatedAt).ToList();
+            _availableTasks = allTasks.OrderBy(t => t.Id).ToList();
         }
         catch (Exception ex)
         {

@@ -27,7 +27,7 @@
                     {
                         var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
                         <KanbanCard Task="task"
-                                    AllTasks="Tasks"
+                                    AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
@@ -64,7 +64,7 @@
                     {
                         var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
                         <KanbanCard Task="task"
-                                    AllTasks="Tasks"
+                                    AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
@@ -101,7 +101,7 @@
                     {
                         var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
                         <KanbanCard Task="task"
-                                    AllTasks="Tasks"
+                                    AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
@@ -138,7 +138,7 @@
                     {
                         var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
                         <KanbanCard Task="task"
-                                    AllTasks="Tasks"
+                                    AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
@@ -155,6 +155,7 @@
         <!-- Column 5: Closed & Terminal -->
         @{
             var closedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, ActiveTaskId) == BacklogKanbanColumn.Closed).ToList();
+            var orderedClosedTasks = TaskRecencyAndRetentionHelper.OrderClosedColumnTasks(closedTasks).ToList();
         }
         <div class="kanban-column column-closed">
             <div class="column-header">
@@ -171,11 +172,11 @@
                 }
                 else
                 {
-                    @foreach (var task in closedTasks)
+                    @foreach (var task in orderedClosedTasks)
                     {
                         var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
                         <KanbanCard Task="task"
-                                    AllTasks="Tasks"
+                                    AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
                                     IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
                                     OnClick="OnTaskSelected"
@@ -193,6 +194,7 @@
 
 @code {
     [Parameter] public IReadOnlyList<ForgeTask> Tasks { get; set; } = Array.Empty<ForgeTask>();
+    [Parameter] public IReadOnlyList<ForgeTask>? AllTasks { get; set; }
     [Parameter] public IReadOnlyDictionary<int, IReadOnlyList<int>> TaskDependencies { get; set; } = new Dictionary<int, IReadOnlyList<int>>();
     [Parameter] public int? ActiveTaskId { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }

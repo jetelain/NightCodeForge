@@ -47,13 +47,26 @@ public record HomeScheduledTaskItem(
     string InspectorUrl,
     string TaskDetailUrl);
 
+public record HomeRecentTerminalTaskItem(
+    int TaskId,
+    string Title,
+    TaskOverallStatus Status,
+    int WorkspaceId,
+    string WorkspaceName,
+    int Priority,
+    DateTime UpdatedAt,
+    string? SquashCommitSha,
+    string InspectorUrl,
+    string TaskDetailUrl);
+
 public record HomeDashboardSnapshot(
     IReadOnlyList<RecentWorkspaceSummary> RecentWorkspaces,
     IReadOnlyList<HomeScheduledTaskItem> RunningAndNextTasks,
     int TotalQueuedCount,
     int PendingQuestionCount,
     IReadOnlyList<HomePendingReviewItem> PendingReviewTasks,
-    int PendingReviewCount);
+    int PendingReviewCount,
+    IReadOnlyList<HomeRecentTerminalTaskItem> RecentFailedAndClosedTasks);
 
 /// <summary>
 /// Builds the workspace-agnostic homepage snapshot aggregating recent workspaces,
@@ -190,6 +203,7 @@ public static class HomeDashboardBuilder
             out var totalQueuedCount);
 
         var pendingReviewTasks = BuildPendingReviewTasks(allTasksById.Values, workspaceById);
+        var recentTerminalTasks = BuildRecentFailedAndClosedTasks(allTasksById.Values, workspaceById);
 
         return new HomeDashboardSnapshot(
             RecentWorkspaces: orderedWorkspaces,
@@ -197,7 +211,41 @@ public static class HomeDashboardBuilder
             TotalQueuedCount: totalQueuedCount,
             PendingQuestionCount: pendingQuestions.Count,
             PendingReviewTasks: pendingReviewTasks,
-            PendingReviewCount: pendingReviewTasks.Count);
+            PendingReviewCount: pendingReviewTasks.Count,
+            RecentFailedAndClosedTasks: recentTerminalTasks);
+    }
+
+    public static IReadOnlyList<HomeRecentTerminalTaskItem> BuildRecentFailedAndClosedTasks(
+        IEnumerable<ForgeTask> tasks,
+        IReadOnlyDictionary<int, Workspace> workspacesById,
+        DateTime? utcNow = null)
+    {
+        var now = utcNow ?? DateTime.UtcNow;
+        var cutoff = now - TaskRecencyAndRetentionHelper.RecentTerminalTaskWindow;
+
+        return tasks
+            .Where(t => (t.Status is TaskOverallStatus.Failed or TaskOverallStatus.Closed) && t.UpdatedAt >= cutoff)
+            .OrderByDescending(t => t.Status == TaskOverallStatus.Failed)
+            .ThenByDescending(t => t.UpdatedAt)
+            .ThenBy(t => t.Id)
+            .Select(t =>
+            {
+                var wsName = workspacesById.TryGetValue(t.WorkspaceId, out var ws) ? ws.Name : UnknownWorkspaceName;
+                int? wsId = t.WorkspaceId > 0 ? t.WorkspaceId : null;
+
+                return new HomeRecentTerminalTaskItem(
+                    TaskId: t.Id,
+                    Title: t.Title,
+                    Status: t.Status,
+                    WorkspaceId: t.WorkspaceId,
+                    WorkspaceName: wsName,
+                    Priority: t.Priority,
+                    UpdatedAt: t.UpdatedAt,
+                    SquashCommitSha: t.SquashCommitSha,
+                    InspectorUrl: WorkspaceUrlHelper.BuildPath(wsId, $"inspector/{t.Id}"),
+                    TaskDetailUrl: WorkspaceUrlHelper.BuildPath(wsId, $"tasks/{t.Id}"));
+            })
+            .ToList();
     }
 
     public static bool IsPendingHumanReview(ForgeTask task) =>

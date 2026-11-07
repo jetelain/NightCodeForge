@@ -1,0 +1,552 @@
+@page "/tasks"
+@page "/w/{WorkspaceId:int}/tasks"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Web.Services
+@inject ITaskRepository TaskRepository
+@inject IWorkspaceRepository WorkspaceRepository
+@inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
+@inject NavigationManager Navigation
+@inject ILogger<Tasks> Logger
+@implements IDisposable
+
+<PageTitle>All Tasks - NightCodeForge</PageTitle>
+
+<div class="tasks-page-container" style="display: flex; flex-direction: column; gap: 1.25rem;">
+    <!-- Page Header -->
+    <div class="page-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span style="font-size: 1.75rem;">📜</span>
+            <div>
+                <h1 style="margin: 0; font-size: 1.5rem; font-weight: 700; color: var(--text-primary);">All Tasks Archive</h1>
+                <p style="margin: 0.2rem 0 0 0; font-size: 0.88rem; color: var(--text-secondary);">
+                    Full historical task ledger with multi-column sorting, recency filters, and cross-workspace search.
+                </p>
+            </div>
+        </div>
+
+        <!-- Header Actions & Workspace Scope Controls -->
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <div class="view-mode-toggle card-glass" style="display: inline-flex; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); overflow: hidden;">
+                <button type="button"
+                        id="toggle-scope-active"
+                        class="view-toggle-btn @(!_showAllWorkspaces ? "active" : "")"
+                        style="padding: 0.35rem 0.75rem; font-size: 0.8rem; background: @(!_showAllWorkspaces ? "rgba(99, 102, 241, 0.2)" : "transparent"); border: none; color: var(--text-primary); cursor: pointer;"
+                        @onclick="() => SetScope(allWorkspaces: false)">
+                    📁 Active Workspace (@(WorkspaceState.ActiveWorkspace?.Name ?? "Selected"))
+                </button>
+                <button type="button"
+                        id="toggle-scope-all"
+                        class="view-toggle-btn @(_showAllWorkspaces ? "active" : "")"
+                        style="padding: 0.35rem 0.75rem; font-size: 0.8rem; background: @(_showAllWorkspaces ? "rgba(99, 102, 241, 0.2)" : "transparent"); border: none; color: var(--text-primary); cursor: pointer;"
+                        @onclick="() => SetScope(allWorkspaces: true)">
+                    🌐 All Workspaces
+                </button>
+            </div>
+
+            <a href="@WorkspaceState.GetPath("backlog")" class="forge-btn forge-btn-secondary" style="font-size: 0.82rem; padding: 0.4rem 0.8rem; text-decoration: none;">
+                📊 Kanban &amp; DAG
+            </a>
+            <a href="@WorkspaceState.GetPath("tasks/new")" class="forge-btn forge-btn-primary" style="font-size: 0.82rem; padding: 0.4rem 0.8rem; text-decoration: none;">
+                ➕ New Task
+            </a>
+            <button type="button" class="forge-btn forge-btn-outline" @onclick="ReloadTasksAsync" disabled="@_isLoading" style="font-size: 0.82rem; padding: 0.4rem 0.75rem;">
+                🔄 Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="card-surface" id="tasks-table-toolbar" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.85rem;">
+        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center;">
+            <!-- Text Search -->
+            <div style="flex: 1; min-width: 240px; position: relative;">
+                <input type="text"
+                       id="tasks-search-input"
+                       class="form-control-dark"
+                       placeholder="Search by #ID, title, or description..."
+                       style="width: 100%; padding: 0.4rem 0.75rem; font-size: 0.85rem;"
+                       @bind="_searchQuery"
+                       @bind:event="oninput" />
+            </div>
+
+            <!-- Status Filter -->
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <label for="filter-status-select" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">Status:</label>
+                <select id="filter-status-select"
+                        class="form-control-dark"
+                        style="padding: 0.35rem 0.6rem; font-size: 0.82rem;"
+                        value="@_statusFilter"
+                        @onchange="HandleStatusChanged">
+                    <option value="@TaskStatusFilter.All">All Statuses</option>
+                    <option value="@TaskStatusFilter.Suggested">Suggested</option>
+                    <option value="@TaskStatusFilter.Open">Open</option>
+                    <option value="@TaskStatusFilter.InFlight">In-Flight</option>
+                    <option value="@TaskStatusFilter.Ready">Ready for Review</option>
+                    <option value="@TaskStatusFilter.Failed">Failed</option>
+                    <option value="@TaskStatusFilter.Closed">Closed &amp; Merged</option>
+                    <option value="@TaskStatusFilter.Rejected">Rejected / Archived</option>
+                    <option value="@TaskStatusFilter.Cancelled">Cancelled</option>
+                </select>
+            </div>
+
+            <!-- Priority Filter -->
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <label for="filter-priority-select" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">Priority:</label>
+                <select id="filter-priority-select"
+                        class="form-control-dark"
+                        style="padding: 0.35rem 0.6rem; font-size: 0.82rem;"
+                        value="@(_priorityFilter?.ToString() ?? "0")"
+                        @onchange="HandlePriorityChanged">
+                    <option value="0">All Priorities</option>
+                    <option value="1">P1 Critical</option>
+                    <option value="2">P2 High</option>
+                    <option value="3">P3 Normal</option>
+                    <option value="4">P4 Low</option>
+                    <option value="5">P5 Trivial</option>
+                </select>
+            </div>
+
+            <!-- Recency Filter -->
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <label for="filter-recency-select" style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">Recency:</label>
+                <select id="filter-recency-select"
+                        class="form-control-dark"
+                        style="padding: 0.35rem 0.6rem; font-size: 0.82rem;"
+                        value="@_recencyFilter"
+                        @onchange="HandleRecencyChanged">
+                    <option value="@TaskRecencyFilter.AllTime">All Time</option>
+                    <option value="@TaskRecencyFilter.Last24Hours">Last 24 Hours</option>
+                    <option value="@TaskRecencyFilter.Last7Days">Last 7 Days</option>
+                    <option value="@TaskRecencyFilter.OlderThan7Days">Older than 7 Days</option>
+                </select>
+            </div>
+
+            @if (HasActiveFilters)
+            {
+                <button type="button" class="forge-btn forge-btn-secondary btn-xs" id="btn-reset-filters" @onclick="ResetFilters" style="font-size: 0.78rem;">
+                    ✕ Reset Filters
+                </button>
+            }
+        </div>
+
+        <!-- Result Stats Pill -->
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.8rem; color: var(--text-secondary); border-top: 1px solid var(--border-subtle); padding-top: 0.5rem;">
+            <span>
+                Showing <strong>@FilteredTasks.Count</strong> of <strong>@_rawTasks.Count</strong> task(s)
+                @if (!_showAllWorkspaces && WorkspaceState.ActiveWorkspace != null)
+                {
+                    <span> in <em>@WorkspaceState.ActiveWorkspace.Name</em></span>
+                }
+                else
+                {
+                    <span> across all workspaces</span>
+                }
+            </span>
+
+            <span>
+                Sorted by <strong>@_sortColumn</strong> (@(_sortAscending ? "ASC ↑" : "DESC ↓"))
+            </span>
+        </div>
+    </div>
+
+    <!-- Tabular Tasks Table Surface -->
+    <div class="card-surface" id="tasks-table-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden;">
+        @if (_isLoading)
+        {
+            <div style="padding: 3rem 1rem; text-align: center; color: var(--text-muted);">
+                <div class="spinner-border spinner-border-sm" role="status" style="margin-bottom: 0.5rem;"></div>
+                <div>Loading tasks archive...</div>
+            </div>
+        }
+        else if (FilteredTasks.Count == 0)
+        {
+            <div id="tasks-empty-state" style="padding: 3rem 1.5rem; text-align: center; color: var(--text-muted);">
+                <div style="font-size: 2.2rem; margin-bottom: 0.5rem;">📂</div>
+                <h3 style="font-size: 1.05rem; color: var(--text-primary); margin-bottom: 0.35rem;">No Tasks Found</h3>
+                <p style="font-size: 0.85rem; margin: 0 auto 1rem auto; max-width: 440px;">
+                    @(HasActiveFilters ? "No tasks match your selected filter criteria. Try adjusting your search query or reset filters." : "No tasks have been created in this scope yet.")
+                </p>
+                @if (HasActiveFilters)
+                {
+                    <button type="button" class="forge-btn forge-btn-secondary btn-sm" @onclick="ResetFilters">
+                        ✕ Clear Filters
+                    </button>
+                }
+            </div>
+        }
+        else
+        {
+            <div style="overflow-x: auto;">
+                <table class="forge-table" id="all-tasks-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;">
+                    <thead>
+                        <tr style="background: rgba(255, 255, 255, 0.02); border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary);">
+                            <th id="sort-col-id" style="padding: 0.65rem 0.85rem; width: 80px; cursor: pointer; user-select: none;" @onclick="() => ToggleSort(TaskSortColumn.Id)">
+                                #ID @SortIndicator(TaskSortColumn.Id)
+                            </th>
+                            <th id="sort-col-priority" style="padding: 0.65rem 0.75rem; width: 75px; cursor: pointer; user-select: none;" @onclick="() => ToggleSort(TaskSortColumn.Priority)">
+                                Priority @SortIndicator(TaskSortColumn.Priority)
+                            </th>
+                            <th style="padding: 0.65rem 0.85rem;">Title</th>
+                            <th id="sort-col-status" style="padding: 0.65rem 0.75rem; width: 140px; cursor: pointer; user-select: none;" @onclick="() => ToggleSort(TaskSortColumn.Status)">
+                                Status @SortIndicator(TaskSortColumn.Status)
+                            </th>
+                            <th style="padding: 0.65rem 0.75rem; width: 150px;">Workspace</th>
+                            <th style="padding: 0.65rem 0.75rem; width: 160px;">Stage / Branch</th>
+                            <th id="sort-col-updated" style="padding: 0.65rem 0.75rem; width: 120px; cursor: pointer; user-select: none;" @onclick="() => ToggleSort(TaskSortColumn.UpdatedAt)">
+                                Updated @SortIndicator(TaskSortColumn.UpdatedAt)
+                            </th>
+                            <th id="sort-col-created" style="padding: 0.65rem 0.75rem; width: 120px; cursor: pointer; user-select: none;" @onclick="() => ToggleSort(TaskSortColumn.CreatedAt)">
+                                Created @SortIndicator(TaskSortColumn.CreatedAt)
+                            </th>
+                            <th style="padding: 0.65rem 0.85rem; width: 170px; text-align: right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var task in FilteredTasks)
+                        {
+                            var wsName = _workspacesById.TryGetValue(task.WorkspaceId, out var ws) ? ws.Name : "Workspace";
+                            var isRecent = TaskRecencyAndRetentionHelper.IsRecentTerminal(task);
+
+                            <tr id="task-row-@task.Id" style="border-bottom: 1px solid var(--border-subtle); transition: background 0.15s ease;">
+                                <!-- ID -->
+                                <td style="padding: 0.65rem 0.85rem; font-family: var(--font-mono); font-weight: 700; color: var(--text-muted);">
+                                    #@task.Id
+                                </td>
+
+                                <!-- Priority -->
+                                <td style="padding: 0.65rem 0.75rem;">
+                                    <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
+                                        P@(task.Priority)
+                                    </span>
+                                </td>
+
+                                <!-- Title -->
+                                <td style="padding: 0.65rem 0.85rem;">
+                                    <a href="@WorkspaceUrlHelper.BuildPath(task.WorkspaceId, $"tasks/{task.Id}")"
+                                       id="task-title-link-@task.Id"
+                                       style="font-weight: 600; color: var(--text-primary); text-decoration: none; font-size: 0.88rem;">
+                                        @task.Title
+                                    </a>
+                                </td>
+
+                                <!-- Status -->
+                                <td style="padding: 0.65rem 0.75rem;">
+                                    <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+                                        @switch (task.Status)
+                                        {
+                                            case TaskOverallStatus.Closed:
+                                                <span class="forge-badge badge-emerald" style="font-size: 0.75rem;">✅ Closed</span>
+                                                break;
+                                            case TaskOverallStatus.Failed:
+                                                <span class="forge-badge badge-crimson" style="font-size: 0.75rem;">❌ Failed</span>
+                                                break;
+                                            case TaskOverallStatus.Ready:
+                                                <span class="forge-badge badge-teal" style="font-size: 0.75rem;">🔍 Ready</span>
+                                                break;
+                                            case TaskOverallStatus.Rejected:
+                                                <span class="forge-badge badge-crimson" style="font-size: 0.75rem;">🗑️ Rejected</span>
+                                                break;
+                                            case TaskOverallStatus.Cancelled:
+                                                <span class="forge-badge badge-gray" style="font-size: 0.75rem;">Cancelled</span>
+                                                break;
+                                            case TaskOverallStatus.Suggested:
+                                                <span class="forge-badge badge-amber" style="font-size: 0.75rem;">💡 Suggested</span>
+                                                break;
+                                            default:
+                                                if (task.IsWaitingForHuman)
+                                                {
+                                                    <span class="badge-waiting-human" style="font-size: 0.75rem;">💬 Human Input</span>
+                                                }
+                                                else if (BacklogStatusClassifier.IsInFlight(task, WorkerState.Current.ActiveTaskId))
+                                                {
+                                                    <span class="forge-badge badge-purple" style="font-size: 0.75rem;">⚡ In-Flight</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="forge-badge badge-indigo" style="font-size: 0.75rem;">📂 Open</span>
+                                                }
+                                                break;
+                                        }
+
+                                        @if (isRecent)
+                                        {
+                                            <span class="forge-badge badge-amber" id="task-table-recent-@task.Id" style="font-size: 0.7rem; padding: 1px 5px;" title="Failed or closed in the last 24 hours">
+                                                @TaskRecencyAndRetentionHelper.RecentBadgeText
+                                            </span>
+                                        }
+                                    </div>
+                                </td>
+
+                                <!-- Workspace -->
+                                <td style="padding: 0.65rem 0.75rem;">
+                                    <span class="forge-badge badge-teal" style="font-size: 0.75rem;" title="Workspace: @wsName">
+                                        🏢 @wsName
+                                    </span>
+                                </td>
+
+                                <!-- Stage / Branch -->
+                                <td style="padding: 0.65rem 0.75rem; font-family: var(--font-mono); font-size: 0.76rem; color: var(--text-secondary);">
+                                    @if (!string.IsNullOrWhiteSpace(task.CurrentStageId))
+                                    {
+                                        <span class="forge-badge badge-purple font-mono" style="font-size: 0.72rem;">@task.CurrentStageId</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(task.FeatureBranch))
+                                    {
+                                        <div style="margin-top: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="@task.FeatureBranch">
+                                            🌿 @task.FeatureBranch
+                                        </div>
+                                    }
+                                </td>
+
+                                <!-- Updated -->
+                                <td style="padding: 0.65rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted);" title="@task.UpdatedAt.ToString("u")">
+                                    🕒 @TaskRecencyAndRetentionHelper.FormatRelativeAge(task.UpdatedAt)
+                                </td>
+
+                                <!-- Created -->
+                                <td style="padding: 0.65rem 0.75rem; font-family: var(--font-mono); font-size: 0.78rem; color: var(--text-muted);" title="@task.CreatedAt.ToString("u")">
+                                    📅 @TaskRecencyAndRetentionHelper.FormatRelativeAge(task.CreatedAt)
+                                </td>
+
+                                <!-- Actions -->
+                                <td style="padding: 0.65rem 0.85rem; text-align: right;">
+                                    <div style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                                        @if (task.Status == TaskOverallStatus.Ready)
+                                        {
+                                            <a href="@WorkspaceUrlHelper.BuildPath(task.WorkspaceId, $"review/{task.Id}")"
+                                               id="task-btn-review-@task.Id"
+                                               class="forge-btn forge-btn-primary btn-xs"
+                                               style="font-size: 0.74rem; padding: 0.25rem 0.5rem; text-decoration: none;"
+                                               title="Review & Merge Code">
+                                                🔍 Review
+                                            </a>
+                                        }
+
+                                        @if (task.HasExecutionRun)
+                                        {
+                                            <a href="@WorkspaceUrlHelper.BuildPath(task.WorkspaceId, $"inspector/{task.Id}")"
+                                               id="task-btn-inspector-@task.Id"
+                                               class="forge-btn forge-btn-secondary btn-xs"
+                                               style="font-size: 0.74rem; padding: 0.25rem 0.5rem; text-decoration: none;"
+                                               title="Inspect Execution Steps & Transcript">
+                                                🔎 Inspector
+                                            </a>
+                                        }
+
+                                        <a href="@WorkspaceUrlHelper.BuildPath(task.WorkspaceId, $"tasks/{task.Id}")"
+                                           id="task-btn-details-@task.Id"
+                                           class="forge-btn forge-btn-outline btn-xs"
+                                           style="font-size: 0.74rem; padding: 0.25rem 0.5rem; text-decoration: none;"
+                                           title="View Details">
+                                            📋 Details
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    private List<ForgeTask> _rawTasks = new();
+    private Dictionary<int, Workspace> _workspacesById = new();
+    private bool _showAllWorkspaces;
+    private bool _isLoading = true;
+    private bool _disposed;
+
+    // Filters
+    private string _searchQuery = string.Empty;
+    private TaskStatusFilter _statusFilter = TaskStatusFilter.All;
+    private int? _priorityFilter = null;
+    private TaskRecencyFilter _recencyFilter = TaskRecencyFilter.AllTime;
+
+    // Sorting
+    private TaskSortColumn _sortColumn = TaskSortColumn.Id;
+    private bool _sortAscending = false; // Default: Id DESC
+
+    private bool HasActiveFilters =>
+        !string.IsNullOrWhiteSpace(_searchQuery) ||
+        _statusFilter != TaskStatusFilter.All ||
+        _priorityFilter.HasValue ||
+        _recencyFilter != TaskRecencyFilter.AllTime;
+
+    private IReadOnlyList<ForgeTask> FilteredTasks =>
+        TaskTableFilterService.FilterAndSort(
+            _rawTasks,
+            _searchQuery,
+            _statusFilter,
+            _priorityFilter,
+            _recencyFilter,
+            _sortColumn,
+            _sortAscending,
+            activeTaskId: WorkerState.Current.ActiveTaskId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        await LoadDataAsync();
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (WorkspaceId.HasValue && WorkspaceState.ActiveWorkspace?.Id != WorkspaceId.Value)
+        {
+            if (!WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value))
+            {
+                await LoadDataAsync();
+            }
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed) return;
+            await LoadDataAsync();
+            StateHasChanged();
+        });
+    }
+
+    private void HandleWorkerStateChanged()
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            var workspaces = await WorkspaceRepository.GetAllAsync();
+            _workspacesById = workspaces.ToDictionary(w => w.Id);
+            WorkspaceState.SetKnownWorkspaces(workspaces);
+
+            if (WorkspaceId.HasValue && WorkspaceState.ActiveWorkspace?.Id != WorkspaceId.Value)
+            {
+                WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+            }
+
+            var activeWs = WorkspaceState.ActiveWorkspace;
+            if (!_showAllWorkspaces && activeWs != null)
+            {
+                var tasks = await TaskRepository.GetByWorkspaceIdAsync(activeWs.Id);
+                _rawTasks = tasks.ToList();
+            }
+            else
+            {
+                var allTasks = new List<ForgeTask>();
+                foreach (var ws in workspaces)
+                {
+                    var tasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id);
+                    allTasks.AddRange(tasks);
+                }
+                _rawTasks = allTasks;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load tasks archive.");
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task ReloadTasksAsync()
+    {
+        await LoadDataAsync();
+        StateHasChanged();
+    }
+
+    private async Task SetScope(bool allWorkspaces)
+    {
+        if (_showAllWorkspaces == allWorkspaces) return;
+        _showAllWorkspaces = allWorkspaces;
+        await LoadDataAsync();
+    }
+
+    private void HandleStatusChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<TaskStatusFilter>(e.Value?.ToString(), out var filter))
+        {
+            _statusFilter = filter;
+        }
+    }
+
+    private void HandlePriorityChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var val) && val >= 1 && val <= 5)
+        {
+            _priorityFilter = val;
+        }
+        else
+        {
+            _priorityFilter = null;
+        }
+    }
+
+    private void HandleRecencyChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<TaskRecencyFilter>(e.Value?.ToString(), out var filter))
+        {
+            _recencyFilter = filter;
+        }
+    }
+
+    private void ResetFilters()
+    {
+        _searchQuery = string.Empty;
+        _statusFilter = TaskStatusFilter.All;
+        _priorityFilter = null;
+        _recencyFilter = TaskRecencyFilter.AllTime;
+    }
+
+    private void ToggleSort(TaskSortColumn col)
+    {
+        if (_sortColumn == col)
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = col;
+            _sortAscending = (col == TaskSortColumn.Priority); // Default P1->P5 ascending, others descending
+        }
+    }
+
+    private string SortIndicator(TaskSortColumn col)
+    {
+        if (_sortColumn != col) return "↕";
+        return _sortAscending ? "▲" : "▼";
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
+    }
+}
+
