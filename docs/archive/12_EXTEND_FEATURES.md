@@ -26,7 +26,11 @@ This document archives the **completed feature steps** from Phase 12. All remain
 | **12.17** | [📜 Step 12.17: Follow Trail Auto-Scroll & Bottom-Right Action in Task Execution Inspector & Reasoning Trace](phase-12/STEP_12_17_FOLLOW_TRAIL_AUTO_SCROLL_INSPECTOR_AND_REASONING_TRACE.md) | Universal reasoning trace auto-scroll tracking in Ideation Chat and Task Execution Inspector, mounting a floating follow-trail button at the bottom-right of `StageConversationViewer`, dual-tier pinning of stream and open `.think-content`, non-intrusive decoupling on manual upward scroll, and bUnit test coverage. | Completed |
 | **12.19** | [🛡️ Step 12.19: Air-Gapped & Offline Web Application Hardening](phase-12/STEP_12_19_AIR_GAPPED_OFFLINE_WEB_APP_HARDENING.md) | Total elimination of external Google Fonts and CDN dependencies; local bundling of Inter and JetBrains Mono WOFF2 typography with native system fallbacks; strict Content Security Policy (CSP) guardrails; zero-telemetry privacy guarantee; and automated static analysis subresource tests. | Completed |
 | **12.24** | [🔍 Step 12.24: Home Page Pending Human Code Review Tasks](phase-12/STEP_12_24_HOME_PAGE_PENDING_HUMAN_CODE_REVIEW_TASKS.md) | `HomePendingReviewItem` aggregation in `HomeDashboardBuilder`, top Command Center **Review Room** button & badge (`#home-review-btn`), independent clickable `🔍 Review: N` badges on workspace summary cards, dedicated **Tasks Awaiting Human Code Review** section (`#home-pending-reviews-section`) with 1-click `🔍 Review & Merge` deep-links, and LLM-free Playwright E2E tests. | Completed |
+| **12.25A** | [⚡ Step 12.25A: Configurable $N$-Worker LLM Inference Concurrency & Multi-Task Telemetry](phase-12/STEP_12_25A_CONCURRENT_INFERENCE_WORKERS_AND_MULTI_TASK_TELEMETRY.md) | Configurable `MaxConcurrentInferenceTasks` (`WorkerCount = N`, `1..16`) in `LlmProviderOptions` and `HangfireConfigurationExtensions.CreateLlmInferenceServerOptions`, plural active telemetry APIs (`GetActiveTasks()`, `GetActiveLlmCalls()`, `GetActiveShellCommands()`) in `IOperationsTelemetryService`, SQLite `busy_timeout = 30000` hardening, and `BareHost` workspace-level serialization guard. | Completed |
+| **12.25B** | [⚡ Step 12.25B: Multi-Worker Telemetry UI, Worker Status Cards & Concurrency Settings](phase-12/STEP_12_25B_MULTI_WORKER_TELEMETRY_UI_AND_CONCURRENCY_SETTINGS.md) | Multi-slot state tracking (`ActiveLlmCalls`, `ActiveShellCommands`, `ActiveTasks`) in `OperationsTelemetryUiService` and `WorkerStateService`, multi-operation rendering in `ActiveOperationsHero.razor` and `WorkerStatusCard.razor` (showing concurrent `OllamaRouter` node streams & `N / M` worker utilization), and `MaxConcurrentInferenceTasks` configuration in `/settings`. | Completed |
 | **12.26** | [🎨 Step 12.26: Workspace Visual Identity — Custom Emoji, Color Code & Settings Management](phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md) | Custom workspace emoji and hex color codes across navigation bar, workspace cards, and drawer headers; EF Core migration for `Workspace.Emoji` and `Workspace.ColorCode`; `WorkspacePresentationHelper` with luminance contrast calculation and curated palette swatches; interactive visual identity editor in `WorkspaceSettingsTab.razor`; and browser Playwright E2E tests. | Completed |
+| **12.29** | [🚀 Step 12.29: Smart OllamaRouter Model Preload & Context-Intent Warmup](phase-12/STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md) | JIT model preloading with explicit `contextIntentTokens` via `POST /api/router/models/{model}/preload`, letting OllamaRouter select the optimal target node (idle-first, server-class for high context), `/api/ps` residency confirmation, and placement telemetry broadcasting. | Completed |
+| **12.30** | [📋 Step 12.30: Tasks QoL — 24h Failed/Closed Highlights, 7-Day Backlog Cutoff, All-Tasks List Page & Inspector Ordering](phase-12/STEP_12_30_TASKS_QOL_RECENT_HIGHLIGHTS_ALL_TASKS_LIST_AND_INSPECTOR_ORDERING.md) | Highlight `Failed` and `Closed` tasks from the last 24 hours with badges in Kanban and Visual DAG plus a dedicated section on the Home page (`Home.razor`); hide tasks closed > 7 days ago from Kanban and DAG (preserving prerequisite resolution) while introducing a full searchable/sortable **All Tasks** list page (`/tasks`); and add a dedicated `❌ Failed` section with deterministic `#ID` sorting to the Task Inspector dropdown (`TaskInspectorGroupingHelper`). | Completed |
 
 ---
 
@@ -103,6 +107,22 @@ This document archives the **completed feature steps** from Phase 12. All remain
   - [x] Add `#home-pending-reviews-section` in `Home.razor` with 1-click `#home-review-task-btn-{taskId}` links to Review Room.
   - [x] Add Playwright E2E browser tests in `HitlAndObservabilityE2ETests.cs`.
 
+- [x] **Step 12.25A (Configurable $N$-Worker LLM Inference Concurrency & Multi-Task Telemetry):**
+  - [x] Add `MaxConcurrentInferenceTasks` (`WorkerCount = N`, `1..16`, defaulting to `1`) to `LlmProviderOptions` and configure `HangfireConfigurationExtensions.CreateLlmInferenceServerOptions`.
+  - [x] Extend `IOperationsTelemetryService` with plural active snapshot APIs (`GetActiveTasks()`, `GetActiveLlmCalls()`, `GetActiveShellCommands()`), preserve backwards-compatible singular accessors, and add `OnActiveTasksChanged` event.
+  - [x] Update `SignalRActivityBridgeService.DispatchActivityEventAsync` to prevent transitioning global worker status to `WaitingForHuman` or `Idle` when sibling tasks remain running.
+  - [x] Configure SQLite `Default Timeout=30` and `CommandTimeout(30)` on `UseSqlite` to avoid `SQLITE_BUSY` contention during parallel worker writes.
+  - [x] Enforce workspace-level execution serialization for `BareHost` mode via a shared task execution lock while allowing full concurrency for `ContainerSandbox` and `WslDirect`.
+  - [x] Author unit tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Core.Tests`.
+
+- [x] **Step 12.25B (Multi-Worker Telemetry UI, Worker Status Cards & Concurrency Settings):**
+  - [x] Extend `OperationsTelemetryUiService` to track multiple concurrent items (`ActiveLlmCalls`, `ActiveShellCommands`, `ActiveTasks`) without singular overwrites.
+  - [x] Update `WorkerStatusSnapshot` and `WorkerStateService` with `ConfiguredWorkerCount` and multi-task awareness, keeping `Status == Running` while at least one task is active.
+  - [x] Update `WorkerStatusCard.razor` to display worker utilization (e.g. `2 / 2 Workers Active`) and list all active tasks.
+  - [x] Update `ActiveOperationsHero.razor` with multi-slot cards for concurrent LLM inferences, shell commands, and autonomous tasks.
+  - [x] Add `MaxConcurrentInferenceTasks` numeric input to `OllamaRouterGatewayCard.razor` in `/settings` with restart required notice.
+  - [x] Author unit and bUnit tests in `NightCodeForge.Web.Tests`.
+
 - [x] **Step 12.26 (Workspace Visual Identity — Custom Emoji, Color Code & Settings Management):**
   - [x] Add `Emoji` and `ColorCode` properties to `Workspace` entity and create EF Core migration `AddWorkspaceEmojiAndColorCode`.
   - [x] Implement `WorkspacePresentationHelper` with hex color validation, luminance-based text contrast calculation, fallback emoji assignment, and curated preset color palettes.
@@ -110,4 +130,21 @@ This document archives the **completed feature steps** from Phase 12. All remain
   - [x] Update `TopNavBar.razor`, `Home.razor`, and `WizardStep1PathProbe.razor` to render custom workspace emoji and color badges.
   - [x] Create visual identity settings UI in `WorkspaceSettingsTab.razor` with real-time preview, emoji picker, and color palette chips.
   - [x] Author unit tests in `NightCodeForge.Web.Tests` and Playwright E2E tests in `WorkspaceVisualIdentityE2ETests.cs`.
+
+- [x] **Step 12.29 (Smart OllamaRouter Model Preload & Context-Intent Warmup):**
+  - [x] Add `ModelPreloadOptions`, `ModelPreloadCandidate`, and `ModelPreloadResult` records to `NightCodeForge.Core.Interfaces`.
+  - [x] Update `ILlmModelPreloadService.PreloadModelAsync` signature to accept `ModelPreloadOptions?` and return `Task<ModelPreloadResult>`.
+  - [x] Update `DeterministicBuildStage` and post-review deterministic quality gate lookahead to trigger JIT model preload with target and context intent.
+  - [x] Implement `OllamaRouterModelPreloadService` for `POST /api/router/models/{model}/preload` with candidate parsing, soft-intent fallback on `503`, and pause check.
+  - [x] Implement `OllamaModelPreloadService` for standalone Ollama and `NoOpModelPreloadService` for OpenAI-compatible providers.
+  - [x] Surface live preload state and target residency in `OperationsTelemetryUiService`, `ActiveOperationsHero.razor`, and `WorkerStatusCard.razor`.
+  - [x] Author unit tests in `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Core.Tests`, and `NightCodeForge.Web.Tests`.
+
+- [x] **Step 12.30 (Tasks QoL — 24h Failed/Closed Highlights, 7-Day Backlog Cutoff, All-Tasks List Page & Inspector Ordering):**
+  - [x] Add `TaskInspectorGroupingHelper.GroupFailed` (`"❌ Failed"`) for `TaskOverallStatus.Failed` tasks and sort tasks within all `TaskInspectorGroupingHelper` optgroups by `Task.Id` ascending.
+  - [x] Add 24-hour recency detection for `Failed` and `Closed` tasks and render a compact recent badge in `KanbanCard.razor` and `DagVisualizer.razor` / `DagLayoutEngine.cs`.
+  - [x] Add `RecentFailedAndClosedTasks` (last 24 hours) to `HomeDashboardSnapshot` / `HomeDashboardBuilder` and render the dedicated **Recent Failed & Closed Tasks (Last 24h)** section in `Home.razor`.
+  - [x] Exclude tasks closed more than 7 days ago from Kanban and DAG in `Backlog.razor` while preserving accurate prerequisite satisfaction checks for dependent `Open` tasks.
+  - [x] Create the **All Tasks** list page (`Tasks.razor` at `/tasks` and `/w/{WorkspaceId:int}/tasks`) with search, status/priority/recency filters, and column sorting, and link it in `NavMenu.razor` and `Backlog.razor`.
+  - [x] Author unit and bUnit tests in `NightCodeForge.Web.Tests`.
 

@@ -1,7 +1,13 @@
-# Step 12.25B — Multi-Worker Telemetry UI, Worker Status Cards & Concurrency Settings
+# ⚡ Step 12.25B: Multi-Worker Telemetry UI, Worker Status Cards & Concurrency Settings
 
-**Status:** Completed (Feature / Multi-Server & Multi-GPU Scaling — Web UI)
-**Prerequisite:** Step 12.25A
+> **Feature Specification (Multi-Server & Multi-GPU Scaling — Web UI)**  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
+> *Target Projects:* [`src/NightCodeForge.Web`](../../../src/NightCodeForge.Web), [`src/NightCodeForge.Infrastructure`](../../../src/NightCodeForge.Infrastructure), [`tests/NightCodeForge.Web.Tests`](../../../tests/NightCodeForge.Web.Tests)  
+> *Dependencies:* [Step 12.25A: Configurable $N$-Worker LLM Inference Concurrency](STEP_12_25A_CONCURRENT_INFERENCE_WORKERS_AND_MULTI_TASK_TELEMETRY.md)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
+
+> This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
 ---
 
@@ -9,11 +15,11 @@
 
 Once the backend supports $N$ concurrent inference workers (Step 12.25A), several Web UI services and components that were originally designed around a single active task/call need to be updated:
 
-1. **[`OperationsTelemetryUiService`](../../src/NightCodeForge.Web/Services/OperationsTelemetryUiService.cs) Single-Slot Overwriting:**
+1. **[`OperationsTelemetryUiService`](../../../src/NightCodeForge.Web/Services/OperationsTelemetryUiService.cs) Single-Slot Overwriting:**
    - `OperationsTelemetryUiService` exposes singular `ActiveLlmCall`, `ActiveShellCommand`, and `ActiveTask` properties. When Worker #2 starts an LLM call or shell command while Worker #1 is still streaming, `ActiveLlmCall` is overwritten by Worker #2's call, and when Worker #2 finishes, the UI briefly jumps or loses track of live progress if not indexed by `CallId` / `CommandId` / `TaskId`.
-2. **[`WorkerStateService`](../../src/NightCodeForge.Web/Services/WorkerStateService.cs) & [`WorkerStatusCard.razor`](../../src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor):**
+2. **[`WorkerStateService`](../../../src/NightCodeForge.Web/Services/WorkerStateService.cs) & [`WorkerStatusCard.razor`](../../../src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor):**
    - `WorkerStateService.Current` holds a single `ActiveTaskId` and `ActiveTaskTitle`. When 2 tasks run concurrently across 2 Ollama servers, the sidebar/monitoring worker status card only shows whichever task started most recently.
-3. **[`ActiveOperationsHero.razor`](../../src/NightCodeForge.Web/Components/Monitoring/ActiveOperationsHero.razor) Single-Item Cards:**
+3. **[`ActiveOperationsHero.razor`](../../../src/NightCodeForge.Web/Components/Monitoring/ActiveOperationsHero.razor) Single-Item Cards:**
    - The three hero cards (`In-Flight LLM Inference`, `In-Flight Shell Operation`, and `In-Flight Autonomous Task`) only render a single `TelemetryUi.ActiveLlmCall`, `TelemetryUi.ActiveShellCommand`, and `TelemetryUi.ActiveTask`, hiding the second concurrent GPU server's inference stream, target backend node, and token speed.
 4. **No In-App Setting for `MaxConcurrentInferenceTasks`:**
    - Users with multiple Ollama servers or multi-GPU setups need a straightforward control in `/settings` to configure `MaxConcurrentInferenceTasks` ($N$) and see how many worker slots are currently active (`ActiveTasks.Count / MaxConcurrentInferenceTasks`).
@@ -27,7 +33,7 @@ Once the backend supports $N$ concurrent inference workers (Step 12.25A), severa
 2. **Multi-Operation Rendering in `ActiveOperationsHero.razor` & `WorkerStatusCard.razor`:**
    - Display all concurrent in-flight LLM calls (with each call's model, `OllamaRouter` target backend badge, tok/s, and prompt preview), shell commands, and autonomous tasks in `ActiveOperationsHero.razor` and `WorkerStatusCard.razor`.
 3. **Concurrent Inference Workers Setting in `/settings`:**
-   - Add a **Max Concurrent Inference Tasks (`WorkerCount`)** configuration input in `/settings` ([`OllamaRouterGatewayCard.razor`](../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor)) persisted to `config/config.json` via [`ILlmConfigurationWriter`](../../src/NightCodeForge.Infrastructure/Configuration/ILlmConfigurationWriter.cs).
+   - Add a **Max Concurrent Inference Tasks (`WorkerCount`)** configuration input in `/settings` ([`OllamaRouterGatewayCard.razor`](../../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor)) persisted to `config/config.json` via [`ILlmConfigurationWriter`](../../../src/NightCodeForge.Infrastructure/Configuration/ILlmConfigurationWriter.cs).
 
 ---
 
@@ -35,7 +41,7 @@ Once the backend supports $N$ concurrent inference workers (Step 12.25A), severa
 
 ### 3.1 `OperationsTelemetryUiService` Multi-Item Tracking
 
-Extend [`OperationsTelemetryUiService`](../../src/NightCodeForge.Web/Services/OperationsTelemetryUiService.cs):
+Extend [`OperationsTelemetryUiService`](../../../src/NightCodeForge.Web/Services/OperationsTelemetryUiService.cs):
 
 - Expose plural read-only collections:
   - `IReadOnlyList<LlmCallRecord> ActiveLlmCalls { get; }`
@@ -49,16 +55,16 @@ Extend [`OperationsTelemetryUiService`](../../src/NightCodeForge.Web/Services/Op
 
 ### 3.2 `WorkerStateService` & `WorkerStatusCard.razor`
 
-- Extend [`WorkerStatusSnapshot`](../../src/NightCodeForge.Web/Services/WorkerStateService.cs) and [`WorkerStateService`](../../src/NightCodeForge.Web/Services/WorkerStateService.cs) to expose:
+- Extend [`WorkerStatusSnapshot`](../../../src/NightCodeForge.Web/Services/WorkerStateService.cs) and [`WorkerStateService`](../../../src/NightCodeForge.Web/Services/WorkerStateService.cs) to expose:
   - `IReadOnlyList<ActiveTaskSummary> ActiveTasks` (all currently running autonomous tasks from `IOperationsTelemetryService.GetActiveTasks()`),
   - `int ActiveTaskCount` (`ActiveTasks.Count`),
   - `int ConfiguredWorkerCount` (from `IOptions<LlmProviderOptions>.Value.MaxConcurrentInferenceTasks`, clamped to `1..16`, defaulting to `1`).
 - Ensure `WorkerStateService.HandleWorkerStatus` and `OnActiveTasksChanged` keep `WorkerStatusSnapshot.Status == WorkerExecutionStatus.Running` whenever `ActiveTasks.Count > 0` (even if one sibling task enters `WaitingForHuman`, `Blocked`, or `Idle`), only transitioning the overall worker state out of `Running` when `ActiveTasks.Count == 0`.
-- Update [`WorkerStatusCard.razor`](../../src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor) to display worker utilization (e.g., `RUNNING (2 / 2)` or `2 / 2 Workers Active` when multiple workers are configured/running) and list all active tasks in `ActiveTasks`.
+- Update [`WorkerStatusCard.razor`](../../../src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor) to display worker utilization (e.g., `RUNNING (2 / 2)` or `2 / 2 Workers Active` when multiple workers are configured/running) and list all active tasks in `ActiveTasks`.
 
 ### 3.3 `ActiveOperationsHero.razor` Multi-Slot Cards
 
-Update [`ActiveOperationsHero.razor`](../../src/NightCodeForge.Web/Components/Monitoring/ActiveOperationsHero.razor):
+Update [`ActiveOperationsHero.razor`](../../../src/NightCodeForge.Web/Components/Monitoring/ActiveOperationsHero.razor):
 
 1. **In-Flight LLM Inference Card (`#active-llm-card`):**
    - Header badge shows `● @TelemetryUi.ActiveLlmCalls.Count Inferring` when `ActiveLlmCalls.Count > 1` (or `● Inferring` when `1`).
@@ -72,9 +78,9 @@ Update [`ActiveOperationsHero.razor`](../../src/NightCodeForge.Web/Components/Mo
 
 ### 3.4 Concurrency Configuration in `/settings`
 
-- In [`OllamaRouterGatewayCard.razor`](../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor) (rendered under the LLM Gateway tab in [`Settings.razor`](../../src/NightCodeForge.Web/Components/Pages/Settings.razor) for all provider types):
+- In [`OllamaRouterGatewayCard.razor`](../../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor) (rendered under the LLM Gateway tab in [`Settings.razor`](../../../src/NightCodeForge.Web/Components/Pages/Settings.razor) for all provider types):
   - Add a numeric input (`id="input-max-concurrent-tasks"`, min `1`, max `16`) in the top Provider Selection & Concurrency configuration strip, initialized from `LlmOptions.Value.MaxConcurrentInferenceTasks` (clamped `1..16`).
-  - Persist `opts.MaxConcurrentInferenceTasks = Math.Clamp(_maxConcurrentTasks, 1, 16)` in `SaveSettingsAsync()` via [`ILlmConfigurationWriter.SaveProviderConfigurationAsync`](../../src/NightCodeForge.Infrastructure/Configuration/ILlmConfigurationWriter.cs) and display a `⚠️ Restart required` notice/toast when the configured worker count differs from the startup worker count.
+  - Persist `opts.MaxConcurrentInferenceTasks = Math.Clamp(_maxConcurrentTasks, 1, 16)` in `SaveSettingsAsync()` via [`ILlmConfigurationWriter.SaveProviderConfigurationAsync`](../../../src/NightCodeForge.Infrastructure/Configuration/ILlmConfigurationWriter.cs) and display a `⚠️ Restart required` notice/toast when the configured worker count differs from the startup worker count.
 
 ---
 

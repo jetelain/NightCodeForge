@@ -57,6 +57,7 @@ To transition active, real-world development projects (**OllamaRouter** and **Co
    - **Step 11.43B:** `Pmad.AI` 0.0.3 `LenientToolDispatcher` & `LenientToolDispatchChatClient` delegating middleware migration.
    - **Step 11.44:** `web_search` result capping with `/tmp` offloading and single-timeout retry policy.
    - **Step 11.45:** Measured-token compaction trigger with `Pmad.AI` next-turn token estimation and deterministic template error guard.
+   - **Step 11.46:** Live Question Inbox & Review Room Badge Synchronization (real-time badge synchronization, layout hydration, and skipped question cleanup on rejection/cancellation).
    - **Step 11.47:** Compaction checkpoint persistence (`StageTurnRole.Optimization`), `< 64k` post-compaction/summarizer/cold-resume ceiling, 10m/30m timeout retry policy for Cloud overflow, header-correlated HTTP retry telemetry, tail-aware prompt previews, and stage token accounting.
 
 > [!NOTE]
@@ -514,6 +515,12 @@ flowchart TD
   - [x] Distinguish `"GatewayDiscovery"` from `"AgentProfile"` in `HarnessAgentFactory` / `ModelCapabilityResolver` when resolving context window tokens.
   - [x] Guard `TransientHttpErrorRetryHandler` against retrying deterministic `HTTP 500` chat prompt/template errors (`"no user query found in messages"`, `"chat prompt error"`).
   - [x] Add unit tests in `NightCodeForge.Agents.Tests` and `NightCodeForge.Core.Tests` covering measured-token + `Pmad.AI` delta compaction triggering, streaming/non-streaming usage capture, baseline reset after compaction, and fast-fail on deterministic template errors; verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+- [x] **Step 11.46 (Live Question Inbox & Review Room Badge Synchronization):**
+  - [x] Add `PendingReviewCount` to `WorkerStatusSnapshot` and `UpdatePendingReviews(int count)` to `WorkerStateService`, and render `.nav-badge` on the **Review Room** sidebar entry in `NavMenu.razor` when `PendingReviewCount > 0`.
+  - [x] Hydrate `PendingQuestionCount` and `PendingReviewCount` on `MainLayout.razor` initialization and tab foregrounding, and synchronize both counts in real time whenever questions are raised (`ask`), answered, or skipped, and whenever tasks enter or leave `Ready` (Gate 2 completion, Approve & Merge, Request Changes, Reject, Cancel, Restart, or manual mutation).
+  - [x] Mark pending questions as `QuestionStatus.Skipped` on task rejection (`RejectTaskAsync`) and cancellation (`ProcessTaskAsync`), preserve global `PendingQuestionCount` when workspace filtering is toggled in `Inbox.razor`, and auto-reload `Inbox.razor` and `Review.razor` when counts change.
+  - [x] Add unit and bUnit component tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Web.Tests`.
 
 - [x] **Step 11.47 (Compaction Checkpoint Persistence, `< 64k` Cold-Resume & Compaction Ceiling, 10m/30m Timeout Retry & Global Correlation Telemetry):**
   - [x] Persist compaction checkpoints as `StageTurnRole.Optimization` turns in `ConversationTurns` and update `ConversationHistorySerializer.Serialize` and `CrucibleConversationCoordinator.ResolveSerializedState` so pause/resume, human clarification (`ask`), remediation, and crash recovery preserve compacted history without resurrecting pre-compaction turns.
