@@ -87,7 +87,12 @@ done";
         "/opt",
         "/snap",
         "/snap/bin",
-        "/usr/lib/snapd"
+        "/usr/lib/snapd",
+        "/usr/share",
+        "/usr/share/nodejs",
+        "/usr/lib/nodejs",
+        "/usr/lib/node_modules",
+        "/usr/local/lib/node_modules"
     };
 
     private readonly IProcessRunner _processRunner;
@@ -376,20 +381,26 @@ done";
         if (dir.EndsWith("/cmdline-tools/latest/bin", StringComparison.OrdinalIgnoreCase))
         {
             var androidRoot = dir[..^"/cmdline-tools/latest/bin".Length];
-            if (!string.IsNullOrWhiteSpace(androidRoot) && !IsExcludedDirectory(androidRoot))
-            {
-                return androidRoot;
-            }
+            return !string.IsNullOrWhiteSpace(androidRoot) && !IsExcludedDirectory(androidRoot)
+                ? androidRoot
+                : null;
+        }
+
+        if (dir.EndsWith("/lib/node_modules/npm/bin", StringComparison.OrdinalIgnoreCase))
+        {
+            var nodeRoot = dir[..^"/lib/node_modules/npm/bin".Length];
+            return !string.IsNullOrWhiteSpace(nodeRoot) && !IsExcludedDirectory(nodeRoot)
+                ? nodeRoot
+                : null;
         }
 
         if (dir.EndsWith("/bin", StringComparison.OrdinalIgnoreCase) ||
             dir.EndsWith("/platform-tools", StringComparison.OrdinalIgnoreCase))
         {
             var parent = GetDirectory(dir);
-            if (!string.IsNullOrWhiteSpace(parent) && !IsExcludedDirectory(parent))
-            {
-                return parent;
-            }
+            return !string.IsNullOrWhiteSpace(parent) && !IsExcludedDirectory(parent)
+                ? parent
+                : null;
         }
 
         return dir;
@@ -406,7 +417,22 @@ done";
     public static bool IsExcludedDirectory(string path)
     {
         var normalized = NormalizePath(path);
-        return ExcludedDirectories.Contains(normalized);
+        if (ExcludedDirectories.Contains(normalized))
+        {
+            return true;
+        }
+
+        if (normalized.StartsWith("/usr/share/nodejs/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/usr/lib/nodejs/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/usr/lib/node_modules/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/usr/local/lib/node_modules/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/usr/lib/snapd/", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/snap/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     public static bool IsValidMountPath(string path)
@@ -414,7 +440,7 @@ done";
         if (string.IsNullOrWhiteSpace(path)) return false;
         var normalized = NormalizePath(path);
         if (!normalized.StartsWith('/') && !normalized.StartsWith("~")) return false;
-        return !ExcludedDirectories.Contains(normalized);
+        return !IsExcludedDirectory(normalized);
     }
 
     public static string NormalizePath(string path)

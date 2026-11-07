@@ -110,6 +110,15 @@ public class ContainerToolsIntegrationTests : IDisposable
         var rgResult = await executor.ExecuteAsync("rg --version");
         Assert.Equal(0, rgResult.ExitCode);
         Assert.Contains("ripgrep", rgResult.StandardOutput, StringComparison.OrdinalIgnoreCase);
+
+        // 4. Verify node and npm are present and functional
+        var nodeResult = await executor.ExecuteAsync("node --version");
+        Assert.Equal(0, nodeResult.ExitCode);
+        Assert.StartsWith("v", nodeResult.StandardOutput.Trim());
+
+        var npmResult = await executor.ExecuteAsync("npm --version");
+        Assert.Equal(0, npmResult.ExitCode);
+        Assert.False(string.IsNullOrWhiteSpace(npmResult.StandardOutput));
     }
 
     [Fact]

@@ -397,6 +397,95 @@ mdfetch=/home/user/.dotnet/tools/mdfetch=/home/user/.dotnet/tools/mdfetch
             "node",
             "/usr/lib/snapd/snap-confine");
         Assert.Null(snapd);
+
+        var npmUsrShare = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "npm",
+            "/usr/share/nodejs/npm/bin/npm-cli.js");
+        Assert.Null(npmUsrShare);
+
+        var nodeUsrBin = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "node",
+            "/usr/bin/node");
+        Assert.Null(nodeUsrBin);
+
+        var nvmNode = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "node",
+            "/home/user/.nvm/versions/node/v20.10.0/bin/node");
+        Assert.Equal("/home/user/.nvm/versions/node/v20.10.0", nvmNode);
+
+        var nvmNpm = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "npm",
+            "/home/user/.nvm/versions/node/v20.10.0/lib/node_modules/npm/bin/npm-cli.js");
+        Assert.Equal("/home/user/.nvm/versions/node/v20.10.0", nvmNpm);
+
+        var npmUsrLibNodeModules = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "npm",
+            "/usr/lib/node_modules/npm/bin/npm-cli.js");
+        Assert.Null(npmUsrLibNodeModules);
+
+        var npmUsrLocalLibNodeModules = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "npm",
+            "/usr/local/lib/node_modules/npm/bin/npm-cli.js");
+        Assert.Null(npmUsrLocalLibNodeModules);
+
+        var optBin = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "tool",
+            "/opt/bin/tool");
+        Assert.Null(optBin);
+
+        var excludedAndroidParent = HostSdkDiscoveryService.DeriveSdkRootFromBinary(
+            "sdkmanager",
+            "/usr/cmdline-tools/latest/bin/sdkmanager");
+        Assert.Null(excludedAndroidParent);
+    }
+
+    [Fact]
+    public void ParseDiscoveryOutput_WhenNodeAndNpmInUsrBinOrUsrShareNodejs_CapturesCommandsButExcludesFromMountPaths()
+    {
+        var output = @"
+---CMD---
+node=/usr/bin/node=/usr/bin/node
+npm=/usr/bin/npm=/usr/share/nodejs/npm/bin/npm-cli.js
+dotnet=/usr/bin/dotnet=/usr/lib/dotnet/dotnet
+---DIR---
+/usr/lib/dotnet
+/usr/share/dotnet
+/usr/share/nodejs/npm
+/usr/lib/nodejs
+/usr/lib/node_modules/npm
+/usr/local/lib/node_modules/npm
+/usr/share
+";
+        var details = HostSdkDiscoveryService.ParseDiscoveryOutput(output);
+
+        Assert.Equal("/usr/bin/node", details.CommandPaths["node"]);
+        Assert.Equal("/usr/bin/npm", details.CommandPaths["npm"]);
+        Assert.Equal("/usr/bin/dotnet", details.CommandPaths["dotnet"]);
+
+        Assert.Contains("/usr/lib/dotnet", details.MountPaths);
+        Assert.Contains("/usr/share/dotnet", details.MountPaths);
+
+        Assert.DoesNotContain("/usr/share/nodejs/npm", details.MountPaths);
+        Assert.DoesNotContain("/usr/share/nodejs", details.MountPaths);
+        Assert.DoesNotContain("/usr/lib/nodejs", details.MountPaths);
+        Assert.DoesNotContain("/usr/lib/node_modules/npm", details.MountPaths);
+        Assert.DoesNotContain("/usr/local/lib/node_modules/npm", details.MountPaths);
+        Assert.DoesNotContain("/usr/share", details.MountPaths);
+        Assert.DoesNotContain("/usr/bin", details.MountPaths);
+    }
+
+    [Fact]
+    public void ParseDiscoveryOutput_WhenNvmNodeAndNpmPresent_DeduplicatesToSingleNvmNodeRoot()
+    {
+        var output = @"
+---CMD---
+node=/home/user/.nvm/versions/node/v20.10.0/bin/node=/home/user/.nvm/versions/node/v20.10.0/bin/node
+npm=/home/user/.nvm/versions/node/v20.10.0/bin/npm=/home/user/.nvm/versions/node/v20.10.0/lib/node_modules/npm/bin/npm-cli.js
+";
+        var details = HostSdkDiscoveryService.ParseDiscoveryOutput(output);
+
+        Assert.Contains("/home/user/.nvm/versions/node/v20.10.0", details.MountPaths);
+        Assert.DoesNotContain("/home/user/.nvm/versions/node/v20.10.0/lib/node_modules/npm", details.MountPaths);
     }
 
     [Fact]

@@ -216,8 +216,10 @@ public class ExecutionEnvironmentTests
     [InlineData("ncf-agent-base:latest", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("ncf-agent-base:v1", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("ncf-agent-base:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("ncf-agent-base:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:latest", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("nightcodeforge-agent:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("alpine:3.19", "alpine:3.19")]
     public void ExecutionEnvironmentProvider_ContainerMode_UpgradesLegacyManagedBaseImages(string configuredImage, string expectedImage)
     {
@@ -400,6 +402,8 @@ public class ExecutionEnvironmentTests
         Assert.Contains("python3", dockerfile);
         Assert.Contains("python3-venv", dockerfile);
         Assert.Contains("python3-pip", dockerfile);
+        Assert.Contains("nodejs", dockerfile);
+        Assert.Contains("npm", dockerfile);
         Assert.Contains("build-essential", dockerfile);
         Assert.Contains("curl", dockerfile);
         Assert.Contains("jq", dockerfile);
@@ -438,6 +442,37 @@ public class ExecutionEnvironmentTests
 
         var fresh = NightCodeForgeContainerExecutor.IsImageFresh(fakeRunner, "ncf-agent-base:latest", options, TimeSpan.FromDays(30));
         Assert.False(fresh);
+    }
+
+    [Fact]
+    public void ContainerExecutor_EnsureImageReady_WhenDefaultImageMissingAndAlternateFresh_TagsAlternateImage()
+    {
+        var recentTime = DateTime.UtcNow.AddDays(-2).ToString("O");
+        var executed = new List<string>();
+        var fakeRunner = new MockProcessRunner((exe, args) =>
+        {
+            executed.Add($"{exe} {args}".Trim());
+            if (args.Contains("image inspect") && args.Contains(ContainerExecutorOptions.DefaultAgentBaseImage))
+            {
+                return new ProcessExecutionResult(1, string.Empty, "Error: No such image");
+            }
+            if (args.Contains("image inspect") && args.Contains(ContainerExecutorOptions.AlternateAgentBaseImage))
+            {
+                return new ProcessExecutionResult(0, recentTime, string.Empty);
+            }
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+        var options = new ContainerExecutorOptions
+        {
+            ContainerImage = ContainerExecutorOptions.DefaultAgentBaseImage
+        };
+
+        var executor = CreateExecutor(options, fakeRunner);
+        executor.EnsureImageReady();
+
+        Assert.Contains(executed, c => c.Contains($"tag {ContainerExecutorOptions.AlternateAgentBaseImage} {ContainerExecutorOptions.DefaultAgentBaseImage}"));
+        Assert.DoesNotContain(executed, c => c.Contains("build -t"));
     }
 
     private static ContainerExecutorOptions StoppedTestOptions() => new()

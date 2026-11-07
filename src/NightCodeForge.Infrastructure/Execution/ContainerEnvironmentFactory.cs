@@ -313,10 +313,12 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             trimmed.Equals("ncf-agent-base:latest", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("ncf-agent-base:v1", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("ncf-agent-base:v2", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("ncf-agent-base:v3", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent:latest", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent:v1", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("nightcodeforge-agent:v2", StringComparison.OrdinalIgnoreCase))
+            trimmed.Equals("nightcodeforge-agent:v2", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("nightcodeforge-agent:v3", StringComparison.OrdinalIgnoreCase))
         {
             return ContainerExecutorOptions.DefaultAgentBaseImage;
         }

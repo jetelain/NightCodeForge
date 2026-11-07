@@ -1672,12 +1672,17 @@ To ensure consistent, secure, and offline-capable execution without requiring ac
    - **Networking & Utilities:** `curl`, `ca-certificates`, `jq`, `procps`, `unzip`, `tar`, `gzip`.
    - **Native Build Prerequisites:** `build-essential` (gcc, make).
    - **Python Runtime:** `python3`, `python3-venv`, `python3-pip`.
+   - **JavaScript / Node Runtime:** `nodejs`, `npm`.
 
 3. **Python Runtime Architecture (Base Image vs. Host Mount):**
    - **Why Python is Baked into the Base Image:** Python executables are dynamically linked against `glibc` and have a tightly-coupled standard library (`/usr/lib/python3.12`) with compiled C-extension shared objects (`.so`). Mounting Python directly from a host system (especially across different Linux distributions or Windows/WSL boundaries) frequently fails due to missing shared libraries or ABI mismatches (e.g., `_ssl`, `_ctypes`, `math`). Baking `python3` and `python3-venv` into the base image costs only ~35 MB uncompressed and guarantees rock-solid execution across any host.
    - **Package Cache Mounting:** While the Python runtime is baked into the base image, package download caches (e.g., `~/.cache/uv`, `~/.cache/pip`) can be cleanly bind-mounted from the host because they are architecture-independent file trees.
 
-4. **Self-Healing 30-Day Freshness Lifecycle:**
+4. **Node.js & npm Runtime Architecture (Base Image vs. Host Mount):**
+   - **Why Node.js & npm are Baked into the Base Image:** In Linux/Debian distributions, the `node` binary resides in `/usr/bin/node` (linked against `libnode.so`), while `npm` symlinks to `/usr/share/nodejs/npm/bin/npm-cli.js`. Because `/usr/bin` is not mounted into sandboxes to prevent host toolchain conflicts, `/usr/bin/node` is never mounted from the host. Mounting only `/usr/share/nodejs/npm` leaves `node` missing and breaks dependency imports from other `/usr/share/nodejs/*` packages. Preinstalling `nodejs` and `npm` directly into the base image guarantees that both `node` and `npm` work immediately out of the box in every container sandbox.
+   - **Package Cache Mounting:** The container sets `npm_config_cache=/cache/npm`, bind-mounting the host's `~/.npm` cache for fast package downloads and zero-bandwidth re-installs.
+
+5. **Self-Healing 30-Day Freshness Lifecycle:**
    `NightCodeForgeContainerExecutor.EnsureImageReady()` automatically checks the image age before launching containers:
    - Uses `docker image inspect -f "{{.Created}}" ncf-agent-base:latest` to retrieve image creation timestamp.
    - If the image does not exist or was created more than 30 days ago, it automatically compiles an isolated temporary Dockerfile and executes `docker build -t ncf-agent-base:latest`, keeping security patches and tools fresh.

@@ -36,7 +36,8 @@ public class ContainerVolumeMount
 
 public class ContainerExecutorOptions
 {
-    public const string DefaultAgentBaseImage = "ncf-agent-base:v3";
+    public const string DefaultAgentBaseImage = "ncf-agent-base:v4";
+    public const string AlternateAgentBaseImage = "nightcodeforge-agent:v4";
     public const string ContainerHomePath = "/ncf-home";
     public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
 
@@ -57,6 +58,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
     python3-pip \
+    nodejs \
+    npm \
     locales \
     libicu-dev \
     libunwind8 \
@@ -850,7 +853,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             // If the alternate image exists and is fresh, tag it
             var altImage = image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase)
                 ? ContainerExecutorOptions.DefaultAgentBaseImage
-                : "nightcodeforge-agent:v3";
+                : ContainerExecutorOptions.AlternateAgentBaseImage;
 
             if (IsImageFresh(_processRunner, altImage, _options, TimeSpan.FromDays(30)))
             {
@@ -936,7 +939,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 ["build", "-t", imageName, buildContext],
                 timeoutSeconds: 600);
 
-            logger.LogInformation("Building local base container image {Image} with git, ripgrep, and python3...", imageName);
+            logger.LogInformation("Building local base container image {Image} with git, ripgrep, python3, and nodejs...", imageName);
             var buildResult = processRunner.Run(buildSpec);
 
             if (buildResult.ExitCode != 0)
