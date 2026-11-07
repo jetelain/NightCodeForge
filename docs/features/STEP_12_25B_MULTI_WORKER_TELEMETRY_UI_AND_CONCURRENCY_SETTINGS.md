@@ -27,7 +27,7 @@ Once the backend supports $N$ concurrent inference workers (Step 12.25A), severa
 2. **Multi-Operation Rendering in `ActiveOperationsHero.razor` & `WorkerStatusCard.razor`:**
    - Display all concurrent in-flight LLM calls (with each call's model, `OllamaRouter` target backend badge, tok/s, and prompt preview), shell commands, and autonomous tasks in `ActiveOperationsHero.razor` and `WorkerStatusCard.razor`.
 3. **Concurrent Inference Workers Setting in `/settings`:**
-   - Add a **Max Concurrent Inference Tasks (`WorkerCount`)** configuration input in `/settings` persisted to `config/config.json` via `IUserConfigurationWriter`.
+   - Add a **Max Concurrent Inference Tasks (`WorkerCount`)** configuration input in `/settings` ([`OllamaRouterGatewayCard.razor`](../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor)) persisted to `config/config.json` via [`ILlmConfigurationWriter`](../../src/NightCodeForge.Infrastructure/Configuration/ILlmConfigurationWriter.cs).
 
 ---
 
@@ -41,19 +41,20 @@ Extend [`OperationsTelemetryUiService`](../../src/NightCodeForge.Web/Services/Op
   - `IReadOnlyList<LlmCallRecord> ActiveLlmCalls { get; }`
   - `IReadOnlyList<ShellCommandRecord> ActiveShellCommands { get; }`
   - `IReadOnlyList<ActiveTaskSummary> ActiveTasks { get; }`
-- Keep singular `ActiveLlmCall`, `ActiveShellCommand`, and `ActiveTask` as computed convenience properties (`ActiveLlmCalls.FirstOrDefault()`, etc.) for backward compatibility.
+- Keep singular `ActiveLlmCall`, `ActiveShellCommand`, and `ActiveTask` consistent with `IOperationsTelemetryService.GetActiveLlmCall()`, `GetActiveShellCommand()`, and `GetActiveTask()` (returning the most recently started active item or `null`) for backward compatibility with existing callers and tests.
 - In `HydrateFromService()`, populate `ActiveLlmCalls`, `ActiveShellCommands`, and `ActiveTasks` from `IOperationsTelemetryService.GetActiveLlmCalls()`, `GetActiveShellCommands()`, and `GetActiveTasks()`.
 - In `HandleLlmCallStarted`, `HandleLlmCallProgress`, and `HandleLlmCallCompleted`, maintain all running calls in `ActiveLlmCalls` by `CallId` so concurrent token-per-second and token-count updates for Call A and Call B update independently in real time.
 - In `HandleShellCommandStarted`, `HandleShellCommandOutput`, and `HandleShellCommandCompleted`, maintain all running commands in `ActiveShellCommands` by `CommandId`.
-- In `HandleActiveTaskChanged`, synchronize `ActiveTasks` with `IOperationsTelemetryService.GetActiveTasks()`.
+- Subscribe to `_telemetryService.OnActiveTasksChanged` and synchronize `ActiveTasks` in `HandleActiveTaskChanged` and `HandleWorkerStatusReceived` from `_telemetryService.GetActiveTasks()` so that when one task transitions to `Idle`, `WaitingForHuman`, or `Blocked`, any other concurrently running task(s) remain in `ActiveTasks` and `ActiveTask`.
 
 ### 3.2 `WorkerStateService` & `WorkerStatusCard.razor`
 
 - Extend [`WorkerStatusSnapshot`](../../src/NightCodeForge.Web/Services/WorkerStateService.cs) and [`WorkerStateService`](../../src/NightCodeForge.Web/Services/WorkerStateService.cs) to expose:
-  - `IReadOnlyList<ActiveTaskSummary> ActiveTasks` (all currently running autonomous tasks),
+  - `IReadOnlyList<ActiveTaskSummary> ActiveTasks` (all currently running autonomous tasks from `IOperationsTelemetryService.GetActiveTasks()`),
   - `int ActiveTaskCount` (`ActiveTasks.Count`),
-  - `int ConfiguredWorkerCount` (from `LlmProviderOptions.MaxConcurrentInferenceTasks`).
-- Update [`WorkerStatusCard.razor`](../../src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor) to display worker utilization (e.g., `Running (2 / 2 Workers)` when 2 tasks are active) and list all active tasks with links to their respective Task Inspectors.
+  - `int ConfiguredWorkerCount` (from `IOptions<LlmProviderOptions>.Value.MaxConcurrentInferenceTasks`, clamped to `1..16`, defaulting to `1`).
+- Ensure `WorkerStateService.HandleWorkerStatus` and `OnActiveTasksChanged` keep `WorkerStatusSnapshot.Status == WorkerExecutionStatus.Running` whenever `ActiveTasks.Count > 0` (even if one sibling task enters `WaitingForHuman`, `Blocked`, or `Idle`), only transitioning the overall worker state out of `Running` when `ActiveTasks.Count == 0`.
+- Update [`WorkerStatusCard.razor`](../../src/NightCodeForge.Web/Components/Monitoring/WorkerStatusCard.razor) to display worker utilization (e.g., `RUNNING (2 / 2)` or `2 / 2 Workers Active` when multiple workers are configured/running) and list all active tasks in `ActiveTasks`.
 
 ### 3.3 `ActiveOperationsHero.razor` Multi-Slot Cards
 
@@ -61,19 +62,19 @@ Update [`ActiveOperationsHero.razor`](../../src/NightCodeForge.Web/Components/Mo
 
 1. **In-Flight LLM Inference Card (`#active-llm-card`):**
    - Header badge shows `● @TelemetryUi.ActiveLlmCalls.Count Inferring` when `ActiveLlmCalls.Count > 1` (or `● Inferring` when `1`).
-   - Renders each active call in `TelemetryUi.ActiveLlmCalls` (showing `@call.Model`, `@call.TargetBackend` route badge, context tokens, tok/s speed, completion/reasoning tokens, elapsed duration, and prompt preview) separated by a subtle divider when multiple calls are in flight simultaneously.
+   - Renders each active call in `TelemetryUi.ActiveLlmCalls` (showing `@call.Model`, `@call.TargetBackend` route badge, context tokens, tok/s speed, completion/reasoning tokens, elapsed duration, and prompt preview) separated by a subtle divider when multiple calls are in flight simultaneously. Avoid duplicate HTML `id` attributes when rendering multiple calls.
 2. **In-Flight Shell Operation Card (`#active-shell-card`):**
    - Header badge shows `● @TelemetryUi.ActiveShellCommands.Count Executing` when `ActiveShellCommands.Count > 1` (or `● Executing` when `1`).
    - Renders each active shell command in `TelemetryUi.ActiveShellCommands`.
 3. **In-Flight Autonomous Task Card (`#active-task-card`):**
-   - Header badge shows `Running (@TelemetryUi.ActiveTasks.Count)` when multiple tasks are executing concurrently.
+   - Header badge (`#badge-active-task-running`) shows `Running (@TelemetryUi.ActiveTasks.Count)` when `ActiveTasks.Count > 1` (or `Running` when `1`).
    - Renders each active task in `TelemetryUi.ActiveTasks` with its `#TaskId`, `TaskTitle`, `CurrentStageId` badge, `Priority`, and `🔍 Inspector` / `📋 Details` buttons.
 
 ### 3.4 Concurrency Configuration in `/settings`
 
-- In [`Settings.razor`](../../src/NightCodeForge.Web/Components/Pages/Settings.razor) (or the LLM Provider / [`OllamaRouterGatewayCard.razor`](../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor) settings section):
-  - Add a numeric input (`id="input-max-concurrent-tasks"`, min `1`, max `16`) bound to `LlmProvider:MaxConcurrentInferenceTasks`.
-  - Persist changes to `config/config.json` via `IUserConfigurationWriter` and display an informational toast/banner indicating when a restart is required for Hangfire server worker count changes to take effect.
+- In [`OllamaRouterGatewayCard.razor`](../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor) (rendered under the LLM Gateway tab in [`Settings.razor`](../../src/NightCodeForge.Web/Components/Pages/Settings.razor) for all provider types):
+  - Add a numeric input (`id="input-max-concurrent-tasks"`, min `1`, max `16`) in the top Provider Selection & Concurrency configuration strip, initialized from `LlmOptions.Value.MaxConcurrentInferenceTasks` (clamped `1..16`).
+  - Persist `opts.MaxConcurrentInferenceTasks = Math.Clamp(_maxConcurrentTasks, 1, 16)` in `SaveSettingsAsync()` via [`ILlmConfigurationWriter.SaveProviderConfigurationAsync`](../../src/NightCodeForge.Infrastructure/Configuration/ILlmConfigurationWriter.cs) and display a `⚠️ Restart required` notice/toast when the configured worker count differs from the startup worker count.
 
 ---
 
@@ -82,6 +83,6 @@ Update [`ActiveOperationsHero.razor`](../../src/NightCodeForge.Web/Components/Mo
 - Unit and bUnit tests in `NightCodeForge.Web.Tests` verify:
   - `OperationsTelemetryUiService` tracks 2 simultaneous `LlmCallRecord` streams (`call-1` on Node A and `call-2` on Node B), updating each call's `CompletionTokens` and `TokensPerSecond` independently and keeping `call-1` in `ActiveLlmCalls` when `call-2` completes.
   - `ActiveOperationsHero.razor` renders both concurrent LLM calls, shell commands, and autonomous tasks when 2 workers are active.
-  - `WorkerStateService` and `WorkerStatusCard.razor` accurately display multiple active tasks and worker slot utilization (`2 / 2`).
-  - Saving `MaxConcurrentInferenceTasks` in `/settings` writes `LlmProvider:MaxConcurrentInferenceTasks` via `IUserConfigurationWriter`.
+  - `WorkerStateService` and `WorkerStatusCard.razor` accurately display multiple active tasks, keep status `Running` while at least one task remains active, and display worker slot utilization (`2 / 2`).
+  - Saving `MaxConcurrentInferenceTasks` in `OllamaRouterGatewayCard.razor` writes `MaxConcurrentInferenceTasks` via `ILlmConfigurationWriter.SaveProviderConfigurationAsync`.
 

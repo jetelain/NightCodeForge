@@ -3,98 +3,124 @@
 > **Feature Implementation Step (Part 2 of 2 — Orchestrator Suspension & Web UI Layer)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Step:* [Step 12.1A: Backlog Context Digest & In-Tool Cycle Rejection](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md)  
-> *Target Components:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Infrastructure/Git`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Services` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Core/Interfaces`, `src/NightCodeForge.Infrastructure/Git`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Services` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 ---
 
 ## 1. Executive Objective
 
-When a task begins execution at Stage 1 (Task Review), the scheduler dispatched it because it had zero unsatisfied prerequisites at that moment. However, with [Step 12.1A](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md), the Stage 1 Task Review agent can discover and declare a dependency on another unmerged task in the backlog.
+When a task begins execution at Stage 1 (`StandardStageIds.TaskReview`), the scheduler dispatched it because it had zero unsatisfied prerequisites at that moment. However, with [Step 12.1A](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md), the Stage 1 Task Review agent can discover and declare a dependency on another unmerged task in the backlog (either an existing task or a newly proposed task via `propose_tasks` + `depends_on` frontmatter).
 
 This step (Part 2 of Step 12.1) implements:
 1. **Dynamic Task Suspension, Resource Cleanup & Clean Workflow Reset:**
-   - If an unclosed prerequisite is detected after Stage 1 completes, [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) executes an immediate early return: suspends execution, sets `task.Status = TaskOverallStatus.Open`, resets `task.CurrentStageId = StandardStageIds.TaskReview`, and records `cohortExitReason = CohortExitReason.Yielded` (or `Suspended`).
-   - Clean up execution resources: remove the task worktree via [`RemoveWorktreeAsync`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs#L311-L325), clean up the container via `CleanupTaskContainerAsync`, and **delete or reset the feature branch** `feature/task-{taskId}` so that when the prerequisite merges, the task is re-branched cleanly from the updated base branch head.
-   - Once all prerequisites reach `Closed` (merged), the task is automatically re-enqueued via DAG cascade to rerun from Stage 1 against the updated codebase.
+   - If an unclosed prerequisite is detected after Stage 1 completes and markdown changes are synchronized from disk, [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) executes an immediate early return before creating a Stage 1 checkpoint or advancing to Stage 2:
+     - Suspends execution and resets the task to a clean pre-execution `Open` state (`task.Status = TaskOverallStatus.Open`, `task.CurrentStageId = string.Empty`, `task.HasExecutionRun = false`, `task.MaxExecutedStageOrder = 0`, `task.LastHangfireJobId = null`, and clears Stage 1 artifacts from `PipelineDataJson`) so [`BacklogStatusClassifier`](../../src/NightCodeForge.Web/Services/BacklogStatusClassifier.cs), [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor), and [`DagLayoutEngine`](../../src/NightCodeForge.Web/Services/DagLayoutEngine.cs) classify it as **Blocked in Open (Backlog)** rather than **In-Flight**.
+     - Records `cohortExitReason = CohortExitReason.Yielded` (or dedicated `Suspended` exit reason).
+   - Cleans up execution resources through [`ITaskWorkspacePreparer`](../../src/NightCodeForge.Core/Workflow/ITaskWorkspacePreparer.cs) and [`IGitWorkspaceManager`](../../src/NightCodeForge.Core/Interfaces/IGitWorkspaceManager.cs):
+     - Removes the task worktree (`RemoveWorktreeSafeAsync`), cleans up the task container (`CleanupTaskContainerSafeAsync`), and **deletes the local feature branch** `feature/task-{taskId}` (`DeleteTaskBranchAsync` / `DeleteTaskBranchSafeAsync`) so that when prerequisites eventually merge, [`EnsureWorktreeAsync`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs#L112-L163) provisions a fresh branch off the updated base branch head instead of checking out a stale pre-merge branch.
+   - Once all prerequisites reach `Closed` (merged), [`TaskMergeAndCascadeCoordinator.CompleteTaskAndCascadeInternalAsync`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs#L293-L457) automatically re-enqueues the task via DAG cascade to rerun from Stage 1 against the updated codebase.
 2. **Surface Dependencies & Suspension Clearly in UI (Presentation Separation):**
-   - Encapsulate blocker resolution and suspension logic in a dedicated presentation service (`TaskDependencyPresentationHelper` in `NightCodeForge.Web.Services`, per [AGENTS.md](../../AGENTS.md)), keeping [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor) and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) strictly focused on markup and user interaction.
-   - Display clickable dependency badges ("Depends on #12", "Blocks #15") and distinctive `⏸️ Blocked on #101` suspension indicators.
+   - Extract inline blocker resolution and suspension formatting out of Razor components into a dedicated presentation helper (`TaskDependencyPresentationHelper` in `NightCodeForge.Web.Services`, per [AGENTS.md](../../AGENTS.md)), keeping [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor), [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor), and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) strictly focused on markup and user interaction.
+   - Render interactive prerequisite chips (`🔗 Prereq: #101`), upstream failure/stall warnings, distinctive `⏸️ Blocked on #101` suspension badges on Kanban cards, and a suspension alert banner in both the full-page [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) view and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
 
 ---
 
 ## 2. Dynamic Task Suspension & Full Workflow Reset Protocol
 
 ### 2.1 Rationale for Suspension & Full Reset
-If the Task Review agent uncovers an unmerged prerequisite task (e.g. #101) that is currently `Open`, `Reviewed`, `Implemented`, or `Ready`:
+If the Task Review agent uncovers an unmerged prerequisite task (e.g. `#101`) that is currently `Open`, `Reviewed`, `Implemented`, `WaitingForClarification`, `Paused`, or `Failed`:
 - **Implementation Cannot Proceed:** Stage 2 / Stage 3 agents cannot write implementation code or tests against APIs, database tables, or contracts that only exist in an unmerged branch or proposal.
-- **Workflow Must Reset to Stage 1:** When prerequisite #101 is eventually completed and merged into the base branch, the codebase will have changed (new files, modified types, new commits). The review specifications, architectural design, and affected file list established *before* #101 merged are likely stale or invalid. Therefore, the task must **reset to Stage 1** and delete its stale `feature/task-{id}` branch so that once unblocked, the review agent re-investigates the task against the actual merged code on disk.
+- **Workflow Must Reset Cleanly Before Stage 1 Completion:** When prerequisite `#101` is eventually completed and merged into the base branch, the codebase will have changed (new files, modified types, new commits). The review specifications, architectural design, and affected file list established *before* `#101` merged are likely stale or invalid. Furthermore, [`GitWorkspaceManager.EnsureWorktreeAsync`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs#L134-L143) reuses an existing `feature/task-{id}` branch if `branchExists` is true. Therefore, the task must **reset its execution state to pre-Stage 1** and **delete its stale `feature/task-{id}` branch** so that once unblocked, the review agent re-investigates the task on a fresh branch created from the updated base branch head.
 
-### 2.2 Orchestration Flow in `TaskOrchestrator`
-Upon completion of Stage 1 (`StandardStageIds.TaskReview`) and post-stage disk synchronization:
-1. **Unclosed Prerequisite Audit:**
-   - [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) reloads the task's dependencies from the database and checks whether all prerequisite tasks are in `TaskOverallStatus.Closed`:
+### 2.2 Collaborator Responsibilities & Constructor Constraints
+Per [AGENTS.md](../../AGENTS.md), service constructors must never exceed 10 parameters. [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L18-L52) (9 params) delegates workspace/git operations and dependency/merge operations to its existing collaborators rather than injecting new dependencies directly:
+- **[`ITaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/ITaskMergeAndCascadeCoordinator.cs) / [`TaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs)** (10 params — already owns `_dependencyEngine`, `_dependencyStore`, `_taskRepository`, and `_jobQueue`):
+  - Add `Task<IReadOnlyList<int>> GetUnclosedPrerequisiteIdsAsync(int taskId, CancellationToken cancellationToken = default)` (or evaluate via `_dependencyStore` / `_taskRepository`).
+  - **Important EF Core & In-Memory Store Constraint:** Do **not** rely on `task.Dependencies.Where(d => d.DependsOnTask == null || ...)` because [`EfCoreTaskRepository`](../../src/NightCodeForge.Infrastructure/Data/Repositories/EfCoreTaskRepository.cs#L30-L47) does not `.ThenInclude(d => d.DependsOnTask)` and [`TaskMarkdownSyncService.SyncAllTasksFromDiskAsync`](../../src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs#L1656-L1660) populates `new TaskDependency { TaskId = task.Id, DependsOnTaskId = depId }` with `DependsOnTask == null` (which would falsely classify already-`Closed` prerequisites as unclosed). Instead, resolve each `DependsOnTaskId`'s current `TaskOverallStatus` via `_dependencyStore.GetTaskStatusAsync(prereqId)` / `_taskRepository.GetByIdAsync(prereqId)`, and ensure `ITaskDependencyStore` is synchronized whenever dependencies are updated via disk sync or UI mutation.
+- **[`IGitWorkspaceManager`](../../src/NightCodeForge.Core/Interfaces/IGitWorkspaceManager.cs) / [`GitWorkspaceManager`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs) & [`ITaskWorkspacePreparer`](../../src/NightCodeForge.Core/Workflow/ITaskWorkspacePreparer.cs) / [`TaskWorkspacePreparer`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs)**:
+  - Add `Task DeleteTaskBranchAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)` to `IGitWorkspaceManager` (deletes `feature/task-{taskId}` via `git branch -D` in the canonical clone if the branch exists, after worktree removal).
+  - Add `Task DeleteTaskBranchSafeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)` to `ITaskWorkspacePreparer` (best-effort wrapper matching `RemoveWorktreeSafeAsync` and `CleanupTaskContainerSafeAsync`).
+
+### 2.3 Orchestration Flow in `TaskOrchestrator.ProcessTaskAsync`
+In [`TaskOrchestrator.ProcessTaskAsync`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L970-L1200), after Stage 1 (`StandardStageIds.TaskReview`) finishes, `pendingProposals` are persisted, and `SyncAllTasksFromDiskAsync` updates `task.Dependencies`:
+1. **Unclosed Prerequisite Audit (Before Missing-Doc Check, Clarification Check, or Stage 1 Checkpoint):**
+   - When `stage.StageId == StandardStageIds.TaskReview && !result.IsCancelled` and `task.Dependencies.Count > 0`:
      ```csharp
-     var unclosedPrerequisites = task.Dependencies
-         .Where(d => d.DependsOnTask == null || d.DependsOnTask.Status != TaskOverallStatus.Closed)
-         .Select(d => d.DependsOnTaskId)
-         .ToList();
+     var unclosedPrerequisites = await _mergeAndCascadeCoordinator
+         .GetUnclosedPrerequisiteIdsAsync(task.Id, cancellationToken);
      ```
-2. **Suspension, Resource Cleanup & State Reset Action:**
+2. **Suspension, Resource Cleanup & Full State Reset Action:**
    - If `unclosedPrerequisites.Count > 0`:
-     - **Status Reset:** `task.Status = TaskOverallStatus.Open`.
-     - **Stage Reset:** `task.CurrentStageId = StandardStageIds.TaskReview`.
-     - **Early Return:** Exit `ProcessTaskAsync` immediately. Do **not** evaluate `pipeline.GetNextStage(...)` (which would otherwise advance to Gate 1 / Implementation). Set `cohortExitReason = CohortExitReason.Yielded` (or dedicated `Suspended` exit reason).
+     - **State Reset (Prevent False "In-Flight" Classification):**
+       - `task.Status = TaskOverallStatus.Open`
+       - `task.CurrentStageId = string.Empty` (when re-dispatched later, [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L218-L225) automatically resolves `pipeline.Stages.FirstOrDefault()`, i.e. `StandardStageIds.TaskReview`)
+       - `task.HasExecutionRun = false`
+       - `task.MaxExecutedStageOrder = 0`
+       - `task.LastHangfireJobId = null`
+       - Clear Stage 1 execution artifacts (`ApprovedPlan`, `StageSummary(TaskReview)`, `SerializedMemory`, etc.) by resetting `dataBag` / `task.PipelineDataJson = "{}"` (preserving only non-stage metadata if any).
+     - **Persistence & Markdown Mirror Sync:**
+       - Save task via `_taskRepository.UpdateAsync(task, reason: $"Task suspended: waiting for unclosed prerequisites [{string.Join(", ", unclosedPrerequisites)}]; workflow reset to Open; worktree and stale branch cleaned up.", actor: AuditActors.System, cancellationToken: cancellationToken)`.
+       - Update dependency store status via `await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken)`.
+       - Synchronize updated frontmatter (`status: Open`, `current_stage: ""`, while keeping `depends_on`) back to the host markdown file via `await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken)`.
      - **Worktree, Container & Branch Cleanup:**
-       1. Remove worktree: `await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, task.Id, cancellationToken)`.
-       2. Clean up task container: `await _environmentProvider.CleanupTaskContainerAsync(workspace, task.Id, cancellationToken)`.
-       3. **Delete/Reset Task Branch:** Invoke `_gitWorkspaceManager.DeleteTaskBranchAsync(workspace, task.Id, cancellationToken)` (or execute `git branch -D feature/task-{task.Id}`) in the canonical clone. This guarantees that when the prerequisite merges and unblocks this task, `EnsureWorktreeAsync` will provision a **brand-new branch created directly off the freshly updated base branch head**, avoiding the stale branch trap.
-     - **Audit Logging:** Save task with `reason: $"Task suspended: waiting for unclosed prerequisites [{string.Join(", ", unclosedPrerequisites)}]; workflow reset to Open; worktree and stale branch cleaned up."` and actor `AuditActors.System`.
-     - **Dependency Store Sync:** Notify `_dependencyStore.UpdateTaskStatusAsync(task.Id, task.Status)`.
-     - **Execution Log:** Log an informational entry: `Task #{task.Id} suspended due to unclosed dependencies [{string.Join(", ", unclosedPrerequisites)}]. Worktree and branch removed; workflow will rerun from Stage 1 once prerequisites are Closed.`
-     - Gracefully finish the current Hangfire job without error.
-3. **Automatic Resumption via DAG Cascade:**
-   - When the prerequisite tasks reach `TaskOverallStatus.Closed`, `TaskOrchestrator.CompleteMergeAsync` executes its DAG cascade unblocking check via `_dependencyEngine.ResolveCascadeUnblockedTasksAsync(task.Id)` and automatically re-enqueues the unblocked task into the Hangfire queue (`_jobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority)`).
+       1. Remove worktree: `await _workspacePreparer.RemoveWorktreeSafeAsync(workspace, task.Id, cancellationToken)`.
+       2. Clean up task container: `await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, cancellationToken)`.
+       3. Delete local task branch: `await _workspacePreparer.DeleteTaskBranchSafeAsync(workspace, task.Id, cancellationToken)`.
+     - **Execution Log & Telemetry:**
+       - Log an informational entry and broadcast via `_notifier`: `Task #{task.Id} suspended due to unclosed dependencies [{string.Join(", ", unclosedPrerequisites)}]. Worktree and branch removed; workflow will rerun from Stage 1 once prerequisites are Closed.`
+       - Set `cohortExitReason = CohortExitReason.Yielded` and return early from `ProcessTaskAsync` without creating a Stage 1 `StageCheckpoint` or advancing to Stage 2.
+3. **Automatic Resumption via DAG Cascade (and Manual UI Unblocking):**
+   - When the prerequisite tasks reach `TaskOverallStatus.Closed`, [`TaskMergeAndCascadeCoordinator.CompleteTaskAndCascadeInternalAsync`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs#L406-L438) executes its DAG cascade unblocking check via `_dependencyEngine.ResolveCascadeUnblockedTasksAsync(task.Id, cancellationToken)` and automatically re-enqueues the unblocked task into the Hangfire queue (`_jobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority)`).
+   - Additionally, if a user manually edits dependencies via [`TaskMutationService.UpdateDependenciesAsync`](../../src/NightCodeForge.Web/Services/TaskMutationService.cs#L246-L285), keep `ITaskDependencyStore` synchronized so the dependency graph reflects manual additions/removals immediately.
 
 ---
 
 ## 3. UI Presentation: Interactive Dependency Badges & Suspension States
 
 ### 3.1 Presentation Separation Architecture
-In accordance with [AGENTS.md](../../AGENTS.md) (*Keep Razor components focused on presentation, layout, and user interaction*), all dependency status evaluation, blocker calculation, and badge styling logic is extracted into a dedicated helper service:
+In accordance with [AGENTS.md](../../AGENTS.md) (*Keep Razor components focused on presentation, layout, and user interaction*), all dependency status evaluation, blocker calculation, and badge/banner formatting logic is extracted into a dedicated helper service:
 - Implement `TaskDependencyPresentationHelper` in `NightCodeForge.Web.Services`.
 - Exposes pure, unit-testable methods:
-  - `IsSuspended(ForgeTask task, IReadOnlyList<int> prerequisiteIds, IReadOnlyList<ForgeTask> allTasks)`
-  - `GetUnclosedBlockers(IReadOnlyList<int> prerequisiteIds, IReadOnlyList<ForgeTask> allTasks)`
-  - `FormatBlockerTooltip(...)`
+  - `GetUnclosedBlockers(ForgeTask task, IReadOnlyList<ForgeTask> allTasks)` (or overload accepting prerequisite IDs)
+  - `IsSuspendedByBlockers(ForgeTask task, IReadOnlyList<ForgeTask> allTasks)`
+  - `HasStalledOrFailedBlocker(ForgeTask task, IReadOnlyList<ForgeTask> allTasks)` (true when any unclosed prerequisite is `Failed`, `WaitingForClarification`, or `Paused`)
+  - `FormatSuspendedBadgeText(IReadOnlyList<ForgeTask> unclosedBlockers)` (e.g., `"⏸️ Blocked on #101"` or `"⏸️ Blocked on #101, #102"`)
+  - `FormatSuspensionBannerText(IReadOnlyList<ForgeTask> unclosedBlockers)`
+- Harden [`BacklogStatusClassifier`](../../src/NightCodeForge.Web/Services/BacklogStatusClassifier.cs) and [`DagLayoutEngine`](../../src/NightCodeForge.Web/Services/DagLayoutEngine.cs) so that an `Open` task with unclosed prerequisites is always classified in the `Open` column / `Blocked` DAG state and never misclassified as `InFlight`.
 
 ### 3.2 Kanban Cards ([`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor))
-- Shows interactive chips:
-  - 🔗 `Prereq: #101` (hover shows title and status; clicking navigates to or opens task drawer for #101).
-  - ⚠️ Amber indicator if an upstream prerequisite failed or is blocked.
-  - ⏸️ **Suspended Badge (`⏸️ Blocked on #101`):** When a task is in `Status == TaskOverallStatus.Open` but has unclosed dependencies, render a distinctive amber/slate suspended pill so developers immediately understand why the card is not currently executing or enqueued in DevQueue.
+- Replace inline `GetBlockers()` logic in `@code` with `TaskDependencyPresentationHelper`.
+- Render interactive prerequisite and blocker indicators:
+  - ⏸️ **Suspended Badge (`⏸️ Blocked on #101`):** When a task is `Open` with unclosed prerequisites, render a distinctive suspended pill naming the blocking task ID(s) so developers immediately understand why the card is waiting in Backlog.
+  - ⚠️ **Upstream Warning Indicator:** Highlight in amber/red if an upstream prerequisite is `Failed`, `WaitingForClarification`, or `Paused`.
+  - 🔗 **Interactive Prerequisite Chips (`🔗 Prereq: #101`):** Clicking a prerequisite chip opens or navigates to that prerequisite task.
 
-### 3.3 Task Detail Drawer ([`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor))
-- Displays "Dependencies & Blockers" card:
-  - Lists **Prerequisite Tasks** (tasks this task depends on) with status pills and completion state.
-  - If any prerequisite is unclosed, displays an alert banner: `⏸️ Task execution is suspended awaiting completion of #101. Worktree will automatically initialize when unblocked.`
-  - Lists **Downstream Blocked Tasks** (tasks waiting on this task).
-  - Quick **Add/Remove Dependency** button linking to [`DependencyLinkingModal.razor`](../../src/NightCodeForge.Web/Components/Backlog/DependencyLinkingModal.razor).
+### 3.3 Task Detail Page ([`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor)) & Task Detail Drawer ([`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor))
+Both the full-page [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) view (used when navigating from [`Backlog.razor`](../../src/NightCodeForge.Web/Components/Pages/Backlog.razor) and [`Tasks.razor`](../../src/NightCodeForge.Web/Components/Pages/Tasks.razor)) and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) already render "Prerequisites" and "Downstream Dependents" sections and open [`DependencyLinkingModal.razor`](../../src/NightCodeForge.Web/Components/Backlog/DependencyLinkingModal.razor). Update both components to:
+- Use `TaskDependencyPresentationHelper` for prerequisite/dependent status resolution.
+- Display a prominent **Suspension Alert Banner** whenever the task is `Open` and has unclosed prerequisites:
+  - `⏸️ Task execution is suspended awaiting completion of #101. Worktree will automatically initialize from the updated base branch when unblocked.`
+  - Include an additional warning callout if any blocking prerequisite is currently `Failed`, `WaitingForClarification`, or `Paused`.
 
 ---
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Dynamic Task Suspension, Branch Cleanup & Workflow Reset:**
-  - [ ] Update [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) upon Stage 1 completion: if newly added dependencies are not `Closed`, suspend execution, reset `task.Status = TaskOverallStatus.Open`, reset `task.CurrentStageId = StandardStageIds.TaskReview`, and execute an immediate early return from `ProcessTaskAsync` without routing to Stage 2.
-  - [ ] Remove task worktree (`RemoveWorktreeAsync`), clean up container (`CleanupTaskContainerAsync`), and delete or reset feature branch `feature/task-{task.Id}` via [`GitWorkspaceManager`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs).
-  - [ ] Verify that the existing DAG unblocking cascade in `TaskOrchestrator.CompleteMergeAsync` re-enqueues the task to rerun from Stage 1 with a fresh worktree branched off the updated base branch once prerequisites reach `Closed`.
+- [ ] **Git & Workspace Preparer Branch Deletion:**
+  - [ ] Add `DeleteTaskBranchAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)` to [`IGitWorkspaceManager`](../../src/NightCodeForge.Core/Interfaces/IGitWorkspaceManager.cs) and implement it in [`GitWorkspaceManager`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs) (`git branch -D feature/task-{taskId}` in canonical clone if branch exists).
+  - [ ] Add `DeleteTaskBranchSafeAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)` to [`ITaskWorkspacePreparer`](../../src/NightCodeForge.Core/Workflow/ITaskWorkspacePreparer.cs) and [`TaskWorkspacePreparer`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs).
+- [ ] **Dynamic Task Suspension & Clean Workflow Reset:**
+  - [ ] Add `GetUnclosedPrerequisiteIdsAsync(int taskId, CancellationToken cancellationToken = default)` to [`ITaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/ITaskMergeAndCascadeCoordinator.cs) and [`TaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs), resolving prerequisite statuses via `_dependencyStore` / `_taskRepository` (never relying on unpopulated `TaskDependency.DependsOnTask` navigation properties).
+  - [ ] Ensure `ITaskDependencyStore` stays synchronized when dependencies are updated during [`TaskMarkdownSyncService.SyncAllTasksFromDiskAsync`](../../src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs) or [`TaskMutationService.UpdateDependenciesAsync`](../../src/NightCodeForge.Web/Services/TaskMutationService.cs).
+  - [ ] Update [`TaskOrchestrator.ProcessTaskAsync`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) after Stage 1 disk sync: if unclosed prerequisites exist, reset `Status = Open`, `CurrentStageId = string.Empty`, `HasExecutionRun = false`, `MaxExecutedStageOrder = 0`, `LastHangfireJobId = null`, and `PipelineDataJson = "{}"`; sync markdown; remove worktree, container, and `feature/task-{id}` branch; and return early with `CohortExitReason.Yielded`.
+  - [ ] Verify that [`TaskMergeAndCascadeCoordinator.CompleteTaskAndCascadeInternalAsync`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs) re-enqueues the suspended task to rerun from Stage 1 on a fresh branch off the updated base branch once all prerequisites reach `Closed`.
 - [ ] **UI Dependency Presentation Helper & Enhancements:**
-  - [ ] Create `TaskDependencyPresentationHelper` in `NightCodeForge.Web.Services` for blocker and suspension state calculations.
-  - [ ] Render prerequisite/downstream chips and `⏸️ Blocked on #X` pill in [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor).
-  - [ ] Add dependency section with suspension banner and link modal in [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
+  - [ ] Create `TaskDependencyPresentationHelper` in `NightCodeForge.Web.Services` and update [`BacklogStatusClassifier`](../../src/NightCodeForge.Web/Services/BacklogStatusClassifier.cs) / [`DagLayoutEngine`](../../src/NightCodeForge.Web/Services/DagLayoutEngine.cs) so blocked `Open` tasks are never shown as `InFlight`.
+  - [ ] Update [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor) to use `TaskDependencyPresentationHelper`, render `⏸️ Blocked on #X` badges, upstream warning indicators, and interactive `🔗 Prereq: #X` chips.
+  - [ ] Update both [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) to use `TaskDependencyPresentationHelper` and display the suspension alert banner when blocked by unclosed prerequisites.
 - [ ] **Tests:**
-  - [ ] Unit tests for `TaskDependencyPresentationHelper`.
-  - [ ] Unit test verifying task suspension and reset: Stage 1 adding unclosed dependency resets task to `Open` / `TaskReview`, deletes stale feature branch, and halts progression.
-  - [ ] Integration test verifying that closing the prerequisite task cascades to re-enqueue the suspended task to execute Stage 1 with a clean branch off the updated base branch.
-
+  - [ ] Unit tests for `TaskDependencyPresentationHelper` and `BacklogStatusClassifier` blocked-task handling.
+  - [ ] Unit tests for `TaskOrchestrator` verifying that Stage 1 adding an unclosed dependency resets the task (`Open`, empty `CurrentStageId`, `HasExecutionRun = false`), deletes the stale feature branch, removes the worktree/container, and halts progression before Stage 2.
+  - [ ] Integration test verifying that closing the prerequisite task via `TaskMergeAndCascadeCoordinator` cascades to re-enqueue the suspended task to execute Stage 1 with a clean branch off the updated base branch.
+  - [ ] bUnit tests for [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor), [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor), and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor) blocker badges and suspension alert banner.

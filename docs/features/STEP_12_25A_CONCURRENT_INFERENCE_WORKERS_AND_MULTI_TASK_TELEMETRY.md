@@ -19,9 +19,9 @@ However, when scaling to **2 or more dedicated Ollama inference servers** (dispa
 2. **Single-Item Active Telemetry APIs in [`IOperationsTelemetryService`](../../src/NightCodeForge.Core/Interfaces/IOperationsTelemetryService.cs):**
    - Although `OperationsTelemetryService` internally stores `_activeTasks[taskId]` in a dictionary and maintains ring buffers of `_llmCalls` and `_shellCommands`, its query methods (`GetActiveTask()`, `GetActiveLlmCall()`, `GetActiveShellCommand()`) only return a single item (`.MaxBy(t => t.StartedAt)` or `.FirstOrDefault(r => r.Status == Running)`).
    - Furthermore, `ClearActiveTask(int? taskId)` broadcasts only a single `remaining` task over SignalR (`ReceiveActiveTask`), causing listeners to lose track of which specific task finished when $N > 1$ tasks are running concurrently.
-3. **SQLite Busy Timeout & `BareHost` Shared-Directory Safety:**
-   - Under $N$ concurrent workers writing conversation turns, checkpoints, and execution logs simultaneously, SQLite connections need an explicit `Default Timeout` / `PRAGMA busy_timeout` so concurrent writes wait cleanly on the WAL lock rather than throwing `SQLITE_BUSY`.
-   - For workspaces configured with `ExecutionMode.BareHost` (which operate directly on `workspace.RepositoryPath` without per-task ext4 worktrees), concurrent tasks in the same `BareHost` workspace must remain serialized at the workspace lock level so two agents never checkout different branches in the same working tree simultaneously.
+3. **SQLite Busy Timeout & `BareHost` Execution Serialization:**
+   - Under $N$ concurrent workers writing conversation turns, checkpoints, and execution logs simultaneously, SQLite connections need an explicit `Default Timeout` / `CommandTimeout` / `PRAGMA busy_timeout` per connection so concurrent writes wait cleanly on the WAL lock rather than throwing `SQLITE_BUSY`.
+   - For workspaces configured with `ExecutionMode.BareHost` (which execute directly on the host filesystem without container or WSL sandbox isolation), concurrent tasks in the same `BareHost` workspace must be serialized at the task-execution lock level (without deadlocking against the non-reentrant canonical Git workspace lock `AcquireLockAsync(workspaceId)`) so two host processes never contend over shared host build artifacts or working tree state simultaneously.
 
 ---
 
@@ -30,9 +30,9 @@ However, when scaling to **2 or more dedicated Ollama inference servers** (dispa
 1. **Configurable `MaxConcurrentInferenceTasks` (`WorkerCount = N`):**
    - Allow configuring the number of concurrent LLM inference workers (`MaxConcurrentInferenceTasks`, default `1`, range `1..16`) in `LlmProviderOptions` (`config/config.json` / `appsettings.json`) and wire it into `HangfireConfigurationExtensions.CreateLlmInferenceServerOptions(int workerCount)` and `AddNightCodeForgeHangfireServers(int inferenceWorkerCount)`.
 2. **Multi-Task & Multi-Operation Telemetry APIs:**
-   - Extend `IOperationsTelemetryService` (`OperationsTelemetryService`) with plural query APIs (`GetActiveTasks()`, `GetActiveLlmCalls()`, `GetActiveShellCommands()`) and task-specific SignalR lifecycle notifications so all $N$ concurrent tasks, LLM calls, and shell commands are tracked without overwriting each other.
-3. **SQLite WAL `busy_timeout` & `BareHost` Mutual Exclusion:**
-   - Guarantee `busy_timeout` (`30,000 ms`) on SQLite connections and enforce workspace-level serialization when a workspace uses `ExecutionMode.BareHost` without isolated task worktrees.
+   - Extend `IOperationsTelemetryService` (`OperationsTelemetryService`) with plural query APIs (`GetActiveTasks()`, `GetActiveLlmCalls()`, `GetActiveShellCommands()`) and multi-task SignalR lifecycle notifications so all $N$ concurrent tasks, LLM calls, and shell commands are tracked without overwriting each other.
+3. **SQLite Per-Connection `busy_timeout` & Deadlock-Free `BareHost` Mutual Exclusion:**
+   - Guarantee a 30-second busy timeout (`Default Timeout=30` / `CommandTimeout(30)`) across all SQLite connections and enforce deadlock-free workspace-scoped task execution serialization when a workspace uses `ExecutionMode.BareHost`.
 
 ---
 
@@ -51,22 +51,26 @@ However, when scaling to **2 or more dedicated Ollama inference servers** (dispa
 
 ### 3.2 Multi-Task & Multi-Operation Telemetry in `IOperationsTelemetryService`
 
-Extend [`IOperationsTelemetryService`](../../src/NightCodeForge.Core/Interfaces/IOperationsTelemetryService.cs) and [`OperationsTelemetryService`](../../src/NightCodeForge.Infrastructure/Telemetry/OperationsTelemetryService.cs):
+Extend [`IOperationsTelemetryService`](../../src/NightCodeForge.Core/Interfaces/IOperationsTelemetryService.cs), [`OperationsTelemetryService`](../../src/NightCodeForge.Infrastructure/Telemetry/OperationsTelemetryService.cs), and [`SignalRActivityBridgeService`](../../src/NightCodeForge.Infrastructure/Hubs/SignalRActivityBridgeService.cs):
 
 1. **Plural Active Snapshot Methods:**
-   - `IReadOnlyList<ActiveTaskSummary> GetActiveTasks()`: returns all currently active autonomous tasks in `_activeTasks.Values`, ordered by `StartedAt` ascending (oldest running first, or consistent chronological order).
-   - `IReadOnlyList<LlmCallRecord> GetActiveLlmCalls()`: returns all records in `_llmCalls` with `Status == LlmCallStatus.Running`, ordered by `StartedAt` ascending.
-   - `IReadOnlyList<ShellCommandRecord> GetActiveShellCommands()`: returns all records in `_shellCommands` with `Status == ShellCommandStatus.Running`, ordered by `StartedAt` ascending.
+   - `IReadOnlyList<ActiveTaskSummary> GetActiveTasks()`: returns all currently active autonomous tasks in `_activeTasks.Values` (filtered by `AutonomousTaskClassifier.IsAutonomousTask`), ordered by `StartedAt` ascending (chronological order of start).
+   - `IReadOnlyList<LlmCallRecord> GetActiveLlmCalls()`: returns all records in `_llmCalls` with `Status == LlmCallStatus.Running`, ordered by `StartTime` ascending.
+   - `IReadOnlyList<ShellCommandRecord> GetActiveShellCommands()`: returns all records in `_shellCommands` with `Status == ShellCommandStatus.Running`, ordered by `StartTime` ascending.
 2. **Task-Specific Clear & SignalR Notification:**
-   - Preserve `GetActiveTask(int? taskId = null)`, `GetActiveLlmCall()`, and `GetActiveShellCommand()` for callers expecting a single primary item.
-   - Add `event Action<IReadOnlyList<ActiveTaskSummary>>? OnActiveTasksChanged;` (or include the full active task list / cleared `taskId` in SignalR broadcasts) so UI consumers can accurately add, update, and remove individual active tasks when $N$ tasks run in parallel.
+   - Preserve `GetActiveTask(int? taskId = null)` (returning the matching `taskId` or `.MaxBy(t => t.StartedAt)`), `GetActiveLlmCall()`, and `GetActiveShellCommand()` for callers expecting a single primary item.
+   - Add `event Action<IReadOnlyList<ActiveTaskSummary>>? OnActiveTasksChanged;` on `IOperationsTelemetryService`, fired whenever `RecordActiveTask` or `ClearActiveTask` mutates the active task set.
+   - In `SignalRActivityBridgeService.DispatchActivityEventAsync`, when handling `StageCompleted`, `Interrupted`, or `Error` for a task while other autonomous tasks remain in `_telemetryService.GetActiveTasks()`, broadcast `ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingActive.TaskId, remainingActive.CurrentStageId, remainingActive.HardwareTarget)` so a paused/interrupted/completed task never transitions global worker status to `WaitingForHuman` or `Idle` while sibling workers are still actively executing.
 
-### 3.3 SQLite `busy_timeout` & `BareHost` Concurrency Guard
+### 3.3 SQLite `busy_timeout` & Deadlock-Free `BareHost` Concurrency Guard
 
-1. **SQLite `busy_timeout`:**
-   - In [`AppDbContext.EnsureDatabaseCreatedAndWalAsync`](../../src/NightCodeForge.Infrastructure/Data/AppDbContext.cs) and SQLite connection initialization, ensure `PRAGMA busy_timeout = 30000;` (and `Default Timeout=30` in `NormalizeSqliteConnectionString`) is configured so $N$ concurrent workers never fail with `SQLITE_BUSY` during simultaneous turn/checkpoint writes.
-2. **`BareHost` Workspace Serialization:**
-   - In `TaskOrchestrator.ProcessTaskAsync`, if `workspace.ExecutionMode == ExecutionMode.BareHost` (where tasks share `workspace.RepositoryPath` rather than per-task worktrees under `~/.nightcodeforge/wks/{id}/worktrees/task-{taskId}`), acquire the workspace-level lock (`_workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken)`) for the task run so two `BareHost` tasks in the same workspace never clobber the shared git working tree. Workspaces using `WslDirect` or `ContainerSandbox` continue using fine-grained per-task locks (`AcquireTaskLockAsync`) for full parallel execution.
+1. **SQLite Per-Connection `busy_timeout`:**
+   - Because `PRAGMA busy_timeout` in SQLite is per-connection rather than persisted in the database header like `PRAGMA journal_mode = WAL`, ensure `Default Timeout=30` is appended in `NormalizeSqliteConnectionString` (for connections that support connection string keywords) and `CommandTimeout(30)` is configured on `UseSqlite(...)` in [`ServiceCollectionExtensions.AddNightCodeForgeCoreAndInfrastructure`](../../src/NightCodeForge.Infrastructure/ServiceCollectionExtensions.cs) (in addition to `PRAGMA busy_timeout = 30000;` in [`AppDbContext.EnsureDatabaseCreatedAndWalAsync`](../../src/NightCodeForge.Infrastructure/Data/AppDbContext.cs)) so all `IDbContextFactory<AppDbContext>` connections wait up to 30s on WAL write locks without throwing `SQLITE_BUSY`.
+   - Ensure `HangfireConfigurationExtensions.AddNightCodeForgeHangfire` continues extracting the `Data Source` file path cleanly when `Default Timeout=30` is present in `hangfireConnection`.
+2. **Deadlock-Free `BareHost` Task Execution Serialization:**
+   - Note that [`WorkspaceLockProvider.AcquireLockAsync(workspaceId)`](../../src/NightCodeForge.Core/Concurrency/WorkspaceLockProvider.cs) is non-reentrant and is acquired internally during `ProcessTaskAsync` by [`TaskWorkspacePreparer.PrepareTaskBranchAndMirrorAsync`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs) and auto-merge (`CompleteTaskAndCascadeInternalAsync`). Holding `AcquireLockAsync(workspaceId)` across `ProcessTaskAsync` would self-deadlock.
+   - Instead, when `workspace.ExecutionMode == ExecutionMode.BareHost`, serialize task execution per workspace using a dedicated task-execution lock key (e.g., acquiring the task lock on a shared workspace-wide sentinel key `taskId: 0` via `AcquireTaskLockAsync(workspace.Id, 0, cancellationToken)` in `TaskOrchestrator` / `TaskWorkspacePreparer`, or an equivalent workspace-scoped execution semaphore) that is orthogonal to the canonical Git lock `AcquireLockAsync(workspace.Id)`.
+   - Workspaces using `WslDirect` or `ContainerSandbox` continue acquiring per-task locks (`AcquireTaskLockAsync(workspace.Id, task.Id, cancellationToken)`) for full parallel execution across $N$ workers.
 
 ---
 
