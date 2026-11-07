@@ -24,6 +24,7 @@ public class TestCanonicalToolsBuilder
     public int? WorkspaceId { get; set; }
     public int? TaskId { get; set; }
     public bool IsReadOnly { get; set; }
+    public int? MaxReadFileBytes { get; set; }
 
     public static CanonicalTools Create(
         string workspaceRoot,
@@ -33,7 +34,8 @@ public class TestCanonicalToolsBuilder
         IWorkspaceSkillsService? skillsService = null,
         bool isReadOnly = false,
         int? workspaceId = null,
-        int? taskId = null) =>
+        int? taskId = null,
+        int? maxReadFileBytes = null) =>
         new TestCanonicalToolsBuilder
         {
             WorkspaceRoot = workspaceRoot,
@@ -43,7 +45,8 @@ public class TestCanonicalToolsBuilder
             SkillsService = skillsService,
             IsReadOnly = isReadOnly,
             WorkspaceId = workspaceId,
-            TaskId = taskId
+            TaskId = taskId,
+            MaxReadFileBytes = maxReadFileBytes
         }.Build();
 
     public CanonicalTools Build()
@@ -57,7 +60,7 @@ public class TestCanonicalToolsBuilder
             NullLogger<WorkspaceSkillsService>.Instance);
 
         return new(
-            new CanonicalToolScope(WorkspaceRoot, WorkspaceId, TaskId, BuildTimeoutSeconds, TestTimeoutSeconds, IsReadOnly),
+            new CanonicalToolScope(WorkspaceRoot, WorkspaceId, TaskId, BuildTimeoutSeconds, TestTimeoutSeconds, IsReadOnly, MaxReadFileBytes),
             PathResolver,
             ExecutionEnv,
             EditorConfigService,

@@ -22,6 +22,7 @@ public static class WorkflowDefaults
     public const int MaxInlineReviewDiffChars = 20000;
     public const int MaxWebSearchResultInlineChars = 3000;
     public const int MaxWebSearchTotalInlineChars = 12000;
+    public const int MaxReadFileBytes = 100 * 1024;
 
     /// <summary>
     /// Tail-truncates stage output if it exceeds <see cref="MaxStageOutputChars"/> to prevent DataBag bloat.

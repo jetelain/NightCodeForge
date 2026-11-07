@@ -54,6 +54,7 @@ public partial class CanonicalTools
     private readonly int? _buildTimeoutSeconds;
     private readonly int? _testTimeoutSeconds;
     private readonly bool _isReadOnly;
+    private readonly int _maxReadFileBytes;
     private readonly ILogger<CanonicalTools> _logger;
 
     public CanonicalTools(
@@ -85,11 +86,17 @@ public partial class CanonicalTools
         _workspaceId = scope.WorkspaceId;
         _taskId = (scope.TaskId.HasValue && scope.TaskId.Value > 0) ? scope.TaskId.Value : null;
         _isReadOnly = scope.IsReadOnly;
+        if (scope.MaxReadFileBytes.HasValue && scope.MaxReadFileBytes.Value <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(scope), scope.MaxReadFileBytes.Value, "MaxReadFileBytes must be greater than zero.");
+        }
+        _maxReadFileBytes = scope.MaxReadFileBytes ?? WorkflowDefaults.MaxReadFileBytes;
     }
 
     public IWebSearchService WebSearchService => _webSearchService;
     public bool IsWebSearchConfigured => _webSearchService.IsConfigured;
     public IWorkspaceSkillsService SkillsService => _skillsService;
+    public int MaxReadFileBytes => _maxReadFileBytes;
 
     public string ResolveFullPath(string path)
     {
@@ -206,6 +213,7 @@ public partial class CanonicalTools
 
     /// <summary>
     /// read: Read file contents with line slicing via 1-indexed offset and limit.
+    /// Output is capped to <see cref="MaxReadFileBytes"/> to avoid overflowing context.
     /// </summary>
     public async Task<string> ReadAsync(string path, int? offset = null, int? limit = null, CancellationToken cancellationToken = default)
     {
@@ -238,14 +246,7 @@ public partial class CanonicalTools
         int count = limit.HasValue ? Math.Max(1, limit.Value) : lines.Length - startIndex;
         var selectedLines = lines.Skip(startIndex).Take(count).ToList();
 
-        var sb = new StringBuilder();
-        for (int i = 0; i < selectedLines.Count; i++)
-        {
-            int lineNum = startLine + i;
-            sb.AppendLine($"{lineNum,5} | {selectedLines[i]}");
-        }
-
-        return sb.ToString().TrimEnd();
+        return ReadOutputFormatter.FormatCapped(selectedLines, startLine, lines.Length, _maxReadFileBytes);
     }
 
     /// <summary>

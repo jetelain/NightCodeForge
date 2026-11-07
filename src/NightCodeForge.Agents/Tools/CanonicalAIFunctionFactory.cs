@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Workflow;
 using Pmad.AI.Tools;
 
 namespace NightCodeForge.Agents.Tools;
@@ -74,6 +75,7 @@ public static class CanonicalAIFunctionFactory
     /// </summary>
     public static IReadOnlyList<AIFunction> CreateAllCanonicalFunctions(CanonicalTools? tools = null)
     {
+        int capKb = (tools?.MaxReadFileBytes ?? WorkflowDefaults.MaxReadFileBytes) / 1024;
         return new List<AIFunction>
         {
             AIFunctionFactory.Create(
@@ -85,7 +87,7 @@ public static class CanonicalAIFunctionFactory
                         ? tools.ReadAsync(path, offset, limit, ct)
                         : throw new InvalidOperationException(MissingToolsInstanceMessage),
                 CanonicalToolNames.Read,
-                "Reads a file with line numbers and optional line-based pagination."),
+                $"Reads a file with line numbers and optional line-based pagination. Output is capped to {capKb} KB to avoid overflowing context; use offset and limit to page through large files."),
 
             AIFunctionFactory.Create(
                 async ([Description("Workspace-relative path to write")] string path,

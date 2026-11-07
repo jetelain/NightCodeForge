@@ -18,7 +18,8 @@ public sealed record CanonicalToolScope(
     int? TaskId = null,
     int? BuildTimeoutSeconds = null,
     int? TestTimeoutSeconds = null,
-    bool IsReadOnly = false);
+    bool IsReadOnly = false,
+    int? MaxReadFileBytes = null);
 
 /// <summary>Everything the toolset factory needs to assemble the tools of one agent session.</summary>
 public sealed record CanonicalToolsetRequest(
