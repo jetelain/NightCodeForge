@@ -202,7 +202,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
     /// <summary>
     /// Arms a one-shot cold-cache resumption compaction gate. When armed, the strategy will compact
-    /// before the next LLM call if the restored history meets or exceeds the cold-resume threshold (&lt; 64k ceiling),
+    /// before the next LLM call if the restored history meets or exceeds the cold-resume threshold (128k ceiling),
     /// even when total tokens are still below the warm-cache <see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>.
     /// </summary>
     public void ArmColdResumeCompaction()
@@ -234,28 +234,28 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             : triggerCeiling;
     }
 
-    private static int GetColdResumeThresholdTokens(CrucibleCompactionOptions options)
+    public static int GetColdResumeThresholdTokens(CrucibleCompactionOptions options)
     {
-        int maxCompacted = options.MaxCompactedContextTokens > 0
-            ? options.MaxCompactedContextTokens
-            : CrucibleCompactionOptions.DefaultMaxCompactedContextTokens;
-        int coldCeiling = Math.Min(maxCompacted, CrucibleCompactionOptions.DefaultColdResumeThresholdTokens);
-        return Math.Min(GetWindowCeilingTokens(options), coldCeiling);
+        ArgumentNullException.ThrowIfNull(options);
+        int coldThreshold = options.ColdResumeThresholdTokens > 0
+            ? options.ColdResumeThresholdTokens
+            : CrucibleCompactionOptions.DefaultColdResumeThresholdTokens;
+        return Math.Min(GetWindowCeilingTokens(options), coldThreshold);
     }
 
-    private static int GetEffectiveCompactedCeilingTokens(CrucibleCompactionOptions options)
+    public static int GetEffectiveCompactedCeilingTokens(CrucibleCompactionOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
         int maxCompacted = options.MaxCompactedContextTokens > 0
             ? options.MaxCompactedContextTokens
             : CrucibleCompactionOptions.DefaultMaxCompactedContextTokens;
-        int coldCeiling = Math.Min(maxCompacted, CrucibleCompactionOptions.DefaultColdResumeThresholdTokens);
-        return Math.Min(GetWindowCeilingTokens(options), coldCeiling);
+        return Math.Min(GetWindowCeilingTokens(options), maxCompacted);
     }
 
     /// <summary>
     /// Evaluates whether the conversation index requires compaction based on the projected prompt token count
     /// for the next LLM request (<see cref="CalculateProjectedPromptTokens(CompactionMessageIndex)"/> &gt; <see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>),
-    /// or when a cold-cache resumption gate is armed and the context meets or exceeds the 64k ceiling.
+    /// or when a cold-cache resumption gate is armed and the context meets or exceeds the cold-resume threshold (128k ceiling).
     /// </summary>
     public bool ShouldCompact(CompactionMessageIndex index) =>
         ShouldCompact(index, _options, _measurementState);
@@ -282,7 +282,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
                 return true;
             }
 
-            // Below 64k on cold resume: disarm and resume directly without redundant compaction.
+            // Below cold-resume threshold on resume: disarm and resume directly without redundant compaction.
             DisarmColdResumeCompaction(measurementState);
         }
 
@@ -625,7 +625,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         }
         var fileOpsXml = fileTracker.FormatFileOperationsXml();
 
-        // 5. Pre-Serialize Messages to Text with Clamped Tool Results & < 60k Summarizer Token Budget
+        // 5. Pre-Serialize Messages to Text with Clamped Tool Results & 96k Summarizer Token Budget
         var messagesToSummarize = groupsToSummarize.SelectMany(g => g.Messages).ToList();
         int maxSummarizerTokens = _options.MaxSummarizerInputTokens > 0
             ? _options.MaxSummarizerInputTokens
@@ -692,7 +692,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
         index.InsertGroup(anchorEndIndex + 1, CompactionGroupKind.Summary, new[] { summaryMessage }, null);
 
-        // 9. Enforce Post-Compaction < 64k Token Ceiling on active included context
+        // 9. Enforce Post-Compaction 96k Token Ceiling on active included context
         EnforcePostCompactionTokenCeiling(groups, anchorEndIndex + 1, estimator, effectiveLogger);
 
         sw.Stop();

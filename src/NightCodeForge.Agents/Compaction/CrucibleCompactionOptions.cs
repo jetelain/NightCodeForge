@@ -10,8 +10,8 @@ public sealed class CrucibleCompactionOptions
     /// <summary>Default token headroom reserved for model reasoning and generation.</summary>
     public const int DefaultReserveTokens = 8192;
 
-    /// <summary>Default recent context budget preserved verbatim without summarization.</summary>
-    public const int DefaultKeepRecentTokens = 16384;
+    /// <summary>Default recent context budget preserved verbatim without summarization (32k tokens).</summary>
+    public const int DefaultKeepRecentTokens = 32768;
 
     /// <summary>Maximum characters retained per tool result during summarization serialization.</summary>
     public const int DefaultToolResultMaxChars = 2000;
@@ -40,14 +40,14 @@ public sealed class CrucibleCompactionOptions
     /// <summary>Maximum character length for individual tool results before emergency clamping triggers.</summary>
     public const int DefaultEmergencyToolResultMaxChars = 8000;
 
-    /// <summary>Default hard ceiling on post-compaction active context size (64k tokens).</summary>
-    public const int DefaultMaxCompactedContextTokens = 65536;
+    /// <summary>Default hard ceiling on post-compaction active context size (96k tokens).</summary>
+    public const int DefaultMaxCompactedContextTokens = 98304;
 
-    /// <summary>Default cold-cache resumption compaction threshold (64,000 tokens).</summary>
-    public const int DefaultColdResumeThresholdTokens = 64000;
+    /// <summary>Default cold-cache resumption compaction threshold (128k tokens).</summary>
+    public const int DefaultColdResumeThresholdTokens = 131072;
 
-    /// <summary>Default hard ceiling on total summarizer LLM prompt tokens (60,000 tokens).</summary>
-    public const int DefaultMaxSummarizerInputTokens = 60000;
+    /// <summary>Default hard ceiling on total summarizer LLM prompt tokens (96,000 tokens).</summary>
+    public const int DefaultMaxSummarizerInputTokens = 96000;
 
     /// <summary>Token budget reserved for the summarizer system prompt, previous summary, and XML template overhead.</summary>
     public const int SummarizerPromptOverheadReserveTokens = 4000;
@@ -113,14 +113,20 @@ public sealed class CrucibleCompactionOptions
     public int ToolResultMaxChars { get; set; } = DefaultToolResultMaxChars;
 
     /// <summary>
-    /// Hard ceiling on post-compaction active context size and cold-cache resumption prefill (defaults to 65,536 / 64k tokens).
+    /// Hard ceiling on post-compaction active context size (defaults to 98,304 / 96k tokens).
     /// Does not lower warm-cache TriggerThresholdTokens during normal in-memory execution.
     /// </summary>
     public int MaxCompactedContextTokens { get; set; } = DefaultMaxCompactedContextTokens;
 
     /// <summary>
+    /// Threshold on restored session tokens at or above which cold-cache resumption triggers compaction
+    /// before the first resumed LLM call (defaults to 131,072 / 128k tokens).
+    /// </summary>
+    public int ColdResumeThresholdTokens { get; set; } = DefaultColdResumeThresholdTokens;
+
+    /// <summary>
     /// Hard ceiling on total summarizer LLM prompt tokens (System + &lt;conversation&gt; + &lt;previous-summary&gt; + instructions).
-    /// Defaults to 60,000 tokens so summarization calls remain strictly below 64k tokens.
+    /// Defaults to 96,000 tokens so summarization calls remain bounded while preserving full warm-window history.
     /// </summary>
     public int MaxSummarizerInputTokens { get; set; } = DefaultMaxSummarizerInputTokens;
 

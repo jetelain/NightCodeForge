@@ -1760,6 +1760,107 @@ public class TaskOrchestratorTests
         Assert.True(reloadedTask2.IsDeferredByPause);
     }
 
+    [Fact]
+    public async Task ProcessTaskAsync_BareHostWorkspace_WhenSecondTaskCancelledWhileWaitingForBareHostLock_AbortsSecondTaskWithoutExecutingStage()
+    {
+        var ws = new Workspace
+        {
+            Id = 2004,
+            Name = "BareHost-CancelWhileWaiting",
+            RepositoryPath = "/repo/barehost-cancel",
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost
+        };
+        await _workspaceRepo.CreateAsync(ws);
+
+        var task1 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 403,
+            WorkspaceId = ws.Id,
+            Title = "BareHost Running Task",
+            Description = "Detailed task specification 403",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage",
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        var task2 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 404,
+            WorkspaceId = ws.Id,
+            Title = "BareHost Cancelled Waiting Task",
+            Description = "Detailed task specification 404",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage",
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        _depStore.AddTask(task1.Id, ws.Id, TaskOverallStatus.Open);
+        _depStore.AddTask(task2.Id, ws.Id, TaskOverallStatus.Open);
+
+        var task1EnteredStage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTask1Stage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executedTasks = new List<int>();
+
+        var reviewStage = new TestWorkflowStage("test-stage", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.TaskReview,
+            Handler = async (ctx, ct) =>
+            {
+                lock (executedTasks)
+                {
+                    executedTasks.Add(ctx.ForgeTask.Id);
+                }
+
+                if (ctx.ForgeTask.Id == task1.Id)
+                {
+                    task1EnteredStage.TrySetResult();
+                    await releaseTask1Stage.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+                }
+
+                return StageExecutionResult.Success();
+            }
+        };
+        var nextTierStage = new TestWorkflowStage("next-tier-stage", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.Implementation
+        };
+
+        var builder = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[] { reviewStage, nextTierStage }))
+        };
+
+        var orchestrator1 = builder.Build();
+        var orchestrator2 = builder.Build();
+
+        var run1 = orchestrator1.ProcessTaskAsync(task1.Id);
+        await task1EnteredStage.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var run2 = orchestrator2.ProcessTaskAsync(task2.Id);
+        await Task.Delay(50);
+
+        // Task 2 is cancelled in the database while waiting on the BareHost sentinel execution lock
+        var dbTask2 = await _taskRepo.GetByIdAsync(task2.Id);
+        Assert.NotNull(dbTask2);
+        dbTask2.Status = TaskOverallStatus.Cancelled;
+        await _taskRepo.UpdateAsync(dbTask2);
+
+        releaseTask1Stage.TrySetResult();
+        await Task.WhenAll(run1, run2);
+
+        Assert.Equal(new[] { task1.Id }, executedTasks);
+        var finalTask2 = await _taskRepo.GetByIdAsync(task2.Id);
+        Assert.NotNull(finalTask2);
+        Assert.Equal(TaskOverallStatus.Cancelled, finalTask2.Status);
+    }
+
     [Theory]
     [InlineData(1, 1)]
     [InlineData(4, 4)]

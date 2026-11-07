@@ -1,6 +1,6 @@
 # Step 12.25A — Configurable $N$-Worker LLM Inference Concurrency & Multi-Task Telemetry
 
-**Status:** Planned (Feature / Multi-Server & Multi-GPU Scaling)
+**Status:** Completed (Feature / Multi-Server & Multi-GPU Scaling)
 
 ---
 

@@ -707,7 +707,11 @@ public class OperationsTelemetryUiService : IDisposable
                 {
                     var existing = _activeTasks.FirstOrDefault(t => t.TaskId == activeTaskId.Value);
                     taskSummary = existing != null
-                        ? existing with { CurrentStageId = stageId ?? existing.CurrentStageId, HardwareTarget = hardwareTarget }
+                        ? existing with
+                        {
+                            CurrentStageId = stageId ?? existing.CurrentStageId,
+                            HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? existing.HardwareTarget : hardwareTarget
+                        }
                         : new ActiveTaskSummary(
                             activeTaskId.Value,
                             $"Task #{activeTaskId.Value}",
@@ -739,11 +743,19 @@ public class OperationsTelemetryUiService : IDisposable
                 {
                     if (_activeTasks[i].TaskId == ActiveTask.TaskId)
                     {
-                        _activeTasks[i] = _activeTasks[i] with { CurrentStageId = stageId, HardwareTarget = hardwareTarget };
+                        _activeTasks[i] = _activeTasks[i] with
+                        {
+                            CurrentStageId = stageId,
+                            HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _activeTasks[i].HardwareTarget : hardwareTarget
+                        };
                     }
                 }
                 ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
-                ActiveTask = ActiveTask with { CurrentStageId = stageId, HardwareTarget = hardwareTarget };
+                ActiveTask = ActiveTask with
+                {
+                    CurrentStageId = stageId,
+                    HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? ActiveTask.HardwareTarget : hardwareTarget
+                };
             }
         }
         NotifyStateChanged();

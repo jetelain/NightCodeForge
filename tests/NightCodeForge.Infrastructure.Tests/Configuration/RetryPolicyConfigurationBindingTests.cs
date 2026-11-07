@@ -276,5 +276,83 @@ public class RetryPolicyConfigurationBindingTests : IDisposable
         Assert.True(opsOptions.ReclaimVramOnPause);
         Assert.True(opsOptions.ShouldReclaimVramOnPause);
     }
+
+    [Fact]
+    public void AddNightCodeForgeCoreAndInfrastructure_BindsRetryPolicyAndLlmRetryPolicy_FromConfiguration()
+    {
+        var json = """
+        {
+          "RetryPolicy": {
+            "MaxRetries": 6,
+            "BaseDelaySeconds": 2.0
+          },
+          "LlmRetryPolicy": {
+            "MaxRetries": 35,
+            "MaxRetryDurationSeconds": 1200.0
+          }
+        }
+        """;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json)))
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddNightCodeForgeCoreAndInfrastructure();
+
+        using var sp = services.BuildServiceProvider();
+        var retryOptions = sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value;
+        var llmRetryOptions = sp.GetRequiredService<IOptions<LlmRetryPolicyOptions>>().Value;
+
+        Assert.Equal(6, retryOptions.MaxRetries);
+        Assert.Equal(TimeSpan.FromSeconds(2.0), retryOptions.BaseDelay);
+        Assert.Equal(35, llmRetryOptions.MaxRetries);
+        Assert.Equal(TimeSpan.FromSeconds(1200.0), llmRetryOptions.MaxRetryDuration);
+    }
+
+    [Fact]
+    public void AddNightCodeForgeCoreAndInfrastructure_WhenOptionsConfiguredBeforeRegistration_ExplicitConfigureOverridesConfiguration()
+    {
+        var json = """
+        {
+          "OperationsControl": {
+            "ReclaimVramOnPause": true
+          },
+          "RetryPolicy": {
+            "MaxRetries": 3
+          },
+          "LlmRetryPolicy": {
+            "MaxRetries": 20
+          }
+        }
+        """;
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json)))
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.Configure<NightCodeForge.Core.Services.OperationsControlOptions>(o => o.ReclaimVramOnPause = false);
+        services.Configure<RetryPolicyOptions>(o => o.MaxRetries = 9);
+        services.Configure<LlmRetryPolicyOptions>(o => o.MaxRetries = 45);
+        services.AddNightCodeForgeCoreAndInfrastructure();
+
+        using var sp = services.BuildServiceProvider();
+        var opsOptions = sp.GetRequiredService<IOptions<NightCodeForge.Core.Services.OperationsControlOptions>>().Value;
+        var retryOptions = sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value;
+        var llmRetryOptions = sp.GetRequiredService<IOptions<LlmRetryPolicyOptions>>().Value;
+
+        Assert.False(opsOptions.ReclaimVramOnPause);
+        Assert.Equal(9, retryOptions.MaxRetries);
+        Assert.Equal(45, llmRetryOptions.MaxRetries);
+
+        // Calling BindConfigurationSectionAsDefault repeatedly must not insert duplicate IConfigureOptions descriptors
+        int countBefore = services.Count(d => d.ServiceType == typeof(IConfigureOptions<RetryPolicyOptions>));
+        NightCodeForge.Infrastructure.Resilience.HttpClientBuilderExtensions.BindConfigurationSectionAsDefault<RetryPolicyOptions>(services, RetryPolicyOptions.SectionName);
+        int countAfter = services.Count(d => d.ServiceType == typeof(IConfigureOptions<RetryPolicyOptions>));
+        Assert.Equal(countBefore, countAfter);
+    }
 }
 

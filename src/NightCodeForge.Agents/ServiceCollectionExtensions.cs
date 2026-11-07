@@ -34,18 +34,8 @@ public static class ServiceCollectionExtensions
         // 1. Streaming & Realtime Telemetry
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
-        services.AddOptions<RetryPolicyOptions>()
-            .Configure<IServiceProvider>((options, sp) =>
-            {
-                var config = sp.GetService<IConfiguration>();
-                config?.GetSection(RetryPolicyOptions.SectionName).Bind(options);
-            });
-        services.AddOptions<LlmRetryPolicyOptions>()
-            .Configure<IServiceProvider>((options, sp) =>
-            {
-                var config = sp.GetService<IConfiguration>();
-                config?.GetSection(LlmRetryPolicyOptions.SectionName).Bind(options);
-            });
+        services.BindConfigurationSectionAsDefault<RetryPolicyOptions>(RetryPolicyOptions.SectionName);
+        services.BindConfigurationSectionAsDefault<LlmRetryPolicyOptions>(LlmRetryPolicyOptions.SectionName);
 
         // 2. Canonical Tools & Context Services
         services.TryAddSingleton<IEditorConfigService, EditorConfigService>();

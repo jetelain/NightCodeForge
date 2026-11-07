@@ -420,6 +420,97 @@ public class CrucibleTransientRetryTests : IDisposable
         Assert.Equal(TimeSpan.FromSeconds(900.0), llmRetryOptions.MaxRetryDuration);
     }
 
+    [Fact]
+    public void AddNightCodeForgeAgents_WhenConfigureCalledBeforeAddNightCodeForgeAgents_ExplicitConfigureOverridesConfiguration()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["RetryPolicy:MaxRetries"] = "3",
+                ["LlmRetryPolicy:MaxRetries"] = "20"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
+        services.Configure<RetryPolicyOptions>(o => o.MaxRetries = 11);
+        services.Configure<LlmRetryPolicyOptions>(o => o.MaxRetries = 55);
+        services.AddNightCodeForgeAgents(LlmProviderType.OllamaRouter);
+
+        using var sp = services.BuildServiceProvider();
+        var retryOptions = sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value;
+        var llmRetryOptions = sp.GetRequiredService<IOptions<LlmRetryPolicyOptions>>().Value;
+
+        Assert.Equal(11, retryOptions.MaxRetries);
+        Assert.Equal(55, llmRetryOptions.MaxRetries);
+    }
+
+    [Fact]
+    public async Task OllamaRouterChatClientFactory_BroadcastRetryNotice_WhenMultipleTasksActive_ResolvesStageFromMatchingTaskId()
+    {
+        var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        var opsControlMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsControlService>();
+        var task101 = new NightCodeForge.Core.Workflow.ActiveTaskSummary(101, "Task 101", "Implementation", 1, "default", DateTime.UtcNow.AddMinutes(-5), "Node-A");
+        var task102 = new NightCodeForge.Core.Workflow.ActiveTaskSummary(102, "Task 102", "CodeReview", 1, "default", DateTime.UtcNow.AddMinutes(-1), "Node-B");
+        telemetryMock.Setup(t => t.GetActiveTask(null)).Returns(task102);
+        telemetryMock.Setup(t => t.GetActiveTask(101)).Returns(task101);
+        telemetryMock.Setup(t => t.GetActiveTask(102)).Returns(task102);
+
+        string? capturedStageId = null;
+        int? capturedTaskId = null;
+        telemetryMock
+            .Setup(t => t.RecordLlmCallRetry(
+                Moq.It.IsAny<RetryNotificationContext>(),
+                Moq.It.IsAny<int?>(),
+                Moq.It.IsAny<string?>(),
+                Moq.It.IsAny<string?>()))
+            .Callback<RetryNotificationContext, int?, string?, string?>((_, taskId, stageId, _) =>
+            {
+                capturedTaskId = taskId;
+                capturedStageId = stageId;
+            });
+
+        AgentActivityEvent? capturedEvent = null;
+        var streamer = new CallbackStreamer(evt => capturedEvent = evt);
+        using var factory = new NightCodeForge.Agents.Inference.OllamaRouterChatClientFactory(
+            Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Agents.Inference.LlmProviderOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
+            telemetryMock.Object,
+            opsControlMock.Object,
+            TimeProvider.System,
+            Microsoft.Extensions.Options.Options.Create(new LlmRetryPolicyOptions()),
+            streamer);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:11434/api/chat");
+        request.Headers.Add(NightCodeForge.Agents.Inference.LlmCorrelationHeaders.TaskId, "101");
+
+        var retryCtx = new RetryNotificationContext(
+            request.RequestUri,
+            request.Method,
+            request.Headers,
+            Attempt: 1,
+            MaxRetries: 20,
+            Delay: TimeSpan.FromSeconds(2),
+            ElapsedDuration: TimeSpan.FromSeconds(2),
+            MaxDuration: TimeSpan.FromMinutes(30),
+            ErrorMessage: "HTTP 503",
+            StatusCode: System.Net.HttpStatusCode.ServiceUnavailable);
+
+        // Invoke protected BroadcastRetryNoticeAsync on LlmChatClientFactoryBase via reflection to verify correlation resolution
+        var method = typeof(NightCodeForge.Agents.Inference.LlmChatClientFactoryBase)
+            .GetMethod("BroadcastRetryNoticeAsync", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var task = (Task?)method.Invoke(factory, new object?[] { retryCtx, null, CancellationToken.None });
+        Assert.NotNull(task);
+        await task;
+
+        Assert.Equal(101, capturedTaskId);
+        Assert.Equal("Implementation", capturedStageId);
+        Assert.NotNull(capturedEvent);
+        Assert.Equal(101, capturedEvent.TaskId);
+        Assert.Equal("Implementation", capturedEvent.StageId);
+    }
+
     private sealed class CallbackStreamer(Action<AgentActivityEvent> onEvent) : IAgentActivityStreamer
     {
         public Task BroadcastAsync(AgentActivityEvent activityEvent, CancellationToken cancellationToken = default)

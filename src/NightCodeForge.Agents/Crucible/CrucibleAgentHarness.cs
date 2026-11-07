@@ -296,16 +296,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
             };
 
             // Cold-Cache Compaction Gate on Session Resumption (§3.2.3):
-            // When resuming an existing conversation whose restored history meets or exceeds the 64k ceiling,
+            // When resuming an existing conversation whose restored history meets or exceeds the cold-resume ceiling,
             // arm one-shot compaction before the first resumed LLM call to avoid multi-minute cold prompt prefill.
             if (conversationState.IsResumedConversation)
             {
                 int restoredTokens = ModelCalibratedTokenEstimator.EstimateMessagesTokens(chatHistory, setup.EffectiveModelId);
-                int coldResumeThreshold = Math.Min(
-                    piStrategy.Options.MaxCompactedContextTokens > 0
-                        ? piStrategy.Options.MaxCompactedContextTokens
-                        : CrucibleCompactionOptions.DefaultMaxCompactedContextTokens,
-                    CrucibleCompactionOptions.DefaultColdResumeThresholdTokens);
+                int coldResumeThreshold = PiStyleCrucibleCompactionStrategy.GetColdResumeThresholdTokens(piStrategy.Options);
 
                 if (restoredTokens >= coldResumeThreshold)
                 {

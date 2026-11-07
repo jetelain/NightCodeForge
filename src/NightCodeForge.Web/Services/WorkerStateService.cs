@@ -46,7 +46,9 @@ public record WorkerStatusSnapshot(
             }
             : Array.Empty<ActiveTaskSummary>());
     public int ActiveTaskCount => ActiveTasks.Count;
-    public int ConfiguredWorkerCount { get; init; } = ConfiguredWorkerCount <= 0 ? 1 : Math.Clamp(ConfiguredWorkerCount, 1, 16);
+    public int ConfiguredWorkerCount { get; init; } = ConfiguredWorkerCount <= 0
+        ? LlmProviderOptions.MinConcurrentInferenceTasks
+        : Math.Clamp(ConfiguredWorkerCount, LlmProviderOptions.MinConcurrentInferenceTasks, LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
 }
 
 /// <summary>
@@ -65,7 +67,10 @@ public class WorkerStateService : IWorkerStateService, IDisposable
     public IReadOnlyList<int> ActiveTaskIds => Current.ActiveTasks.Select(t => t.TaskId).ToList();
     public IReadOnlyList<ActiveTaskSummary> ActiveTasks => Current.ActiveTasks;
     public int ActiveTaskCount => Current.ActiveTaskCount;
-    public int ConfiguredWorkerCount => Math.Clamp(_llmOptions.Value?.MaxConcurrentInferenceTasks ?? 1, 1, 16);
+    public int ConfiguredWorkerCount => Math.Clamp(
+        _llmOptions.Value?.MaxConcurrentInferenceTasks ?? LlmProviderOptions.MinConcurrentInferenceTasks,
+        LlmProviderOptions.MinConcurrentInferenceTasks,
+        LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
     public bool IsRunning => Current.Status == WorkerExecutionStatus.Running;
     public ModelPreloadTelemetryRecord? LatestModelPreload => _telemetryService.GetLatestModelPreload();
 
@@ -136,6 +141,39 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         return activeTasks;
     }
 
+    private List<ActiveTaskSummary> ReconcileTelemetryTasksWithCurrent(bool fallbackToCurrentActiveTasks)
+    {
+        var activeTasks = GetTelemetryActiveTasks();
+        if (activeTasks.Count > 0)
+        {
+            for (int i = 0; i < activeTasks.Count; i++)
+            {
+                var teleTask = activeTasks[i];
+                var teleStageChanged = !_lastTelemetryStageByTask.TryGetValue(teleTask.TaskId, out var prevTeleStage) ||
+                    !string.Equals(teleTask.CurrentStageId, prevTeleStage, StringComparison.OrdinalIgnoreCase);
+                _lastTelemetryStageByTask[teleTask.TaskId] = teleTask.CurrentStageId;
+
+                if (!teleStageChanged)
+                {
+                    var currentMatch = _current.ActiveTasks.FirstOrDefault(t => t.TaskId == teleTask.TaskId);
+                    if (currentMatch != null)
+                    {
+                        activeTasks[i] = currentMatch;
+                    }
+                }
+            }
+
+            return activeTasks;
+        }
+
+        if (fallbackToCurrentActiveTasks && _current.Status == WorkerExecutionStatus.Running && _current.ActiveTasks.Count > 0)
+        {
+            return _current.ActiveTasks.ToList();
+        }
+
+        return activeTasks;
+    }
+
     public static string FormatRunningStatusLabel(WorkerStatusSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -160,6 +198,11 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                 .Where(AutonomousTaskClassifier.IsAutonomousTask)
                 .OrderBy(t => t.StartedAt)
                 .ToList();
+
+            foreach (var t in validTasks)
+            {
+                _lastTelemetryStageByTask[t.TaskId] = t.CurrentStageId;
+            }
 
             if (validTasks.Count > 0)
             {
@@ -209,15 +252,15 @@ public class WorkerStateService : IWorkerStateService, IDisposable
     {
         lock (_lock)
         {
-            var tasks = GetTelemetryActiveTasks();
-
             if (active != null)
             {
                 if (!AutonomousTaskClassifier.IsAutonomousTask(active))
                 {
                     return;
                 }
+                var tasks = ReconcileTelemetryTasksWithCurrent(fallbackToCurrentActiveTasks: true);
                 _lastIdleTaskId = null;
+                _lastTelemetryStageByTask[active.TaskId] = active.CurrentStageId;
                 var existingIdx = tasks.FindIndex(t => t.TaskId == active.TaskId);
                 if (existingIdx >= 0)
                 {
@@ -242,6 +285,7 @@ public class WorkerStateService : IWorkerStateService, IDisposable
             }
             else
             {
+                var tasks = ReconcileTelemetryTasksWithCurrent(fallbackToCurrentActiveTasks: false);
                 if (tasks.Count > 0)
                 {
                     var latest = tasks[^1];
@@ -281,10 +325,9 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         {
             lock (_lock)
             {
-                var activeTasks = GetTelemetryActiveTasks();
-
                 if (_current.ActiveTaskId == null)
                 {
+                    var activeTasks = GetTelemetryActiveTasks();
                     var nonStaleTasks = _lastIdleTaskId.HasValue
                         ? activeTasks.Where(t => t.TaskId != _lastIdleTaskId.Value).ToList()
                         : activeTasks;
@@ -309,69 +352,56 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                         _current = _current with { ConfiguredWorkerCount = ConfiguredWorkerCount };
                     }
                 }
-                else if (activeTasks.Count > 0)
+                else
                 {
-                    for (int i = 0; i < activeTasks.Count; i++)
+                    var activeTasks = ReconcileTelemetryTasksWithCurrent(fallbackToCurrentActiveTasks: false);
+                    if (activeTasks.Count > 0)
                     {
-                        var teleTask = activeTasks[i];
-                        var teleStageChanged = !_lastTelemetryStageByTask.TryGetValue(teleTask.TaskId, out var prevTeleStage) ||
-                            !string.Equals(teleTask.CurrentStageId, prevTeleStage, StringComparison.OrdinalIgnoreCase);
-                        _lastTelemetryStageByTask[teleTask.TaskId] = teleTask.CurrentStageId;
-
-                        if (!teleStageChanged)
+                        var active = activeTasks.FirstOrDefault(t => t.TaskId == _current.ActiveTaskId) ?? activeTasks[^1];
+                        if (active.TaskId != _current.ActiveTaskId)
                         {
-                            var currentMatch = _current.ActiveTasks.FirstOrDefault(t => t.TaskId == teleTask.TaskId);
-                            if (currentMatch != null)
+                            _current = _current with
                             {
-                                activeTasks[i] = currentMatch;
-                            }
+                                Status = WorkerExecutionStatus.Running,
+                                ActiveTaskId = active.TaskId,
+                                ActiveTaskTitle = active.TaskTitle,
+                                StageId = active.CurrentStageId,
+                                HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                                StartedAt = active.StartedAt,
+                                ActiveTasks = activeTasks,
+                                ConfiguredWorkerCount = ConfiguredWorkerCount
+                            };
                         }
-                    }
-
-                    var active = activeTasks.FirstOrDefault(t => t.TaskId == _current.ActiveTaskId) ?? activeTasks[^1];
-                    if (active.TaskId != _current.ActiveTaskId)
-                    {
-                        _current = _current with
+                        else if (!string.Equals(active.CurrentStageId, _current.StageId, StringComparison.OrdinalIgnoreCase))
                         {
-                            Status = WorkerExecutionStatus.Running,
-                            ActiveTaskId = active.TaskId,
-                            ActiveTaskTitle = active.TaskTitle,
-                            StageId = active.CurrentStageId,
-                            HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
-                            StartedAt = active.StartedAt,
-                            ActiveTasks = activeTasks,
-                            ConfiguredWorkerCount = ConfiguredWorkerCount
-                        };
-                    }
-                    else if (!string.Equals(active.CurrentStageId, _current.StageId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _current = _current with
+                            _current = _current with
+                            {
+                                StageId = active.CurrentStageId,
+                                HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                                ActiveTasks = activeTasks,
+                                ConfiguredWorkerCount = ConfiguredWorkerCount
+                            };
+                        }
+                        else
                         {
-                            StageId = active.CurrentStageId,
-                            HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
-                            ActiveTasks = activeTasks,
-                            ConfiguredWorkerCount = ConfiguredWorkerCount
-                        };
+                            _current = _current with
+                            {
+                                ActiveTasks = activeTasks,
+                                ConfiguredWorkerCount = ConfiguredWorkerCount
+                            };
+                        }
                     }
                     else
                     {
+                        var fallbackTasks = _current.Status == WorkerExecutionStatus.Running && _current.ActiveTasks.Count > 0
+                            ? _current.ActiveTasks
+                            : Array.Empty<ActiveTaskSummary>();
                         _current = _current with
                         {
-                            ActiveTasks = activeTasks,
+                            ActiveTasks = fallbackTasks,
                             ConfiguredWorkerCount = ConfiguredWorkerCount
                         };
                     }
-                }
-                else
-                {
-                    var fallbackTasks = _current.Status == WorkerExecutionStatus.Running && _current.ActiveTasks.Count > 0
-                        ? _current.ActiveTasks
-                        : Array.Empty<ActiveTaskSummary>();
-                    _current = _current with
-                    {
-                        ActiveTasks = fallbackTasks,
-                        ConfiguredWorkerCount = ConfiguredWorkerCount
-                    };
                 }
                 return _current;
             }
@@ -514,29 +544,44 @@ public class WorkerStateService : IWorkerStateService, IDisposable
 
         lock (_lock)
         {
-            var telemetryTasks = GetTelemetryActiveTasks();
+            var telemetryTasks = ReconcileTelemetryTasksWithCurrent(fallbackToCurrentActiveTasks: true);
 
             if (incomingStatus == WorkerExecutionStatus.Running)
             {
                 _lastIdleTaskId = null;
 
+                var taskChanged = activeTaskId.HasValue && activeTaskId != _current.ActiveTaskId;
+                var keepPrevious = !taskChanged;
+
                 ActiveTaskSummary? matchedExisting = null;
+                var existingIdx = activeTaskId.HasValue ? telemetryTasks.FindIndex(t => t.TaskId == activeTaskId.Value) : -1;
+                if (existingIdx >= 0)
+                {
+                    matchedExisting = telemetryTasks[existingIdx];
+                }
+
+                var now = DateTime.UtcNow;
+                var startedAt = matchedExisting?.StartedAt ?? (taskChanged ? now : (_current.StartedAt ?? now));
+                var effectiveHardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget)
+                    ? (matchedExisting?.HardwareTarget ?? _current.HardwareTarget)
+                    : hardwareTarget;
+
                 if (activeTaskId.HasValue)
                 {
-                    var existingIdx = telemetryTasks.FindIndex(t => t.TaskId == activeTaskId.Value);
-                    if (existingIdx >= 0)
+                    var rawTeleMatch = GetTelemetryActiveTasks().FirstOrDefault(t => t.TaskId == activeTaskId.Value);
+                    if (rawTeleMatch != null)
                     {
-                        matchedExisting = telemetryTasks[existingIdx];
-                        _lastTelemetryStageByTask[activeTaskId.Value] = matchedExisting.CurrentStageId;
+                        _lastTelemetryStageByTask[activeTaskId.Value] = rawTeleMatch.CurrentStageId;
                     }
+
                     var taskSummary = new ActiveTaskSummary(
                         activeTaskId.Value,
                         taskTitle ?? (matchedExisting != null ? matchedExisting.TaskTitle : $"Task #{activeTaskId.Value}"),
                         stageId ?? (matchedExisting != null ? matchedExisting.CurrentStageId : "Executing"),
                         matchedExisting?.Priority ?? 1,
                         matchedExisting?.QueueType ?? "default",
-                        matchedExisting?.StartedAt ?? DateTime.UtcNow,
-                        string.IsNullOrWhiteSpace(hardwareTarget) ? (matchedExisting?.HardwareTarget ?? _current.HardwareTarget) : hardwareTarget);
+                        startedAt,
+                        effectiveHardwareTarget);
 
                     if (existingIdx >= 0)
                     {
@@ -548,17 +593,13 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                     }
                 }
 
-                var taskChanged = activeTaskId.HasValue && activeTaskId != _current.ActiveTaskId;
-                var startedAt = matchedExisting?.StartedAt ?? (taskChanged ? DateTime.UtcNow : (_current.StartedAt ?? DateTime.UtcNow));
-                var keepPrevious = !taskChanged;
-
                 _current = _current with
                 {
                     Status = WorkerExecutionStatus.Running,
                     ActiveTaskId = activeTaskId ?? _current.ActiveTaskId,
                     ActiveTaskTitle = taskTitle ?? (keepPrevious ? _current.ActiveTaskTitle : matchedExisting?.TaskTitle),
                     StageId = stageId ?? (keepPrevious ? _current.StageId : matchedExisting?.CurrentStageId),
-                    HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _current.HardwareTarget : hardwareTarget,
+                    HardwareTarget = effectiveHardwareTarget,
                     BranchName = branchName ?? (keepPrevious ? _current.BranchName : null),
                     StartedAt = startedAt,
                     ActiveTasks = telemetryTasks.OrderBy(t => t.StartedAt).ToList(),

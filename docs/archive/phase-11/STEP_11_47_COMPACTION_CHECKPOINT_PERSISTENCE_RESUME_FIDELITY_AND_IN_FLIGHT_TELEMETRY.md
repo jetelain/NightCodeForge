@@ -1,6 +1,6 @@
-# 🛡️ Step 11.47: Compaction Checkpoint Persistence, `< 64k` Cold-Resume & Compaction Ceiling, 10m/30m Timeout Retry & Global Correlation Telemetry
+# 🛡️ Step 11.47: Compaction Checkpoint Persistence, `128k` Cold-Resume & `96k` Compaction Ceilings, 10m/30m Timeout Retry & Global Correlation Telemetry
 
-> **Bug Fix, State Persistence, Resilience & Observability Step (Lossless Compaction Resumption, `< 64k` Post-Compaction & Cold-Resume Ceiling, 10m/30m Timeout Retry for Cloud Overflow, Tail-Aware Previews & Header-Correlated Retry Telemetry)**  
+> **Bug Fix, State Persistence, Resilience & Observability Step (Lossless Compaction Resumption, `96k` Post-Compaction & Summarizer Ceilings, `128k` Cold-Resume Gate, 10m/30m Timeout Retry for Cloud Overflow, Tail-Aware Previews & Header-Correlated Retry Telemetry)**  
 > *Parent Plan:* [Phase 11 Archive](../11_EXTEND_FEATURES.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../../src/NightCodeForge.Agents), [`src/NightCodeForge.Infrastructure`](../../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Web`](../../../src/NightCodeForge.Web), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests), [`tests/NightCodeForge.Web.Tests`](../../../tests/NightCodeForge.Web.Tests)  
@@ -36,9 +36,9 @@ Cross-referencing `nightcodeforge.db` (`Conversations`, `ConversationTurns`, `St
 
 ```mermaid
 flowchart TB
-    subgraph InMemory ["Live Crucible Session & Compaction (< 64k Ceiling)"]
+    subgraph InMemory ["Live Crucible Session & Compaction (96k Output / 128k Cold-Resume)"]
         Reducer["InMemoryChatHistoryProvider / CompactionProvider"]
-        Strategy["PiStyleCrucibleCompactionStrategy<br/>- Warm-Cache Trigger: ContextWindow - Reserve (>200k OK)<br/>- Cold-Resume Trigger &amp; Output Ceiling: &lt; 64k Tokens<br/>- Bounded Summarizer Input: &lt; 64k Tokens<br/>- Injected ILogger (never NullLogger)"]
+        Strategy["PiStyleCrucibleCompactionStrategy<br/>- Warm-Cache Trigger: ContextWindow - Reserve (>200k OK)<br/>- Cold-Resume Trigger: &gt;= 128k Tokens<br/>- Output &amp; Summarizer Ceiling: &lt;= 96k Tokens<br/>- Injected ILogger (never NullLogger)"]
         Summarizer["Summarizer IChatClient<br/>(Tagged as Compaction Summarizer)"]
         Persister["Crucible PerServiceCallChatHistoryPersistingChatClient"]
     end
@@ -46,7 +46,7 @@ flowchart TB
     subgraph Persistence ["Database & Checkpoint Persistence (SQLite)"]
         Turns[("ConversationTurns<br/>- User / Assistant / Thinking / Tool / ToolResult<br/>- Optimization (Compaction Checkpoint &amp; Cut Index)")]
         Serializer["ConversationHistorySerializer.Serialize<br/>(Replaces TurnIndex 1..CutIndex with Checkpoint)"]
-        Coordinator["CrucibleConversationCoordinator<br/>(Preserves Checkpoint &amp; Forces &lt; 64k Compaction on Resume)"]
+        Coordinator["CrucibleConversationCoordinator<br/>(Preserves Checkpoint &amp; Forces &lt; 96k Compaction on &gt;= 128k Resume)"]
     end
 
     subgraph Telemetry ["10m/30m Timeout Retry & Header-Correlated Telemetry"]
@@ -56,11 +56,11 @@ flowchart TB
     end
 
     Reducer --> Strategy
-    Strategy -->|"GenerateLlmSummaryAsync (&lt; 64k)"| Summarizer
+    Strategy -->|"GenerateLlmSummaryAsync (&lt;= 96k)"| Summarizer
     Strategy -->|"OnCompacted Callback"| Turns
     Persister -->|"Updates chatHistory"| Coordinator
     Turns --> Serializer --> Coordinator
-    Coordinator -->|"Cold-Resume &gt;= 64k Gate"| Strategy
+    Coordinator -->|"Cold-Resume &gt;= 128k Gate"| Strategy
     RetryHandler -->|"OnRetryAsync (X-NCF-* Headers)"| TelService --> Hero
     Summarizer --> TelService
 ```
@@ -91,25 +91,25 @@ flowchart TB
 
 ---
 
-### 3.2 Enforce `< 64k` Token Ceiling on Compaction Output, Summarizer Input & Cold-Cache Resumption
+### 3.2 Enforce Compaction Output (`96k`), Summarizer Input (`96k`) & Cold-Cache Resumption (`128k`) Ceilings
 
-> **Design Constraint:** During normal continuous execution (warm KV cache), models operate reliably at `> 200k` context; the model's `ContextWindowTokens` and normal `TriggerThresholdTokens` (`ContextWindowTokens - ReserveTokens`) must **not** be artificially lowered. However, any **compaction output**, **compaction summarizer request**, or **resumed session (cold KV cache)** must be strictly bounded below **`64k` tokens (`65,536` tokens)**.
+> **Design Constraint:** During normal continuous execution (warm KV cache), models operate reliably at `> 200k` context; the model's `ContextWindowTokens` and normal `TriggerThresholdTokens` (`ContextWindowTokens - ReserveTokens`) must **not** be artificially lowered. Meanwhile, `DefaultKeepRecentTokens` is `32,768` (`32k` tokens for `>= 128k` windows), post-compaction output is bounded below **`96k` tokens (`98,304` tokens)**, the compaction summarizer request is bounded to **`96,000` tokens**, and cold-cache session resumption triggers compaction at or above **`128k` tokens (`131,072` tokens)**.
 
-1. **`< 64k` Token Ceiling on Post-Compaction Output (`MaxCompactedContextTokens`):**
-   - Add a configurable ceiling (default **`65,536` tokens** / `64k`, with a target post-compaction budget of e.g. `<= 48,000` tokens after safety margin) on [`CrucibleCompactionOptions`](../../../src/NightCodeForge.Agents/Compaction/CrucibleCompactionOptions.cs) governing the maximum allowed context size immediately after compaction.
+1. **`96k` Token Ceiling on Post-Compaction Output (`MaxCompactedContextTokens`):**
+   - Add a configurable ceiling (default **`98,304` tokens** / `96k`, with `DefaultKeepRecentTokens = 32,768`) on [`CrucibleCompactionOptions`](../../../src/NightCodeForge.Agents/Compaction/CrucibleCompactionOptions.cs) governing the maximum allowed context size immediately after compaction.
    - In [`PiStyleCrucibleCompactionStrategy.CalculateEffectiveKeepRecentTokens`](../../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs):
-     - Ensure `AnchorTokens + SummaryBudget + EffectiveKeepRecentTokens + SafetyMarginTokens <= Math.Min(TriggerThresholdTokens, MaxCompactedContextTokens)` so that the resulting compacted conversation (`index.GetIncludedMessages()`) is always strictly **below `64k` tokens** (even when `TriggerThresholdTokens` is `253,952`).
-     - If an individual kept-recent turn or anchor contains oversized tool output that would push the post-compaction total above `64k` tokens, clamp its tool result content so the post-compaction context never exceeds `64k` tokens.
+     - Ensure `AnchorTokens + SummaryBudget + EffectiveKeepRecentTokens + SafetyMarginTokens <= Math.Min(TriggerThresholdTokens, MaxCompactedContextTokens)` so that the resulting compacted conversation (`index.GetIncludedMessages()`) stays **below `96k` tokens** (even when `TriggerThresholdTokens` is `253,952`).
+     - If an individual kept-recent turn or anchor contains oversized tool output that would push the post-compaction total above `96k` tokens, clamp its tool result content so the post-compaction context never exceeds `96k` tokens.
 
-2. **`< 64k` Token Ceiling on the Compaction Summarizer Request (`GenerateLlmSummaryAsync`):**
+2. **`96k` Token Ceiling on the Compaction Summarizer Request (`GenerateLlmSummaryAsync`):**
    - In [`ConversationSerializer.SerializeConversation`](../../../src/NightCodeForge.Agents/Compaction/ConversationSerializer.cs) and [`PiStyleCrucibleCompactionStrategy.GenerateLlmSummaryAsync`](../../../src/NightCodeForge.Agents/Compaction/PiStyleCrucibleCompactionStrategy.cs):
-     - Bound the total token count of the summarization request (`SummarizationSystemPrompt` + `<conversation>` + `<previous-summary>` + `SummarizationPromptTemplate`) so it never exceeds **`60,000` tokens** (strictly `< 64k` tokens, estimated via `ModelCalibratedTokenEstimator`).
-     - When `messagesToSummarize` would produce a `<conversation>` transcript exceeding the summarizer token budget (as happened in Task #61 when 499 turns produced `67.1k` tokens), progressively reduce per-tool-result/argument character limits or elide the oldest middle tool payloads (while preserving all `FileOperationTracker` `<read-files>` / `<modified-files>` tracking and the newest turns being summarized) so the summarizer LLM call itself always stays well below `64k` tokens.
+     - Bound the total token count of the summarization request (`SummarizationSystemPrompt` + `<conversation>` + `<previous-summary>` + `SummarizationPromptTemplate`) so it never exceeds **`96,000` tokens** (estimated via `ModelCalibratedTokenEstimator`).
+     - When `messagesToSummarize` would produce a `<conversation>` transcript exceeding the summarizer token budget, progressively reduce per-tool-result/argument character limits or elide the oldest middle tool payloads (while preserving all `FileOperationTracker` `<read-files>` / `<modified-files>` tracking and the newest turns being summarized) so the summarizer LLM call itself stays within `96k` tokens.
 
-3. **Cold-Cache Compaction Gate on Session Resumption (`< 64k` Tokens on Resume):**
-   - When a Crucible stage resumes an existing conversation (after global/task Pause where VRAM/KV cache was reclaimed, `WaitingForHuman` clarification, conversational remediation, or startup crash recovery) and the restored `ChatHistory` has `>= 64,000` estimated tokens (`MaxCompactedContextTokens`):
+3. **Cold-Cache Compaction Gate on Session Resumption (`128k` Tokens on Resume):**
+   - When a Crucible stage resumes an existing conversation (after global/task Pause where VRAM/KV cache was reclaimed, `WaitingForHuman` clarification, conversational remediation, or startup crash recovery) and the restored `ChatHistory` has `>= 131,072` (`128k`) estimated tokens (`ColdResumeThresholdTokens`):
      - Arm `PiStyleCrucibleCompactionStrategy` to compact the restored history **before** the first resumed LLM call even if the total tokens (e.g., `166.3k` tokens in Task #61) are below the warm-cache `TriggerThresholdTokens` (`253,952`).
-     - If the restored history is already `< 64k` tokens (for example, it was compacted shortly before pause and remained at `~30k` tokens), resume directly **without** triggering a redundant compaction call.
+     - If the restored history is `< 128k` tokens, resume directly **without** triggering a redundant compaction call.
 
 ---
 
@@ -147,11 +147,11 @@ flowchart TB
 
 ## 4. Verification & Test Strategy
 
-1. **Compaction Checkpoint Persistence, `< 64k` Ceiling & Cold-Resume Integration Tests (`NightCodeForge.Agents.Tests`):**
-   - **`CrucibleCompactionPauseResumeIntegrationTests`:**
-     - **Case 1 (Already Compacted `< 64k` Before Pause):** Run a multi-turn stage that compacts down to `< 64k` tokens, executes 2 small turns (staying `< 64k`), pauses, and resumes. Assert that `ConversationTurns` contains the `StageTurnRole.Optimization` checkpoint, pre-compaction turns are not resurrected, and resuming does **not** trigger a redundant compaction LLM call.
-     - **Case 2 (Grew Above `>= 64k` Before Pause, Below `256k` Warm Threshold):** Run a stage with a `262,144` context window that grows to `~100k` tokens (`>= 64k` cold-resume ceiling, `< 253,952` warm trigger), pauses, and resumes. Assert that upon resume, cold-resume compaction triggers before the first resumed agent turn and produces a post-compaction prompt strictly `< 64k` tokens.
-     - **Case 3 (Bounded Summarizer Prompt `< 64k`):** Compact a massive history (`> 1,000,000` chars across 500 turns) and verify the `<conversation>` prompt sent to `_summarizerClient` is strictly `< 64,000` estimated tokens.
+1. **Compaction Checkpoint Persistence, `96k` Ceiling & `128k` Cold-Resume Integration Tests (`NightCodeForge.Agents.Tests`):**
+   - **`Step1147CompactionResumeAndTelemetryTests`:**
+     - **Case 1 (Already Compacted `< 96k` Before Pause):** Run a multi-turn stage that compacts down to `< 96k` tokens, executes 2 small turns (staying `< 128k`), pauses, and resumes. Assert that `ConversationTurns` contains the `StageTurnRole.Optimization` checkpoint, pre-compaction turns are not resurrected, and resuming does **not** trigger a redundant compaction LLM call.
+     - **Case 2 (Grew Above `>= 128k` Before Pause, Below Warm Threshold):** Run a stage with a `225,280` context window that grows to `~145k` tokens (`>= 128k` cold-resume ceiling, `< 217,088` warm trigger), pauses, and resumes. Assert that upon resume, cold-resume compaction triggers before the first resumed agent turn and produces a post-compaction prompt strictly `< 96k` tokens (`98,304`).
+     - **Case 3 (Paused Below `128k` Cold-Resume Ceiling & Bounded Summarizer Prompt `<= 96k`):** Verify a session paused at `~80k` tokens (`< 128k` cold-resume ceiling) resumes directly without redundant compaction, and verify compacting a massive history bounds the `<conversation>` prompt sent to `_summarizerClient` within `MaxSummarizerInputTokens` (`96,000` tokens).
 2. **`ConversationHistorySerializer` Compaction Tests (`NightCodeForge.Core.Tests`):**
    - **`ConversationHistorySerializerTests`:**
      - Verify `Serialize` with one or multiple `StageTurnRole.Optimization` compaction checkpoint turns excludes pre-cut turns (except `TurnIndex 0`), injects `[CONTEXT COMPACTION CHECKPOINT]` at index `1`, and preserves kept-recent and subsequent turns without orphan tool calls/results.
@@ -167,7 +167,7 @@ flowchart TB
 ## 5. Definition of Done (DoD) Checklist
 
 - [x] Persist compaction checkpoints as `StageTurnRole.Optimization` turns in `ConversationTurns` and update `ConversationHistorySerializer.Serialize` and `CrucibleConversationCoordinator.ResolveSerializedState` to reconstruct compacted history without resurrecting summarized pre-compaction turns.
-- [x] Enforce a `< 64k` token (`65,536`) ceiling on post-compaction context size (`CalculateEffectiveKeepRecentTokens` + tool clamping), bound the compaction summarizer `<conversation>` prompt to `< 64k` tokens, and trigger compaction on session resumption whenever the restored history is `>= 64k` tokens (while keeping normal warm-cache `ContextWindowTokens > 200k` untouched).
+- [x] Enforce a `< 96k` token (`98,304`) ceiling on post-compaction context size (`CalculateEffectiveKeepRecentTokens` + tool clamping, with `DefaultKeepRecentTokens = 32,768`), bound the compaction summarizer `<conversation>` prompt to `<= 96,000` tokens, and trigger compaction on session resumption whenever the restored history is `>= 128k` (`131,072`) tokens (while keeping normal warm-cache `ContextWindowTokens > 200k` untouched).
 - [x] Change `LlmProviderOptions.RequestTimeoutMinutes` default from `15` to `10` minutes and `LlmRetryPolicyOptions.DefaultLlmMaxTimeoutRetries` from `1` to `3` (within the 30-minute `MaxRetryDuration`) to enable `OllamaRouter` repeated-failure Cloud overflow.
 - [x] Add global HTTP retry telemetry on `IOperationsTelemetryService` correlated via `LlmCorrelationHeaders` (`X-NCF-Session-Id`, `X-NCF-Task-Id`, `X-NCF-Stage-Id`) in `LlmChatClientFactoryBase.BroadcastRetryNoticeAsync` (without `AsyncLocal`) and surface retry attempt/reason in `ActiveOperationsHero.razor` and `InferenceInspectionModal.razor`.
 - [x] Update `TelemetryChatClient.ExtractPromptPreview` to inspect the active tail of `messages` (ignoring stale `[CONTEXT COMPACTION CHECKPOINT]` messages) and label compaction summarizer calls with `"[Context Compaction Summarizer]"`.

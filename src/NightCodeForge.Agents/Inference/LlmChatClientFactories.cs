@@ -198,6 +198,14 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
                 }
             }
         }
+        else if (string.IsNullOrWhiteSpace(effectiveStageId) || effectiveStageId == LlmCorrelationHeaders.DefaultStageId)
+        {
+            var matchedActiveTask = _telemetryService.GetActiveTask(effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(matchedActiveTask?.CurrentStageId))
+            {
+                effectiveStageId = matchedActiveTask.CurrentStageId;
+            }
+        }
 
         if (string.IsNullOrWhiteSpace(effectiveSessionId))
         {

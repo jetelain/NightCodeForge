@@ -259,16 +259,16 @@ public class Step1147CompactionResumeAndTelemetryTests : IDisposable
     }
 
     [Fact]
-    public async Task Case2_PauseBeforeCompactionAt80k_ArmsColdResumeGate_AndCompactsUnder64kBeforeFirstResumedCall()
+    public async Task Case2_PauseBeforeCompactionAt145k_ArmsColdResumeGate_AndCompactsUnder96kBeforeFirstResumedCall()
     {
         // ContextWindowTokens = 225,280 (warm TriggerThreshold = 217,088).
-        // Conversation is paused with ~80k tokens in ConversationTurns (below warm threshold, but >= 64k cold-resume ceiling).
+        // Conversation is paused with ~145k tokens in ConversationTurns (below warm threshold, but >= 128k cold-resume ceiling).
         var repo = new InMemoryTaskRepository();
-        var task = await repo.CreateAsync(new ForgeTask { Id = 11472, Title = "Case 2 Cold Resume Gate At 80k", WorkspaceId = 1 });
+        var task = await repo.CreateAsync(new ForgeTask { Id = 11472, Title = "Case 2 Cold Resume Gate At 145k", WorkspaceId = 1 });
         var conv = await repo.StartConversationAsync(task.Id, "task-implementation", WorkflowStageKind.Agentic, 1);
 
         await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement feature 11.47");
-        for (int i = 1; i <= 6; i++)
+        for (int i = 1; i <= 11; i++)
         {
             var callId = $"call_pre_{i}";
             await repo.AddConversationTurnAsync(
@@ -281,14 +281,14 @@ public class Step1147CompactionResumeAndTelemetryTests : IDisposable
                 conv.Id,
                 StageTurnRole.ToolResult,
                 toolName: CanonicalToolNames.Read,
-                toolResult: new string((char)('A' + i), 48_000), // ~13.3k Qwen tokens per turn -> ~80k total
+                toolResult: new string((char)('A' + i), 48_000), // ~13.3k Qwen tokens per turn -> ~146k total
                 metadataJson: $"{{\"CallId\":\"{callId}\"}}");
             await repo.AddConversationTurnAsync(
                 conv.Id,
                 StageTurnRole.Assistant,
                 content: $"Analyzed File{i}.cs and recorded findings for step {i}.");
         }
-        await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Paused at ~80k tokens");
+        await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Paused at ~145k tokens");
 
         List<ChatMessage>? firstResumedCallMessages = null;
         List<ChatMessage>? summarizerCallMessages = null;
@@ -309,7 +309,7 @@ public class Step1147CompactionResumeAndTelemetryTests : IDisposable
             CancellationToken ct)
         {
             summarizerCallMessages = messages.ToList();
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "## Goal\nCold-resumed summary\n\n## Progress\n### Done\n- [x] Read File1..File5")));
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "## Goal\nCold-resumed summary\n\n## Progress\n### Done\n- [x] Read File1..File9")));
         }
 
         var client = new DualModeScriptedChatClient(StreamHandler, SummarizerHandler);
@@ -320,45 +320,51 @@ public class Step1147CompactionResumeAndTelemetryTests : IDisposable
             TaskRepository = repo
         }.Build();
 
-        // Warm ContextWindowTokens is 225,280 (TriggerThreshold = 217,088 > 80k), yet Cold-Resume Gate must compact because restored history >= 64k!
+        // Warm ContextWindowTokens is 225,280 (TriggerThreshold = 217,088 > 145k), yet Cold-Resume Gate must compact because restored history >= 128k!
         var context = CreateContext(task, contextWindowTokens: 225_280, serializedState: null);
         var result = await harness.RunStageAsync(context);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.NotNull(summarizerCallMessages);
         int summarizerTokens = ModelCalibratedTokenEstimator.EstimateMessagesTokens(summarizerCallMessages, "Qwen3.8-27B:latest");
-        Assert.True(summarizerTokens <= 60_000, $"Summarizer input tokens ({summarizerTokens}) exceeded 60,000 ceiling");
+        Assert.True(summarizerTokens <= CrucibleCompactionOptions.DefaultMaxSummarizerInputTokens,
+            $"Summarizer input tokens ({summarizerTokens}) exceeded {CrucibleCompactionOptions.DefaultMaxSummarizerInputTokens} ceiling");
 
         Assert.NotNull(firstResumedCallMessages);
         Assert.Contains(firstResumedCallMessages!, PiStyleCrucibleCompactionStrategy.IsCompactionCheckpointMessage);
         int firstResumedCallTokens = ModelCalibratedTokenEstimator.EstimateMessagesTokens(firstResumedCallMessages, "Qwen3.8-27B:latest");
-        Assert.True(firstResumedCallTokens < 64_000, $"First resumed LLM call tokens ({firstResumedCallTokens}) must be < 64,000");
+        Assert.True(firstResumedCallTokens < CrucibleCompactionOptions.DefaultMaxCompactedContextTokens,
+            $"First resumed LLM call tokens ({firstResumedCallTokens}) must be < {CrucibleCompactionOptions.DefaultMaxCompactedContextTokens}");
 
         var updatedConv = await repo.GetConversationWithTurnsAsync(conv.Id);
         Assert.Contains(updatedConv!.Turns, t => t.Role == StageTurnRole.Optimization && ConversationHistorySerializer.IsCompactionCheckpointTurn(t));
     }
 
     [Fact]
-    public async Task Case3_PauseBeforeCompactionAt25k_ResumesDirectlyWithoutTriggeringRedundantCompaction()
+    public async Task Case3_PauseBeforeCompactionAt80k_ResumesDirectlyWithoutTriggeringRedundantCompaction()
     {
         var repo = new InMemoryTaskRepository();
-        var task = await repo.CreateAsync(new ForgeTask { Id = 11473, Title = "Case 3 Resume Under 64k", WorkspaceId = 1 });
+        var task = await repo.CreateAsync(new ForgeTask { Id = 11473, Title = "Case 3 Resume Under 128k", WorkspaceId = 1 });
         var conv = await repo.StartConversationAsync(task.Id, "task-implementation", WorkflowStageKind.Agentic, 1);
 
         await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Implement feature 11.47");
-        await repo.AddConversationTurnAsync(
-            conv.Id,
-            StageTurnRole.Tool,
-            toolName: CanonicalToolNames.Read,
-            toolArguments: "{\"path\":\"Small.cs\"}",
-            metadataJson: "{\"CallId\":\"call_small_1\"}");
-        await repo.AddConversationTurnAsync(
-            conv.Id,
-            StageTurnRole.ToolResult,
-            toolName: CanonicalToolNames.Read,
-            toolResult: new string('S', 20_000), // ~7k tokens (< 64k)
-            metadataJson: "{\"CallId\":\"call_small_1\"}");
-        await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Paused under 64k");
+        for (int i = 1; i <= 6; i++)
+        {
+            var callId = $"call_mid_{i}";
+            await repo.AddConversationTurnAsync(
+                conv.Id,
+                StageTurnRole.Tool,
+                toolName: CanonicalToolNames.Read,
+                toolArguments: $"{{\"path\":\"Mid{i}.cs\"}}",
+                metadataJson: $"{{\"CallId\":\"{callId}\"}}");
+            await repo.AddConversationTurnAsync(
+                conv.Id,
+                StageTurnRole.ToolResult,
+                toolName: CanonicalToolNames.Read,
+                toolResult: new string((char)('A' + i), 48_000), // ~80k total tokens (< 128k cold-resume ceiling)
+                metadataJson: $"{{\"CallId\":\"{callId}\"}}");
+        }
+        await repo.CompleteConversationAsync(conv.Id, StageExecutionStatus.Interrupted, summary: "Paused at ~80k (< 128k ceiling)");
 
         bool summarizerCalled = false;
         List<ChatMessage>? resumedMessages = null;

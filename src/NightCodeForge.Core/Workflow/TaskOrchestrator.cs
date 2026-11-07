@@ -175,16 +175,49 @@ public class TaskOrchestrator : ITaskOrchestrator
                 ? await _workspacePreparer.AcquireTaskLockAsync(workspace.Id, NightCodeForge.Core.Concurrency.WorkspaceLockProvider.WorkspaceExecutionSentinelTaskId, cancellationToken)
                 : null;
 
-            if (bareHostExecutionLock != null && _operationsControlService.IsPaused)
+            if (bareHostExecutionLock != null)
             {
-                _logger.LogInformation("Task #{TaskId} execution deferred after acquiring BareHost workspace lock: operations are globally paused.", taskId);
-                cohortExitReason = CohortExitReason.Paused;
-                if (task.Status == TaskOverallStatus.Open)
+                var reloadedAfterBareHost = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
+                if (reloadedAfterBareHost == null)
                 {
-                    task.IsDeferredByPause = true;
-                    await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                    _logger.LogError("ForgeTask #{TaskId} not found after acquiring BareHost workspace lock.", taskId);
+                    return;
                 }
-                return;
+
+                if (reloadedAfterBareHost.Status == TaskOverallStatus.Cancelled ||
+                    reloadedAfterBareHost.Status == TaskOverallStatus.Closed ||
+                    reloadedAfterBareHost.Status == TaskOverallStatus.Rejected)
+                {
+                    _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status after acquiring BareHost workspace lock; aborting execution.", taskId, reloadedAfterBareHost.Status);
+                    if (reloadedAfterBareHost.Status == TaskOverallStatus.Cancelled)
+                    {
+                        cohortExitReason = CohortExitReason.Cancelled;
+                    }
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(initialJobId) &&
+                    !string.IsNullOrWhiteSpace(reloadedAfterBareHost.LastHangfireJobId) &&
+                    !string.Equals(reloadedAfterBareHost.LastHangfireJobId, initialJobId, StringComparison.Ordinal))
+                {
+                    _logger.LogInformation("ForgeTask #{TaskId} execution was superseded while waiting for BareHost workspace lock (Old JobId: '{OldJobId}', New JobId: '{NewJobId}'); aborting stale execution.",
+                        taskId, initialJobId, reloadedAfterBareHost.LastHangfireJobId);
+                    return;
+                }
+
+                task = reloadedAfterBareHost;
+
+                if (_operationsControlService.IsPaused)
+                {
+                    _logger.LogInformation("Task #{TaskId} execution deferred after acquiring BareHost workspace lock: operations are globally paused.", taskId);
+                    cohortExitReason = CohortExitReason.Paused;
+                    if (task.Status == TaskOverallStatus.Open)
+                    {
+                        task.IsDeferredByPause = true;
+                        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                    }
+                    return;
+                }
             }
 
             // 3. Branch & Environment Setup

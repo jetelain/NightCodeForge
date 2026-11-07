@@ -126,7 +126,9 @@ public static class ModelCapabilityResolver
 
         int defaultKeepRecent = isSmallWindow
             ? Math.Max(CrucibleCompactionOptions.MinSmallWindowBudgetTokens, usableTokens / 2)
-            : CrucibleCompactionOptions.DefaultKeepRecentTokens;
+            : contextWindow < LlmProviderOptions.DefaultContextWindowTokens
+                ? Math.Min(CrucibleCompactionOptions.DefaultKeepRecentTokens, Math.Max(CrucibleCompactionOptions.MinSmallWindowBudgetTokens, usableTokens / 3))
+                : CrucibleCompactionOptions.DefaultKeepRecentTokens;
 
         int keepRecentTokens = explicitKeepRecentTokens ?? defaultKeepRecent;
         if (keepRecentTokens >= usableTokens)

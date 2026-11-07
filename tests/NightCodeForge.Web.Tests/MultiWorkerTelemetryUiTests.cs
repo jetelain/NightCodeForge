@@ -451,4 +451,51 @@ public class MultiWorkerTelemetryUiTests : BunitContext
         Assert.Equal(101, uiService.ActiveTasks[0].TaskId);
         Assert.Equal(101, uiService.ActiveTask?.TaskId);
     }
+
+    [Fact]
+    public void WorkerStateService_WhenConcurrentTasksArriveViaHandleWorkerStatusWithoutTelemetry_TracksBothAndStaysRunningWhenOneWaitsForHuman()
+    {
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        var workerState = WorkerStateTestHelper.Create(telemetryMock.Object, 2);
+
+        workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 101, "stage-1", "Node-A", "Task 101", "feature/task-101");
+        workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 102, "stage-1", "Node-B", "Task 102", "feature/task-102");
+
+        Assert.Equal(WorkerExecutionStatus.Running, workerState.Current.Status);
+        Assert.Equal(2, workerState.ActiveTaskCount);
+        Assert.Contains(101, workerState.ActiveTaskIds);
+        Assert.Contains(102, workerState.ActiveTaskIds);
+
+        // Task 101 stage update with empty hardwareTarget while Task 102 is active: must preserve Task 101's "Node-A"
+        workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 101, "stage-2", "");
+        Assert.Equal("Node-A", workerState.Current.HardwareTarget);
+
+        // Task 102 transitions to WaitingForHuman while Task 101 continues running
+        workerState.HandleWorkerStatus(WorkerStatusConstants.WaitingForHuman, 102, "stage-1", "Node-B");
+
+        Assert.Equal(WorkerExecutionStatus.Running, workerState.Current.Status);
+        Assert.Equal(101, workerState.ActiveTaskId);
+        Assert.Single(workerState.Current.ActiveTasks);
+        Assert.Equal("Task 101", workerState.Current.ActiveTasks[0].TaskTitle);
+    }
+
+    [Fact]
+    public void OperationsTelemetryUiService_WhenHandleWorkerStatusReceivedWithEmptyHardwareTarget_PreservesExistingHardwareTarget()
+    {
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        var hub = TestHubConnectionHelper.Create();
+        var uiService = new OperationsTelemetryUiService(hub, telemetryMock.Object);
+
+        hub.TriggerWorkerStatus(WorkerStatusConstants.Running, 101, "stage-1", "Node-A-RTX4090");
+        Assert.Single(uiService.ActiveTasks);
+        Assert.Equal("Node-A-RTX4090", uiService.ActiveTasks[0].HardwareTarget);
+
+        // Stage update arrives with empty hardwareTarget while telemetry GetActiveTasks() is empty
+        hub.TriggerWorkerStatus(WorkerStatusConstants.Running, 101, "stage-2", "");
+
+        Assert.Single(uiService.ActiveTasks);
+        Assert.Equal("stage-2", uiService.ActiveTasks[0].CurrentStageId);
+        Assert.Equal("Node-A-RTX4090", uiService.ActiveTasks[0].HardwareTarget);
+        Assert.Equal("Node-A-RTX4090", uiService.ActiveTask?.HardwareTarget);
+    }
 }

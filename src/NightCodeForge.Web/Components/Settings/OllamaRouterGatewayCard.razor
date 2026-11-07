@@ -75,7 +75,7 @@
                 <label for="input-max-concurrent-tasks" style="font-size: 0.88rem; font-weight: 600; color: var(--text-primary); margin: 0;">
                     Max Concurrent Tasks:
                 </label>
-                <input type="number" id="input-max-concurrent-tasks" class="forge-input" style="width: 75px; padding: 0.35rem 0.5rem; text-align: center;" min="1" max="16" @bind="_maxConcurrentTasks" />
+                <input type="number" id="input-max-concurrent-tasks" class="forge-input" style="width: 75px; padding: 0.35rem 0.5rem; text-align: center;" min="@LlmProviderOptions.MinConcurrentInferenceTasks" max="@LlmProviderOptions.MaxConcurrentInferenceTasksLimit" @bind="_maxConcurrentTasks" />
             </div>
             @if (_selectedProvider != GatewayService.ProviderType)
             {
@@ -509,7 +509,7 @@
     {
         var opts = LlmOptions.Value;
         _selectedProvider = opts.ProviderType;
-        _maxConcurrentTasks = Math.Clamp(opts.MaxConcurrentInferenceTasks, 1, 16);
+        _maxConcurrentTasks = Math.Clamp(opts.MaxConcurrentInferenceTasks, LlmProviderOptions.MinConcurrentInferenceTasks, LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
         _initialMaxConcurrentTasks = _maxConcurrentTasks;
         _ollamaEndpoint = !string.IsNullOrWhiteSpace(opts.Endpoint) ? opts.Endpoint : "http://localhost:11434";
         _openAiEndpoint = !string.IsNullOrWhiteSpace(opts.OpenAiCompatible?.Endpoint) ? opts.OpenAiCompatible.Endpoint : "https://api.openai.com/v1";
@@ -749,7 +749,7 @@
         _isSaving = true;
         try
         {
-            _maxConcurrentTasks = Math.Clamp(_maxConcurrentTasks, 1, 16);
+            _maxConcurrentTasks = Math.Clamp(_maxConcurrentTasks, LlmProviderOptions.MinConcurrentInferenceTasks, LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
             await ConfigurationWriter.SaveProviderConfigurationAsync(opts =>
             {
                 opts.ProviderType = _selectedProvider;

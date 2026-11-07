@@ -48,12 +48,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWebSearchSettingsService, WebSearchSettingsService>();
         services.TryAddSingleton<IOperationsStateStore, OperationsStateStore>();
         services.TryAddSingleton<IWorkerStateService, Telemetry.TelemetryWorkerStateService>();
-        services.AddOptions<NightCodeForge.Core.Services.OperationsControlOptions>()
-            .Configure<IServiceProvider>((options, sp) =>
-            {
-                var config = sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
-                config?.GetSection(NightCodeForge.Core.Services.OperationsControlOptions.SectionName).Bind(options);
-            });
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Services.OperationsControlOptions>(
+            NightCodeForge.Core.Services.OperationsControlOptions.SectionName);
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Resilience.RetryPolicyOptions>(
+            NightCodeForge.Core.Resilience.RetryPolicyOptions.SectionName);
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Resilience.LlmRetryPolicyOptions>(
+            NightCodeForge.Core.Resilience.LlmRetryPolicyOptions.SectionName);
         services.TryAddSingleton<IOperationsControlService, OperationsControlService>();
 
         // 3. Concurrency & DAG Engine
