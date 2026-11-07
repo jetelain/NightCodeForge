@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
@@ -51,9 +52,9 @@ public class ModelCapabilityResolverTests
     [Fact]
     public void BuildCompactionStrategy_ReturnsStrategy()
     {
-        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new LlmProviderOptions(), "qwen3.8:35b"));
-        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy((LlmProviderOptions?)null, (string?)null));
-        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new AgentProfile { Id = "test", ModelName = "qwen3.8:35b" }));
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new LlmProviderOptions(), "qwen3.8:35b", NullLogger.Instance));
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy((LlmProviderOptions?)null, (string?)null, NullLogger.Instance));
+        Assert.NotNull(ModelCapabilityResolver.BuildCompactionStrategy(new AgentProfile { Id = "test", ModelName = "qwen3.8:35b" }, NullLogger.Instance));
     }
 
     [Fact]
@@ -62,6 +63,7 @@ public class ModelCapabilityResolverTests
         var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
             new LlmProviderOptions { ContextWindowTokens = 225280 },
             "test-model",
+            NullLogger.Instance,
             explicitContextWindowTokens: 65536);
 
         Assert.Equal(65536, strategy.Options.ContextWindowTokens);
@@ -81,6 +83,7 @@ public class ModelCapabilityResolverTests
         var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)
             ModelCapabilityResolver.BuildCompactionStrategy(
                 profile,
+                NullLogger.Instance,
                 explicitContextWindowTokens: 262144);
 
         Assert.Equal(262144, strategy.Options.ContextWindowTokens);
@@ -100,6 +103,7 @@ public class ModelCapabilityResolverTests
         var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)
             ModelCapabilityResolver.BuildCompactionStrategy(
                 profile,
+                NullLogger.Instance,
                 explicitContextWindowTokens: 262144);
 
         Assert.Equal(262144, strategy.Options.ContextWindowTokens);
@@ -117,7 +121,8 @@ public class ModelCapabilityResolverTests
 
         var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
             options,
-            "custom-model:latest");
+            "custom-model:latest",
+            NullLogger.Instance);
 
         Assert.Equal(180000, strategy.Options.ContextWindowTokens);
         Assert.Equal("ModelCapabilityProfile", strategy.Options.ResolutionSource);
@@ -130,7 +135,8 @@ public class ModelCapabilityResolverTests
 
         var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
             options,
-            "unmatched-model");
+            "unmatched-model",
+            NullLogger.Instance);
 
         Assert.Equal(225280, strategy.Options.ContextWindowTokens);
         Assert.Equal("LlmProviderOptions (appsettings.json)", strategy.Options.ResolutionSource);
@@ -141,7 +147,8 @@ public class ModelCapabilityResolverTests
     {
         var strategy = (NightCodeForge.Agents.Compaction.PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
             null,
-            "unmatched-model");
+            "unmatched-model",
+            NullLogger.Instance);
 
         Assert.Equal(LlmProviderOptions.DefaultContextWindowTokens, strategy.Options.ContextWindowTokens);
         Assert.Equal("Default (128k fallback)", strategy.Options.ResolutionSource);

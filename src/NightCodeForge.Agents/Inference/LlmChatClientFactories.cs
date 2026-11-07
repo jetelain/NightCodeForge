@@ -98,7 +98,7 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     {
         var rawClient = CreateRawChatClient(options, effectiveModel, routingTarget, sessionId, _sharedSocketsHandler);
         var targetLabel = options.ProviderType == LlmProviderType.OpenAiCompatible ? "OpenAI Compatible" : routingTarget.ToString();
-        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, targetLabel, _loggerFactory.CreateLogger<TelemetryChatClient>(), options.EffectiveEndpoint);
+        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, targetLabel, _loggerFactory.CreateLogger<TelemetryChatClient>(), options.EffectiveEndpoint, sessionId);
         return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
     }
 
@@ -208,6 +208,12 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
         {
             effectiveStageId = LlmCorrelationHeaders.DefaultStageId;
         }
+
+        _telemetryService.RecordLlmCallRetry(
+            retryCtx,
+            effectiveTaskId > 0 ? effectiveTaskId : null,
+            effectiveStageId,
+            effectiveSessionId);
 
         var endpointStr = retryCtx.RequestUri?.ToString() ?? _options.Value.EffectiveEndpoint;
         var statusOrError = retryCtx.StatusCode.HasValue

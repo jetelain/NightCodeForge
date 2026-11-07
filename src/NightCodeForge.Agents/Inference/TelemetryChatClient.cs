@@ -21,7 +21,10 @@ public class TelemetryChatClient : DelegatingChatClient
     private readonly string _defaultModel;
     private readonly string _defaultTarget;
     private readonly string _endpoint;
-    private readonly ILogger<TelemetryChatClient>? _logger;
+    private readonly string? _sessionId;
+    private readonly int? _taskId;
+    private readonly string? _stageId;
+    private readonly ILogger<TelemetryChatClient> _logger;
 
     public TelemetryChatClient(
         IChatClient innerClient,
@@ -29,24 +32,22 @@ public class TelemetryChatClient : DelegatingChatClient
         string defaultModel,
         string defaultTarget,
         ILogger<TelemetryChatClient> logger,
-        string? endpoint = null)
+        string? endpoint,
+        string? sessionId)
         : base(innerClient ?? throw new ArgumentNullException(nameof(innerClient)))
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
         _defaultModel = !string.IsNullOrWhiteSpace(defaultModel) ? defaultModel : "unknown";
         _defaultTarget = !string.IsNullOrWhiteSpace(defaultTarget) ? defaultTarget : "Auto";
         _endpoint = !string.IsNullOrWhiteSpace(endpoint) ? endpoint : "http://localhost:11434";
+        _sessionId = !string.IsNullOrWhiteSpace(sessionId) ? sessionId.Trim() : null;
+        if (!string.IsNullOrWhiteSpace(_sessionId))
+        {
+            var (parsedTaskId, parsedStageId) = LlmCorrelationHeaders.ParseSessionId(_sessionId);
+            _taskId = parsedTaskId;
+            _stageId = parsedStageId;
+        }
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-    }
-
-    public TelemetryChatClient(
-        IChatClient innerClient,
-        IOperationsTelemetryService telemetryService,
-        string defaultModel,
-        string defaultTarget,
-        string? endpoint = null)
-        : this(innerClient, telemetryService, defaultModel, defaultTarget, Microsoft.Extensions.Logging.Abstractions.NullLogger<TelemetryChatClient>.Instance, endpoint)
-    {
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -79,7 +80,10 @@ public class TelemetryChatClient : DelegatingChatClient
             ErrorMessage: null,
             ReasoningTokens: 0,
             Endpoint: _endpoint,
-            ThinkingEffort: thinkingEffort);
+            ThinkingEffort: thinkingEffort,
+            SessionId: _sessionId,
+            TaskId: _taskId,
+            StageId: _stageId);
 
         _telemetryService.RecordLlmCallStarted(runningRecord);
         var sw = Stopwatch.StartNew();
@@ -193,7 +197,10 @@ public class TelemetryChatClient : DelegatingChatClient
             ErrorMessage: null,
             ReasoningTokens: 0,
             Endpoint: _endpoint,
-            ThinkingEffort: thinkingEffort);
+            ThinkingEffort: thinkingEffort,
+            SessionId: _sessionId,
+            TaskId: _taskId,
+            StageId: _stageId);
 
         _telemetryService.RecordLlmCallStarted(runningRecord);
         var sw = Stopwatch.StartNew();
@@ -364,18 +371,100 @@ public class TelemetryChatClient : DelegatingChatClient
         return _defaultTarget;
     }
 
-    private static string ExtractPromptPreview(IReadOnlyList<ChatMessage> messages)
-    {
-        if (messages.Count == 0) return string.Empty;
+    public const string CompactionSummarizerPreviewPrefix = "[Context Compaction Summarizer] ";
+    public const int MaxPreviewLength = 500;
+    private const int MaxReasoningPreviewLength = 300;
+    private const int MaxCombinedResponsePreviewLength = 400;
+    private const string TruncationEllipsis = "...";
 
-        var lastUserMsg = messages.LastOrDefault(m => m.Role == ChatRole.User);
-        if (lastUserMsg != null && !string.IsNullOrWhiteSpace(lastUserMsg.Text))
+    public static string ExtractPromptPreview(IReadOnlyList<ChatMessage> messages)
+    {
+        if (messages == null || messages.Count == 0) return string.Empty;
+
+        var isCompactionSummarizer = messages.Any(m =>
+            m.Role == ChatRole.System
+            && !string.IsNullOrWhiteSpace(m.Text)
+            && m.Text.Contains(PiStyleCrucibleCompactionStrategy.SummarizationSystemPrompt, StringComparison.Ordinal));
+
+        var prefix = isCompactionSummarizer ? CompactionSummarizerPreviewPrefix : string.Empty;
+        var maxBodyLength = MaxPreviewLength - prefix.Length;
+
+        for (int i = messages.Count - 1; i >= 0; i--)
         {
-            return Truncate(lastUserMsg.Text.Trim(), 500);
+            var msg = messages[i];
+            if (msg.Role == ChatRole.System)
+            {
+                continue;
+            }
+
+            if (msg.Role == ChatRole.User
+                && i < messages.Count - 1
+                && PiStyleCrucibleCompactionStrategy.IsCompactionCheckpointMessage(msg))
+            {
+                continue;
+            }
+
+            var formatted = FormatMessageForPreview(msg);
+            if (string.IsNullOrWhiteSpace(formatted))
+            {
+                continue;
+            }
+
+            var truncated = Truncate(formatted, Math.Max(0, maxBodyLength));
+            return string.IsNullOrEmpty(prefix)
+                ? truncated
+                : prefix + Truncate(formatted, Math.Max(0, maxBodyLength - TruncationEllipsis.Length));
         }
 
         var lastMsg = messages[^1];
-        return Truncate(lastMsg.Text?.Trim() ?? string.Empty, 500);
+        var fallback = FormatMessageForPreview(lastMsg);
+        if (string.IsNullOrWhiteSpace(fallback))
+        {
+            return string.Empty;
+        }
+
+        return string.IsNullOrEmpty(prefix)
+            ? Truncate(fallback, MaxPreviewLength)
+            : prefix + Truncate(fallback, Math.Max(0, maxBodyLength - TruncationEllipsis.Length));
+    }
+
+    private static string FormatMessageForPreview(ChatMessage message)
+    {
+        if (message.Contents != null && message.Contents.Count > 0)
+        {
+            var toolResult = message.Contents.OfType<FunctionResultContent>().LastOrDefault();
+            if (toolResult != null)
+            {
+                var resultStr = toolResult.Result?.ToString()?.Trim() ?? string.Empty;
+                return string.IsNullOrWhiteSpace(resultStr)
+                    ? $"[Tool Result: {toolResult.CallId}]"
+                    : $"[Tool Result] {resultStr}";
+            }
+
+            var toolCall = message.Contents.OfType<FunctionCallContent>().LastOrDefault();
+            if (toolCall != null)
+            {
+                var argsStr = toolCall.Arguments != null && toolCall.Arguments.Count > 0
+                    ? string.Join(", ", toolCall.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                    : string.Empty;
+                var textPart = !string.IsNullOrWhiteSpace(message.Text) ? $"{message.Text.Trim()} " : string.Empty;
+                return string.IsNullOrWhiteSpace(argsStr)
+                    ? $"{textPart}[Tool Call: {toolCall.Name}]".Trim()
+                    : $"{textPart}[Tool Call: {toolCall.Name}] {argsStr}".Trim();
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.Text))
+        {
+            var trimmed = message.Text.Trim();
+            if (message.Role == ChatRole.Tool && !trimmed.StartsWith("[Tool Result", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[Tool Result] {trimmed}";
+            }
+            return trimmed;
+        }
+
+        return string.Empty;
     }
 
     private static (string Preview, int ReasoningTokens, int TextTokens) ExtractResponseDetails(ChatResponse response, HeuristicTokenEstimator estimator)
@@ -492,13 +581,13 @@ public class TelemetryChatClient : DelegatingChatClient
 
         if (!string.IsNullOrEmpty(reasoningTrimmed) && !string.IsNullOrEmpty(textTrimmed))
         {
-            return $"[Reasoning]\n{Truncate(reasoningTrimmed, 300)}\n\n[Response]\n{Truncate(textTrimmed, 400)}";
+            return $"[Reasoning]\n{Truncate(reasoningTrimmed, MaxReasoningPreviewLength)}\n\n[Response]\n{Truncate(textTrimmed, MaxCombinedResponsePreviewLength)}";
         }
         if (!string.IsNullOrEmpty(reasoningTrimmed))
         {
-            return $"[Reasoning]\n{Truncate(reasoningTrimmed, 500)}";
+            return $"[Reasoning]\n{Truncate(reasoningTrimmed, MaxPreviewLength)}";
         }
-        return Truncate(textTrimmed, 500);
+        return Truncate(textTrimmed, MaxPreviewLength);
     }
 
     public static int EstimateTotalContextTokens(IEnumerable<ChatMessage>? messages, string? modelId = null) =>
@@ -510,7 +599,7 @@ public class TelemetryChatClient : DelegatingChatClient
     private static string Truncate(string text, int maxLength)
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
-        return text.Length <= maxLength ? text : text[..maxLength] + "...";
+        return text.Length <= maxLength ? text : text[..maxLength] + TruncationEllipsis;
     }
 
     public static string ResolveThinkingEffort(ChatOptions? options)

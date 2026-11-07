@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Interfaces;
@@ -17,7 +18,7 @@ public class TelemetryChatClientTests
     {
         _innerClient = new Mock<IChatClient>();
         _telemetryService = new Mock<IOperationsTelemetryService>();
-        _client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "qwen2.5-coder:32b", "Remote");
+        _client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "qwen2.5-coder:32b", "Remote", NullLogger<TelemetryChatClient>.Instance, null, null);
     }
 
     [Fact]
@@ -411,7 +412,7 @@ public class TelemetryChatClientTests
     [Fact]
     public async Task GetResponseAsync_PopulatesEndpointAndThinkingEffort()
     {
-        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "custom-model", "Auto", endpoint: "http://my-ollama:11434");
+        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "custom-model", "Auto", NullLogger<TelemetryChatClient>.Instance, "http://my-ollama:11434", null);
         var messages = new List<ChatMessage> { new(ChatRole.User, "test") };
         var options = new ChatOptions
         {
@@ -606,7 +607,7 @@ public class TelemetryChatClientTests
     [InlineData(true, "medium", "medium")]
     public async Task GetResponseAsync_PopulatesExpectedThinkingEffort(bool? think, string? effort, string expectedEffort)
     {
-        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "model", "Auto");
+        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "model", "Auto", NullLogger<TelemetryChatClient>.Instance, null, null);
         var props = new AdditionalPropertiesDictionary();
 
         if (think == true)

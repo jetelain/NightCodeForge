@@ -21,7 +21,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             ToolResultMaxChars = 200
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         // Turn 0: User Task Anchor
         var anchorMsg = new ChatMessage(ChatRole.User, "Task requirement: implement feature X with criteria A, B, C");
@@ -107,7 +107,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             KeepRecentTokens = 2000
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchorMsg = new ChatMessage(ChatRole.User, "Task anchor");
         var anchorGroup = CreateGroup(CompactionGroupKind.User, new[] { anchorMsg }, tokenCount: 500);
@@ -140,7 +140,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             KeepRecentTokens = 1000
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options, mockSummarizer.Object);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, mockSummarizer.Object, NullLogger.Instance);
 
         var anchorGroup = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Goal") }, tokenCount: 500);
         var callGroup = CreateGroup(CompactionGroupKind.ToolCall, new[] {
@@ -176,7 +176,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             KeepRecentTokens = 1600
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Task anchor") }, tokenCount: 500);
         var oldMsg = CreateGroup(CompactionGroupKind.AssistantText, new[] { new ChatMessage(ChatRole.Assistant, "Old assistant message") }, tokenCount: 2000);
@@ -221,7 +221,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             KeepRecentTokens = 2000
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Task anchor") }, tokenCount: 500);
         var callGroup = CreateGroup(CompactionGroupKind.ToolCall, new[]
@@ -257,7 +257,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             KeepRecentTokens = 1000
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Task anchor") }, tokenCount: 1500);
         var existingSummary = CreateGroup(CompactionGroupKind.Summary, new[] { new ChatMessage(ChatRole.User, "[CONTEXT COMPACTION CHECKPOINT]\n## Goal\nPrior goal") }, tokenCount: 500);
@@ -284,7 +284,7 @@ public class PiStyleCrucibleCompactionStrategyTests
             KeepRecentTokens = 100
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Fix bug in parser") }, tokenCount: 500);
         var priorCheckpoint = CreateGroup(CompactionGroupKind.Summary, new[]

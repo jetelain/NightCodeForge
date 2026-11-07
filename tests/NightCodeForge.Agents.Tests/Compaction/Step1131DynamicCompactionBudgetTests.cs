@@ -23,7 +23,7 @@ public class Step1131DynamicCompactionBudgetTests
             KeepRecentTokens = 16384
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         int effectiveKeepRecent = strategy.CalculateEffectiveKeepRecentTokens(anchorTokens: 10_000);
 
@@ -41,7 +41,7 @@ public class Step1131DynamicCompactionBudgetTests
             KeepRecentTokens = 16384
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         // Anchor is only 1,000 tokens. Dynamic budget = 122,880 - 1,000 - 4,000 = 117,880.
         // Min(16,384, 117,880) = 16,384
@@ -64,7 +64,7 @@ public class Step1131DynamicCompactionBudgetTests
             EmergencyThresholdRatio = 0.95 // Emergency at 9500
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Anchor task") }, tokenCount: 1000);
         var call1 = CreateToolCallGroup("c1", "read", tokenCount: 500);
@@ -114,7 +114,7 @@ public class Step1131DynamicCompactionBudgetTests
             EmergencyThresholdRatio = 0.95 // Emergency at 9500
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Anchor task") }, tokenCount: 1000);
         var oldExcludedFlood = CreateToolResultGroup("c0", "historical old output", tokenCount: 9000);
@@ -162,7 +162,7 @@ public class Step1131DynamicCompactionBudgetTests
             EmergencyThresholdRatio = 0.95
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Anchor task") }, tokenCount: 1000);
         var call1 = CreateToolCallGroup("c1", "read", tokenCount: 500);
@@ -200,7 +200,7 @@ public class Step1131DynamicCompactionBudgetTests
             DebounceTokenDelta = 2500
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var groups = new List<CompactionMessageGroup>
         {
@@ -251,7 +251,7 @@ public class Step1131DynamicCompactionBudgetTests
             ToolResultMaxChars = 2000
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Anchor") }, tokenCount: 1000);
         var call = CreateToolCallGroup("c1", "bash", tokenCount: 200);
@@ -301,7 +301,7 @@ public class Step1131DynamicCompactionBudgetTests
             ToolResultMaxChars = 3000 // ToolResultMaxChars > EmergencyToolResultMaxChars
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, new[] { new ChatMessage(ChatRole.User, "Anchor") }, tokenCount: 1000);
         var call = CreateToolCallGroup("c1", "bash", tokenCount: 200);

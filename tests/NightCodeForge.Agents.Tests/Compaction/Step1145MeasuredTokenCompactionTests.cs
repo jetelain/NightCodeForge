@@ -30,7 +30,7 @@ public class Step1145MeasuredTokenCompactionTests
         };
         Assert.Equal(253_952, options.TriggerThresholdTokens);
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchorGroup = CreateGroup(
             CompactionGroupKind.User,
@@ -105,7 +105,7 @@ public class Step1145MeasuredTokenCompactionTests
             SummarizerModelId = "Qwen3.8-27B:latest"
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, [new ChatMessage(ChatRole.User, "Task anchor")], tokenCount: 500);
         var oldWork = CreateGroup(CompactionGroupKind.AssistantText, [new ChatMessage(ChatRole.Assistant, "Historical work")], tokenCount: 200_000);
@@ -144,7 +144,7 @@ public class Step1145MeasuredTokenCompactionTests
             SummarizerModelId = "Qwen3.8-27B:latest"
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, [new ChatMessage(ChatRole.User, "Task anchor")], tokenCount: 1_000);
         var turn1 = CreateGroup(CompactionGroupKind.AssistantText, [new ChatMessage(ChatRole.Assistant, "Turn 1")], tokenCount: 42_000);
@@ -346,7 +346,7 @@ public class Step1145MeasuredTokenCompactionTests
             ReserveTokens = 5_000,
             SummarizerModelId = "Qwen3.8-27B:latest"
         };
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var userMsg = new ChatMessage(ChatRole.User, "Initial query");
         var assistantMsg = new ChatMessage(ChatRole.Assistant, "Assistant response whose output tokens were reported as 0 by backend");
@@ -384,7 +384,7 @@ public class Step1145MeasuredTokenCompactionTests
             SummarizerModelId = "Qwen3.8-27B:latest"
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, [new ChatMessage(ChatRole.User, "Task anchor")], tokenCount: 1_000);
         var turn1 = CreateGroup(CompactionGroupKind.AssistantText, [new ChatMessage(ChatRole.Assistant, "Turn 1")], tokenCount: 5_000);
@@ -417,7 +417,7 @@ public class Step1145MeasuredTokenCompactionTests
             SummarizerModelId = "Qwen3.8-27B:latest"
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, [new ChatMessage(ChatRole.User, "Task anchor")], tokenCount: 1_000);
         var oldHistory = CreateGroup(CompactionGroupKind.AssistantText, [new ChatMessage(ChatRole.Assistant, "Old history")], tokenCount: 12_000);
@@ -468,7 +468,7 @@ public class Step1145MeasuredTokenCompactionTests
             SummarizerModelId = "Qwen3.8-27B:latest"
         };
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(options);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, null, NullLogger.Instance);
 
         var anchorMsg = new ChatMessage(ChatRole.User, "Implement router endpoints");
         var call1Msg = new ChatMessage(ChatRole.Assistant, new List<AIContent>

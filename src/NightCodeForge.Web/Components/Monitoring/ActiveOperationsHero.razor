@@ -118,11 +118,17 @@
                 {
                     var call = TelemetryUi.ActiveLlmCall;
                     <div style="margin-bottom: 0.75rem;">
-                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
                             <span style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem;">@call.Model</span>
                             <span class="forge-badge @OperationsTelemetryUiService.GetRouteBadgeClass(call.TargetBackend)" style="font-size: 0.75rem;">
                                 @call.TargetBackend
                             </span>
+                            @if (OperationsTelemetryUiService.HasRetryAttempt(call))
+                            {
+                                <span id="badge-llm-retry-attempt" class="forge-badge badge-crimson" style="font-size: 0.75rem;" title="@OperationsTelemetryUiService.FormatRetryNotice(call)">
+                                    🔄 @OperationsTelemetryUiService.FormatRetryBadgeLabel(call)
+                                </span>
+                            }
                         </div>
                         <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
                             <span title="Context Size (Prompt Tokens)">Context: <strong style="color: var(--text-primary);">@call.PromptTokens tokens</strong></span>
@@ -134,6 +140,12 @@
                             }
                             <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveLlmDuration(call)</strong></span>
                         </div>
+                        @if (OperationsTelemetryUiService.HasRetryAttempt(call) && !string.IsNullOrWhiteSpace(call.LastRetryReason))
+                        {
+                            <div id="active-llm-retry-reason" style="margin-bottom: 0.45rem; padding: 0.35rem 0.6rem; border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); font-size: 0.76rem; color: var(--accent-amber); line-height: 1.35;">
+                                ⚠️ @OperationsTelemetryUiService.FormatRetryNotice(call)
+                            </div>
+                        }
                         @if (!string.IsNullOrWhiteSpace(call.PromptPreview))
                         {
                             <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.78rem; color: var(--text-muted); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.4;">

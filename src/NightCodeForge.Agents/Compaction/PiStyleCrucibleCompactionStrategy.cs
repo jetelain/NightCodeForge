@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Workflow;
 using Pmad.AI.Tokens;
 
 namespace NightCodeForge.Agents.Compaction;
@@ -95,12 +96,24 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.";
 
     public const string CheckpointPreamble =
-        "[CONTEXT COMPACTION CHECKPOINT]\nThe conversation history prior to this point was compacted into the following summary:\n\n";
+        ConversationHistorySerializer.CompactionCheckpointHeader + "\nThe conversation history prior to this point was compacted into the following summary:\n\n";
 
     public const string CompactionExcludeReason = "PiStyleCompaction";
 
     /// <summary>Maximum characters kept per user message in the deterministic fallback summary.</summary>
     public const int MaxDeterministicGoalChars = 500;
+
+    public sealed record CompactionCheckpointNotification(
+        ChatMessage SummaryMessage,
+        IReadOnlyList<ChatMessage> IncludedMessages,
+        string? FirstKeptCallId,
+        int KeptRecentMessageCount,
+        int KeptRecentGroupCount,
+        int SummarizedGroupCount,
+        int SummarizedMessageCount,
+        int PreCompactionTokens,
+        int PostCompactionTokens,
+        double DurationMs);
 
     private sealed class MeasuredTokenState
     {
@@ -109,19 +122,32 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         public int OutputTokens;
         public int MessageCount;
         public int ResponseMessageCount;
+        public bool ColdResumeArmed;
     }
 
     private readonly CrucibleCompactionOptions _options;
     private readonly IChatClient? _summarizerClient;
+    private readonly ILogger _logger;
     private readonly MeasuredTokenState _measurementState;
     private int _lastCompactedTurnCount = -1;
     private int _lastCompactedIncludedTurnCount = -1;
     private int _lastCompactedTokenCount = 0;
     private int _lastCompactedIncludedTokenCount = 0;
+    private long _totalSummarizerInputTokens = 0;
+    private long _totalSummarizerOutputTokens = 0;
 
     public CrucibleCompactionOptions Options => _options;
     public int LastCompactedTurnCount => _lastCompactedTurnCount;
     public int LastCompactedTokenCount => _lastCompactedTokenCount;
+    public long TotalSummarizerInputTokens => Interlocked.Read(ref _totalSummarizerInputTokens);
+    public long TotalSummarizerOutputTokens => Interlocked.Read(ref _totalSummarizerOutputTokens);
+    public Func<int, int, CancellationToken, Task>? OnCompacting { get; set; }
+    public Func<CompactionCheckpointNotification, CancellationToken, Task>? OnCompacted { get; set; }
+
+    public bool IsColdResumeCompactionArmed
+    {
+        get { lock (_measurementState.Lock) { return _measurementState.ColdResumeArmed; } }
+    }
 
     public int LastMeasuredInputTokens
     {
@@ -143,19 +169,24 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         get { lock (_measurementState.Lock) { return _measurementState.ResponseMessageCount; } }
     }
 
-    public PiStyleCrucibleCompactionStrategy(CrucibleCompactionOptions options, IChatClient? summarizerClient = null)
-        : this(RequireOptions(options), summarizerClient, new MeasuredTokenState())
+    public PiStyleCrucibleCompactionStrategy(
+        CrucibleCompactionOptions options,
+        IChatClient? summarizerClient,
+        ILogger logger)
+        : this(RequireOptions(options), summarizerClient, logger ?? throw new ArgumentNullException(nameof(logger)), new MeasuredTokenState())
     {
     }
 
     private PiStyleCrucibleCompactionStrategy(
         CrucibleCompactionOptions options,
         IChatClient? summarizerClient,
+        ILogger logger,
         MeasuredTokenState measurementState)
         : base(CreateTrigger(options, measurementState))
     {
         _options = options;
         _summarizerClient = summarizerClient;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _measurementState = measurementState;
     }
 
@@ -170,8 +201,61 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         options ?? throw new ArgumentNullException(nameof(options));
 
     /// <summary>
+    /// Arms a one-shot cold-cache resumption compaction gate. When armed, the strategy will compact
+    /// before the next LLM call if the restored history meets or exceeds the cold-resume threshold (&lt; 64k ceiling),
+    /// even when total tokens are still below the warm-cache <see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>.
+    /// </summary>
+    public void ArmColdResumeCompaction()
+    {
+        lock (_measurementState.Lock)
+        {
+            _measurementState.ColdResumeArmed = true;
+        }
+    }
+
+    /// <summary>
+    /// Disarms the cold-cache resumption compaction gate.
+    /// </summary>
+    public void DisarmColdResumeCompaction() => DisarmColdResumeCompaction(_measurementState);
+
+    private static void DisarmColdResumeCompaction(MeasuredTokenState measurementState)
+    {
+        lock (measurementState.Lock)
+        {
+            measurementState.ColdResumeArmed = false;
+        }
+    }
+
+    private static int GetWindowCeilingTokens(CrucibleCompactionOptions options)
+    {
+        int triggerCeiling = Math.Max(1, options.TriggerThresholdTokens);
+        return options.ContextWindowTokens > 0
+            ? Math.Min(options.ContextWindowTokens, triggerCeiling)
+            : triggerCeiling;
+    }
+
+    private static int GetColdResumeThresholdTokens(CrucibleCompactionOptions options)
+    {
+        int maxCompacted = options.MaxCompactedContextTokens > 0
+            ? options.MaxCompactedContextTokens
+            : CrucibleCompactionOptions.DefaultMaxCompactedContextTokens;
+        int coldCeiling = Math.Min(maxCompacted, CrucibleCompactionOptions.DefaultColdResumeThresholdTokens);
+        return Math.Min(GetWindowCeilingTokens(options), coldCeiling);
+    }
+
+    private static int GetEffectiveCompactedCeilingTokens(CrucibleCompactionOptions options)
+    {
+        int maxCompacted = options.MaxCompactedContextTokens > 0
+            ? options.MaxCompactedContextTokens
+            : CrucibleCompactionOptions.DefaultMaxCompactedContextTokens;
+        int coldCeiling = Math.Min(maxCompacted, CrucibleCompactionOptions.DefaultColdResumeThresholdTokens);
+        return Math.Min(GetWindowCeilingTokens(options), coldCeiling);
+    }
+
+    /// <summary>
     /// Evaluates whether the conversation index requires compaction based on the projected prompt token count
-    /// for the next LLM request (<see cref="CalculateProjectedPromptTokens(CompactionMessageIndex)"/> &gt; <see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>).
+    /// for the next LLM request (<see cref="CalculateProjectedPromptTokens(CompactionMessageIndex)"/> &gt; <see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>),
+    /// or when a cold-cache resumption gate is armed and the context meets or exceeds the 64k ceiling.
     /// </summary>
     public bool ShouldCompact(CompactionMessageIndex index) =>
         ShouldCompact(index, _options, _measurementState);
@@ -182,8 +266,27 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         MeasuredTokenState measurementState)
     {
         ArgumentNullException.ThrowIfNull(index);
-        return options.Enabled
-            && CalculateProjectedPromptTokens(index, options, measurementState) > options.TriggerThresholdTokens;
+        if (!options.Enabled) return false;
+
+        int projected = CalculateProjectedPromptTokens(index, options, measurementState);
+        bool coldResumeArmed;
+        lock (measurementState.Lock)
+        {
+            coldResumeArmed = measurementState.ColdResumeArmed;
+        }
+
+        if (coldResumeArmed)
+        {
+            if (projected >= GetColdResumeThresholdTokens(options))
+            {
+                return true;
+            }
+
+            // Below 64k on cold resume: disarm and resume directly without redundant compaction.
+            DisarmColdResumeCompaction(measurementState);
+        }
+
+        return projected > options.TriggerThresholdTokens;
     }
 
     /// <summary>
@@ -297,17 +400,18 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
     /// <summary>
     /// Calculates the dynamic budget of recent tokens to preserve verbatim.
-    /// Invariant: AnchorTokens + EffectiveKeepRecent + CheckpointSummary &lt;= TriggerThreshold - HeadroomMargin.
+    /// Invariant: AnchorTokens + EffectiveKeepRecent + CheckpointSummary &lt;= Math.Min(TriggerThresholdTokens, MaxCompactedContextTokens) - HeadroomMargin.
     /// </summary>
     public int CalculateEffectiveKeepRecentTokens(int anchorTokens)
     {
+        int targetCeiling = GetEffectiveCompactedCeilingTokens(_options);
         int effectiveSafetyMargin = _options.SafetyMarginTokens;
-        if (_options.TriggerThresholdTokens <= _options.SafetyMarginTokens)
+        if (targetCeiling <= _options.SafetyMarginTokens)
         {
-            effectiveSafetyMargin = Math.Max(0, _options.TriggerThresholdTokens / 4);
+            effectiveSafetyMargin = Math.Max(0, targetCeiling / 4);
         }
 
-        int dynamicBudget = Math.Max(0, _options.TriggerThresholdTokens - anchorTokens - effectiveSafetyMargin);
+        int dynamicBudget = Math.Max(0, targetCeiling - anchorTokens - effectiveSafetyMargin);
         return Math.Min(_options.KeepRecentTokens, dynamicBudget);
     }
 
@@ -316,17 +420,35 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         ILogger logger,
         CancellationToken cancellationToken)
     {
+        var effectiveLogger = _logger;
         if (!_options.Enabled) return false;
 
         int projectedPromptTokens = CalculateProjectedPromptTokens(index);
+        bool isColdResumeCompaction = false;
+        if (IsColdResumeCompactionArmed)
+        {
+            if (projectedPromptTokens >= GetColdResumeThresholdTokens(_options))
+            {
+                isColdResumeCompaction = true;
+            }
+            DisarmColdResumeCompaction();
+        }
 
-        // Check if projected prompt token count for the next request exceeds trigger threshold
-        if (projectedPromptTokens <= _options.TriggerThresholdTokens)
+        // Check if projected prompt token count for the next request exceeds trigger threshold (or cold-resume gate)
+        if (!isColdResumeCompaction && projectedPromptTokens <= _options.TriggerThresholdTokens)
         {
             return false;
         }
 
         var groups = index.Groups;
+        if (groups.Count == 2
+            && groups[1].Kind == CompactionGroupKind.ToolCall
+            && groups[1].Messages.Count >= 4)
+        {
+            SplitConsecutiveToolCallChain(index, 1);
+            groups = index.Groups;
+        }
+
         if (groups.Count <= 2)
         {
             // Too few groups to compact without destroying prompt anchors
@@ -360,7 +482,8 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             (int)(_options.ContextWindowTokens * _options.EmergencyThresholdRatio));
 
         bool hasMeasuredServerBaseline = LastMeasuredInputTokens > 0;
-        bool isEmergency = projectedPromptTokens >= emergencyThresholdTokens
+        bool isEmergency = isColdResumeCompaction
+            || projectedPromptTokens >= emergencyThresholdTokens
             || (hasMeasuredServerBaseline
                 && projectedPromptTokens > _options.TriggerThresholdTokens
                 && tokensAddedSinceLastCompaction >= _options.DebounceTokenDelta);
@@ -369,7 +492,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         {
             if (turnsSinceLastCompaction < _options.DebounceTurnCooldown)
             {
-                logger.LogDebug(
+                effectiveLogger.LogDebug(
                     "Compaction skipped by turn cooldown. Turns since last: {Turns}, Cooldown: {Cooldown}",
                     turnsSinceLastCompaction, _options.DebounceTurnCooldown);
                 return false;
@@ -377,15 +500,17 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
             if (tokensAddedSinceLastCompaction < _options.DebounceTokenDelta)
             {
-                logger.LogDebug(
+                effectiveLogger.LogDebug(
                     "Compaction skipped by token delta debounce. Tokens added: {TokensAdded}, Min delta: {MinDelta}",
                     tokensAddedSinceLastCompaction, _options.DebounceTokenDelta);
                 return false;
             }
         }
 
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
         // Tier 2 (Compaction Emergency): Clamp oversized tool results in active groups
-        ClampOversizedToolResults(groups, _options.EmergencyToolResultMaxChars, _options.ToolResultMaxChars, logger);
+        ClampOversizedToolResults(groups, _options.EmergencyToolResultMaxChars, _options.ToolResultMaxChars, effectiveLogger);
 
         // 1. Locate Task Anchor (System messages + initial User message)
         int anchorEndIndex = -1;
@@ -454,8 +579,8 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             cutIndex = groups.Count - 1;
         }
 
-        // If the cut point cannot preserve any recent groups (e.g. an oversized older group consumes KeepRecentTokens),
-        // advance cutIndex to preserve at least the newest turn(s) so the oversized older history can be compacted.
+        // If the cut point cannot preserve any groups to summarize before it, advance cutIndex to preserve at least
+        // the newest turn(s) so the older history can be compacted.
         if (cutIndex <= anchorEndIndex + 1 && anchorEndIndex + 2 <= groups.Count - 1)
         {
             cutIndex = anchorEndIndex + 2;
@@ -500,9 +625,31 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         }
         var fileOpsXml = fileTracker.FormatFileOperationsXml();
 
-        // 5. Pre-Serialize Messages to Text with Clamped Tool Results
+        // 5. Pre-Serialize Messages to Text with Clamped Tool Results & < 60k Summarizer Token Budget
         var messagesToSummarize = groupsToSummarize.SelectMany(g => g.Messages).ToList();
-        var serializedTranscript = ConversationSerializer.SerializeConversation(messagesToSummarize, _options.ToolResultMaxChars);
+        int maxSummarizerTokens = _options.MaxSummarizerInputTokens > 0
+            ? _options.MaxSummarizerInputTokens
+            : CrucibleCompactionOptions.DefaultMaxSummarizerInputTokens;
+        int overheadTokens = EstimateSummarizerOverheadTokens(previousSummary, estimator);
+        int maxTranscriptTokens = Math.Max(1024, maxSummarizerTokens - overheadTokens);
+        var serializedTranscript = ConversationSerializer.SerializeConversation(
+            messagesToSummarize,
+            _options.ToolResultMaxChars,
+            maxTranscriptTokens,
+            _options.SummarizerModelId);
+
+        effectiveLogger.LogInformation(
+            "Starting Pi-style context compaction (ColdResume: {IsColdResume}, PreCompactionTokens: {PreTokens}, TriggerThreshold: {Threshold}, SummarizingGroups: {GroupCount}, SummarizingMessages: {MessageCount}).",
+            isColdResumeCompaction,
+            projectedPromptTokens,
+            _options.TriggerThresholdTokens,
+            groupsToSummarize.Count,
+            messagesToSummarize.Count);
+
+        if (OnCompacting != null)
+        {
+            await OnCompacting(projectedPromptTokens, messagesToSummarize.Count, cancellationToken);
+        }
 
         // 6. Generate Summary (via LLM or deterministic fallback)
         string summaryBody;
@@ -514,7 +661,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             }
             catch (Exception ex)
             {
-                logger.LogWarning(ex, "LLM summarization failed during context compaction. Falling back to deterministic structured summary.");
+                effectiveLogger.LogWarning(ex, "LLM summarization failed during context compaction. Falling back to deterministic structured summary.");
                 summaryBody = GenerateDeterministicSummary(messagesToSummarize, previousSummary);
             }
         }
@@ -545,6 +692,10 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
         index.InsertGroup(anchorEndIndex + 1, CompactionGroupKind.Summary, new[] { summaryMessage }, null);
 
+        // 9. Enforce Post-Compaction < 64k Token Ceiling on active included context
+        EnforcePostCompactionTokenCeiling(groups, anchorEndIndex + 1, estimator, effectiveLogger);
+
+        sw.Stop();
         _lastCompactedTurnCount = totalAssistantTurns;
         _lastCompactedIncludedTurnCount = groups
             .Where(g => !g.IsExcluded)
@@ -555,11 +706,42 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         _lastCompactedTokenCount = groups.Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
         ResetMeasuredBaseline();
 
-        logger.LogInformation(
-            "Pi-style context compaction succeeded. Summarized {GroupCount} groups ({MessageCount} messages). Injected summary with {FileOpsLength} file ops characters.",
+        effectiveLogger.LogInformation(
+            "Pi-style context compaction succeeded in {DurationMs:F0}ms. Pre-compaction: {PreTokens} tokens -> Post-compaction: {PostTokens} tokens. Summarized {GroupCount} groups ({MessageCount} messages). Injected summary with {FileOpsLength} file ops characters.",
+            sw.Elapsed.TotalMilliseconds,
+            projectedPromptTokens,
+            _lastCompactedIncludedTokenCount,
             groupsToSummarize.Count,
             messagesToSummarize.Count,
             fileOpsXml.Length);
+
+        var keptGroups = groups
+            .Skip(anchorEndIndex + 2)
+            .Where(g => !g.IsExcluded && !IsSummaryGroup(g))
+            .ToList();
+        var keptMessages = keptGroups.SelectMany(g => g.Messages).ToList();
+        var firstKeptCallId = keptMessages
+            .SelectMany(m => m.Contents.OfType<FunctionCallContent>())
+            .Select(fc => fc.CallId)
+            .FirstOrDefault(cid => !string.IsNullOrWhiteSpace(cid));
+        var includedMessagesSnapshot = index.GetIncludedMessages().ToList();
+
+        if (OnCompacted != null)
+        {
+            await OnCompacted(
+                new CompactionCheckpointNotification(
+                    SummaryMessage: summaryMessage,
+                    IncludedMessages: includedMessagesSnapshot,
+                    FirstKeptCallId: firstKeptCallId,
+                    KeptRecentMessageCount: keptMessages.Count,
+                    KeptRecentGroupCount: keptGroups.Count,
+                    SummarizedGroupCount: groupsToSummarize.Count,
+                    SummarizedMessageCount: messagesToSummarize.Count,
+                    PreCompactionTokens: projectedPromptTokens,
+                    PostCompactionTokens: _lastCompactedIncludedTokenCount,
+                    DurationMs: sw.Elapsed.TotalMilliseconds),
+                cancellationToken);
+        }
 
         return true;
     }
@@ -669,15 +851,144 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         return cutIndex;
     }
 
+    private static void SplitConsecutiveToolCallChain(CompactionMessageIndex index, int groupIndex)
+    {
+        var originalGroup = index.Groups[groupIndex];
+        var messages = originalGroup.Messages.ToList();
+
+        var stepBatches = new List<List<ChatMessage>>();
+        var currentBatch = new List<ChatMessage>();
+        bool seenToolResultInBatch = false;
+
+        foreach (var msg in messages)
+        {
+            if (msg.Role == ChatRole.Assistant && seenToolResultInBatch && currentBatch.Count > 0)
+            {
+                stepBatches.Add(currentBatch);
+                currentBatch = new List<ChatMessage>();
+                seenToolResultInBatch = false;
+            }
+
+            currentBatch.Add(msg);
+            if (msg.Role == ChatRole.Tool || msg.Contents.Any(c => c is FunctionResultContent))
+            {
+                seenToolResultInBatch = true;
+            }
+        }
+
+        if (currentBatch.Count > 0)
+        {
+            stepBatches.Add(currentBatch);
+        }
+
+        if (stepBatches.Count <= 1)
+        {
+            return;
+        }
+
+        index.Groups.RemoveAt(groupIndex);
+        for (int i = 0; i < stepBatches.Count; i++)
+        {
+            index.InsertGroup(groupIndex + i, CompactionGroupKind.ToolCall, stepBatches[i], null);
+        }
+    }
+
+    private void EnforcePostCompactionTokenCeiling(
+        IList<CompactionMessageGroup> groups,
+        int summaryGroupIndex,
+        HeuristicTokenEstimator estimator,
+        ILogger logger)
+    {
+        int ceiling = GetEffectiveCompactedCeilingTokens(_options);
+        int currentTokens = groups
+            .Where(g => !g.IsExcluded)
+            .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+
+        if (currentTokens < ceiling)
+        {
+            return;
+        }
+
+        // Step 1: Progressively clamp tool outputs in kept-recent groups
+        int[] progressiveCaps = [2000, 1000, 500, 250];
+        foreach (var cap in progressiveCaps)
+        {
+            ClampOversizedToolResults(groups, cap, cap, logger);
+            currentTokens = groups
+                .Where(g => !g.IsExcluded)
+                .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+            if (currentTokens < ceiling)
+            {
+                return;
+            }
+        }
+
+        // Step 2: Clamp oversized tool arguments or assistant/user message payloads in kept-recent groups
+        for (int i = summaryGroupIndex + 1; i < groups.Count && currentTokens >= ceiling; i++)
+        {
+            var group = groups[i];
+            if (group.IsExcluded) continue;
+
+            foreach (var msg in group.Messages)
+            {
+                for (int cIdx = 0; cIdx < msg.Contents.Count; cIdx++)
+                {
+                    if (msg.Contents[cIdx] is TextContent tc && !string.IsNullOrEmpty(tc.Text) && tc.Text.Length > 1000)
+                    {
+                        tc.Text = ConversationSerializer.TruncateForSummary(tc.Text, 1000);
+                    }
+                }
+            }
+
+            currentTokens = groups
+                .Where(g => !g.IsExcluded)
+                .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+        }
+    }
+
+    private int EstimateSummarizerOverheadTokens(string? previousSummary, HeuristicTokenEstimator estimator)
+    {
+        int systemTokens = ModelCalibratedTokenEstimator.EstimateTextTokens(SummarizationSystemPrompt, estimator) + 16;
+        int templateTokens = ModelCalibratedTokenEstimator.EstimateTextTokens(
+            string.IsNullOrWhiteSpace(previousSummary) ? SummarizationPromptTemplate : UpdateSummarizationPromptTemplate,
+            estimator) + 32;
+        int prevSummaryTokens = string.IsNullOrWhiteSpace(previousSummary)
+            ? 0
+            : ModelCalibratedTokenEstimator.EstimateTextTokens(previousSummary, estimator) + 32;
+        return systemTokens + templateTokens + prevSummaryTokens;
+    }
+
     private async Task<string> GenerateLlmSummaryAsync(
         string serializedTranscript,
         string? previousSummary,
         CancellationToken cancellationToken)
     {
-        string promptText = $"<conversation>\n{serializedTranscript}\n</conversation>\n\n";
-        if (!string.IsNullOrWhiteSpace(previousSummary))
+        var estimator = ResolveTokenEstimator();
+        int maxSummarizerTokens = _options.MaxSummarizerInputTokens > 0
+            ? _options.MaxSummarizerInputTokens
+            : CrucibleCompactionOptions.DefaultMaxSummarizerInputTokens;
+
+        string effectivePreviousSummary = previousSummary ?? string.Empty;
+        int overheadTokens = EstimateSummarizerOverheadTokens(effectivePreviousSummary, estimator);
+        if (overheadTokens > maxSummarizerTokens / 2 && !string.IsNullOrWhiteSpace(effectivePreviousSummary))
         {
-            promptText += $"<previous-summary>\n{previousSummary}\n</previous-summary>\n\n{UpdateSummarizationPromptTemplate}";
+            int maxPrevSummaryChars = Math.Max(1000, (maxSummarizerTokens / 4) * 2);
+            effectivePreviousSummary = ConversationSerializer.TruncateForSummary(effectivePreviousSummary, maxPrevSummaryChars);
+            overheadTokens = EstimateSummarizerOverheadTokens(effectivePreviousSummary, estimator);
+        }
+
+        int maxTranscriptTokens = Math.Max(512, maxSummarizerTokens - overheadTokens);
+        string effectiveTranscript = serializedTranscript;
+        if (ModelCalibratedTokenEstimator.EstimateTextTokens(effectiveTranscript, estimator) > maxTranscriptTokens)
+        {
+            var paragraphs = effectiveTranscript.Split("\n\n", StringSplitOptions.RemoveEmptyEntries);
+            effectiveTranscript = ConversationSerializer.ElideMiddlePartsToFitTokenBudget(paragraphs, maxTranscriptTokens, estimator);
+        }
+
+        string promptText = $"<conversation>\n{effectiveTranscript}\n</conversation>\n\n";
+        if (!string.IsNullOrWhiteSpace(effectivePreviousSummary))
+        {
+            promptText += $"<previous-summary>\n{effectivePreviousSummary}\n</previous-summary>\n\n{UpdateSummarizationPromptTemplate}";
         }
         else
         {
@@ -697,6 +1008,17 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         };
 
         var response = await _summarizerClient!.GetResponseAsync(messages, options, cancellationToken);
+        if (response.Usage != null)
+        {
+            if (response.Usage.InputTokenCount.HasValue && response.Usage.InputTokenCount.Value > 0)
+            {
+                Interlocked.Add(ref _totalSummarizerInputTokens, response.Usage.InputTokenCount.Value);
+            }
+            if (response.Usage.OutputTokenCount.HasValue && response.Usage.OutputTokenCount.Value > 0)
+            {
+                Interlocked.Add(ref _totalSummarizerOutputTokens, response.Usage.OutputTokenCount.Value);
+            }
+        }
 
         // Guard against accidental tool calls in summarizer response
         if (response.Messages.SelectMany(m => m.Contents).Any(c => c is FunctionCallContent))
@@ -721,7 +1043,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         var userGoals = messages
             .Where(m => m.Role == ChatRole.User
                      && !string.IsNullOrWhiteSpace(m.Text)
-                     && !m.Text.StartsWith("[CONTEXT COMPACTION CHECKPOINT]", StringComparison.OrdinalIgnoreCase))
+                     && !m.Text.StartsWith(ConversationHistorySerializer.CompactionCheckpointHeader, StringComparison.OrdinalIgnoreCase))
             .Select(m => ConversationSerializer.TruncateForSummary(m.Text!, MaxDeterministicGoalChars))
             .Take(3)
             .ToList();
@@ -805,8 +1127,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     private static string StripCheckpointPreamble(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
-        const string marker = "[CONTEXT COMPACTION CHECKPOINT]";
-        var idx = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        var idx = text.IndexOf(ConversationHistorySerializer.CompactionCheckpointHeader, StringComparison.OrdinalIgnoreCase);
         if (idx >= 0)
         {
             var headerIdx = text.IndexOf("## Goal", idx, StringComparison.OrdinalIgnoreCase);
@@ -824,6 +1145,34 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     }
 
     /// <summary>
+    /// Returns true if the message is a compaction checkpoint summary message.
+    /// </summary>
+    public static bool IsCompactionCheckpointMessage(ChatMessage? message)
+    {
+        if (message == null) return false;
+        if (!string.IsNullOrWhiteSpace(message.Text)
+            && message.Text.TrimStart().StartsWith(ConversationHistorySerializer.CompactionCheckpointHeader, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (message.Contents != null)
+        {
+            foreach (var content in message.Contents)
+            {
+                if (content is TextContent tc
+                    && !string.IsNullOrWhiteSpace(tc.Text)
+                    && tc.Text.TrimStart().StartsWith(ConversationHistorySerializer.CompactionCheckpointHeader, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns true if the group is a compaction checkpoint summary group, either by <see cref="CompactionGroupKind.Summary"/>
     /// or by containing a checkpoint message after <see cref="CompactionMessageIndex"/> is rebuilt from flat <see cref="ChatMessage"/>s.
     /// </summary>
@@ -837,8 +1186,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
         foreach (var message in group.Messages)
         {
-            if (!string.IsNullOrWhiteSpace(message.Text)
-                && message.Text.StartsWith("[CONTEXT COMPACTION CHECKPOINT]", StringComparison.OrdinalIgnoreCase))
+            if (IsCompactionCheckpointMessage(message))
             {
                 return true;
             }

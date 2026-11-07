@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Hubs;
 
@@ -64,6 +65,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
             }
         }
 
+        OnLlmCallChanged?.Invoke(record);
+
         _ = Task.Run(async () =>
         {
             try
@@ -75,6 +78,75 @@ public class OperationsTelemetryService : IOperationsTelemetryService
                 _logger.LogDebug(ex, "Failed to broadcast ReceiveLlmCallStarted for {CallId}", record.CallId);
             }
         });
+    }
+
+    public void RecordLlmCallRetry(RetryNotificationContext context, int? taskId = null, string? stageId = null, string? sessionId = null)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var reason = context.StatusCode.HasValue
+            ? $"HTTP {(int)context.StatusCode.Value} {context.StatusCode.Value}"
+            : context.ErrorMessage;
+
+        LlmCallRecord? updatedRecord = null;
+        lock (_llmLock)
+        {
+            var idx = -1;
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                idx = _llmCalls.FindIndex(r => r.Status == LlmCallStatus.Running && string.Equals(r.SessionId, sessionId, StringComparison.OrdinalIgnoreCase));
+            }
+            if (idx < 0 && taskId.HasValue && taskId.Value > 0)
+            {
+                idx = _llmCalls.FindIndex(r => r.Status == LlmCallStatus.Running && r.TaskId == taskId.Value);
+            }
+            if (idx < 0)
+            {
+                idx = _llmCalls.FindIndex(r => r.Status == LlmCallStatus.Running);
+            }
+
+            if (idx >= 0)
+            {
+                var existing = _llmCalls[idx];
+                updatedRecord = existing with
+                {
+                    StartTime = DateTime.UtcNow,
+                    DurationMs = 0,
+                    RetryAttempt = context.Attempt,
+                    MaxRetries = context.MaxRetries,
+                    LastRetryReason = reason,
+                    SessionId = !string.IsNullOrWhiteSpace(sessionId) ? sessionId : existing.SessionId,
+                    TaskId = taskId.HasValue && taskId.Value > 0 ? taskId : existing.TaskId,
+                    StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : existing.StageId
+                };
+                _llmCalls[idx] = updatedRecord;
+            }
+        }
+
+        if (updatedRecord != null)
+        {
+            _logger.LogWarning(
+                "LLM call retrying (attempt {Attempt}/{MaxRetries}): CallId: {CallId}, Model: {Model}, Reason: {Reason}",
+                context.Attempt,
+                context.MaxRetries,
+                updatedRecord.CallId,
+                updatedRecord.Model,
+                reason);
+
+            OnLlmCallChanged?.Invoke(updatedRecord);
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _hubContext.Clients.All.ReceiveLlmCallStarted(updatedRecord);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to broadcast ReceiveLlmCallStarted on retry for {CallId}", updatedRecord.CallId);
+                }
+            });
+        }
     }
 
     public void UpdateLlmCallProgress(string callId, int completionTokens, double durationMs, double tokensPerSecond, int reasoningTokens = 0)
@@ -142,6 +214,16 @@ public class OperationsTelemetryService : IOperationsTelemetryService
             var idx = _llmCalls.FindIndex(r => r.CallId == record.CallId);
             if (idx >= 0)
             {
+                var existing = _llmCalls[idx];
+                record = record with
+                {
+                    RetryAttempt = record.RetryAttempt > 0 ? record.RetryAttempt : existing.RetryAttempt,
+                    MaxRetries = record.MaxRetries > 0 ? record.MaxRetries : existing.MaxRetries,
+                    LastRetryReason = record.LastRetryReason ?? existing.LastRetryReason,
+                    SessionId = record.SessionId ?? existing.SessionId,
+                    TaskId = record.TaskId ?? existing.TaskId,
+                    StageId = record.StageId ?? existing.StageId
+                };
                 _llmCalls[idx] = record;
             }
             else
@@ -153,6 +235,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
                 }
             }
         }
+
+        OnLlmCallChanged?.Invoke(record);
 
         _ = Task.Run(async () =>
         {
@@ -328,6 +412,7 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     private readonly object _taskLock = new();
     private readonly Dictionary<int, ActiveTaskSummary> _activeTasks = new();
 
+    public event Action<LlmCallRecord>? OnLlmCallChanged;
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
     public event Action<int, int>? OnPendingCountsChanged;
     public event Action<ModelPreloadTelemetryRecord?>? OnModelPreloadChanged;

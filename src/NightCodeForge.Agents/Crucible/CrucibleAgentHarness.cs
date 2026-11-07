@@ -240,6 +240,85 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var activeClient = setup.ActiveClient;
         var harnessOptions = setup.Options;
         var agent = setup.Agent;
+
+        if (harnessOptions.CompactionStrategy is PiStyleCrucibleCompactionStrategy piStrategy)
+        {
+            piStrategy.OnCompacting = async (preTokens, msgCount, ct) =>
+            {
+                await BroadcastAsync(
+                    sessionId,
+                    context.ForgeTask.Id,
+                    context.StageId,
+                    AgentActivityKind.Notice,
+                    $"Compacting conversation context ({preTokens:N0} estimated tokens, summarizing {msgCount} messages)...",
+                    ct);
+            };
+
+            piStrategy.OnCompacted = async (notification, ct) =>
+            {
+                chatHistory.Clear();
+                chatHistory.AddRange(notification.IncludedMessages);
+                latestSerializedState = SerializeSession(chatHistory);
+
+                await conversationState.DrainAsync();
+                int? cutTurnIndex = ResolveCompactionCutTurnIndex(
+                    conversationState.GetTrackedTurnsSnapshot(),
+                    notification.FirstKeptCallId,
+                    notification.KeptRecentMessageCount);
+
+                var checkpointMeta = new ConversationHistorySerializer.CompactionCheckpointMetadata(
+                    IsCompactionCheckpoint: true,
+                    CutTurnIndex: cutTurnIndex,
+                    FirstKeptTurnIndex: cutTurnIndex,
+                    FirstKeptCallId: notification.FirstKeptCallId,
+                    KeptRecentMessageCount: notification.KeptRecentMessageCount,
+                    KeptRecentGroupCount: notification.KeptRecentGroupCount,
+                    SummarizedGroupCount: notification.SummarizedGroupCount,
+                    SummarizedMessageCount: notification.SummarizedMessageCount,
+                    PreCompactionTokens: notification.PreCompactionTokens,
+                    PostCompactionTokens: notification.PostCompactionTokens,
+                    DurationMs: Math.Round(notification.DurationMs, 1));
+
+                conversationState.EnqueueTurn(
+                    StageTurnRole.Optimization,
+                    $"Failed to record compaction checkpoint turn for conversation #{conversation.Id}",
+                    content: notification.SummaryMessage.Text,
+                    durationMs: (long)Math.Round(notification.DurationMs),
+                    metadataJson: JsonSerializer.Serialize(checkpointMeta));
+
+                await BroadcastAsync(
+                    sessionId,
+                    context.ForgeTask.Id,
+                    context.StageId,
+                    AgentActivityKind.Notice,
+                    $"Context compaction complete in {notification.DurationMs:F0}ms: {notification.PreCompactionTokens:N0} -> {notification.PostCompactionTokens:N0} tokens (summarized {notification.SummarizedMessageCount} messages across {notification.SummarizedGroupCount} groups).",
+                    ct);
+            };
+
+            // Cold-Cache Compaction Gate on Session Resumption (§3.2.3):
+            // When resuming an existing conversation whose restored history meets or exceeds the 64k ceiling,
+            // arm one-shot compaction before the first resumed LLM call to avoid multi-minute cold prompt prefill.
+            if (conversationState.IsResumedConversation)
+            {
+                int restoredTokens = ModelCalibratedTokenEstimator.EstimateMessagesTokens(chatHistory, setup.EffectiveModelId);
+                int coldResumeThreshold = Math.Min(
+                    piStrategy.Options.MaxCompactedContextTokens > 0
+                        ? piStrategy.Options.MaxCompactedContextTokens
+                        : CrucibleCompactionOptions.DefaultMaxCompactedContextTokens,
+                    CrucibleCompactionOptions.DefaultColdResumeThresholdTokens);
+
+                if (restoredTokens >= coldResumeThreshold)
+                {
+                    _logger.LogInformation(
+                        "Armed cold-resume context compaction for conversation #{ConversationId} (restored {RestoredTokens} estimated tokens >= {ColdThreshold} ceiling).",
+                        conversation.Id,
+                        restoredTokens,
+                        coldResumeThreshold);
+                    piStrategy.ArmColdResumeCompaction();
+                }
+            }
+        }
+
         var session = await agent.CreateSessionAsync(cancellationToken);
 
         string? targetRouting = null;
@@ -248,11 +327,32 @@ public partial class CrucibleAgentHarness : IAgentHarness
         bool streamingFailed = false;
         bool sawToolCallInPass = false;
 
-        AgentRunMetrics CurrentMetrics() =>
-            new(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens);
+        (long Prompt, long Completion) GetEffectiveTokenTotals()
+        {
+            long summarizerPrompt = harnessOptions.CompactionStrategy is PiStyleCrucibleCompactionStrategy ps
+                ? ps.TotalSummarizerInputTokens
+                : 0;
+            long summarizerCompletion = harnessOptions.CompactionStrategy is PiStyleCrucibleCompactionStrategy psc
+                ? psc.TotalSummarizerOutputTokens
+                : 0;
+            var effectivePrompt = (tracingClient != null
+                ? Math.Max(promptTokens, tracingClient.TotalMeasuredInputTokens)
+                : promptTokens) + summarizerPrompt;
+            var effectiveCompletion = (tracingClient != null
+                ? Math.Max(completionTokens, tracingClient.TotalMeasuredOutputTokens)
+                : completionTokens) + summarizerCompletion;
+            return (effectivePrompt, effectiveCompletion);
+        }
+
+        AgentRunMetrics CurrentMetrics()
+        {
+            var (effPrompt, effCompletion) = GetEffectiveTokenTotals();
+            return new(stopwatch.ElapsedMilliseconds, effPrompt, effCompletion, effPrompt + effCompletion);
+        }
 
         async Task<string?> SaveAsync(AgentRunStatus status, string? summary, CancellationToken ct)
         {
+            var (effPrompt, effCompletion) = GetEffectiveTokenTotals();
             return await _conversationCoordinator.SaveTranscriptAsync(
                 conversationState,
                 new CrucibleTranscriptRequest(
@@ -260,8 +360,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     workspacePath,
                     chatHistory,
                     stopwatch.ElapsedMilliseconds,
-                    promptTokens,
-                    completionTokens,
+                    effPrompt,
+                    effCompletion,
                     status,
                     summary,
                     tracingClient,
@@ -1005,13 +1105,79 @@ public partial class CrucibleAgentHarness : IAgentHarness
         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken);
 
         return AgentRunResult.Completed(
-            new AgentRunMetrics(stopwatch.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+            CurrentMetrics(),
             commitHash: null,
             updatedState: latestSerializedState,
             summary: extraction.Summary,
             targetRouting: extraction.TargetRouting,
             reviewerFeedback: extraction.ReviewerFeedback,
             proposals: proposals);
+    }
+
+    private static int? ResolveCompactionCutTurnIndex(
+        IReadOnlyList<ConversationTurn>? ordered,
+        string? firstKeptCallId,
+        int keptRecentMessageCount)
+    {
+        if (ordered == null || ordered.Count == 0)
+        {
+            return null;
+        }
+
+        int anchorIdx = -1;
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            if (ordered[i].Role == StageTurnRole.User)
+            {
+                anchorIdx = i;
+                break;
+            }
+        }
+
+        int minPostAnchorIdx = anchorIdx >= 0 ? anchorIdx + 1 : 0;
+
+        if (!string.IsNullOrWhiteSpace(firstKeptCallId))
+        {
+            for (int i = minPostAnchorIdx; i < ordered.Count; i++)
+            {
+                if (ordered[i].Role == StageTurnRole.Tool &&
+                    string.Equals(ConversationHistorySerializer.ExtractCallId(ordered[i].MetadataJson), firstKeptCallId, StringComparison.Ordinal))
+                {
+                    int idx = i;
+                    while (idx > minPostAnchorIdx && (ordered[idx - 1].Role is StageTurnRole.Thinking or StageTurnRole.Assistant))
+                    {
+                        idx--;
+                    }
+                    return ordered[idx].TurnIndex;
+                }
+            }
+        }
+
+        if (keptRecentMessageCount <= 0)
+        {
+            return ordered[^1].TurnIndex + 1;
+        }
+
+        int remaining = keptRecentMessageCount;
+        int cursor = ordered.Count;
+        while (cursor > minPostAnchorIdx && remaining > 0)
+        {
+            cursor--;
+            var role = ordered[cursor].Role;
+            if (role is StageTurnRole.Optimization or StageTurnRole.Thinking)
+            {
+                continue;
+            }
+
+            remaining--;
+        }
+
+        while (cursor > minPostAnchorIdx && ordered[cursor - 1].Role == StageTurnRole.Thinking)
+        {
+            cursor--;
+        }
+
+        return cursor < ordered.Count ? ordered[cursor].TurnIndex : ordered[^1].TurnIndex + 1;
     }
 
     private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct, Dictionary<string, object?>? metadata = null)

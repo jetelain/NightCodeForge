@@ -378,6 +378,69 @@ public class OperationsTelemetryServiceTests
         Assert.Contains("high", completeLog.Message);
     }
 
+    [Fact]
+    public void RecordLlmCallRetry_CorrelatesBySessionOrTaskId_UpdatesRetryFields_AndPreservesRetryMetadataOnCompletion()
+    {
+        var call = new LlmCallRecord(
+            CallId: "call-retry-corr",
+            Model: "Qwen3.8-27B:latest",
+            TargetBackend: "Local",
+            StartTime: DateTime.UtcNow.AddMinutes(-10),
+            DurationMs: 0,
+            PromptTokens: 45_000,
+            CompletionTokens: 0,
+            TokensPerSecond: 0,
+            PromptPreview: "[Tool Result] Build succeeded",
+            CompletionPreview: null,
+            Status: LlmCallStatus.Running,
+            ErrorMessage: null,
+            SessionId: "ncf-task77-implementation",
+            TaskId: 77,
+            StageId: "implementation");
+
+        var changedNotifications = new List<LlmCallRecord>();
+        _service.OnLlmCallChanged += r => changedNotifications.Add(r);
+
+        _service.RecordLlmCallStarted(call);
+
+        var retryCtx = new NightCodeForge.Core.Resilience.RetryNotificationContext(
+            new Uri("http://localhost:11434/api/chat"),
+            HttpMethod.Post,
+            Headers: null,
+            Attempt: 2,
+            MaxRetries: 3,
+            Delay: TimeSpan.FromSeconds(5),
+            ElapsedDuration: TimeSpan.FromMinutes(10),
+            MaxDuration: TimeSpan.FromMinutes(30),
+            ErrorMessage: "The request timed out after 600 seconds.");
+
+        _service.RecordLlmCallRetry(retryCtx, taskId: 77, stageId: "implementation", sessionId: "ncf-task77-implementation");
+
+        var active = _service.GetActiveLlmCall();
+        Assert.NotNull(active);
+        Assert.Equal("call-retry-corr", active!.CallId);
+        Assert.Equal(2, active.RetryAttempt);
+        Assert.Equal(3, active.MaxRetries);
+        Assert.Equal("The request timed out after 600 seconds.", active.LastRetryReason);
+
+        // Complete the call without explicitly setting RetryAttempt on the completion record -> must preserve retry metadata
+        _service.RecordLlmCallCompleted(call with
+        {
+            DurationMs = 15_000,
+            CompletionTokens = 250,
+            TokensPerSecond = 16.7,
+            Status = LlmCallStatus.Completed,
+            CompletionPreview = "Completed on retry!"
+        });
+
+        var recent = _service.GetRecentLlmCalls(1).Single();
+        Assert.Equal(LlmCallStatus.Completed, recent.Status);
+        Assert.Equal(2, recent.RetryAttempt);
+        Assert.Equal(3, recent.MaxRetries);
+        Assert.Equal("The request timed out after 600 seconds.", recent.LastRetryReason);
+        Assert.Equal(3, changedNotifications.Count);
+    }
+
     private class TestLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
     {
         public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Logs { get; } = new();

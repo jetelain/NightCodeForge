@@ -11,7 +11,7 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
     public const double DefaultLlmBaseDelaySeconds = 1.0;
     public const double DefaultLlmMaxDelaySeconds = 30.0;
     public const double DefaultLlmMaxRetryDurationSeconds = 1800.0; // 30 minutes
-    public const int DefaultLlmMaxTimeoutRetries = 1;
+    public const int DefaultLlmMaxTimeoutRetries = 3;
 
     public LlmRetryPolicyOptions()
     {

@@ -27,6 +27,7 @@ public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClien
         CancellationToken cancellationToken = default)
     {
         var messages = chatMessages.ToList();
+        await PersistIfCompactedAsync(messages);
         var response = await base.GetResponseAsync(messages, options, cancellationToken);
 
         // Add response to the tracked history and persist
@@ -54,6 +55,7 @@ public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClien
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var messages = chatMessages.ToList();
+        await PersistIfCompactedAsync(messages);
         var assistantContents = new List<AIContent>();
         var textBuilder = new System.Text.StringBuilder();
 
@@ -92,6 +94,14 @@ public class PerServiceCallChatHistoryPersistingChatClient : DelegatingChatClien
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Failed to persist chat history after streaming response; continuing inference.");
+        }
+    }
+
+    private async Task PersistIfCompactedAsync(IReadOnlyList<ChatMessage> messages)
+    {
+        if (messages.Any(Compaction.PiStyleCrucibleCompactionStrategy.IsCompactionCheckpointMessage))
+        {
+            await _onPersistAsync(messages);
         }
     }
 }

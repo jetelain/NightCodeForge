@@ -40,6 +40,18 @@ public sealed class CrucibleCompactionOptions
     /// <summary>Maximum character length for individual tool results before emergency clamping triggers.</summary>
     public const int DefaultEmergencyToolResultMaxChars = 8000;
 
+    /// <summary>Default hard ceiling on post-compaction active context size (64k tokens).</summary>
+    public const int DefaultMaxCompactedContextTokens = 65536;
+
+    /// <summary>Default cold-cache resumption compaction threshold (64,000 tokens).</summary>
+    public const int DefaultColdResumeThresholdTokens = 64000;
+
+    /// <summary>Default hard ceiling on total summarizer LLM prompt tokens (60,000 tokens).</summary>
+    public const int DefaultMaxSummarizerInputTokens = 60000;
+
+    /// <summary>Token budget reserved for the summarizer system prompt, previous summary, and XML template overhead.</summary>
+    public const int SummarizerPromptOverheadReserveTokens = 4000;
+
     /// <summary>
     /// Whether automatic context compaction is enabled.
     /// </summary>
@@ -99,6 +111,18 @@ public sealed class CrucibleCompactionOptions
     /// Content exceeding this limit is safely truncated with a marker.
     /// </summary>
     public int ToolResultMaxChars { get; set; } = DefaultToolResultMaxChars;
+
+    /// <summary>
+    /// Hard ceiling on post-compaction active context size and cold-cache resumption prefill (defaults to 65,536 / 64k tokens).
+    /// Does not lower warm-cache TriggerThresholdTokens during normal in-memory execution.
+    /// </summary>
+    public int MaxCompactedContextTokens { get; set; } = DefaultMaxCompactedContextTokens;
+
+    /// <summary>
+    /// Hard ceiling on total summarizer LLM prompt tokens (System + &lt;conversation&gt; + &lt;previous-summary&gt; + instructions).
+    /// Defaults to 60,000 tokens so summarization calls remain strictly below 64k tokens.
+    /// </summary>
+    public int MaxSummarizerInputTokens { get; set; } = DefaultMaxSummarizerInputTokens;
 
     /// <summary>
     /// Identifies how the active context window size was resolved (e.g., "AgentProfile", "LlmProviderOptions (appsettings.json)").

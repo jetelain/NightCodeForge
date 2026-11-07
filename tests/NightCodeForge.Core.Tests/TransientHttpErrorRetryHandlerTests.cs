@@ -571,7 +571,7 @@ public class TransientHttpErrorRetryHandlerTests
     {
         var options = new LlmRetryPolicyOptions();
         Assert.Equal(TimeSpan.FromMinutes(30), options.MaxRetryDuration);
-        Assert.Equal(1, options.MaxTimeoutRetries);
+        Assert.Equal(3, options.MaxTimeoutRetries);
         Assert.Null(options.PerAttemptTimeout);
     }
 

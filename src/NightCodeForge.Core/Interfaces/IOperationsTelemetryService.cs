@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Interfaces;
@@ -17,6 +18,16 @@ public interface IOperationsTelemetryService
     /// Updates real-time streaming progress of an active LLM inference call.
     /// </summary>
     void UpdateLlmCallProgress(string callId, int completionTokens, double durationMs, double tokensPerSecond, int reasoningTokens = 0);
+
+    /// <summary>
+    /// Records an HTTP-level retry attempt on an active in-flight LLM inference call.
+    /// </summary>
+    void RecordLlmCallRetry(RetryNotificationContext context, int? taskId = null, string? stageId = null, string? sessionId = null);
+
+    /// <summary>
+    /// Event fired whenever an LLM call record starts, retries, or completes.
+    /// </summary>
+    event Action<LlmCallRecord>? OnLlmCallChanged;
 
     /// <summary>
     /// Records the completion, failure, or cancellation of an LLM inference call.

@@ -23,13 +23,14 @@ public class CompactionReviewRegressionTests
     [Fact]
     public void Strategy_NullOptions_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => new PiStyleCrucibleCompactionStrategy(null!));
+        Assert.Throws<ArgumentNullException>(() => new PiStyleCrucibleCompactionStrategy(null!, null, NullLogger.Instance));
+        Assert.Throws<ArgumentNullException>(() => new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 1000), null, null!));
     }
 
     [Fact]
     public async Task CutPoint_IgnoresAlreadyExcludedGroups_WhenAccumulatingRecentWindow()
     {
-        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 1000));
+        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 1000), null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, "anchor", 500);
         var a = CreateGroup(CompactionGroupKind.AssistantText, "A", 1500);
@@ -52,7 +53,7 @@ public class CompactionReviewRegressionTests
     public async Task CutPoint_WhenRecentBudgetCannotBeFilled_NeverSummarizesNewestGroup()
     {
         // Oversized anchor puts the context over the trigger while everything after it is below KeepRecentTokens.
-        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 5000));
+        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 5000), null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, "huge anchor", 3000);
         var a = CreateGroup(CompactionGroupKind.AssistantText, "A", 100);
@@ -72,7 +73,7 @@ public class CompactionReviewRegressionTests
     [Fact]
     public async Task DeterministicSummary_TruncatesHugeUserMessages()
     {
-        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 100));
+        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 100), null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, "anchor", 500);
         var hugeUser = CreateGroup(CompactionGroupKind.User, new string('Z', 20000), 2500);
@@ -100,7 +101,7 @@ public class CompactionReviewRegressionTests
 
         var options = SmallOptions(keepRecent: 100);
         options.SummarizerModelId = "override-model";
-        var strategy = new PiStyleCrucibleCompactionStrategy(options, summarizer.Object);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, summarizer.Object, NullLogger.Instance);
 
         var index = CreateIndex(new List<CompactionMessageGroup>
         {
@@ -155,7 +156,7 @@ public class CompactionReviewRegressionTests
     public void BuildCompactionStrategy_TinyWindows_KeepsPositiveHeadroomAndSaneBudgets(int window)
     {
         var strategy = (PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
-            null, "some-model", explicitContextWindowTokens: window);
+            null, "some-model", NullLogger.Instance, explicitContextWindowTokens: window);
 
         var o = strategy.Options;
         Assert.True(o.ReserveTokens >= 1 && o.ReserveTokens < window);
@@ -166,7 +167,7 @@ public class CompactionReviewRegressionTests
     [Fact]
     public void BuildCompactionStrategy_ForwardsModelIdToSummarizer()
     {
-        var strategy = (PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(null, "profile-model");
+        var strategy = (PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(null, "profile-model", NullLogger.Instance);
 
         Assert.Equal("profile-model", strategy.Options.SummarizerModelId);
     }
@@ -177,7 +178,7 @@ public class CompactionReviewRegressionTests
     public void BuildCompactionStrategy_NonPositiveWindow_FallsBackToDefault(int nonPositiveWindow)
     {
         var strategy = (PiStyleCrucibleCompactionStrategy)ModelCapabilityResolver.BuildCompactionStrategy(
-            null, "some-model", explicitContextWindowTokens: nonPositiveWindow);
+            null, "some-model", NullLogger.Instance, explicitContextWindowTokens: nonPositiveWindow);
 
         Assert.Equal(LlmProviderOptions.DefaultContextWindowTokens, strategy.Options.ContextWindowTokens);
     }
@@ -187,7 +188,7 @@ public class CompactionReviewRegressionTests
     {
         // When a tool result is at the end of the conversation and cannot be kept alongside its call due to tight headroom,
         // it must return false rather than orphaning the tool result.
-        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 100));
+        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 100), null, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, "anchor", 500);
         var call = CreateGroup(
@@ -247,7 +248,7 @@ src/ExistingMod.cs
             .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, "## Goal\nUpdated Goal\n\n## Progress\n### Done\n- All done")));
 
         var options = SmallOptions(keepRecent: 100);
-        var strategy = new PiStyleCrucibleCompactionStrategy(options, summarizer.Object);
+        var strategy = new PiStyleCrucibleCompactionStrategy(options, summarizer.Object, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, "anchor", 500);
         var priorCheckpoint = CreateGroup(
@@ -298,7 +299,7 @@ src/ExistingMod.cs
                 new FunctionCallContent("spurious_call", "read", new Dictionary<string, object?> { ["path"] = "X.cs" })
             })));
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 100), summarizer.Object);
+        var strategy = new PiStyleCrucibleCompactionStrategy(SmallOptions(keepRecent: 100), summarizer.Object, NullLogger.Instance);
 
         var anchor = CreateGroup(CompactionGroupKind.User, "anchor", 500);
         var a = CreateGroup(CompactionGroupKind.AssistantText, "action text", 3000);

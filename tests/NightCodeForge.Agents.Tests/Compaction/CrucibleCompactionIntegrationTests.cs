@@ -36,7 +36,7 @@ public class CrucibleCompactionIntegrationTests
 
         var mockModelClient = new MultiTurnCompactingMockChatClient(capturedRequests);
 
-        var strategy = new PiStyleCrucibleCompactionStrategy(compactionOptions);
+        var strategy = new PiStyleCrucibleCompactionStrategy(compactionOptions, null, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
 
         var harnessOptions = new HarnessAgentOptions
         {

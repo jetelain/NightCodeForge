@@ -29,7 +29,13 @@ public record LlmCallRecord(
     string? ErrorMessage,
     int ReasoningTokens = 0,
     string? Endpoint = null,
-    string? ThinkingEffort = null);
+    string? ThinkingEffort = null,
+    int RetryAttempt = 0,
+    int MaxRetries = 0,
+    string? LastRetryReason = null,
+    string? SessionId = null,
+    int? TaskId = null,
+    string? StageId = null);
 
 /// <summary>
 /// Status of an operating system shell command intercepted by telemetry.

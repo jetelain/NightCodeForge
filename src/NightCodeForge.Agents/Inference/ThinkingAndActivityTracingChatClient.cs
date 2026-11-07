@@ -37,10 +37,36 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
     private readonly string _stageId;
     private Action<MeasuredCallTokenUsage>? _onMeasuredUsage;
     private MeasuredCallTokenUsage? _lastMeasuredUsage;
+    private long _totalMeasuredInputTokens;
+    private long _totalMeasuredOutputTokens;
 
     public string? LastCapturedSystemPrompt { get; private set; }
     public IReadOnlyList<string> LastCapturedTools { get; private set; } = Array.Empty<string>();
     public string? DetectedMafConfiguration { get; private set; }
+
+    /// <summary>Cumulative server-measured prompt tokens across all completed LLM calls on this client.</summary>
+    public long TotalMeasuredInputTokens
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _totalMeasuredInputTokens;
+            }
+        }
+    }
+
+    /// <summary>Cumulative server-measured completion tokens across all completed LLM calls on this client.</summary>
+    public long TotalMeasuredOutputTokens
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _totalMeasuredOutputTokens;
+            }
+        }
+    }
 
     /// <summary>Latest server-measured token usage reported by a completed call through this client.</summary>
     public MeasuredCallTokenUsage? LastMeasuredUsage
@@ -305,6 +331,8 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         lock (_lock)
         {
             _lastMeasuredUsage = usage;
+            _totalMeasuredInputTokens += usage.InputTokens;
+            _totalMeasuredOutputTokens += usage.OutputTokens;
             callback = _onMeasuredUsage;
         }
 

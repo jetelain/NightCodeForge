@@ -52,6 +52,7 @@ public class OperationsTelemetryUiService : IDisposable
 
         _hubConnection.OnActiveTaskReceived += HandleActiveTaskChanged;
         _hubConnection.OnWorkerStatusReceived += HandleWorkerStatusReceived;
+        _telemetryService.OnLlmCallChanged += HandleLlmCallChanged;
         _telemetryService.OnActiveTaskChanged += HandleActiveTaskChanged;
         _telemetryService.OnModelPreloadChanged += HandleModelPreloadChanged;
     }
@@ -90,11 +91,27 @@ public class OperationsTelemetryUiService : IDisposable
         NotifyStateChanged();
     }
 
+    private void HandleLlmCallChanged(LlmCallRecord call)
+    {
+        if (call.Status == LlmCallStatus.Running)
+        {
+            HandleLlmCallStarted(call);
+        }
+        else
+        {
+            HandleLlmCallCompleted(call);
+        }
+    }
+
     private void HandleLlmCallStarted(LlmCallRecord call)
     {
         lock (_lock)
         {
             ActiveLlmCall = call;
+            if (SelectedLlmCall?.CallId == call.CallId)
+            {
+                SelectedLlmCall = call;
+            }
             var idx = _recentLlmCalls.FindIndex(c => c.CallId == call.CallId);
             if (idx >= 0)
             {
@@ -282,6 +299,26 @@ public class OperationsTelemetryUiService : IDisposable
             }
         }
         NotifyStateChanged();
+    }
+
+    public static bool HasRetryAttempt(LlmCallRecord? call) =>
+        call != null && call.RetryAttempt > 0;
+
+    public static string FormatRetryBadgeLabel(LlmCallRecord? call)
+    {
+        if (call == null || call.RetryAttempt <= 0) return string.Empty;
+        return call.MaxRetries > 0
+            ? string.Create(CultureInfo.InvariantCulture, $"Retry {call.RetryAttempt}/{call.MaxRetries}")
+            : string.Create(CultureInfo.InvariantCulture, $"Retry {call.RetryAttempt}");
+    }
+
+    public static string FormatRetryNotice(LlmCallRecord? call)
+    {
+        if (call == null || call.RetryAttempt <= 0) return string.Empty;
+        var badge = FormatRetryBadgeLabel(call);
+        return !string.IsNullOrWhiteSpace(call.LastRetryReason)
+            ? $"{badge} — {call.LastRetryReason}"
+            : badge;
     }
 
     public static string FormatDuration(double durationMs)
@@ -509,6 +546,7 @@ public class OperationsTelemetryUiService : IDisposable
 
         _hubConnection.OnActiveTaskReceived -= HandleActiveTaskChanged;
         _hubConnection.OnWorkerStatusReceived -= HandleWorkerStatusReceived;
+        _telemetryService.OnLlmCallChanged -= HandleLlmCallChanged;
         _telemetryService.OnActiveTaskChanged -= HandleActiveTaskChanged;
         _telemetryService.OnModelPreloadChanged -= HandleModelPreloadChanged;
     }

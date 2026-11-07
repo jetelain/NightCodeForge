@@ -51,6 +51,6 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
 
 ## 4. Completed Fixes Archive
 
-All 37 previously completed Phase 11 onboarding, hardening, and bug-fix steps (`11.2` through `11.45`) are archived in:
+All 38 previously completed Phase 11 onboarding, hardening, and bug-fix steps (`11.2` through `11.47`) are archived in:
 - **Summary & DoD Record:** [`docs/archive/11_EXTEND_FEATURES.md`](../archive/11_EXTEND_FEATURES.md)
 - **Step Specifications:** [`docs/archive/phase-11/`](../archive/phase-11/)

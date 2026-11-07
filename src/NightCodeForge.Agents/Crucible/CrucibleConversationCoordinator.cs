@@ -37,6 +37,7 @@ public sealed class CrucibleConversationState
     private readonly ITaskRepository _repository;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, bool> _writtenToolCallIds = new(StringComparer.Ordinal);
+    private readonly List<ConversationTurn> _trackedTurns = new();
     private readonly object _gate = new();
     private Task _tail = Task.CompletedTask;
 
@@ -46,11 +47,18 @@ public sealed class CrucibleConversationState
         AttemptIndex = attemptIndex;
         _repository = repository;
         _logger = logger;
+        if (conversation.Turns is { Count: > 0 })
+        {
+            _trackedTurns.AddRange(conversation.Turns);
+        }
     }
 
     public Conversation Conversation { get; }
 
     public int AttemptIndex { get; }
+
+    /// <summary>True when this stage execution resumed an existing conversation or restored serialized session state.</summary>
+    public bool IsResumedConversation { get; internal set; }
 
     /// <summary>Restored (or freshly seeded) chat history of the session; mutated in place by the harness.</summary>
     public List<ChatMessage> ChatHistory { get; internal set; } = new();
@@ -59,6 +67,33 @@ public sealed class CrucibleConversationState
     public bool TryRecordToolCall(string callId) => _writtenToolCallIds.TryAdd(callId, true);
 
     public bool IsToolCallRecorded(string callId) => _writtenToolCallIds.ContainsKey(callId);
+
+    internal void TrackPersistedTurn(ConversationTurn? turn)
+    {
+        if (turn == null)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (!_trackedTurns.Any(t => ReferenceEquals(t, turn)
+                || (turn.Id > 0 && t.Id == turn.Id)
+                || t.TurnIndex == turn.TurnIndex))
+            {
+                _trackedTurns.Add(turn);
+            }
+        }
+    }
+
+    /// <summary>Returns an ordered snapshot of all conversation turns tracked in this session.</summary>
+    public IReadOnlyList<ConversationTurn> GetTrackedTurnsSnapshot()
+    {
+        lock (_gate)
+        {
+            return _trackedTurns.OrderBy(t => t.TurnIndex).ToList();
+        }
+    }
 
     /// <summary>Queues a conversation turn write, executed in submission order.</summary>
     public void EnqueueTurn(
@@ -75,18 +110,22 @@ public sealed class CrucibleConversationState
     {
         var conversationId = Conversation.Id;
         EnqueueWrite(
-            () => _repository.AddConversationTurnAsync(
-                conversationId,
-                role,
-                content: content,
-                thinkingTrace: thinkingTrace,
-                toolName: toolName,
-                toolArguments: toolArguments,
-                toolResult: toolResult,
-                durationMs: durationMs,
-                isError: isError,
-                metadataJson: metadataJson,
-                cancellationToken: CancellationToken.None),
+            async () =>
+            {
+                var turn = await _repository.AddConversationTurnAsync(
+                    conversationId,
+                    role,
+                    content: content,
+                    thinkingTrace: thinkingTrace,
+                    toolName: toolName,
+                    toolArguments: toolArguments,
+                    toolResult: toolResult,
+                    durationMs: durationMs,
+                    isError: isError,
+                    metadataJson: metadataJson,
+                    cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                TrackPersistedTurn(turn);
+            },
             failureMessage);
     }
 
@@ -119,7 +158,7 @@ public sealed class CrucibleConversationState
 
     /// <summary>Call id of the most recent persisted <c>ask</c> tool turn, if any.</summary>
     public string? FindLastAskCallId() =>
-        CrucibleConversationCoordinator.ExtractCallId(Conversation.Turns?.LastOrDefault(IsAskToolTurn));
+        CrucibleConversationCoordinator.ExtractCallId(GetTrackedTurnsSnapshot().LastOrDefault(IsAskToolTurn));
 
     internal static bool IsAskToolTurn(ConversationTurn t) =>
         t.Role == StageTurnRole.Tool && string.Equals(t.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase);
@@ -169,7 +208,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
     private const string ForwardPassPrimingType = "ForwardPass";
     private const string LoopbackDiagnosticPrimingType = "LoopbackDiagnostic";
     private const string CompactionRole = "COMPACTION";
-    private const string LegacyCompactionMarker = "[CONTEXT COMPACTION CHECKPOINT]";
+    private const string LegacyCompactionMarker = ConversationHistorySerializer.CompactionCheckpointHeader;
 
     private readonly ITaskRepository _taskRepository;
     private readonly SessionTranscriptService _transcriptService;
@@ -192,6 +231,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         int attemptIndex = (context.PipelineContext?.StageRetries.GetValueOrDefault(context.StageId, 0) ?? 0) + 1;
         Conversation? conversation = null;
         Conversation? waitingConversation = null;
+        ConversationTurn? initialBootstrapTurn = null;
         bool hadPersistedTurnsBeforeResume = false;
 
         var resumableConversation = await _taskRepository.GetResumableConversationAsync(context.ForgeTask.Id, context.StageId, cancellationToken);
@@ -223,15 +263,15 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
                 if (!hadPersistedTurnsBeforeResume && !string.IsNullOrWhiteSpace(context.BootstrapPrompt))
                 {
-                    var turn0 = await _taskRepository.AddConversationTurnAsync(
+                    initialBootstrapTurn = await _taskRepository.AddConversationTurnAsync(
                         conversation.Id,
                         StageTurnRole.User,
                         content: context.BootstrapPrompt,
                         cancellationToken: cancellationToken);
                     conversation.Turns ??= new List<ConversationTurn>();
-                    if (!conversation.Turns.Contains(turn0))
+                    if (!conversation.Turns.Contains(initialBootstrapTurn))
                     {
-                        conversation.Turns.Add(turn0);
+                        conversation.Turns.Add(initialBootstrapTurn);
                     }
                 }
             }
@@ -262,7 +302,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
             if (!string.IsNullOrWhiteSpace(context.BootstrapPrompt))
             {
-                await _taskRepository.AddConversationTurnAsync(
+                initialBootstrapTurn = await _taskRepository.AddConversationTurnAsync(
                     conversation.Id,
                     StageTurnRole.User,
                     content: context.BootstrapPrompt,
@@ -276,7 +316,10 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         }
 
         var state = new CrucibleConversationState(conversation, attemptIndex, _taskRepository, _logger);
+        state.TrackPersistedTurn(initialBootstrapTurn);
         var effectiveSerializedStateJson = ResolveSerializedState(context, conversation, hadPersistedTurnsBeforeResume);
+        state.IsResumedConversation = hadPersistedTurnsBeforeResume
+            || !string.IsNullOrWhiteSpace(context.SerializedStateJson);
         state.ChatHistory = RestoreChatHistory(context, effectiveSerializedStateJson);
 
         if (conversation.Turns != null)
@@ -328,6 +371,35 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             {
                 var turnsHistory = CrucibleAgentHarness.DeserializeSession(turnsStateJson, _logger);
                 var stateHistory = CrucibleAgentHarness.DeserializeSession(effectiveSerializedStateJson, _logger);
+
+                var turnsCheckpointMsg = turnsHistory.LastOrDefault(PiStyleCrucibleCompactionStrategy.IsCompactionCheckpointMessage);
+                var stateCheckpointMsg = stateHistory.LastOrDefault(PiStyleCrucibleCompactionStrategy.IsCompactionCheckpointMessage);
+                bool turnsHasCompactionCheckpoint = turnsCheckpointMsg != null;
+                bool stateHasCompactionCheckpoint = stateCheckpointMsg != null;
+
+                if (turnsHasCompactionCheckpoint && !stateHasCompactionCheckpoint)
+                {
+                    // DB turns contain a persisted compaction checkpoint while stateHistory is stale/uncompacted.
+                    return turnsStateJson;
+                }
+
+                // Never overwrite a compacted stateHistory with an uncompacted turnsHistory simply because
+                // turnsHistory has more items (compaction intentionally reduces message count).
+                if (stateHasCompactionCheckpoint && !turnsHasCompactionCheckpoint)
+                {
+                    return effectiveSerializedStateJson;
+                }
+
+                if (turnsHasCompactionCheckpoint && stateHasCompactionCheckpoint)
+                {
+                    var turnsCheckpointText = turnsCheckpointMsg!.Text?.Trim() ?? string.Empty;
+                    var stateCheckpointText = stateCheckpointMsg!.Text?.Trim() ?? string.Empty;
+                    if (!string.Equals(turnsCheckpointText, stateCheckpointText, StringComparison.Ordinal))
+                    {
+                        return turnsStateJson;
+                    }
+                }
+
                 if (turnsHistory.Count >= stateHistory.Count)
                 {
                     effectiveSerializedStateJson = turnsStateJson;

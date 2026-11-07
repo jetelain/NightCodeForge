@@ -421,4 +421,101 @@ public class ConversationHistorySerializerTests
         Assert.Equal(4, singleRemovedTool.TurnIndex);
         Assert.Equal("bash", singleRemovedTool.ToolName);
     }
+
+    [Fact]
+    public void Serialize_WithCompactionCheckpointTurn_PreservesAnchorAndCheckpoint_ExcludesPreCutTurns_AndReplaysKeptAndPostCheckpointTurns()
+    {
+        var checkpointText =
+            "[CONTEXT COMPACTION CHECKPOINT]\nThe conversation history prior to this point was compacted into the following summary:\n\n## Goal\nImplement feature X";
+        var checkpointMeta = JsonSerializer.Serialize(new ConversationHistorySerializer.CompactionCheckpointMetadata(
+            IsCompactionCheckpoint: true,
+            CutTurnIndex: 3,
+            FirstKeptCallId: "call_kept_2",
+            KeptRecentMessageCount: 2,
+            SummarizedGroupCount: 1,
+            SummarizedMessageCount: 2,
+            PreCompactionTokens: 120_000,
+            PostCompactionTokens: 18_000));
+
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Initial task anchor" },
+            // Pre-cut turns (TurnIndex 1 & 2) -> must be excluded after compaction
+            new() { TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = "read", ToolArguments = "{\"path\":\"Old.cs\"}", MetadataJson = "{\"CallId\":\"call_old_1\"}" },
+            new() { TurnIndex = 2, Role = StageTurnRole.ToolResult, ToolName = "read", ToolResult = "old content", MetadataJson = "{\"CallId\":\"call_old_1\"}" },
+            // Kept-recent turns at/after CutTurnIndex = 3
+            new() { TurnIndex = 3, Role = StageTurnRole.Tool, ToolName = "edit", ToolArguments = "{\"path\":\"Kept.cs\"}", MetadataJson = "{\"CallId\":\"call_kept_2\"}" },
+            new() { TurnIndex = 4, Role = StageTurnRole.ToolResult, ToolName = "edit", ToolResult = "edited ok", MetadataJson = "{\"CallId\":\"call_kept_2\"}" },
+            // Compaction checkpoint turn persisted at TurnIndex 5
+            new() { TurnIndex = 5, Role = StageTurnRole.Optimization, Content = checkpointText, MetadataJson = checkpointMeta },
+            // Post-checkpoint turns
+            new() { TurnIndex = 6, Role = StageTurnRole.Assistant, Content = "Continuing after compaction." }
+        };
+
+        var json = ConversationHistorySerializer.Serialize(turns);
+        var items = ConversationHistorySerializer.Deserialize(json);
+
+        // Expected: [0] Anchor User, [1] Checkpoint User, [2] Kept Tool Call, [3] Kept Tool Result, [4] Post-checkpoint Assistant
+        Assert.Equal(5, items.Count);
+        Assert.Equal("user", items[0].Role);
+        Assert.Equal("Initial task anchor", items[0].Text);
+
+        Assert.Equal("user", items[1].Role);
+        Assert.Equal(checkpointText, items[1].Text);
+
+        Assert.Equal("assistant", items[2].Role);
+        Assert.Equal("call_kept_2", items[2].FunctionCalls![0].CallId);
+
+        Assert.Equal("tool", items[3].Role);
+        Assert.Equal("call_kept_2", items[3].FunctionResults![0].CallId);
+        Assert.Equal("edited ok", items[3].FunctionResults![0].Result);
+
+        Assert.Equal("assistant", items[4].Role);
+        Assert.Equal("Continuing after compaction.", items[4].Text);
+
+        // Pre-cut call_old_1 must NOT appear anywhere
+        Assert.DoesNotContain(items, i => i.FunctionCalls?.Any(fc => fc.CallId == "call_old_1") == true);
+        Assert.DoesNotContain(items, i => i.FunctionResults?.Any(fr => fr.CallId == "call_old_1") == true);
+    }
+
+    [Fact]
+    public void Serialize_WithMultipleCompactionCheckpoints_UsesLatestCheckpointOnly_AndMaintainsToolCallResultAtomicityAcrossCutBoundary()
+    {
+        var checkpoint1 = "[CONTEXT COMPACTION CHECKPOINT]\nSummary 1";
+        var checkpoint2 = "[CONTEXT COMPACTION CHECKPOINT]\nSummary 2 (latest)";
+
+        // Suppose metadata points CutTurnIndex at TurnIndex 5 (which is a ToolResult whose Tool call was at TurnIndex 4).
+        // ResolveCompactionCutListIndex must pull in TurnIndex 4 (and preceding Thinking at TurnIndex 3) so no orphan ToolResult is emitted.
+        var meta2 = JsonSerializer.Serialize(new ConversationHistorySerializer.CompactionCheckpointMetadata(
+            IsCompactionCheckpoint: true,
+            CutTurnIndex: 5));
+
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Anchor prompt" },
+            new() { TurnIndex = 1, Role = StageTurnRole.Assistant, Content = "Early turn 1" },
+            new() { TurnIndex = 2, Role = StageTurnRole.Optimization, Content = checkpoint1, MetadataJson = "{\"IsCompactionCheckpoint\":true,\"CutTurnIndex\":1}" },
+            new() { TurnIndex = 3, Role = StageTurnRole.Thinking, ThinkingTrace = "Thinking before tool call 2" },
+            new() { TurnIndex = 4, Role = StageTurnRole.Tool, ToolName = "bash", ToolArguments = "{\"command\":\"dotnet test\"}", MetadataJson = "{\"CallId\":\"call_atomic_2\"}" },
+            new() { TurnIndex = 5, Role = StageTurnRole.ToolResult, ToolName = "bash", ToolResult = "Passed!", MetadataJson = "{\"CallId\":\"call_atomic_2\"}" },
+            new() { TurnIndex = 6, Role = StageTurnRole.Optimization, Content = checkpoint2, MetadataJson = meta2 },
+            new() { TurnIndex = 7, Role = StageTurnRole.Tool, ToolName = "write", ToolArguments = "{\"path\":\"Final.cs\"}", MetadataJson = "{\"CallId\":\"call_unanswered_3\"}" }
+        };
+
+        var json = ConversationHistorySerializer.Serialize(turns);
+        var items = ConversationHistorySerializer.Deserialize(json);
+
+        // [0] Anchor, [1] Checkpoint 2 (NOT Checkpoint 1), [2] Thinking, [3] Tool call_atomic_2, [4] ToolResult call_atomic_2, [5] Tool call_unanswered_3, [6] Flushed InterruptedToolResult for call_unanswered_3
+        Assert.Equal(7, items.Count);
+        Assert.Equal("Anchor prompt", items[0].Text);
+        Assert.Equal(checkpoint2, items[1].Text);
+        Assert.DoesNotContain(items, i => i.Text == checkpoint1);
+        Assert.DoesNotContain(items, i => i.Text == "Early turn 1");
+
+        Assert.Equal(ConversationHistorySerializer.ContentTypeReasoning, items[2].Contents![0].Type);
+        Assert.Equal("call_atomic_2", items[3].FunctionCalls![0].CallId);
+        Assert.Equal("call_atomic_2", items[4].FunctionResults![0].CallId);
+        Assert.Equal("call_unanswered_3", items[5].FunctionCalls![0].CallId);
+        Assert.Equal(ConversationHistorySerializer.InterruptedToolResult, items[6].FunctionResults![0].Result);
+    }
 }

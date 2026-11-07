@@ -22,9 +22,9 @@ public class LlmProviderOptions : ILlmProviderOptions
     public string Endpoint { get; set; } = "http://localhost:11434";
 
     /// <summary>
-    /// HTTP client request timeout in minutes to accommodate lengthy code generation and reasoning (default: 15 minutes).
+    /// HTTP client request timeout in minutes to accommodate lengthy code generation and reasoning (default: 10 minutes).
     /// </summary>
-    public double RequestTimeoutMinutes { get; set; } = 15;
+    public double RequestTimeoutMinutes { get; set; } = 10;
 
     public const int DefaultContextWindowTokens = 131072;
     public const int DefaultMaxOutputTokens = 8192;

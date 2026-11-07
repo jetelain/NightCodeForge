@@ -1,5 +1,6 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Core.Domain;
@@ -20,6 +21,7 @@ public static class ModelCapabilityResolver
     /// </summary>
     public static CompactionStrategy BuildCompactionStrategy(
         AgentProfile profile,
+        ILogger logger,
         LlmProviderOptions? options = null,
         int? explicitContextWindowTokens = null,
         int? explicitReserveTokens = null,
@@ -28,6 +30,7 @@ public static class ModelCapabilityResolver
         string? explicitResolutionSource = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(logger);
         int? windowTokens = explicitContextWindowTokens ?? profile.ContextWindowTokens;
         var resolutionSource = !string.IsNullOrWhiteSpace(explicitResolutionSource)
             ? explicitResolutionSource
@@ -38,6 +41,7 @@ public static class ModelCapabilityResolver
         return BuildCompactionStrategy(
             options,
             modelId,
+            logger,
             explicitContextWindowTokens: windowTokens,
             explicitReserveTokens: explicitReserveTokens,
             explicitKeepRecentTokens: explicitKeepRecentTokens,
@@ -72,12 +76,14 @@ public static class ModelCapabilityResolver
     public static CompactionStrategy BuildCompactionStrategy(
         LlmProviderOptions? options,
         string? modelId,
+        ILogger logger,
         int? explicitContextWindowTokens = null,
         int? explicitReserveTokens = null,
         int? explicitKeepRecentTokens = null,
         IChatClient? summarizerClient = null,
         string? explicitResolutionSource = null)
     {
+        ArgumentNullException.ThrowIfNull(logger);
         var profile = FindProfile(options, modelId);
         string resolutionSource;
         int contextWindow;
@@ -137,7 +143,7 @@ public static class ModelCapabilityResolver
             ResolutionSource = resolutionSource
         };
 
-        return new PiStyleCrucibleCompactionStrategy(compactionOptions, summarizerClient);
+        return new PiStyleCrucibleCompactionStrategy(compactionOptions, summarizerClient, logger);
     }
 
     /// <summary>

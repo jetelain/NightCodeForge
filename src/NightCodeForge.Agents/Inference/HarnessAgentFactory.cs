@@ -124,6 +124,7 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
 
         var compactionStrategy = ModelCapabilityResolver.BuildCompactionStrategy(
             profile,
+            _logger,
             _llmOptions,
             explicitContextWindowTokens: explicitContext,
             summarizerClient: baseClient,

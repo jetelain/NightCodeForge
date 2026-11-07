@@ -34,6 +34,12 @@
                     <span class="forge-badge @OperationsTelemetryUiService.GetLlmStatusBadgeClass(Call.Status)">
                         Status: <strong>@Call.Status</strong>
                     </span>
+                    @if (OperationsTelemetryUiService.HasRetryAttempt(Call))
+                    {
+                        <span class="forge-badge badge-crimson" title="@OperationsTelemetryUiService.FormatRetryNotice(Call)">
+                            <strong>🔄 @OperationsTelemetryUiService.FormatRetryBadgeLabel(Call)</strong>
+                        </span>
+                    }
                     <span class="forge-badge badge-gray font-mono">
                         Duration: <strong>@OperationsTelemetryUiService.FormatDuration(Call.DurationMs)</strong>
                     </span>
@@ -55,6 +61,14 @@
                 <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 1.25rem;" class="font-mono">
                     Call ID: @Call.CallId &nbsp;|&nbsp; Started: @Call.StartTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss.fff")
                 </div>
+
+                @if (OperationsTelemetryUiService.HasRetryAttempt(Call) && !string.IsNullOrWhiteSpace(Call.LastRetryReason))
+                {
+                    <div style="margin-bottom: 1.25rem; padding: 0.85rem 1rem; border-radius: var(--radius-md); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.35);">
+                        <strong style="color: var(--accent-amber); font-size: 0.85rem; display: block; margin-bottom: 0.25rem;">HTTP Retry Notice (@OperationsTelemetryUiService.FormatRetryBadgeLabel(Call)):</strong>
+                        <div class="font-mono" style="font-size: 0.8rem; color: var(--text-primary); white-space: pre-wrap;">@Call.LastRetryReason</div>
+                    </div>
+                }
 
                 @if (!string.IsNullOrWhiteSpace(Call.ErrorMessage))
                 {
