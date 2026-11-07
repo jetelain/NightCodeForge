@@ -16,5 +16,7 @@ public class TelemetryWorkerStateService : IWorkerStateService
 
     public int? ActiveTaskId => _telemetryService.GetActiveTask()?.TaskId;
 
+    public IReadOnlyList<int> ActiveTaskIds => _telemetryService.GetActiveTasks().Select(t => t.TaskId).ToList();
+
     public bool IsRunning => _telemetryService.GetActiveTask() != null;
 }

@@ -458,4 +458,50 @@ public class OperationsTelemetryServiceTests
             Logs.Add((logLevel, formatter(state, exception)));
         }
     }
-}
+
+    [Fact]
+    public void GetActiveTasks_TracksConcurrentTasksAndRemovesOnlyCompletedOne()
+    {
+        var t0 = DateTime.UtcNow;
+        var second = new ActiveTaskSummary(TaskId: 2, TaskTitle: "B", CurrentStageId: "s", Priority: 1, QueueType: "llm-inference", StartedAt: t0.AddSeconds(5));
+        var first = new ActiveTaskSummary(TaskId: 1, TaskTitle: "A", CurrentStageId: "s", Priority: 1, QueueType: "llm-inference", StartedAt: t0);
+        var snapshots = new List<IReadOnlyList<ActiveTaskSummary>>();
+        _service.OnActiveTasksChanged += snapshots.Add;
+
+        _service.RecordActiveTask(second);
+        _service.RecordActiveTask(first);
+
+        Assert.Equal(new[] { 1, 2 }, _service.GetActiveTasks().Select(t => t.TaskId));
+
+        _service.ClearActiveTask(1);
+
+        Assert.Equal(new[] { 2 }, _service.GetActiveTasks().Select(t => t.TaskId));
+        Assert.Equal(3, snapshots.Count);
+        Assert.Equal(new[] { 2 }, snapshots[^1].Select(t => t.TaskId));
+    }
+
+    [Fact]
+    public void GetActiveLlmCallsAndShellCommands_ReturnAllRunningItemsOrderedByStart()
+    {
+        var t0 = DateTime.UtcNow;
+        LlmCallRecord Call(string id, DateTime start, LlmCallStatus status) => new(
+            CallId: id, Model: "m", TargetBackend: "Remote", StartTime: start, DurationMs: 0, PromptTokens: 1,
+            CompletionTokens: 0, TokensPerSecond: 0, PromptPreview: "p", CompletionPreview: null, Status: status, ErrorMessage: null);
+        ShellCommandRecord Cmd(string id, DateTime start) => new(
+            CommandId: id, CommandLine: "dotnet build", WorkingDirectory: "/w", StartTime: start, DurationMs: 0,
+            ExitCode: null, Status: ShellCommandStatus.Running, OutputPreview: null, ErrorPreview: null);
+
+        _service.RecordLlmCallStarted(Call("late", t0.AddSeconds(2), LlmCallStatus.Running));
+        _service.RecordLlmCallStarted(Call("early", t0, LlmCallStatus.Running));
+        _service.RecordShellCommandStarted(Cmd("c-late", t0.AddSeconds(2)));
+        _service.RecordShellCommandStarted(Cmd("c-early", t0));
+
+        Assert.Equal(new[] { "early", "late" }, _service.GetActiveLlmCalls().Select(c => c.CallId));
+        Assert.Equal(new[] { "c-early", "c-late" }, _service.GetActiveShellCommands().Select(c => c.CommandId));
+
+        _service.RecordLlmCallCompleted(Call("early", t0, LlmCallStatus.Completed));
+        _service.RecordShellCommandCompleted(Cmd("c-early", t0) with { Status = ShellCommandStatus.Completed, ExitCode = 0 });
+
+        Assert.Equal(new[] { "late" }, _service.GetActiveLlmCalls().Select(c => c.CallId));
+        Assert.Equal(new[] { "c-late" }, _service.GetActiveShellCommands().Select(c => c.CommandId));
+    }}

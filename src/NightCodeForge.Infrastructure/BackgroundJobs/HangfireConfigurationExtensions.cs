@@ -14,6 +14,13 @@ namespace NightCodeForge.Infrastructure.BackgroundJobs;
 public static class HangfireConfigurationExtensions
 {
     /// <summary>
+    /// Minimum, default and maximum number of concurrent LLM inference workers.
+    /// </summary>
+    public const int MinInferenceWorkerCount = 1;
+    public const int DefaultInferenceWorkerCount = 1;
+    public const int MaxInferenceWorkerCount = 16;
+
+    /// <summary>
     /// Default timeout for clean shutdown of individual Hangfire background processing servers.
     /// </summary>
     public static readonly TimeSpan DefaultHangfireShutdownTimeout = TimeSpan.FromSeconds(10);
@@ -39,13 +46,12 @@ public static class HangfireConfigurationExtensions
         var dbPath = sqliteConnectionString;
         if (dbPath.Contains("Data Source=", StringComparison.OrdinalIgnoreCase))
         {
-            var parts = dbPath.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            var parts = dbPath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             foreach (var part in parts)
             {
-                var trimmed = part.Trim();
-                if (trimmed.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
+                if (part.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
                 {
-                    dbPath = trimmed["Data Source=".Length..].Trim();
+                    dbPath = part["Data Source=".Length..].Trim();
                     break;
                 }
             }
@@ -67,15 +73,15 @@ public static class HangfireConfigurationExtensions
 
     /// <summary>
     /// Configures the two isolated Hangfire processing servers via IServiceCollection:
-    /// 1. NCF-LLM-Inference-Worker (WorkerCount = 1, IsLightweightServer = true) on queues [llm-urgent, llm-code-review, llm-implementation, llm-task-review, llm-inference]
+    /// 1. NCF-LLM-Inference-Worker (WorkerCount = N, default 1, clamped to 1..16, IsLightweightServer = true) on queues [llm-urgent, llm-code-review, llm-implementation, llm-task-review, llm-inference]
     /// 2. NCF-Utility-Worker (WorkerCount = 4, IsLightweightServer = false) on queue [default]
     /// Also wraps the registered hosted services in <see cref="GracefulHangfireServerHostedService"/> to handle cancellation tokens gracefully.
     /// </summary>
-    public static IServiceCollection AddNightCodeForgeHangfireServers(this IServiceCollection services)
+    public static IServiceCollection AddNightCodeForgeHangfireServers(this IServiceCollection services, int inferenceWorkerCount = DefaultInferenceWorkerCount)
     {
         services.AddHangfireServer(options =>
         {
-            CopyServerOptions(options, CreateLlmInferenceServerOptions());
+            CopyServerOptions(options, CreateLlmInferenceServerOptions(inferenceWorkerCount));
         });
 
         services.AddHangfireServer(options =>
@@ -89,14 +95,14 @@ public static class HangfireConfigurationExtensions
     }
 
     /// <summary>
-    /// Returns the BackgroundJobServerOptions for the single-threaded LLM inference worker (WorkerCount = 1).
+    /// Returns the BackgroundJobServerOptions for the LLM inference worker (WorkerCount = N, default 1, clamped to 1..16).
     /// Marked as lightweight to prevent running duplicate storage maintenance processes.
     /// </summary>
-    public static BackgroundJobServerOptions CreateLlmInferenceServerOptions() =>
+    public static BackgroundJobServerOptions CreateLlmInferenceServerOptions(int workerCount = DefaultInferenceWorkerCount) =>
         new()
         {
             ServerName = "NCF-LLM-Inference-Worker",
-            WorkerCount = 1,
+            WorkerCount = Math.Clamp(workerCount, MinInferenceWorkerCount, MaxInferenceWorkerCount),
             Queues = HangfireQueues.InferenceQueues,
             IsLightweightServer = true,
             ShutdownTimeout = DefaultHangfireShutdownTimeout,
@@ -156,12 +162,12 @@ public static class HangfireConfigurationExtensions
 #pragma warning disable CS0618 // Type or member is obsolete
     /// <summary>
     /// Launches the two isolated Hangfire servers via IApplicationBuilder:
-    /// 1. NCF-LLM-Inference-Worker (WorkerCount = 1) on queues [llm-urgent, llm-inference]
+    /// 1. NCF-LLM-Inference-Worker (WorkerCount = N, default 1, clamped to 1..16) on queues [llm-urgent, llm-code-review, llm-implementation, llm-task-review, llm-inference]
     /// 2. NCF-Utility-Worker (WorkerCount = 4) on queue [default]
     /// </summary>
-    public static IApplicationBuilder UseNightCodeForgeHangfireServers(this IApplicationBuilder app)
+    public static IApplicationBuilder UseNightCodeForgeHangfireServers(this IApplicationBuilder app, int inferenceWorkerCount = DefaultInferenceWorkerCount)
     {
-        app.UseHangfireServer(CreateLlmInferenceServerOptions());
+        app.UseHangfireServer(CreateLlmInferenceServerOptions(inferenceWorkerCount));
         app.UseHangfireServer(CreateUtilityServerOptions());
         return app;
     }

@@ -11,6 +11,11 @@ public interface IWorkerStateService
     int? ActiveTaskId { get; }
 
     /// <summary>
+    /// Identifiers of all currently executing tasks across concurrent workers.
+    /// </summary>
+    IReadOnlyList<int> ActiveTaskIds => ActiveTaskId.HasValue ? [ActiveTaskId.Value] : [];
+
+    /// <summary>
     /// Indicates whether a task is currently executing.
     /// </summary>
     bool IsRunning { get; }

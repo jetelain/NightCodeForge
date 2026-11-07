@@ -1101,7 +1101,7 @@ flowchart TD
 ```
 
 #### 7.1.2 Queue Polling Hierarchy & Server Configuration
-In [HangfireConfigurationExtensions.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/BackgroundJobs/HangfireConfigurationExtensions.cs), the single dedicated inference worker (`NCF-LLM-Inference-Worker`, `WorkerCount = 1`) polls queues in strict descending priority order:
+In [HangfireConfigurationExtensions.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Infrastructure/BackgroundJobs/HangfireConfigurationExtensions.cs), the dedicated inference worker server (`NCF-LLM-Inference-Worker`, defaulting to `WorkerCount = 1` and configurable up to `N` concurrent workers (`1..16`) via `LlmProvider:MaxConcurrentInferenceTasks` when backed by multi-node `OllamaRouter` or parallel inference endpoints) polls queues in strict descending priority order:
 
 | Queue Name | Worker Count | Priority Tier | Workload Scope & Purpose |
 | :--- | :--- | :--- | :--- |

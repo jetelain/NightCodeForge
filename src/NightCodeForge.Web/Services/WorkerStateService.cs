@@ -38,6 +38,7 @@ public class WorkerStateService : IWorkerStateService, IDisposable
     private int? _lastIdleTaskId;
 
     public int? ActiveTaskId => Current.ActiveTaskId;
+    public IReadOnlyList<int> ActiveTaskIds => _telemetryService.GetActiveTasks().Select(t => t.TaskId).ToList();
     public bool IsRunning => Current.Status == WorkerExecutionStatus.Running;
     public ModelPreloadTelemetryRecord? LatestModelPreload => _telemetryService.GetLatestModelPreload();
 

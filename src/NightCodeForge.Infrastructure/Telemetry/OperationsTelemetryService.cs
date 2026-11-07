@@ -393,6 +393,14 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         }
     }
 
+    public IReadOnlyList<LlmCallRecord> GetActiveLlmCalls()
+    {
+        lock (_llmLock)
+        {
+            return _llmCalls.Where(r => r.Status == LlmCallStatus.Running).OrderBy(r => r.StartTime).ToList();
+        }
+    }
+
     public IReadOnlyList<ShellCommandRecord> GetRecentShellCommands(int count = 25)
     {
         lock (_shellLock)
@@ -409,11 +417,20 @@ public class OperationsTelemetryService : IOperationsTelemetryService
         }
     }
 
+    public IReadOnlyList<ShellCommandRecord> GetActiveShellCommands()
+    {
+        lock (_shellLock)
+        {
+            return _shellCommands.Where(r => r.Status == ShellCommandStatus.Running).OrderBy(r => r.StartTime).ToList();
+        }
+    }
+
     private readonly object _taskLock = new();
     private readonly Dictionary<int, ActiveTaskSummary> _activeTasks = new();
 
     public event Action<LlmCallRecord>? OnLlmCallChanged;
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
+    public event Action<IReadOnlyList<ActiveTaskSummary>>? OnActiveTasksChanged;
     public event Action<int, int>? OnPendingCountsChanged;
     public event Action<ModelPreloadTelemetryRecord?>? OnModelPreloadChanged;
 
@@ -464,12 +481,18 @@ public class OperationsTelemetryService : IOperationsTelemetryService
             return;
         }
 
+        IReadOnlyList<ActiveTaskSummary> snapshot;
         lock (_taskLock)
         {
             _activeTasks[summary.TaskId] = summary;
+            snapshot = _activeTasks.Values
+                .Where(AutonomousTaskClassifier.IsAutonomousTask)
+                .OrderBy(t => t.StartedAt)
+                .ToList();
         }
 
         OnActiveTaskChanged?.Invoke(summary);
+        OnActiveTasksChanged?.Invoke(snapshot);
 
         _ = Task.Run(async () =>
         {
@@ -493,6 +516,7 @@ public class OperationsTelemetryService : IOperationsTelemetryService
 
         bool cleared = false;
         ActiveTaskSummary? remaining = null;
+        IReadOnlyList<ActiveTaskSummary> snapshot;
         lock (_taskLock)
         {
             if (taskId.HasValue)
@@ -505,14 +529,17 @@ public class OperationsTelemetryService : IOperationsTelemetryService
                 _activeTasks.Clear();
             }
 
-            remaining = _activeTasks.Values
+            snapshot = _activeTasks.Values
                 .Where(AutonomousTaskClassifier.IsAutonomousTask)
-                .MaxBy(t => t.StartedAt);
+                .OrderBy(t => t.StartedAt)
+                .ToList();
+            remaining = snapshot.Count > 0 ? snapshot[^1] : null;
         }
 
         if (cleared)
         {
             OnActiveTaskChanged?.Invoke(remaining);
+            OnActiveTasksChanged?.Invoke(snapshot);
 
             _ = Task.Run(async () =>
             {
@@ -542,6 +569,17 @@ public class OperationsTelemetryService : IOperationsTelemetryService
             return _activeTasks.Values
                 .Where(AutonomousTaskClassifier.IsAutonomousTask)
                 .MaxBy(t => t.StartedAt);
+        }
+    }
+
+    public IReadOnlyList<ActiveTaskSummary> GetActiveTasks()
+    {
+        lock (_taskLock)
+        {
+            return _activeTasks.Values
+                .Where(AutonomousTaskClassifier.IsAutonomousTask)
+                .OrderBy(t => t.StartedAt)
+                .ToList();
         }
     }
 

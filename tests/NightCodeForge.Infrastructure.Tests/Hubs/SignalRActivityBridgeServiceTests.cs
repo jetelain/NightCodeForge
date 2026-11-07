@@ -531,6 +531,47 @@ public class SignalRActivityBridgeServiceTests
     }
 
     [Fact]
+    public async Task DispatchActivityEventAsync_InterruptedAndError_WhenOtherAutonomousTaskRemainsActive_BroadcastsRunningForRemainingTask()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        var t0 = DateTime.UtcNow;
+        telemetry.RecordActiveTask(new ActiveTaskSummary(11, "Task 11", "impl", 2, "llm-implementation", t0, "Local GPU"));
+        telemetry.RecordActiveTask(new ActiveTaskSummary(12, "Task 12", "task-review", 2, "llm-task-review", t0.AddSeconds(5), "Local GPU"));
+        telemetry.RecordActiveTask(new ActiveTaskSummary(13, "Task 13", "code-review-fix", 1, "llm-code-review", t0.AddSeconds(10), "Local GPU"));
+
+        // Task 12 interrupts with ask while Task 11 and Task 13 remain running
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-12",
+            12,
+            "task-review",
+            AgentActivityKind.Interrupted,
+            "Need clarification",
+            DateTime.UtcNow));
+
+        Assert.Equal(new[] { 11, 13 }, telemetry.GetActiveTasks().Select(t => t.TaskId));
+        var statusAfterInterrupt = fakeHubContext.AllClient.WorkerStatuses.Last();
+        Assert.Equal(WorkerStatusConstants.Running, statusAfterInterrupt.Status);
+        Assert.Equal(13, statusAfterInterrupt.ActiveTaskId);
+
+        // Task 13 errors while Task 11 remains running
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-13",
+            13,
+            "code-review-fix",
+            AgentActivityKind.Error,
+            "Failed gate",
+            DateTime.UtcNow));
+
+        Assert.Equal(new[] { 11 }, telemetry.GetActiveTasks().Select(t => t.TaskId));
+        var statusAfterError = fakeHubContext.AllClient.WorkerStatuses.Last();
+        Assert.Equal(WorkerStatusConstants.Running, statusAfterError.Status);
+        Assert.Equal(11, statusAfterError.ActiveTaskId);
+    }
+
+    [Fact]
     public async Task HandleOperationsStateChanged_WhenTriggered_BroadcastsReceiveOperationsStatusChanged()
     {
         var fakeHubContext = new FakeHubContext();

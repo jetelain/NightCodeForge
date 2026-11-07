@@ -32,7 +32,10 @@ public static class ServiceCollectionExtensions
         services.AddSignalR();
         services.AddDbContextFactory<AppDbContext>(options =>
             options.UseSqlite(dbConnectionString, sqliteOptions =>
-                sqliteOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)));
+                {
+                    sqliteOptions.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery);
+                    sqliteOptions.CommandTimeout(Data.AppDbContext.SqliteBusyTimeoutSeconds);
+                }));
         services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
 
         // 2. Repositories & Stores

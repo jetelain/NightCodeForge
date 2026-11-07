@@ -197,7 +197,7 @@ public class SignalRActivityBridgeService : BackgroundService
                               string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase)))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
-                        var remainingActive = _telemetryService.GetActiveTask();
+                        var remainingActive = GetRemainingActiveTask();
                         if (remainingActive != null)
                         {
                             await _hubContext.Clients.All
@@ -217,7 +217,7 @@ public class SignalRActivityBridgeService : BackgroundService
                     if (AutonomousTaskClassifier.IsAutonomousTask(evt))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
-                        var remainingAfterInterrupted = _telemetryService.GetActiveTask();
+                        var remainingAfterInterrupted = GetRemainingActiveTask();
                         if (remainingAfterInterrupted != null)
                         {
                             await _hubContext.Clients.All
@@ -256,7 +256,7 @@ public class SignalRActivityBridgeService : BackgroundService
                     if (AutonomousTaskClassifier.IsAutonomousTask(evt))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
-                        var remainingAfterError = _telemetryService.GetActiveTask();
+                        var remainingAfterError = GetRemainingActiveTask();
                         if (remainingAfterError != null)
                         {
                             await _hubContext.Clients.All
@@ -307,5 +307,16 @@ public class SignalRActivityBridgeService : BackgroundService
         {
             _logger.LogDebug(ex, "Failed to dispatch SignalR activity event {Kind} for task #{TaskId}; client may have disconnected.", evt.Kind, evt.TaskId);
         }
+    }
+
+    private ActiveTaskSummary? GetRemainingActiveTask()
+    {
+        var activeTasks = _telemetryService.GetActiveTasks();
+        if (activeTasks is { Count: > 0 })
+        {
+            return activeTasks[^1];
+        }
+
+        return _telemetryService.GetActiveTask();
     }
 }

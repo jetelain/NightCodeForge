@@ -1458,4 +1458,321 @@ public class TaskOrchestratorTests
         Assert.NotNull(capturedSessionContext);
         Assert.Equal(" src/Foo.cs | 12 ++++++++++++\n 1 file changed, 12 insertions(+)", capturedSessionContext.ReviewDiffStat);
     }
+
+    [Theory]
+    [InlineData(ExecutionMode.ContainerSandbox)]
+    [InlineData(ExecutionMode.WslDirect)]
+    public async Task ProcessTaskAsync_IsolatedExecutionModes_ExecuteTwoTasksConcurrentlyWithoutBlockingEachOther(ExecutionMode executionMode)
+    {
+        var ws = new Workspace
+        {
+            Id = 2001,
+            Name = $"Concurrent-{executionMode}",
+            RepositoryPath = "/repo/concurrent",
+            DefaultBaseBranch = "main",
+            ExecutionMode = executionMode
+        };
+        await _workspaceRepo.CreateAsync(ws);
+
+        var task1 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 201,
+            WorkspaceId = ws.Id,
+            Title = "Task 1",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        var task2 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 202,
+            WorkspaceId = ws.Id,
+            Title = "Task 2",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        _depStore.AddTask(task1.Id, ws.Id, TaskOverallStatus.Open);
+        _depStore.AddTask(task2.Id, ws.Id, TaskOverallStatus.Open);
+
+        var bothEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var currentConcurrent = 0;
+        var maxObservedConcurrent = 0;
+
+        var reviewStage = TestWorkflowPipelines.CreateReviewStage(async (_, ct) =>
+        {
+            var nowRunning = Interlocked.Increment(ref currentConcurrent);
+            int initialMax;
+            do
+            {
+                initialMax = maxObservedConcurrent;
+                if (nowRunning <= initialMax) break;
+            } while (Interlocked.CompareExchange(ref maxObservedConcurrent, nowRunning, initialMax) != initialMax);
+
+            if (nowRunning >= 2)
+            {
+                bothEntered.TrySetResult();
+            }
+
+            await bothEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+            Interlocked.Decrement(ref currentConcurrent);
+            return StageExecutionResult.Success();
+        });
+
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[] { reviewStage }));
+        var builder = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            GitWorkspaceManager = _gitManager,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = pipelineProvider
+        };
+
+        var orchestrator1 = builder.Build();
+        var orchestrator2 = builder.Build();
+
+        await Task.WhenAll(
+            orchestrator1.ProcessTaskAsync(task1.Id),
+            orchestrator2.ProcessTaskAsync(task2.Id));
+
+        Assert.Equal(2, maxObservedConcurrent);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_BareHostWorkspace_SerializesConcurrentTasksWithoutDeadlockingCanonicalGitLock()
+    {
+        var ws = new Workspace
+        {
+            Id = 2002,
+            Name = "BareHost-Serialized",
+            RepositoryPath = "/repo/barehost",
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost
+        };
+        await _workspaceRepo.CreateAsync(ws);
+
+        var task1 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 301,
+            WorkspaceId = ws.Id,
+            Title = "BareHost Task 1",
+            Description = "Detailed task specification 1",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage",
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        var task2 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 302,
+            WorkspaceId = ws.Id,
+            Title = "BareHost Task 2",
+            Description = "Detailed task specification 2",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage",
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        _depStore.AddTask(task1.Id, ws.Id, TaskOverallStatus.Open);
+        _depStore.AddTask(task2.Id, ws.Id, TaskOverallStatus.Open);
+
+        var task1EnteredStage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTask1Stage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var currentConcurrent = 0;
+        var maxObservedConcurrent = 0;
+        var executionOrder = new List<int>();
+        var orderLock = new object();
+
+        var reviewStage = new TestWorkflowStage("test-stage", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.TaskReview,
+            Handler = async (ctx, ct) =>
+            {
+                var nowRunning = Interlocked.Increment(ref currentConcurrent);
+                int initialMax;
+                do
+                {
+                    initialMax = maxObservedConcurrent;
+                    if (nowRunning <= initialMax) break;
+                } while (Interlocked.CompareExchange(ref maxObservedConcurrent, nowRunning, initialMax) != initialMax);
+
+                lock (orderLock)
+                {
+                    executionOrder.Add(ctx.ForgeTask.Id);
+                }
+
+                if (ctx.ForgeTask.Id == task1.Id)
+                {
+                    task1EnteredStage.TrySetResult();
+                    await releaseTask1Stage.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+                }
+
+                Interlocked.Decrement(ref currentConcurrent);
+                return StageExecutionResult.Success();
+            }
+        };
+        var nextTierStage = new TestWorkflowStage("next-tier-stage", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.Implementation
+        };
+
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[] { reviewStage, nextTierStage }));
+        var builder = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            PipelineProvider = pipelineProvider
+        };
+
+        var orchestrator1 = builder.Build();
+        var orchestrator2 = builder.Build();
+
+        var run1 = orchestrator1.ProcessTaskAsync(task1.Id);
+        await task1EnteredStage.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var run2 = orchestrator2.ProcessTaskAsync(task2.Id);
+        await Task.Delay(75);
+
+        // Task 2 must not enter stage execution while Task 1 holds the BareHost sentinel execution lock
+        lock (orderLock)
+        {
+            Assert.Equal(new[] { task1.Id }, executionOrder);
+        }
+
+        releaseTask1Stage.TrySetResult();
+        await Task.WhenAll(run1, run2);
+
+        Assert.Equal(1, maxObservedConcurrent);
+        Assert.Equal(new[] { task1.Id, task2.Id }, executionOrder);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_BareHostWorkspace_WhenOperationsPausedWhileWaitingForBareHostLock_DefersSecondTask()
+    {
+        var ws = new Workspace
+        {
+            Id = 2003,
+            Name = "BareHost-PauseWhileWaiting",
+            RepositoryPath = "/repo/barehost-pause",
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost
+        };
+        await _workspaceRepo.CreateAsync(ws);
+
+        var task1 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 401,
+            WorkspaceId = ws.Id,
+            Title = "BareHost Running Task",
+            Description = "Detailed task specification 401",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage",
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        var task2 = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 402,
+            WorkspaceId = ws.Id,
+            Title = "BareHost Waiting Task",
+            Description = "Detailed task specification 402",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage",
+            BaseBranch = "main",
+            MergeMode = MergeMode.ManualReviewRequired
+        });
+        _depStore.AddTask(task1.Id, ws.Id, TaskOverallStatus.Open);
+        _depStore.AddTask(task2.Id, ws.Id, TaskOverallStatus.Open);
+
+        var isPaused = false;
+        var opsControlMock = new Mock<IOperationsControlService>();
+        opsControlMock.SetupGet(o => o.IsPaused).Returns(() => isPaused);
+
+        var task1EnteredStage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTask1Stage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var executedTasks = new List<int>();
+
+        var reviewStage = new TestWorkflowStage("test-stage", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.TaskReview,
+            Handler = async (ctx, ct) =>
+            {
+                lock (executedTasks)
+                {
+                    executedTasks.Add(ctx.ForgeTask.Id);
+                }
+
+                if (ctx.ForgeTask.Id == task1.Id)
+                {
+                    task1EnteredStage.TrySetResult();
+                    await releaseTask1Stage.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+                }
+
+                return StageExecutionResult.Success();
+            }
+        };
+        var nextTierStage = new TestWorkflowStage("next-tier-stage", WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.Implementation
+        };
+
+        var builder = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            DependencyEngine = _depEngine,
+            LockProvider = _lockProvider,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            OperationsControlService = opsControlMock.Object,
+            PipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline(new IWorkflowStage[] { reviewStage, nextTierStage }))
+        };
+
+        var orchestrator1 = builder.Build();
+        var orchestrator2 = builder.Build();
+
+        var run1 = orchestrator1.ProcessTaskAsync(task1.Id);
+        await task1EnteredStage.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Start Task 2 so it blocks on the BareHost sentinel execution lock before global pause is set
+        var run2 = orchestrator2.ProcessTaskAsync(task2.Id);
+        await Task.Delay(50);
+
+        // Global pause happens before Task 1 releases the BareHost lock
+        isPaused = true;
+        releaseTask1Stage.TrySetResult();
+
+        await Task.WhenAll(run1, run2);
+
+        Assert.Equal(new[] { task1.Id }, executedTasks);
+        var reloadedTask2 = await _taskRepo.GetByIdAsync(task2.Id);
+        Assert.NotNull(reloadedTask2);
+        Assert.True(reloadedTask2.IsDeferredByPause);
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(4, 4)]
+    [InlineData(16, 16)]
+    [InlineData(0, 1)]
+    [InlineData(-5, 1)]
+    [InlineData(32, 16)]
+    public void LlmProviderOptions_MaxConcurrentInferenceTasks_ClampsToValidBounds(int input, int expected)
+    {
+        var options = new NightCodeForge.Agents.Inference.LlmProviderOptions();
+        Assert.Equal(1, options.MaxConcurrentInferenceTasks);
+
+        options.MaxConcurrentInferenceTasks = input;
+        Assert.Equal(expected, options.MaxConcurrentInferenceTasks);
+    }
 }

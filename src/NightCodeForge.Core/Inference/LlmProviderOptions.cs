@@ -26,6 +26,20 @@ public class LlmProviderOptions : ILlmProviderOptions
     /// </summary>
     public double RequestTimeoutMinutes { get; set; } = 10;
 
+    public const int MinConcurrentInferenceTasks = 1;
+    public const int MaxConcurrentInferenceTasksLimit = 16;
+
+    private int _maxConcurrentInferenceTasks = MinConcurrentInferenceTasks;
+
+    /// <summary>
+    /// Number of concurrent LLM inference workers (Hangfire WorkerCount of NCF-LLM-Inference-Worker). Clamped to 1..16, default 1.
+    /// </summary>
+    public int MaxConcurrentInferenceTasks
+    {
+        get => _maxConcurrentInferenceTasks;
+        set => _maxConcurrentInferenceTasks = Math.Clamp(value, MinConcurrentInferenceTasks, MaxConcurrentInferenceTasksLimit);
+    }
+
     public const int DefaultContextWindowTokens = 131072;
     public const int DefaultMaxOutputTokens = 8192;
 

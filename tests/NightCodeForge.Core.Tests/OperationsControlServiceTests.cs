@@ -499,4 +499,37 @@ public class OperationsControlServiceTests
         Assert.False(service.IsPaused);
         Assert.Equal(OperationsReclaimStatus.Idle, service.ReclaimStatus);
     }
+
+    [Fact]
+    public async Task PauseOperationsAsync_WhenMultipleActiveTasksPresent_RequestsPauseAndCleansContainersForAll()
+    {
+        var ws = new Workspace { Id = 1, Name = "Ws", RepositoryPath = "C:/ws" };
+        var task1 = new ForgeTask { Id = 41, Title = "Active task 1", Status = TaskOverallStatus.Open, Workspace = ws };
+        var task2 = new ForgeTask { Id = 42, Title = "Active task 2", Status = TaskOverallStatus.Open, Workspace = ws };
+        await _taskRepository.CreateAsync(task1);
+        await _taskRepository.CreateAsync(task2);
+
+        _workerStateMock.SetupSequence(w => w.ActiveTaskIds)
+            .Returns(new[] { 41, 42 })
+            .Returns(Array.Empty<int>())
+            .Returns(Array.Empty<int>());
+        _workerStateMock.Setup(w => w.ActiveTaskId).Returns((int?)null);
+        _gatewayMock.Setup(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var service = new OperationsControlService(
+            _stateStoreMock.Object,
+            _gatewayMock.Object,
+            _workerStateMock.Object,
+            _cancellationManagerMock.Object,
+            _scopeFactory,
+            NullLogger<OperationsControlService>.Instance);
+
+        var result = await service.PauseOperationsAsync();
+
+        Assert.True(result);
+        _cancellationManagerMock.Verify(c => c.RequestPause(41), Times.Once);
+        _cancellationManagerMock.Verify(c => c.RequestPause(42), Times.Once);
+        _environmentProviderMock.Verify(e => e.CleanupTaskContainerAsync(ws, 41, It.IsAny<CancellationToken>()), Times.Once);
+        _environmentProviderMock.Verify(e => e.CleanupTaskContainerAsync(ws, 42, It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

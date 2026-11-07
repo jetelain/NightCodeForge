@@ -60,6 +60,11 @@ public interface IOperationsTelemetryService
     LlmCallRecord? GetActiveLlmCall();
 
     /// <summary>
+    /// Retrieves all currently running LLM calls ordered by start time ascending.
+    /// </summary>
+    IReadOnlyList<LlmCallRecord> GetActiveLlmCalls();
+
+    /// <summary>
     /// Retrieves a chronological snapshot of the most recent shell commands (newest first).
     /// </summary>
     IReadOnlyList<ShellCommandRecord> GetRecentShellCommands(int count = 25);
@@ -68,6 +73,11 @@ public interface IOperationsTelemetryService
     /// Retrieves the currently active in-flight shell command, if any.
     /// </summary>
     ShellCommandRecord? GetActiveShellCommand();
+
+    /// <summary>
+    /// Retrieves all currently running shell commands ordered by start time ascending.
+    /// </summary>
+    IReadOnlyList<ShellCommandRecord> GetActiveShellCommands();
 
     /// <summary>
     /// Records an active task currently executing in the system.
@@ -84,6 +94,16 @@ public interface IOperationsTelemetryService
     /// If no task ID is specified, returns the most recently started active task.
     /// </summary>
     ActiveTaskSummary? GetActiveTask(int? taskId = null);
+
+    /// <summary>
+    /// Retrieves all currently active autonomous tasks ordered by start time ascending.
+    /// </summary>
+    IReadOnlyList<ActiveTaskSummary> GetActiveTasks();
+
+    /// <summary>
+    /// Event fired whenever the set of active tasks is mutated (task recorded or cleared), carrying the full snapshot.
+    /// </summary>
+    event Action<IReadOnlyList<ActiveTaskSummary>>? OnActiveTasksChanged;
 
     /// <summary>
     /// Event fired whenever the active task changes (starts, advances, or clears).

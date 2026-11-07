@@ -11,6 +11,18 @@ namespace NightCodeForge.Infrastructure.Tests;
 
 public class HangfireQueuePriorityTests
 {
+    [Theory]
+    [InlineData(4, 4)]
+    [InlineData(0, 1)]
+    [InlineData(-3, 1)]
+    [InlineData(99, 16)]
+    public void LlmInferenceServerOptions_UsesConfiguredWorkerCountClampedToRange(int requested, int expected)
+    {
+        var options = HangfireConfigurationExtensions.CreateLlmInferenceServerOptions(requested);
+
+        Assert.Equal(expected, options.WorkerCount);
+    }
+
     [Fact]
     public void LlmInferenceServerOptions_EnforcesWorkerCountOneAndPriorityQueues()
     {
@@ -138,6 +150,35 @@ public class HangfireQueuePriorityTests
         Assert.Equal(5, TestJobTarget.ExecutionOrder.Count);
         // WorkerCount = 1 strictly prevents concurrency: max concurrency must be exactly 1
         Assert.Equal(1, TestJobTarget.MaxConcurrentWorkers);
+    }
+
+    [Fact]
+    public async Task HangfireQueue_ConfiguredMultiWorkerConcurrency_ExecutesConcurrentlyUpToWorkerCount()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+
+        TestJobTarget.MaxConcurrentWorkers = 0;
+        TestJobTarget.CurrentConcurrentWorkers = 0;
+        TestJobTarget.ExecutionOrder.Clear();
+
+        for (int i = 0; i < 4; i++)
+        {
+            var id = i;
+            client.Create(() => TestJobTarget.ConcurrentJob(id), new EnqueuedState(HangfireQueues.LlmInference));
+        }
+
+        var options = HangfireConfigurationExtensions.CreateLlmInferenceServerOptions(workerCount: 2);
+        using var server = new BackgroundJobServer(options, storage);
+
+        var timeout = DateTime.UtcNow.AddSeconds(10);
+        while (TestJobTarget.ExecutionOrder.Count < 4 && DateTime.UtcNow < timeout)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(4, TestJobTarget.ExecutionOrder.Count);
+        Assert.Equal(2, TestJobTarget.MaxConcurrentWorkers);
     }
 
     [Fact]

@@ -168,6 +168,25 @@ public class TaskOrchestrator : ITaskOrchestrator
                 return;
             }
 
+            // BareHost workspaces run directly on the host filesystem: serialize task execution per workspace using the
+            // workspace-wide sentinel task lock (orthogonal to the non-reentrant canonical Git lock acquired later).
+            using var bareHostExecutionLock = workspace.ExecutionMode == ExecutionMode.BareHost
+                && task.Id != NightCodeForge.Core.Concurrency.WorkspaceLockProvider.WorkspaceExecutionSentinelTaskId
+                ? await _workspacePreparer.AcquireTaskLockAsync(workspace.Id, NightCodeForge.Core.Concurrency.WorkspaceLockProvider.WorkspaceExecutionSentinelTaskId, cancellationToken)
+                : null;
+
+            if (bareHostExecutionLock != null && _operationsControlService.IsPaused)
+            {
+                _logger.LogInformation("Task #{TaskId} execution deferred after acquiring BareHost workspace lock: operations are globally paused.", taskId);
+                cohortExitReason = CohortExitReason.Paused;
+                if (task.Status == TaskOverallStatus.Open)
+                {
+                    task.IsDeferredByPause = true;
+                    await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+                }
+                return;
+            }
+
             // 3. Branch & Environment Setup
             try
             {

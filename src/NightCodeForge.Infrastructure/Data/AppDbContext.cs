@@ -430,6 +430,8 @@ public class AppDbContext : DbContext
     /// <summary>
     /// Migration identifier for workspace emoji and color code.
     /// </summary>
+    public const int SqliteBusyTimeoutSeconds = 30;
+
     public const string AddWorkspaceEmojiAndColorCodeMigrationId = "20261102181531_AddWorkspaceEmojiAndColorCode";
 
     /// <summary>
@@ -450,6 +452,7 @@ public class AppDbContext : DbContext
             await Database.ExecuteSqlRawAsync("PRAGMA journal_mode = WAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA synchronous = NORMAL;", cancellationToken);
             await Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = ON;", cancellationToken);
+            await Database.ExecuteSqlRawAsync($"PRAGMA busy_timeout = {SqliteBusyTimeoutSeconds * 1000};", cancellationToken);
 
             await BackfillStageQueueTiersAsync(cancellationToken);
             await ApplyWorkspaceIdSeedIfConfiguredAsync(cancellationToken);

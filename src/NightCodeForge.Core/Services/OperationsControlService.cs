@@ -105,12 +105,12 @@ public class OperationsControlService : IOperationsControlService
 
             _logger.LogInformation("Initiating global operations pause: {Reason}", reason);
 
-            // 1. Signal pause to any active task BEFORE setting _isPaused to avoid race with inference gating
-            var activeTaskId = _workerStateService.ActiveTaskId;
-            if (activeTaskId.HasValue)
+            // 1. Signal pause to any active tasks BEFORE setting _isPaused to avoid race with inference gating
+            var activeTaskIds = GetCurrentActiveTaskIds();
+            foreach (var activeTaskId in activeTaskIds)
             {
-                _logger.LogInformation("Active Task #{TaskId} detected. Signalling pause request before setting global pause flag...", activeTaskId.Value);
-                _cancellationManager.RequestPause(activeTaskId.Value);
+                _logger.LogInformation("Active Task #{TaskId} detected. Signalling pause request before setting global pause flag...", activeTaskId);
+                _cancellationManager.RequestPause(activeTaskId);
             }
 
             try
@@ -119,9 +119,9 @@ public class OperationsControlService : IOperationsControlService
             }
             catch (Exception ex)
             {
-                if (activeTaskId.HasValue)
+                foreach (var activeTaskId in activeTaskIds)
                 {
-                    _cancellationManager.ClearPause(activeTaskId.Value);
+                    _cancellationManager.ClearPause(activeTaskId);
                 }
                 _logger.LogError(ex, "Failed persisting IsPaused state to storage during pause.");
                 throw new InvalidOperationException("Failed persisting operations pause state to storage.", ex);
@@ -133,27 +133,30 @@ public class OperationsControlService : IOperationsControlService
 
             OnOperationsStateChanged?.Invoke(true);
 
-            // 2. Wait for active worker to drain and clean up container
-            if (activeTaskId.HasValue)
+            // 2. Wait for active workers to drain and clean up containers
+            if (activeTaskIds.Count > 0)
             {
-                _logger.LogInformation("Waiting up to {TimeoutSec}s for active Task #{TaskId} worker release...", DefaultWorkerDrainTimeout.TotalSeconds, activeTaskId.Value);
+                _logger.LogInformation("Waiting up to {TimeoutSec}s for {Count} active task worker(s) to release...", DefaultWorkerDrainTimeout.TotalSeconds, activeTaskIds.Count);
                 await WaitForWorkerIdleAsync(DefaultWorkerDrainTimeout, cancellationToken);
 
-                try
+                foreach (var activeTaskId in activeTaskIds)
                 {
-                    using var scope = _scopeFactory.CreateScope();
-                    var taskRepository = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
-                    var environmentProvider = scope.ServiceProvider.GetRequiredService<IExecutionEnvironmentProvider>();
-
-                    var task = await taskRepository.GetByIdAsync(activeTaskId.Value, cancellationToken);
-                    if (task?.Workspace != null)
+                    try
                     {
-                        await environmentProvider.CleanupTaskContainerAsync(task.Workspace, activeTaskId.Value, cancellationToken);
+                        using var scope = _scopeFactory.CreateScope();
+                        var taskRepository = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
+                        var environmentProvider = scope.ServiceProvider.GetRequiredService<IExecutionEnvironmentProvider>();
+
+                        var task = await taskRepository.GetByIdAsync(activeTaskId, cancellationToken);
+                        if (task?.Workspace != null)
+                        {
+                            await environmentProvider.CleanupTaskContainerAsync(task.Workspace, activeTaskId, cancellationToken);
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Error while cleaning up task container for task #{TaskId} during pause.", activeTaskId.Value);
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Error while cleaning up task container for task #{TaskId} during pause.", activeTaskId);
+                    }
                 }
             }
 
@@ -327,10 +330,33 @@ public class OperationsControlService : IOperationsControlService
         return openTasks.Count(t => !t.IsWaitingForHuman && t.IsDeferredByPause);
     }
 
+    private IReadOnlyList<int> GetCurrentActiveTaskIds()
+    {
+        var ids = new List<int>();
+        if (_workerStateService.ActiveTaskIds is { Count: > 0 } multiIds)
+        {
+            foreach (var id in multiIds)
+            {
+                if (id > 0 && !ids.Contains(id))
+                {
+                    ids.Add(id);
+                }
+            }
+        }
+
+        var singleId = _workerStateService.ActiveTaskId;
+        if (singleId is > 0 && !ids.Contains(singleId.Value))
+        {
+            ids.Add(singleId.Value);
+        }
+
+        return ids;
+    }
+
     private async Task WaitForWorkerIdleAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         var start = DateTime.UtcNow;
-        while (_workerStateService.ActiveTaskId.HasValue && DateTime.UtcNow - start < timeout)
+        while (GetCurrentActiveTaskIds().Count > 0 && DateTime.UtcNow - start < timeout)
         {
             try
             {
@@ -338,14 +364,15 @@ public class OperationsControlService : IOperationsControlService
             }
             catch (OperationCanceledException)
             {
-                _logger.LogWarning("WaitForWorkerIdleAsync cancelled while waiting for active task #{TaskId} to release worker.", _workerStateService.ActiveTaskId);
+                _logger.LogWarning("WaitForWorkerIdleAsync cancelled while waiting for active task(s) to release worker.");
                 break;
             }
         }
 
-        if (_workerStateService.ActiveTaskId.HasValue)
+        var remaining = GetCurrentActiveTaskIds();
+        if (remaining.Count > 0)
         {
-            _logger.LogWarning("WaitForWorkerIdleAsync timed out after {TimeoutSec}s; active task #{TaskId} has not released worker.", timeout.TotalSeconds, _workerStateService.ActiveTaskId);
+            _logger.LogWarning("WaitForWorkerIdleAsync timed out after {TimeoutSec}s; active task(s) [{TaskIds}] have not released worker.", timeout.TotalSeconds, string.Join(", ", remaining));
         }
     }
 }

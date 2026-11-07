@@ -8,6 +8,7 @@ namespace NightCodeForge.Core.Interfaces;
 public interface ILlmProviderOptions
 {
     LlmProviderType ProviderType { get; }
+    int MaxConcurrentInferenceTasks => 1;
     string? DefaultModelId { get; }
     ThinkingEffort DefaultThinkingEffort { get; }
     string? CoderModelId { get; }
@@ -26,4 +27,5 @@ public record DefaultLlmProviderOptions(
     ThinkingEffort? CoderThinkingEffort = null,
     string? ArchitectModelId = null,
     ThinkingEffort? ArchitectThinkingEffort = null,
-    LlmProviderType ProviderType = LlmProviderType.OllamaRouter) : ILlmProviderOptions;
+    LlmProviderType ProviderType = LlmProviderType.OllamaRouter,
+    int MaxConcurrentInferenceTasks = 1) : ILlmProviderOptions;

@@ -13,6 +13,12 @@ namespace NightCodeForge.Core.Concurrency;
 /// </summary>
 public class WorkspaceLockProvider : IWorkspaceLockProvider
 {
+    /// <summary>
+    /// Sentinel task identifier used with AcquireTaskLockAsync to serialize whole-task execution within a single workspace
+    /// (BareHost mode), without touching the canonical workspace Git lock.
+    /// </summary>
+    public const int WorkspaceExecutionSentinelTaskId = 0;
+
     private sealed class ActiveLockEntry
     {
         public required string LockId { get; init; }

@@ -107,8 +107,10 @@ EnsureSqliteDirectoryExists(hangfireConnection);
 
 // The LLM provider is fixed at startup (changing it requires a restart): each provider has dedicated implementations.
 var llmProviderSection = builder.Configuration.GetSection(NightCodeForge.Agents.Inference.LlmProviderOptions.SectionName);
-var llmProviderType = (llmProviderSection.Get<NightCodeForge.Agents.Inference.LlmProviderOptions>()
-    ?? new NightCodeForge.Agents.Inference.LlmProviderOptions()).ProviderType;
+var startupLlmOptions = llmProviderSection.Get<NightCodeForge.Agents.Inference.LlmProviderOptions>()
+    ?? new NightCodeForge.Agents.Inference.LlmProviderOptions();
+var llmProviderType = startupLlmOptions.ProviderType;
+var llmInferenceWorkerCount = startupLlmOptions.MaxConcurrentInferenceTasks;
 var securitySection = builder.Configuration.GetSection(SecurityOptions.SectionName);
 builder.Services.Configure<SecurityOptions>(securitySection);
 builder.Services.AddNightCodeForgeCoreAndInfrastructure(dbConnection);
@@ -117,7 +119,7 @@ builder.Services.Configure<NightCodeForge.Infrastructure.Inference.LlmEndpointOp
 builder.Services.AddNightCodeForgeInference(llmProviderType);
 builder.Services.AddNightCodeForgeAgents(llmProviderType);
 builder.Services.AddNightCodeForgeHangfire(hangfireConnection);
-builder.Services.AddNightCodeForgeHangfireServers();
+builder.Services.AddNightCodeForgeHangfireServers(llmInferenceWorkerCount);
 
 // Configure host shutdown timeout to give background services adequate time for graceful shutdown
 builder.Services.Configure<HostOptions>(options =>
@@ -299,11 +301,13 @@ static void EnsureSqliteDirectoryExists(string? connectionString)
 static string NormalizeSqliteConnectionString(string? connectionString, string baseDirectory)
 {
     if (string.IsNullOrWhiteSpace(connectionString)) return connectionString ?? string.Empty;
-    var parts = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries);
+    var parts = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     var modified = false;
+    var hasKeyValue = parts.Any(p => p.Contains('='));
+    var hasTimeout = parts.Any(p => p.StartsWith("Default Timeout=", StringComparison.OrdinalIgnoreCase));
     for (int i = 0; i < parts.Length; i++)
     {
-        var trimmed = parts[i].Trim();
+        var trimmed = parts[i];
         if (trimmed.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase))
         {
             var filePath = trimmed["Data Source=".Length..].Trim();
@@ -315,6 +319,11 @@ static string NormalizeSqliteConnectionString(string? connectionString, string b
             }
             break;
         }
+    }
+    if (hasKeyValue && !hasTimeout)
+    {
+        parts = parts.Append($"Default Timeout={NightCodeForge.Infrastructure.Data.AppDbContext.SqliteBusyTimeoutSeconds}").ToArray();
+        modified = true;
     }
     return modified ? string.Join(";", parts) + ";" : connectionString;
 }
