@@ -154,7 +154,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         var workspaceState = new WorkspaceStateService();
         workspaceState.SetActiveWorkspace(new Workspace { Id = 9, Name = "Nine Repo", RepositoryPath = "/repos/nine" });
 
-        Services.AddSingleton(new WorkerStateService(new Mock<IOperationsTelemetryService>().Object));
+        Services.AddSingleton(WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
         Services.AddSingleton(workspaceState);
 
         var cut = Render<NavMenu>();
@@ -309,7 +309,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         Services.AddSingleton(workspaceState);
         Services.AddSingleton<ITaskMutationService>(new Mock<ITaskMutationService>().Object);
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
-        Services.AddSingleton(new WorkerStateService(new Mock<IOperationsTelemetryService>().Object));
+        Services.AddSingleton(WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
 
         var nav = Services.GetRequiredService<NavigationManager>();
         nav.NavigateTo($"http://localhost/w/{ws1.Id}/review/{task.Id}");
@@ -357,7 +357,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
 
     private void RegisterLayoutServices(IWorkspaceRepository workspaceRepo, WorkspaceStateService workspaceState)
     {
-        Services.AddSingleton(new WorkerStateService(new Mock<IOperationsTelemetryService>().Object));
+        Services.AddSingleton(WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
         Services.AddSingleton<ITaskRepository>(new InMemoryTaskRepository());
         Services.AddSingleton(workspaceRepo);
         Services.AddSingleton(workspaceState);

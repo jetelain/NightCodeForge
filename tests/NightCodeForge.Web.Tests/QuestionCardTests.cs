@@ -18,7 +18,7 @@ public class QuestionCardTests : BunitContext
     {
         _orchestrator = new MockTaskOrchestrator();
         _toastService = TestServices.CreateToastService();
-        _workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
+        _workerState = WorkerStateTestHelper.Create(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
 
         Services.AddSingleton<ITaskOrchestrator>(_orchestrator);
         Services.AddSingleton(_toastService);

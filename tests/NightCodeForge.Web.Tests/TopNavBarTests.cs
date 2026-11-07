@@ -24,7 +24,7 @@ public class TopNavBarTests : BunitContext
         _gatewayServiceMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
         Services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
         Services.AddSingleton(_workspaceState);
-        Services.AddSingleton(new WorkerStateService(_telemetryMock.Object));
+        Services.AddSingleton(WorkerStateTestHelper.Create(_telemetryMock.Object));
         Services.AddSingleton(_operationsControlMock.Object);
         Services.AddSingleton(_gatewayServiceMock.Object);
         Services.AddSingleton(TestServices.CreateToastService());

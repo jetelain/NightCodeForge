@@ -145,7 +145,7 @@ public class HomePendingReviewTests : BunitContext
         var telemetryServiceMock = new Mock<IOperationsTelemetryService>();
         telemetryServiceMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
         telemetryServiceMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
-        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryServiceMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var gatewayMock = new Mock<ILlmGatewayService>();
         gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);

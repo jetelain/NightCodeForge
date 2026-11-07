@@ -30,7 +30,7 @@ public class TaskInspectorPageTests : BunitContext
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository(new[] { TestWorkflowFixtures.CreateStandardWorkflow() });
         _telemetryMock = new Moq.Mock<IOperationsTelemetryService>();
-        _workerState = new WorkerStateService(_telemetryMock.Object);
+        _workerState = WorkerStateTestHelper.Create(_telemetryMock.Object);
         _workspaceState = new WorkspaceStateService();
         _hubConnection = TestHubConnectionHelper.Create(workerStateService: _workerState);
         _devQueueService = new FakeDevQueueService();

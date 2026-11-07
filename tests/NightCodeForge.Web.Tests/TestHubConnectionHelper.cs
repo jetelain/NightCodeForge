@@ -19,7 +19,7 @@ public static class TestHubConnectionHelper
     {
         nav ??= new TestNavigationManager();
         logger ??= Mock.Of<ILogger<OrchestratorHubClientConnection>>();
-        workerStateService ??= new WorkerStateService(Mock.Of<IOperationsTelemetryService>());
+        workerStateService ??= WorkerStateTestHelper.Create(Mock.Of<IOperationsTelemetryService>());
 
         if (autoStartNoOp)
         {

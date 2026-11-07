@@ -23,7 +23,7 @@ public class TasksPageTests : BunitContext
         _workspaceRepo = new InMemoryWorkspaceRepository();
         _taskRepo = new InMemoryTaskRepository();
         _workspaceState = new WorkspaceStateService();
-        _workerState = new WorkerStateService(new Mock<IOperationsTelemetryService>().Object);
+        _workerState = WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object);
 
         Services.AddSingleton<IWorkspaceRepository>(_workspaceRepo);
         Services.AddSingleton<ITaskRepository>(_taskRepo);

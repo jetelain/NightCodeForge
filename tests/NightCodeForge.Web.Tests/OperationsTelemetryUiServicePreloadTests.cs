@@ -103,7 +103,7 @@ public class OperationsTelemetryUiServicePreloadTests : BunitContext
         telemetryMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(Array.Empty<LlmCallRecord>());
         telemetryMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(Array.Empty<ShellCommandRecord>());
 
-        var workerState = new WorkerStateService(telemetryMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var uiService = new OperationsTelemetryUiService(hubConnection, telemetryMock.Object);
 
@@ -158,7 +158,7 @@ public class OperationsTelemetryUiServicePreloadTests : BunitContext
         telemetryMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new[] { retryingCall });
         telemetryMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(Array.Empty<ShellCommandRecord>());
 
-        var workerState = new WorkerStateService(telemetryMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var uiService = new OperationsTelemetryUiService(hubConnection, telemetryMock.Object);
 

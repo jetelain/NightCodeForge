@@ -29,7 +29,7 @@ public class MonitoringPageTests : BunitContext
 
         _mockTelemetryService = new Mock<IOperationsTelemetryService>();
         _mockGatewayService = new Mock<ILlmGatewayService>();
-        _workerState = new WorkerStateService(_mockTelemetryService.Object);
+        _workerState = WorkerStateTestHelper.Create(_mockTelemetryService.Object);
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
         _hubConnection = TestHubConnectionHelper.Create(workerStateService: _workerState);

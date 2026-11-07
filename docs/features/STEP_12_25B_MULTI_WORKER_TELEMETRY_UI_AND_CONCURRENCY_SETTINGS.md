@@ -1,6 +1,6 @@
 # Step 12.25B — Multi-Worker Telemetry UI, Worker Status Cards & Concurrency Settings
 
-**Status:** Planned (Feature / Multi-Server & Multi-GPU Scaling — Web UI)
+**Status:** Completed (Feature / Multi-Server & Multi-GPU Scaling — Web UI)
 **Prerequisite:** Step 12.25A
 
 ---

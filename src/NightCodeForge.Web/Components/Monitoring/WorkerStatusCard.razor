@@ -19,7 +19,7 @@
             {
                 case WorkerExecutionStatus.Running:
                     <span class="spinner-pulse" style="width: 10px; height: 10px; border-width: 1.5px; border-top-color: #34d399;"></span>
-                    <span>RUNNING</span>
+                    <span>@WorkerStateService.FormatRunningStatusLabel(CurrentSnapshot)</span>
                     break;
                 case WorkerExecutionStatus.WaitingForHuman:
                     <span>✋ WAITING FOR HUMAN</span>
@@ -50,25 +50,50 @@
     <div class="worker-grid">
         <!-- Active Task & Branch -->
         <div class="worker-metric-group">
-            <div class="worker-metric-label">Active Task &amp; Scope</div>
-            <div class="worker-metric-value">
-                @if (CurrentSnapshot.ActiveTaskId.HasValue)
+            <div class="worker-metric-label">
+                Active Task &amp; Scope
+                @if (CurrentSnapshot.ConfiguredWorkerCount > 1 || CurrentSnapshot.ActiveTasks.Count > 1)
                 {
+                    <span style="font-weight: 500; font-size: 0.72rem; color: var(--accent-indigo); margin-left: 0.35rem;">
+                        (@WorkerStateService.FormatWorkerUtilizationLabel(CurrentSnapshot))
+                    </span>
+                }
+            </div>
+            @if (CurrentSnapshot.ActiveTasks.Count > 1)
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.25rem;">
+                    @foreach (var task in CurrentSnapshot.ActiveTasks)
+                    {
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem;">
+                            <div style="display: flex; align-items: center; gap: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                <span class="card-id font-mono" style="color: var(--accent-indigo);">#@task.TaskId</span>
+                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">@task.TaskTitle</span>
+                            </div>
+                            <span class="forge-badge badge-purple" style="font-size: 0.7rem; white-space: nowrap;">@task.CurrentStageId</span>
+                        </div>
+                    }
+                </div>
+            }
+            else if (CurrentSnapshot.ActiveTaskId.HasValue)
+            {
+                <div class="worker-metric-value">
                     <span class="card-id font-mono" style="color: var(--accent-indigo);">#@CurrentSnapshot.ActiveTaskId.Value</span>
                     <span style="font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                         @(CurrentSnapshot.ActiveTaskTitle ?? "In progress")
                     </span>
-                }
-                else
+                </div>
+                @if (!string.IsNullOrEmpty(CurrentSnapshot.BranchName))
                 {
-                    <span style="color: var(--text-muted); font-size: 0.88rem;">No active task running</span>
+                    <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono); display: flex; align-items: center; gap: 0.35rem;">
+                        <span>🌿</span>
+                        <span>@CurrentSnapshot.BranchName</span>
+                    </div>
                 }
-            </div>
-            @if (!string.IsNullOrEmpty(CurrentSnapshot.BranchName))
+            }
+            else
             {
-                <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono); display: flex; align-items: center; gap: 0.35rem;">
-                    <span>🌿</span>
-                    <span>@CurrentSnapshot.BranchName</span>
+                <div class="worker-metric-value">
+                    <span style="color: var(--text-muted); font-size: 0.88rem;">No active task running</span>
                 </div>
             }
         </div>

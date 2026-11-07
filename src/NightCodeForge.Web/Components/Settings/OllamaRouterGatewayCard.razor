@@ -71,10 +71,22 @@
                     <span>OpenAI Compatible</span>
                 </label>
             </div>
+            <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                <label for="input-max-concurrent-tasks" style="font-size: 0.88rem; font-weight: 600; color: var(--text-primary); margin: 0;">
+                    Max Concurrent Tasks:
+                </label>
+                <input type="number" id="input-max-concurrent-tasks" class="forge-input" style="width: 75px; padding: 0.35rem 0.5rem; text-align: center;" min="1" max="16" @bind="_maxConcurrentTasks" />
+            </div>
             @if (_selectedProvider != GatewayService.ProviderType)
             {
                 <span class="forge-badge badge-amber" style="font-size: 0.78rem;">
                     ⚠️ Restart required after saving to activate @_selectedProvider
+                </span>
+            }
+            else if (_maxConcurrentTasks != _initialMaxConcurrentTasks)
+            {
+                <span class="forge-badge badge-amber" style="font-size: 0.78rem;">
+                    ⚠️ Restart required after saving changes
                 </span>
             }
         </div>
@@ -460,7 +472,7 @@
                 </div>
             </div>
             <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
-                <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@_isSaving">
+                <button type="button" id="btn-save-settings-ollama" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@_isSaving">
                     @(_isSaving ? "Saving..." : "💾 Save Settings")
                 </button>
             </div>
@@ -484,6 +496,8 @@
     private bool _differentiateRoles;
     private string _coderModelId = "";
     private string _architectModelId = "";
+    private int _maxConcurrentTasks = 1;
+    private int _initialMaxConcurrentTasks = 1;
 
     private bool _isLoading;
     private bool _isReclaiming;
@@ -495,6 +509,8 @@
     {
         var opts = LlmOptions.Value;
         _selectedProvider = opts.ProviderType;
+        _maxConcurrentTasks = Math.Clamp(opts.MaxConcurrentInferenceTasks, 1, 16);
+        _initialMaxConcurrentTasks = _maxConcurrentTasks;
         _ollamaEndpoint = !string.IsNullOrWhiteSpace(opts.Endpoint) ? opts.Endpoint : "http://localhost:11434";
         _openAiEndpoint = !string.IsNullOrWhiteSpace(opts.OpenAiCompatible?.Endpoint) ? opts.OpenAiCompatible.Endpoint : "https://api.openai.com/v1";
         _openAiApiKey = opts.OpenAiCompatible?.ApiKey ?? "";
@@ -733,9 +749,11 @@
         _isSaving = true;
         try
         {
+            _maxConcurrentTasks = Math.Clamp(_maxConcurrentTasks, 1, 16);
             await ConfigurationWriter.SaveProviderConfigurationAsync(opts =>
             {
                 opts.ProviderType = _selectedProvider;
+                opts.MaxConcurrentInferenceTasks = _maxConcurrentTasks;
                 if (_selectedProvider == LlmProviderType.OpenAiCompatible)
                 {
                     opts.OpenAiCompatible ??= new();
@@ -773,6 +791,10 @@
             if (_selectedProvider != GatewayService.ProviderType)
             {
                 ToastService.Show("Settings Saved", "LLM settings saved to config/config.json. Please restart NightCodeForge to activate the new provider.", ToastLevel.Warning);
+            }
+            else if (_maxConcurrentTasks != _initialMaxConcurrentTasks)
+            {
+                ToastService.Show("Settings Saved", "LLM settings saved to config/config.json. Please restart NightCodeForge to activate changes.", ToastLevel.Warning);
             }
             else
             {

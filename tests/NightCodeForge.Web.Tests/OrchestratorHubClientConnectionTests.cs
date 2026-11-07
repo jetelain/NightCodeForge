@@ -285,7 +285,7 @@ public class OrchestratorHubClientConnectionTests
     {
         var nav = new TestNavigationManager();
         var logger = Moq.Mock.Of<Microsoft.Extensions.Logging.ILogger<OrchestratorHubClientConnection>>();
-        var workerState = new WorkerStateService(Moq.Mock.Of<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>());
+        var workerState = WorkerStateTestHelper.Create(Moq.Mock.Of<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>());
 
         Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(null!, logger, workerState));
         Assert.Throws<ArgumentNullException>(() => new OrchestratorHubClientConnection(nav, null!, workerState));

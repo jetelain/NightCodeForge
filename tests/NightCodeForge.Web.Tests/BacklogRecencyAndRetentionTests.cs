@@ -189,7 +189,7 @@ public class BacklogRecencyAndRetentionTests : BunitContext
         var taskRepo = new InMemoryTaskRepository();
         var depStore = new InMemoryTaskDependencyStore();
         var workspaceState = new WorkspaceStateService();
-        var workerState = new WorkerStateService(new Mock<IOperationsTelemetryService>().Object);
+        var workerState = WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
 
         var ws = await workspaceRepo.CreateAsync(new Workspace

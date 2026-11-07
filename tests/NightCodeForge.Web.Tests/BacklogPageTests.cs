@@ -51,7 +51,7 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton<ITaskDiskSyncCoordinator>(_diskSyncCoordinator);
         Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
         var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
-        var workerStateService = new WorkerStateService(telemetryMock.Object);
+        var workerStateService = WorkerStateTestHelper.Create(telemetryMock.Object);
         Services.AddSingleton(workerStateService);
         Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(

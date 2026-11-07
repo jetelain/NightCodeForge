@@ -9,12 +9,14 @@ namespace NightCodeForge.Web.Tests;
 public class WorkerStateServiceTests
 {
     private readonly Mock<IOperationsTelemetryService> _telemetryMock = new();
+    private WorkerStateService CreateService(int workerCount = 1) =>
+        WorkerStateTestHelper.Create(_telemetryMock.Object, workerCount);
 
     [Fact]
     public void InitialState_WhenNoActiveTask_ShouldBeIdleWithZeroPendingQuestions()
     {
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary?)null);
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
         Assert.Null(service.Current.ActiveTaskId);
@@ -30,7 +32,7 @@ public class WorkerStateServiceTests
     {
         var started = DateTime.UtcNow.AddMinutes(-5);
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(42, "Refactor Parser", "execution-stage", 1, "default", started));
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
         Assert.Equal(42, service.Current.ActiveTaskId);
@@ -43,7 +45,7 @@ public class WorkerStateServiceTests
     public void Current_WhenInitialIdleButActiveTaskAppears_ShouldHydrateFromTelemetry()
     {
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary?)null);
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
 
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(99, "Late Task", "stage-1", 1, "default", DateTime.UtcNow));
@@ -55,7 +57,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdateStatus_ShouldUpdateSnapshotAndNotify()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         var snapshot = new WorkerStatusSnapshot(
             WorkerExecutionStatus.Running,
             101,
@@ -83,7 +85,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdateStatus_WhenNull_ShouldThrowArgumentNullException()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         Assert.Throws<ArgumentNullException>(() => service.UpdateStatus(null!));
     }
@@ -91,7 +93,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdatePendingQuestions_ShouldPreserveSnapshotAndNotify()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         var initialSnapshot = new WorkerStatusSnapshot(
             WorkerExecutionStatus.WaitingForHuman,
             50,
@@ -117,7 +119,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void HandleWorkerStatus_Running_ShouldUpdateExecutionAndFireEvent()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         var eventFired = false;
         service.OnWorkerStateChanged += () => eventFired = true;
 
@@ -136,7 +138,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void HandleWorkerStatus_Idle_ShouldResetActiveTask()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 5, "stage-exec", "A100", "Run task 5", "task/5");
         Assert.Equal(5, service.Current.ActiveTaskId);
 
@@ -152,7 +154,7 @@ public class WorkerStateServiceTests
     public void Current_AfterExplicitIdle_ShouldNotResurrectStaleTelemetryTask()
     {
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(5, "Stale", "s", 1, "q", DateTime.UtcNow));
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         service.HandleWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
 
@@ -163,7 +165,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void HandleWorkerStatus_DifferentTask_ShouldNotCarryOverPreviousTitleOrBranch()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 5, "stage-a", "Local GPU", "Task five", "task/5");
 
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 6, "stage-a", "Local GPU");
@@ -176,7 +178,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void HandleWorkerStatus_SameTaskNextStage_ShouldKeepTitleAndStartTime()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 5, "stage-a", "Local GPU", "Task five", "task/5");
         var started = service.Current.StartedAt;
 
@@ -191,7 +193,7 @@ public class WorkerStateServiceTests
     public void Current_WhenNewActiveTaskStartsInTelemetryAfterPreviousIdle_HydratesNewActiveTask()
     {
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(5, "Stale", "s", 1, "q", DateTime.UtcNow));
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         service.HandleWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
         Assert.Equal(WorkerExecutionStatus.Idle, service.Current.Status);
@@ -208,7 +210,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void HandleTelemetryActiveTaskChanged_UpdatesStatusAndRaisesEvent()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         bool eventFired = false;
         service.OnWorkerStateChanged += () => eventFired = true;
 
@@ -233,7 +235,7 @@ public class WorkerStateServiceTests
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
             12, "Deterministic Task", "gate-1", 1, "cpu-deterministic", DateTime.UtcNow, "Deterministic CPU"));
 
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         Assert.Equal("Deterministic CPU", service.Current.HardwareTarget);
 
         var task13 = new ActiveTaskSummary(
@@ -250,7 +252,7 @@ public class WorkerStateServiceTests
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
             15, "Advancing Task", "stage-1", 1, "llm-inference", DateTime.UtcNow, "Local GPU"));
 
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         Assert.Equal("stage-1", service.Current.StageId);
 
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
@@ -263,7 +265,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void Current_WhenActiveTaskIdChangesInTelemetry_ReconcilesToNewTask()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 10, "stage-1", "Local GPU", "Task 10", "task/10");
         Assert.Equal(10, service.Current.ActiveTaskId);
 
@@ -279,7 +281,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void WhenActiveTaskClearsInTelemetry_ReconcilesToIdle()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 10, "stage-1", "Local GPU", "Task 10", "task/10");
         Assert.Equal(WorkerExecutionStatus.Running, service.Current.Status);
         Assert.Equal(10, service.Current.ActiveTaskId);
@@ -299,7 +301,7 @@ public class WorkerStateServiceTests
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
             8, "Task 8", "impl", 3, "llm-implementation", DateTime.UtcNow, "Local GPU"));
 
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         // Idle received for task 10 (e.g. merge completed) while task 8 is running
         service.HandleWorkerStatus(WorkerStatusConstants.Idle, 10, null, "Local GPU");
@@ -312,7 +314,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void HandleWorkerStatus_TaskChanged_ResetsStartedAt()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         var firstStart = DateTime.UtcNow.AddMinutes(-30);
         service.HandleWorkerStatus(WorkerStatusConstants.Running, 1, "stage-1", "Local GPU", "Task 1", "task/1");
@@ -335,7 +337,7 @@ public class WorkerStateServiceTests
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
             42, "Refactor Parser", "impl", 1, "default", DateTime.UtcNow, "Local GPU"));
 
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         Assert.Equal(42, service.Current.ActiveTaskId);
 
         // Ideation chat status arrived (task 0)
@@ -352,7 +354,7 @@ public class WorkerStateServiceTests
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns(new ActiveTaskSummary(
             42, "Refactor Parser", "impl", 1, "default", DateTime.UtcNow, "Local GPU"));
 
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         // Telemetry emits Task 0 with ideation stage
         _telemetryMock.Raise(t => t.OnActiveTaskChanged += null, new ActiveTaskSummary(
@@ -366,7 +368,7 @@ public class WorkerStateServiceTests
     public void InitialState_PendingReviewCount_ShouldDefaultToZero()
     {
         _telemetryMock.Setup(t => t.GetActiveTask()).Returns((ActiveTaskSummary?)null);
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         Assert.Equal(0, service.Current.PendingReviewCount);
     }
@@ -374,7 +376,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdatePendingReviews_ShouldUpdateSnapshotAndNotify()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         var eventFired = false;
         service.OnWorkerStateChanged += () => eventFired = true;
 
@@ -387,7 +389,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdatePendingReviews_SameCount_ShouldDeduplicateAndNotNotify()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.UpdatePendingReviews(3);
 
         var eventFired = false;
@@ -402,7 +404,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdatePendingCounts_ShouldUpdateBothAndNotifyOnce()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         var fireCount = 0;
         service.OnWorkerStateChanged += () => fireCount++;
 
@@ -416,7 +418,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void UpdatePendingCounts_SameValues_ShouldDeduplicateAndNotNotify()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
         service.UpdatePendingCounts(4, 7);
 
         var fireCount = 0;
@@ -430,7 +432,7 @@ public class WorkerStateServiceTests
     [Fact]
     public void TelemetryOnPendingCountsChanged_ShouldUpdateWorkerState()
     {
-        var service = new WorkerStateService(_telemetryMock.Object);
+        var service = CreateService();
 
         _telemetryMock.Raise(t => t.OnPendingCountsChanged += null, 3, 6);
 

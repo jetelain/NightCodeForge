@@ -100,10 +100,10 @@
                         <span style="font-size: 1.3rem;">🧠</span>
                         <strong style="font-size: 0.95rem; color: var(--text-primary);">In-Flight LLM Inference</strong>
                     </div>
-                    @if (TelemetryUi.ActiveLlmCall != null)
+                    @if (TelemetryUi.ActiveLlmCalls.Count > 0)
                     {
                         <span class="forge-badge badge-amber" style="font-size: 0.78rem; font-weight: 600;">
-                            ● Inferring
+                            ● @OperationsTelemetryUiService.FormatActiveLlmBadge(TelemetryUi.ActiveLlmCalls.Count)
                         </span>
                     }
                     else
@@ -114,45 +114,52 @@
                     }
                 </div>
 
-                @if (TelemetryUi.ActiveLlmCall != null)
+                @if (TelemetryUi.ActiveLlmCalls.Count > 0)
                 {
-                    var call = TelemetryUi.ActiveLlmCall;
-                    <div style="margin-bottom: 0.75rem;">
-                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
-                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem;">@call.Model</span>
-                            <span class="forge-badge @OperationsTelemetryUiService.GetRouteBadgeClass(call.TargetBackend)" style="font-size: 0.75rem;">
-                                @call.TargetBackend
-                            </span>
-                            @if (OperationsTelemetryUiService.HasRetryAttempt(call))
-                            {
-                                <span id="badge-llm-retry-attempt" class="forge-badge badge-crimson" style="font-size: 0.75rem;" title="@OperationsTelemetryUiService.FormatRetryNotice(call)">
-                                    🔄 @OperationsTelemetryUiService.FormatRetryBadgeLabel(call)
+                    @for (int i = 0; i < TelemetryUi.ActiveLlmCalls.Count; i++)
+                    {
+                        var call = TelemetryUi.ActiveLlmCalls[i];
+                        if (i > 0)
+                        {
+                            <hr style="border: 0; border-top: 1px solid var(--border-subtle); margin: 0.85rem 0;" />
+                        }
+                        <div style="margin-bottom: 0.75rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                                <span style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem;">@call.Model</span>
+                                <span class="forge-badge @OperationsTelemetryUiService.GetRouteBadgeClass(call.TargetBackend)" style="font-size: 0.75rem;">
+                                    @call.TargetBackend
                                 </span>
-                            }
-                        </div>
-                        <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
-                            <span title="Context Size (Prompt Tokens)">Context: <strong style="color: var(--text-primary);">@call.PromptTokens tokens</strong></span>
-                            <span>Speed: <strong style="color: var(--accent-teal);">@OperationsTelemetryUiService.FormatSpeed(call.TokensPerSecond)</strong></span>
-                            <span>Tokens: <strong>@call.CompletionTokens</strong></span>
-                            @if (call.ReasoningTokens > 0)
+                                @if (OperationsTelemetryUiService.HasRetryAttempt(call))
+                                {
+                                    <span id="@(i == 0 ? "badge-llm-retry-attempt" : null)" class="forge-badge badge-crimson" style="font-size: 0.75rem;" title="@OperationsTelemetryUiService.FormatRetryNotice(call)">
+                                        🔄 @OperationsTelemetryUiService.FormatRetryBadgeLabel(call)
+                                    </span>
+                                }
+                            </div>
+                            <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
+                                <span title="Context Size (Prompt Tokens)">Context: <strong style="color: var(--text-primary);">@call.PromptTokens tokens</strong></span>
+                                <span>Speed: <strong style="color: var(--accent-teal);">@OperationsTelemetryUiService.FormatSpeed(call.TokensPerSecond)</strong></span>
+                                <span>Tokens: <strong>@call.CompletionTokens</strong></span>
+                                @if (call.ReasoningTokens > 0)
+                                {
+                                    <span title="Reasoning / Thinking Tokens">Reasoning: <strong style="color: var(--accent-amber);">🧠 @call.ReasoningTokens</strong></span>
+                                }
+                                <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveLlmDuration(call)</strong></span>
+                            </div>
+                            @if (OperationsTelemetryUiService.HasRetryAttempt(call) && !string.IsNullOrWhiteSpace(call.LastRetryReason))
                             {
-                                <span title="Reasoning / Thinking Tokens">Reasoning: <strong style="color: var(--accent-amber);">🧠 @call.ReasoningTokens</strong></span>
+                                <div id="@(i == 0 ? "active-llm-retry-reason" : null)" style="margin-bottom: 0.45rem; padding: 0.35rem 0.6rem; border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); font-size: 0.76rem; color: var(--accent-amber); line-height: 1.35;">
+                                    ⚠️ @OperationsTelemetryUiService.FormatRetryNotice(call)
+                                </div>
                             }
-                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveLlmDuration(call)</strong></span>
+                            @if (!string.IsNullOrWhiteSpace(call.PromptPreview))
+                            {
+                                <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.78rem; color: var(--text-muted); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.4;">
+                                    "@call.PromptPreview"
+                                </div>
+                            }
                         </div>
-                        @if (OperationsTelemetryUiService.HasRetryAttempt(call) && !string.IsNullOrWhiteSpace(call.LastRetryReason))
-                        {
-                            <div id="active-llm-retry-reason" style="margin-bottom: 0.45rem; padding: 0.35rem 0.6rem; border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); font-size: 0.76rem; color: var(--accent-amber); line-height: 1.35;">
-                                ⚠️ @OperationsTelemetryUiService.FormatRetryNotice(call)
-                            </div>
-                        }
-                        @if (!string.IsNullOrWhiteSpace(call.PromptPreview))
-                        {
-                            <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.78rem; color: var(--text-muted); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.4;">
-                                "@call.PromptPreview"
-                            </div>
-                        }
-                    </div>
+                    }
                 }
                 else
                 {
@@ -172,10 +179,10 @@
                         <span style="font-size: 1.3rem;">💻</span>
                         <strong style="font-size: 0.95rem; color: var(--text-primary);">In-Flight Shell Operation</strong>
                     </div>
-                    @if (TelemetryUi.ActiveShellCommand != null)
+                    @if (TelemetryUi.ActiveShellCommands.Count > 0)
                     {
                         <span class="forge-badge badge-amber" style="font-size: 0.78rem; font-weight: 600;">
-                            ● Executing
+                            ● @OperationsTelemetryUiService.FormatActiveShellBadge(TelemetryUi.ActiveShellCommands.Count)
                         </span>
                     }
                     else
@@ -186,24 +193,31 @@
                     }
                 </div>
 
-                @if (TelemetryUi.ActiveShellCommand != null)
+                @if (TelemetryUi.ActiveShellCommands.Count > 0)
                 {
-                    var cmd = TelemetryUi.ActiveShellCommand;
-                    <div style="margin-bottom: 0.75rem;">
-                        <div class="font-mono" style="font-weight: 700; color: var(--text-primary); font-size: 0.85rem; margin-bottom: 0.35rem; word-break: break-all;">
-                            $ @cmd.CommandLine
-                        </div>
-                        <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
-                            <span>Cwd: <strong class="font-mono" style="font-size: 0.78rem;">@cmd.WorkingDirectory</strong></span>
-                            <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveShellDuration(cmd)</strong></span>
-                        </div>
-                        @if (!string.IsNullOrWhiteSpace(cmd.OutputPreview))
+                    @for (int i = 0; i < TelemetryUi.ActiveShellCommands.Count; i++)
+                    {
+                        var cmd = TelemetryUi.ActiveShellCommands[i];
+                        if (i > 0)
                         {
-                            <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.76rem; color: var(--text-secondary); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.3;">
-                                @cmd.OutputPreview
-                            </div>
+                            <hr style="border: 0; border-top: 1px solid var(--border-subtle); margin: 0.85rem 0;" />
                         }
-                    </div>
+                        <div style="margin-bottom: 0.75rem;">
+                            <div class="font-mono" style="font-weight: 700; color: var(--text-primary); font-size: 0.85rem; margin-bottom: 0.35rem; word-break: break-all;">
+                                $ @cmd.CommandLine
+                            </div>
+                            <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                                <span>Cwd: <strong class="font-mono" style="font-size: 0.78rem;">@cmd.WorkingDirectory</strong></span>
+                                <span>Elapsed: <strong>@OperationsTelemetryUiService.FormatLiveShellDuration(cmd)</strong></span>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(cmd.OutputPreview))
+                            {
+                                <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.76rem; color: var(--text-secondary); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.3;">
+                                    @cmd.OutputPreview
+                                </div>
+                            }
+                        </div>
+                    }
                 }
                 else
                 {
@@ -219,19 +233,17 @@
         <div id="active-task-card" class="forge-subcard" style="padding: 1.25rem; border-radius: var(--radius-md); background: var(--bg-surface); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; justify-content: space-between;">
             <div>
                 @{
-                    var active = AutonomousTaskClassifier.IsAutonomousTask(TelemetryUi.ActiveTask)
-                        ? TelemetryUi.ActiveTask
-                        : null;
+                    var activeList = TelemetryUi.ActiveTasks.Where(AutonomousTaskClassifier.IsAutonomousTask).ToList();
                 }
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                         <span style="font-size: 1.3rem;">🎯</span>
                         <strong style="font-size: 0.95rem; color: var(--text-primary);">In-Flight Autonomous Task</strong>
                     </div>
-                    @if (active != null)
+                    @if (activeList.Count > 0)
                     {
                         <span class="badge-running" id="badge-active-task-running">
-                            <span class="pulse-dot"></span> Running
+                            <span class="pulse-dot"></span> @OperationsTelemetryUiService.FormatActiveTaskBadge(activeList.Count)
                         </span>
                     }
                     else
@@ -242,29 +254,37 @@
                     }
                 </div>
 
-                @if (active != null)
+                @if (activeList.Count > 0)
                 {
-                    <div style="margin-bottom: 0.75rem;">
-                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
-                            <span class="font-mono text-secondary" style="font-weight: 700;">#@active.TaskId</span>
-                            <span style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                @active.TaskTitle
-                            </span>
+                    @for (int i = 0; i < activeList.Count; i++)
+                    {
+                        var active = activeList[i];
+                        if (i > 0)
+                        {
+                            <hr style="border: 0; border-top: 1px solid var(--border-subtle); margin: 0.85rem 0;" />
+                        }
+                        <div style="margin-bottom: 0.75rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
+                                <span class="font-mono text-secondary" style="font-weight: 700;">#@active.TaskId</span>
+                                <span style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    @active.TaskTitle
+                                </span>
+                            </div>
+                            <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
+                                <span>Stage: <strong class="forge-badge badge-purple" style="font-size: 0.75rem;">@active.CurrentStageId</strong></span>
+                                <span>Queue Type: <strong>@active.QueueType</strong></span>
+                                <span>Priority: <strong>P@(active.Priority)</strong></span>
+                            </div>
+                            <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                                <a href="/inspector/@active.TaskId" class="forge-btn forge-btn-secondary btn-xs" style="text-decoration: none;">
+                                    🔍 Inspector
+                                </a>
+                                <a href="/tasks/@active.TaskId" class="forge-btn forge-btn-secondary btn-xs" style="text-decoration: none;">
+                                    📋 Details
+                                </a>
+                            </div>
                         </div>
-                        <div style="display: flex; gap: 1.25rem; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.5rem; flex-wrap: wrap;">
-                            <span>Stage: <strong class="forge-badge badge-purple" style="font-size: 0.75rem;">@active.CurrentStageId</strong></span>
-                            <span>Queue Type: <strong>@active.QueueType</strong></span>
-                            <span>Priority: <strong>P@(active.Priority)</strong></span>
-                        </div>
-                        <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                            <a href="/inspector/@active.TaskId" class="forge-btn forge-btn-secondary btn-xs" style="text-decoration: none;">
-                                🔍 Inspector
-                            </a>
-                            <a href="/tasks/@active.TaskId" class="forge-btn forge-btn-secondary btn-xs" style="text-decoration: none;">
-                                📋 Details
-                            </a>
-                        </div>
-                    </div>
+                    }
                 }
                 else
                 {
@@ -343,7 +363,7 @@
             while (!token.IsCancellationRequested && await timer.WaitForNextTickAsync(token))
             {
                 if (_isDisposed) break;
-                if (TelemetryUi.ActiveLlmCall != null || TelemetryUi.ActiveShellCommand != null || TelemetryUi.ActiveTask != null)
+                if (TelemetryUi.ActiveLlmCalls.Count > 0 || TelemetryUi.ActiveShellCommands.Count > 0 || TelemetryUi.ActiveTasks.Count > 0 || TelemetryUi.ActiveLlmCall != null || TelemetryUi.ActiveShellCommand != null || TelemetryUi.ActiveTask != null)
                 {
                     await InvokeAsync(StateHasChanged);
                 }

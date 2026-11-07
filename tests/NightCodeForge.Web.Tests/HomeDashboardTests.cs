@@ -188,7 +188,7 @@ public class HomeDashboardTests : BunitContext
         telemetryServiceMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
         telemetryServiceMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
 
-        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryServiceMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var gatewayMock = new Mock<ILlmGatewayService>();
         gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
@@ -465,7 +465,7 @@ public class HomeDashboardTests : BunitContext
         telemetryServiceMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
         telemetryServiceMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
 
-        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryServiceMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var gatewayMock = new Mock<ILlmGatewayService>();
         gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
@@ -494,7 +494,7 @@ public class HomeDashboardTests : BunitContext
     public void WorkerStateService_UpdatePendingQuestions_OnlyFiresEventWhenCountChanges()
     {
         var telemetryServiceMock = new Mock<IOperationsTelemetryService>();
-        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryServiceMock.Object);
 
         int eventCount = 0;
         workerState.OnWorkerStateChanged += () => eventCount++;
@@ -622,7 +622,7 @@ public class HomeDashboardTests : BunitContext
         telemetryServiceMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
         telemetryServiceMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
 
-        var workerState = new WorkerStateService(telemetryServiceMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryServiceMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var gatewayMock = new Mock<ILlmGatewayService>();
         gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
@@ -797,7 +797,7 @@ public class HomeDashboardTests : BunitContext
         telemetryMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
 
         var workspaceState = new WorkspaceStateService();
-        var workerState = new WorkerStateService(telemetryMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryMock.Object);
         var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
         var gatewayMock = new Mock<ILlmGatewayService>();
         gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);

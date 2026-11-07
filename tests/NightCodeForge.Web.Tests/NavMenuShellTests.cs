@@ -10,7 +10,7 @@ public class NavMenuShellTests : BunitContext
 {
     public NavMenuShellTests()
     {
-        Services.AddSingleton(new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object));
+        Services.AddSingleton(WorkerStateTestHelper.Create(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object));
         Services.AddSingleton(new WorkspaceStateService());
     }
 
@@ -179,7 +179,7 @@ public class NavMenuShellTests : BunitContext
     [Fact]
     public void WorkerState_RefreshFromTelemetry_RaisesStateChanged()
     {
-        var workerState = new WorkerStateService(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
+        var workerState = WorkerStateTestHelper.Create(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object);
         var raised = 0;
         workerState.OnWorkerStateChanged += () => raised++;
 
@@ -193,7 +193,7 @@ public class NavMenuShellTests : BunitContext
     {
         var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
         telemetryMock.Setup(t => t.GetActiveTask()).Returns((NightCodeForge.Core.Workflow.ActiveTaskSummary?)null);
-        var workerState = new WorkerStateService(telemetryMock.Object);
+        var workerState = WorkerStateTestHelper.Create(telemetryMock.Object);
 
         workerState.HandleWorkerStatus("Running", 42, "Implementation", "Local GPU", "Task 42");
         Assert.Equal(WorkerExecutionStatus.Running, workerState.Current.Status);

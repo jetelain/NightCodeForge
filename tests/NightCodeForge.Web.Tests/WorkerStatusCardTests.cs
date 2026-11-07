@@ -16,7 +16,7 @@ public class WorkerStatusCardTests : BunitContext
     public WorkerStatusCardTests()
     {
         _telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
-        _workerState = new WorkerStateService(_telemetryMock.Object);
+        _workerState = WorkerStateTestHelper.Create(_telemetryMock.Object);
         _workspaceState = new WorkspaceStateService();
 
         Services.AddSingleton(_workerState);

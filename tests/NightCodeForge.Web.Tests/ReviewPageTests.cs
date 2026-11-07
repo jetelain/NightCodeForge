@@ -36,7 +36,7 @@ public class ReviewPageTests : BunitContext
         _commentState = new ReviewCommentStateService();
         _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();
-        _workerState = new WorkerStateService(new Mock<IOperationsTelemetryService>().Object);
+        _workerState = WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object);
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<ITaskReviewService>(_reviewService);

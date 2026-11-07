@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Options;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -25,7 +27,27 @@ public record WorkerStatusSnapshot(
     string? Harness = "Crucible",
     string? Model = "qwen2.5-coder:32b",
     DateTime? StartedAt = null,
-    int PendingReviewCount = 0);
+    int PendingReviewCount = 0,
+    IReadOnlyList<ActiveTaskSummary>? ActiveTasks = null,
+    int ConfiguredWorkerCount = 1)
+{
+    public IReadOnlyList<ActiveTaskSummary> ActiveTasks { get; init; } =
+        ActiveTasks ?? (Status == WorkerExecutionStatus.Running && ActiveTaskId.HasValue && AutonomousTaskClassifier.IsAutonomousTask(ActiveTaskId, StageId)
+            ? new[]
+            {
+                new ActiveTaskSummary(
+                    ActiveTaskId.Value,
+                    ActiveTaskTitle ?? $"Task #{ActiveTaskId.Value}",
+                    StageId ?? "Executing",
+                    1,
+                    "default",
+                    StartedAt ?? DateTime.UtcNow,
+                    HardwareTarget)
+            }
+            : Array.Empty<ActiveTaskSummary>());
+    public int ActiveTaskCount => ActiveTasks.Count;
+    public int ConfiguredWorkerCount { get; init; } = ConfiguredWorkerCount <= 0 ? 1 : Math.Clamp(ConfiguredWorkerCount, 1, 16);
+}
 
 /// <summary>
 /// Singleton service providing real-time snapshot and event dispatch for worker execution state and questions.
@@ -33,34 +55,52 @@ public record WorkerStatusSnapshot(
 public class WorkerStateService : IWorkerStateService, IDisposable
 {
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly IOptions<LlmProviderOptions> _llmOptions;
     private readonly object _lock = new();
+    private readonly Dictionary<int, string?> _lastTelemetryStageByTask = new();
     private WorkerStatusSnapshot _current;
     private int? _lastIdleTaskId;
 
     public int? ActiveTaskId => Current.ActiveTaskId;
-    public IReadOnlyList<int> ActiveTaskIds => _telemetryService.GetActiveTasks().Select(t => t.TaskId).ToList();
+    public IReadOnlyList<int> ActiveTaskIds => Current.ActiveTasks.Select(t => t.TaskId).ToList();
+    public IReadOnlyList<ActiveTaskSummary> ActiveTasks => Current.ActiveTasks;
+    public int ActiveTaskCount => Current.ActiveTaskCount;
+    public int ConfiguredWorkerCount => Math.Clamp(_llmOptions.Value?.MaxConcurrentInferenceTasks ?? 1, 1, 16);
     public bool IsRunning => Current.Status == WorkerExecutionStatus.Running;
     public ModelPreloadTelemetryRecord? LatestModelPreload => _telemetryService.GetLatestModelPreload();
 
-    public WorkerStateService(IOperationsTelemetryService telemetryService)
+    public WorkerStateService(
+        IOperationsTelemetryService telemetryService,
+        IOptions<LlmProviderOptions> llmOptions)
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _llmOptions = llmOptions ?? throw new ArgumentNullException(nameof(llmOptions));
         _telemetryService.OnActiveTaskChanged += HandleTelemetryActiveTaskChanged;
+        _telemetryService.OnActiveTasksChanged += HandleTelemetryActiveTasksChanged;
         _telemetryService.OnPendingCountsChanged += HandleTelemetryPendingCountsChanged;
         _telemetryService.OnModelPreloadChanged += HandleTelemetryModelPreloadChanged;
 
-        var active = _telemetryService.GetActiveTask();
-        if (AutonomousTaskClassifier.IsAutonomousTask(active))
+        var configuredWorkers = ConfiguredWorkerCount;
+        var activeTasks = GetTelemetryActiveTasks();
+        foreach (var t in activeTasks)
         {
+            _lastTelemetryStageByTask[t.TaskId] = t.CurrentStageId;
+        }
+
+        if (activeTasks.Count > 0)
+        {
+            var active = activeTasks[^1];
             _current = new WorkerStatusSnapshot(
                 WorkerExecutionStatus.Running,
-                active!.TaskId,
+                active.TaskId,
                 active.TaskTitle,
                 active.CurrentStageId,
                 null,
                 string.IsNullOrWhiteSpace(active.HardwareTarget) ? "Local GPU" : active.HardwareTarget,
                 0,
-                StartedAt: active.StartedAt);
+                StartedAt: active.StartedAt,
+                ActiveTasks: activeTasks,
+                ConfiguredWorkerCount: configuredWorkers);
         }
         else
         {
@@ -71,29 +111,70 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                 null,
                 null,
                 "Local GPU",
-                0);
+                0,
+                ActiveTasks: Array.Empty<ActiveTaskSummary>(),
+                ConfiguredWorkerCount: configuredWorkers);
         }
     }
 
-    private void HandleTelemetryActiveTaskChanged(NightCodeForge.Core.Workflow.ActiveTaskSummary? active)
+    private List<ActiveTaskSummary> GetTelemetryActiveTasks()
+    {
+        var activeTasks = (_telemetryService.GetActiveTasks() ?? Array.Empty<ActiveTaskSummary>())
+            .Where(AutonomousTaskClassifier.IsAutonomousTask)
+            .OrderBy(t => t.StartedAt)
+            .ToList();
+
+        if (activeTasks.Count == 0)
+        {
+            var single = _telemetryService.GetActiveTask();
+            if (AutonomousTaskClassifier.IsAutonomousTask(single))
+            {
+                activeTasks.Add(single!);
+            }
+        }
+
+        return activeTasks;
+    }
+
+    public static string FormatRunningStatusLabel(WorkerStatusSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.ConfiguredWorkerCount > 1 || snapshot.ActiveTasks.Count > 1)
+        {
+            return $"RUNNING ({snapshot.ActiveTasks.Count} / {snapshot.ConfiguredWorkerCount})";
+        }
+        return "RUNNING";
+    }
+
+    public static string FormatWorkerUtilizationLabel(WorkerStatusSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return $"{snapshot.ActiveTasks.Count} / {snapshot.ConfiguredWorkerCount} Workers Active";
+    }
+
+    private void HandleTelemetryActiveTasksChanged(IReadOnlyList<ActiveTaskSummary> activeTasks)
     {
         lock (_lock)
         {
-            if (active != null)
+            var validTasks = (activeTasks ?? Array.Empty<ActiveTaskSummary>())
+                .Where(AutonomousTaskClassifier.IsAutonomousTask)
+                .OrderBy(t => t.StartedAt)
+                .ToList();
+
+            if (validTasks.Count > 0)
             {
-                if (!AutonomousTaskClassifier.IsAutonomousTask(active))
-                {
-                    return;
-                }
+                var latest = validTasks[^1];
                 _lastIdleTaskId = null;
                 _current = _current with
                 {
                     Status = WorkerExecutionStatus.Running,
-                    ActiveTaskId = active.TaskId,
-                    ActiveTaskTitle = active.TaskTitle,
-                    StageId = active.CurrentStageId,
-                    HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
-                    StartedAt = active.StartedAt
+                    ActiveTaskId = latest.TaskId,
+                    ActiveTaskTitle = latest.TaskTitle,
+                    StageId = latest.CurrentStageId,
+                    HardwareTarget = string.IsNullOrWhiteSpace(latest.HardwareTarget) ? _current.HardwareTarget : latest.HardwareTarget,
+                    StartedAt = latest.StartedAt,
+                    ActiveTasks = validTasks,
+                    ConfiguredWorkerCount = ConfiguredWorkerCount
                 };
             }
             else
@@ -106,7 +187,87 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                         ActiveTaskId = null,
                         ActiveTaskTitle = null,
                         StageId = null,
-                        StartedAt = null
+                        StartedAt = null,
+                        ActiveTasks = Array.Empty<ActiveTaskSummary>(),
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
+                    };
+                }
+                else
+                {
+                    _current = _current with
+                    {
+                        ActiveTasks = Array.Empty<ActiveTaskSummary>(),
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
+                    };
+                }
+            }
+        }
+        OnWorkerStateChanged?.Invoke();
+    }
+
+    private void HandleTelemetryActiveTaskChanged(NightCodeForge.Core.Workflow.ActiveTaskSummary? active)
+    {
+        lock (_lock)
+        {
+            var tasks = GetTelemetryActiveTasks();
+
+            if (active != null)
+            {
+                if (!AutonomousTaskClassifier.IsAutonomousTask(active))
+                {
+                    return;
+                }
+                _lastIdleTaskId = null;
+                var existingIdx = tasks.FindIndex(t => t.TaskId == active.TaskId);
+                if (existingIdx >= 0)
+                {
+                    tasks[existingIdx] = active;
+                }
+                else
+                {
+                    tasks.Add(active);
+                }
+                tasks = tasks.OrderBy(t => t.StartedAt).ToList();
+                _current = _current with
+                {
+                    Status = WorkerExecutionStatus.Running,
+                    ActiveTaskId = active.TaskId,
+                    ActiveTaskTitle = active.TaskTitle,
+                    StageId = active.CurrentStageId,
+                    HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                    StartedAt = active.StartedAt,
+                    ActiveTasks = tasks,
+                    ConfiguredWorkerCount = ConfiguredWorkerCount
+                };
+            }
+            else
+            {
+                if (tasks.Count > 0)
+                {
+                    var latest = tasks[^1];
+                    _current = _current with
+                    {
+                        Status = WorkerExecutionStatus.Running,
+                        ActiveTaskId = latest.TaskId,
+                        ActiveTaskTitle = latest.TaskTitle,
+                        StageId = latest.CurrentStageId,
+                        HardwareTarget = string.IsNullOrWhiteSpace(latest.HardwareTarget) ? _current.HardwareTarget : latest.HardwareTarget,
+                        StartedAt = latest.StartedAt,
+                        ActiveTasks = tasks,
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
+                    };
+                }
+                else if (_current.Status == WorkerExecutionStatus.Running)
+                {
+                    _current = _current with
+                    {
+                        Status = WorkerExecutionStatus.Idle,
+                        ActiveTaskId = null,
+                        ActiveTaskTitle = null,
+                        StageId = null,
+                        StartedAt = null,
+                        ActiveTasks = Array.Empty<ActiveTaskSummary>(),
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
                     };
                 }
             }
@@ -120,14 +281,55 @@ public class WorkerStateService : IWorkerStateService, IDisposable
         {
             lock (_lock)
             {
-                var active = _telemetryService.GetActiveTask();
-                if (!AutonomousTaskClassifier.IsAutonomousTask(active))
-                {
-                    active = null;
-                }
+                var activeTasks = GetTelemetryActiveTasks();
+
                 if (_current.ActiveTaskId == null)
                 {
-                    if (active != null && active.TaskId != _lastIdleTaskId)
+                    var nonStaleTasks = _lastIdleTaskId.HasValue
+                        ? activeTasks.Where(t => t.TaskId != _lastIdleTaskId.Value).ToList()
+                        : activeTasks;
+
+                    if (nonStaleTasks.Count > 0)
+                    {
+                        var active = nonStaleTasks[^1];
+                        _current = _current with
+                        {
+                            Status = WorkerExecutionStatus.Running,
+                            ActiveTaskId = active.TaskId,
+                            ActiveTaskTitle = active.TaskTitle,
+                            StageId = active.CurrentStageId,
+                            HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                            StartedAt = active.StartedAt,
+                            ActiveTasks = nonStaleTasks,
+                            ConfiguredWorkerCount = ConfiguredWorkerCount
+                        };
+                    }
+                    else if (_current.ConfiguredWorkerCount != ConfiguredWorkerCount)
+                    {
+                        _current = _current with { ConfiguredWorkerCount = ConfiguredWorkerCount };
+                    }
+                }
+                else if (activeTasks.Count > 0)
+                {
+                    for (int i = 0; i < activeTasks.Count; i++)
+                    {
+                        var teleTask = activeTasks[i];
+                        var teleStageChanged = !_lastTelemetryStageByTask.TryGetValue(teleTask.TaskId, out var prevTeleStage) ||
+                            !string.Equals(teleTask.CurrentStageId, prevTeleStage, StringComparison.OrdinalIgnoreCase);
+                        _lastTelemetryStageByTask[teleTask.TaskId] = teleTask.CurrentStageId;
+
+                        if (!teleStageChanged)
+                        {
+                            var currentMatch = _current.ActiveTasks.FirstOrDefault(t => t.TaskId == teleTask.TaskId);
+                            if (currentMatch != null)
+                            {
+                                activeTasks[i] = currentMatch;
+                            }
+                        }
+                    }
+
+                    var active = activeTasks.FirstOrDefault(t => t.TaskId == _current.ActiveTaskId) ?? activeTasks[^1];
+                    if (active.TaskId != _current.ActiveTaskId)
                     {
                         _current = _current with
                         {
@@ -136,28 +338,39 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                             ActiveTaskTitle = active.TaskTitle,
                             StageId = active.CurrentStageId,
                             HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
-                            StartedAt = active.StartedAt
+                            StartedAt = active.StartedAt,
+                            ActiveTasks = activeTasks,
+                            ConfiguredWorkerCount = ConfiguredWorkerCount
+                        };
+                    }
+                    else if (!string.Equals(active.CurrentStageId, _current.StageId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _current = _current with
+                        {
+                            StageId = active.CurrentStageId,
+                            HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                            ActiveTasks = activeTasks,
+                            ConfiguredWorkerCount = ConfiguredWorkerCount
+                        };
+                    }
+                    else
+                    {
+                        _current = _current with
+                        {
+                            ActiveTasks = activeTasks,
+                            ConfiguredWorkerCount = ConfiguredWorkerCount
                         };
                     }
                 }
-                else if (active != null && active.TaskId != _current.ActiveTaskId)
+                else
                 {
+                    var fallbackTasks = _current.Status == WorkerExecutionStatus.Running && _current.ActiveTasks.Count > 0
+                        ? _current.ActiveTasks
+                        : Array.Empty<ActiveTaskSummary>();
                     _current = _current with
                     {
-                        Status = WorkerExecutionStatus.Running,
-                        ActiveTaskId = active.TaskId,
-                        ActiveTaskTitle = active.TaskTitle,
-                        StageId = active.CurrentStageId,
-                        HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
-                        StartedAt = active.StartedAt
-                    };
-                }
-                else if (active != null && active.TaskId == _current.ActiveTaskId && !string.Equals(active.CurrentStageId, _current.StageId, StringComparison.OrdinalIgnoreCase))
-                {
-                    _current = _current with
-                    {
-                        StageId = active.CurrentStageId,
-                        HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget
+                        ActiveTasks = fallbackTasks,
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
                     };
                 }
                 return _current;
@@ -193,13 +406,9 @@ public class WorkerStateService : IWorkerStateService, IDisposable
     {
         lock (_lock)
         {
-            var active = _telemetryService.GetActiveTask();
-            if (!AutonomousTaskClassifier.IsAutonomousTask(active))
-            {
-                active = null;
-            }
+            var activeTasks = GetTelemetryActiveTasks();
 
-            if (active == null && _current.Status == WorkerExecutionStatus.Running)
+            if (activeTasks.Count == 0 && _current.Status == WorkerExecutionStatus.Running)
             {
                 _current = _current with
                 {
@@ -207,7 +416,24 @@ public class WorkerStateService : IWorkerStateService, IDisposable
                     ActiveTaskId = null,
                     ActiveTaskTitle = null,
                     StageId = null,
-                    StartedAt = null
+                    StartedAt = null,
+                    ActiveTasks = Array.Empty<ActiveTaskSummary>(),
+                    ConfiguredWorkerCount = ConfiguredWorkerCount
+                };
+            }
+            else if (activeTasks.Count > 0)
+            {
+                var active = activeTasks[^1];
+                _current = _current with
+                {
+                    Status = WorkerExecutionStatus.Running,
+                    ActiveTaskId = active.TaskId,
+                    ActiveTaskTitle = active.TaskTitle,
+                    StageId = active.CurrentStageId,
+                    HardwareTarget = string.IsNullOrWhiteSpace(active.HardwareTarget) ? _current.HardwareTarget : active.HardwareTarget,
+                    StartedAt = active.StartedAt,
+                    ActiveTasks = activeTasks,
+                    ConfiguredWorkerCount = ConfiguredWorkerCount
                 };
             }
         }
@@ -278,7 +504,7 @@ public class WorkerStateService : IWorkerStateService, IDisposable
             return;
         }
 
-        var execStatus = WorkerStatusConstants.IsRunning(status)
+        var incomingStatus = WorkerStatusConstants.IsRunning(status)
             ? WorkerExecutionStatus.Running
             : WorkerStatusConstants.IsWaitingForHuman(status)
                 ? WorkerExecutionStatus.WaitingForHuman
@@ -288,38 +514,104 @@ public class WorkerStateService : IWorkerStateService, IDisposable
 
         lock (_lock)
         {
-            if (execStatus == WorkerExecutionStatus.Idle)
-            {
-                // If this idle event is targeted at a specific task that is NOT the currently running task,
-                // ignore it so that a completion of another task (e.g. merge of task 10) does not clobber task 8.
-                if (activeTaskId.HasValue && _current.Status == WorkerExecutionStatus.Running && _current.ActiveTaskId.HasValue && activeTaskId.Value != _current.ActiveTaskId.Value)
-                {
-                    return;
-                }
+            var telemetryTasks = GetTelemetryActiveTasks();
 
-                _lastIdleTaskId = activeTaskId ?? _current.ActiveTaskId ?? _telemetryService.GetActiveTask()?.TaskId;
-            }
-            else if (execStatus == WorkerExecutionStatus.Running)
+            if (incomingStatus == WorkerExecutionStatus.Running)
             {
                 _lastIdleTaskId = null;
+
+                ActiveTaskSummary? matchedExisting = null;
+                if (activeTaskId.HasValue)
+                {
+                    var existingIdx = telemetryTasks.FindIndex(t => t.TaskId == activeTaskId.Value);
+                    if (existingIdx >= 0)
+                    {
+                        matchedExisting = telemetryTasks[existingIdx];
+                        _lastTelemetryStageByTask[activeTaskId.Value] = matchedExisting.CurrentStageId;
+                    }
+                    var taskSummary = new ActiveTaskSummary(
+                        activeTaskId.Value,
+                        taskTitle ?? (matchedExisting != null ? matchedExisting.TaskTitle : $"Task #{activeTaskId.Value}"),
+                        stageId ?? (matchedExisting != null ? matchedExisting.CurrentStageId : "Executing"),
+                        matchedExisting?.Priority ?? 1,
+                        matchedExisting?.QueueType ?? "default",
+                        matchedExisting?.StartedAt ?? DateTime.UtcNow,
+                        string.IsNullOrWhiteSpace(hardwareTarget) ? (matchedExisting?.HardwareTarget ?? _current.HardwareTarget) : hardwareTarget);
+
+                    if (existingIdx >= 0)
+                    {
+                        telemetryTasks[existingIdx] = taskSummary;
+                    }
+                    else
+                    {
+                        telemetryTasks.Add(taskSummary);
+                    }
+                }
+
+                var taskChanged = activeTaskId.HasValue && activeTaskId != _current.ActiveTaskId;
+                var startedAt = matchedExisting?.StartedAt ?? (taskChanged ? DateTime.UtcNow : (_current.StartedAt ?? DateTime.UtcNow));
+                var keepPrevious = !taskChanged;
+
+                _current = _current with
+                {
+                    Status = WorkerExecutionStatus.Running,
+                    ActiveTaskId = activeTaskId ?? _current.ActiveTaskId,
+                    ActiveTaskTitle = taskTitle ?? (keepPrevious ? _current.ActiveTaskTitle : matchedExisting?.TaskTitle),
+                    StageId = stageId ?? (keepPrevious ? _current.StageId : matchedExisting?.CurrentStageId),
+                    HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _current.HardwareTarget : hardwareTarget,
+                    BranchName = branchName ?? (keepPrevious ? _current.BranchName : null),
+                    StartedAt = startedAt,
+                    ActiveTasks = telemetryTasks.OrderBy(t => t.StartedAt).ToList(),
+                    ConfiguredWorkerCount = ConfiguredWorkerCount
+                };
             }
-
-            var taskChanged = activeTaskId.HasValue && activeTaskId != _current.ActiveTaskId;
-            var startedAt = execStatus == WorkerExecutionStatus.Running
-                ? (taskChanged ? DateTime.UtcNow : (_current.StartedAt ?? DateTime.UtcNow))
-                : (DateTime?)null;
-            var keepPrevious = execStatus != WorkerExecutionStatus.Idle && !taskChanged;
-
-            _current = _current with
+            else
             {
-                Status = execStatus,
-                ActiveTaskId = activeTaskId ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.ActiveTaskId),
-                ActiveTaskTitle = taskTitle ?? (keepPrevious ? _current.ActiveTaskTitle : null),
-                StageId = stageId ?? (execStatus == WorkerExecutionStatus.Idle ? null : _current.StageId),
-                HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _current.HardwareTarget : hardwareTarget,
-                BranchName = branchName ?? (keepPrevious ? _current.BranchName : null),
-                StartedAt = startedAt
-            };
+                if (activeTaskId.HasValue)
+                {
+                    telemetryTasks.RemoveAll(t => t.TaskId == activeTaskId.Value);
+                }
+                else
+                {
+                    telemetryTasks.Clear();
+                }
+
+                if (telemetryTasks.Count > 0)
+                {
+                    var nextActive = telemetryTasks[^1];
+                    _current = _current with
+                    {
+                        Status = WorkerExecutionStatus.Running,
+                        ActiveTaskId = nextActive.TaskId,
+                        ActiveTaskTitle = nextActive.TaskTitle,
+                        StageId = nextActive.CurrentStageId,
+                        HardwareTarget = string.IsNullOrWhiteSpace(nextActive.HardwareTarget) ? _current.HardwareTarget : nextActive.HardwareTarget,
+                        StartedAt = nextActive.StartedAt,
+                        ActiveTasks = telemetryTasks.OrderBy(t => t.StartedAt).ToList(),
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
+                    };
+                }
+                else
+                {
+                    if (incomingStatus == WorkerExecutionStatus.Idle)
+                    {
+                        _lastIdleTaskId = activeTaskId ?? _current.ActiveTaskId ?? _telemetryService.GetActiveTask()?.TaskId;
+                    }
+
+                    _current = _current with
+                    {
+                        Status = incomingStatus,
+                        ActiveTaskId = incomingStatus == WorkerExecutionStatus.Idle ? null : activeTaskId,
+                        ActiveTaskTitle = incomingStatus == WorkerExecutionStatus.Idle ? null : taskTitle,
+                        StageId = incomingStatus == WorkerExecutionStatus.Idle ? null : stageId,
+                        HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? _current.HardwareTarget : hardwareTarget,
+                        BranchName = incomingStatus == WorkerExecutionStatus.Idle ? null : branchName,
+                        StartedAt = null,
+                        ActiveTasks = Array.Empty<ActiveTaskSummary>(),
+                        ConfiguredWorkerCount = ConfiguredWorkerCount
+                    };
+                }
+            }
         }
 
         OnWorkerStateChanged?.Invoke();
@@ -338,6 +630,7 @@ public class WorkerStateService : IWorkerStateService, IDisposable
     public void Dispose()
     {
         _telemetryService.OnActiveTaskChanged -= HandleTelemetryActiveTaskChanged;
+        _telemetryService.OnActiveTasksChanged -= HandleTelemetryActiveTasksChanged;
         _telemetryService.OnPendingCountsChanged -= HandleTelemetryPendingCountsChanged;
         _telemetryService.OnModelPreloadChanged -= HandleTelemetryModelPreloadChanged;
     }

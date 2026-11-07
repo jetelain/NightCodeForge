@@ -15,6 +15,9 @@ public class OperationsTelemetryUiService : IDisposable
     private readonly OrchestratorHubClientConnection _hubConnection;
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly object _lock = new();
+    private readonly List<LlmCallRecord> _activeLlmCalls = new();
+    private readonly List<ShellCommandRecord> _activeShellCommands = new();
+    private readonly List<ActiveTaskSummary> _activeTasks = new();
     private readonly List<LlmCallRecord> _recentLlmCalls = new();
     private readonly List<ShellCommandRecord> _recentShellCommands = new();
 
@@ -22,6 +25,10 @@ public class OperationsTelemetryUiService : IDisposable
     public ShellCommandRecord? ActiveShellCommand { get; private set; }
     public ActiveTaskSummary? ActiveTask { get; private set; }
     public ModelPreloadTelemetryRecord? LatestModelPreload { get; private set; }
+
+    public IReadOnlyList<LlmCallRecord> ActiveLlmCalls { get; private set; } = Array.Empty<LlmCallRecord>();
+    public IReadOnlyList<ShellCommandRecord> ActiveShellCommands { get; private set; } = Array.Empty<ShellCommandRecord>();
+    public IReadOnlyList<ActiveTaskSummary> ActiveTasks { get; private set; } = Array.Empty<ActiveTaskSummary>();
 
     public IReadOnlyList<LlmCallRecord> RecentLlmCalls { get; private set; } = Array.Empty<LlmCallRecord>();
     public IReadOnlyList<ShellCommandRecord> RecentShellCommands { get; private set; } = Array.Empty<ShellCommandRecord>();
@@ -54,6 +61,7 @@ public class OperationsTelemetryUiService : IDisposable
         _hubConnection.OnWorkerStatusReceived += HandleWorkerStatusReceived;
         _telemetryService.OnLlmCallChanged += HandleLlmCallChanged;
         _telemetryService.OnActiveTaskChanged += HandleActiveTaskChanged;
+        _telemetryService.OnActiveTasksChanged += HandleTelemetryActiveTasksChanged;
         _telemetryService.OnModelPreloadChanged += HandleModelPreloadChanged;
     }
 
@@ -63,17 +71,43 @@ public class OperationsTelemetryUiService : IDisposable
         {
             LatestModelPreload = _telemetryService.GetLatestModelPreload();
             _recentLlmCalls.Clear();
-            _recentLlmCalls.AddRange(_telemetryService.GetRecentLlmCalls(50));
+            _recentLlmCalls.AddRange(_telemetryService.GetRecentLlmCalls(50) ?? Array.Empty<LlmCallRecord>());
             RecentLlmCalls = _recentLlmCalls.ToArray();
-            ActiveLlmCall = _telemetryService.GetActiveLlmCall() ?? RecentLlmCalls.FirstOrDefault(c => c.Status == LlmCallStatus.Running);
+
+            _activeLlmCalls.Clear();
+            _activeLlmCalls.AddRange(_telemetryService.GetActiveLlmCalls() ?? Array.Empty<LlmCallRecord>());
+            ActiveLlmCalls = _activeLlmCalls.OrderBy(c => c.StartTime).ToArray();
+            ActiveLlmCall = _telemetryService.GetActiveLlmCall() ?? ActiveLlmCalls.LastOrDefault() ?? RecentLlmCalls.FirstOrDefault(c => c.Status == LlmCallStatus.Running);
+            if (ActiveLlmCall != null && !_activeLlmCalls.Any(c => c.CallId == ActiveLlmCall.CallId))
+            {
+                _activeLlmCalls.Add(ActiveLlmCall);
+                ActiveLlmCalls = _activeLlmCalls.OrderBy(c => c.StartTime).ToArray();
+            }
 
             _recentShellCommands.Clear();
-            _recentShellCommands.AddRange(_telemetryService.GetRecentShellCommands(50));
+            _recentShellCommands.AddRange(_telemetryService.GetRecentShellCommands(50) ?? Array.Empty<ShellCommandRecord>());
             RecentShellCommands = _recentShellCommands.ToArray();
-            ActiveShellCommand = _telemetryService.GetActiveShellCommand() ?? RecentShellCommands.FirstOrDefault(c => c.Status == ShellCommandStatus.Running);
 
+            _activeShellCommands.Clear();
+            _activeShellCommands.AddRange(_telemetryService.GetActiveShellCommands() ?? Array.Empty<ShellCommandRecord>());
+            ActiveShellCommands = _activeShellCommands.OrderBy(c => c.StartTime).ToArray();
+            ActiveShellCommand = _telemetryService.GetActiveShellCommand() ?? ActiveShellCommands.LastOrDefault() ?? RecentShellCommands.FirstOrDefault(c => c.Status == ShellCommandStatus.Running);
+            if (ActiveShellCommand != null && !_activeShellCommands.Any(c => c.CommandId == ActiveShellCommand.CommandId))
+            {
+                _activeShellCommands.Add(ActiveShellCommand);
+                ActiveShellCommands = _activeShellCommands.OrderBy(c => c.StartTime).ToArray();
+            }
+
+            _activeTasks.Clear();
+            _activeTasks.AddRange((_telemetryService.GetActiveTasks() ?? Array.Empty<ActiveTaskSummary>()).Where(AutonomousTaskClassifier.IsAutonomousTask));
+            ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
             var active = _telemetryService.GetActiveTask();
-            ActiveTask = AutonomousTaskClassifier.IsAutonomousTask(active) ? active : null;
+            ActiveTask = AutonomousTaskClassifier.IsAutonomousTask(active) ? active : ActiveTasks.LastOrDefault();
+            if (ActiveTask != null && !_activeTasks.Any(t => t.TaskId == ActiveTask.TaskId))
+            {
+                _activeTasks.Add(ActiveTask);
+                ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
+            }
         }
         NotifyStateChanged();
     }
@@ -86,7 +120,20 @@ public class OperationsTelemetryUiService : IDisposable
             {
                 return;
             }
-            ActiveTask = task;
+
+            if (task != null)
+            {
+                _activeTasks.RemoveAll(t => t.TaskId == task.TaskId);
+                _activeTasks.Add(task);
+                ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
+                ActiveTask = task;
+            }
+            else
+            {
+                _activeTasks.Clear();
+                ActiveTasks = Array.Empty<ActiveTaskSummary>();
+                ActiveTask = null;
+            }
         }
         NotifyStateChanged();
     }
@@ -107,7 +154,18 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            var activeIdx = _activeLlmCalls.FindIndex(c => c.CallId == call.CallId);
+            if (activeIdx >= 0)
+            {
+                _activeLlmCalls[activeIdx] = call;
+            }
+            else
+            {
+                _activeLlmCalls.Add(call);
+            }
+            ActiveLlmCalls = _activeLlmCalls.OrderBy(c => c.StartTime).ToArray();
             ActiveLlmCall = call;
+
             if (SelectedLlmCall?.CallId == call.CallId)
             {
                 SelectedLlmCall = call;
@@ -131,6 +189,19 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            var activeIdx = _activeLlmCalls.FindIndex(c => c.CallId == callId);
+            if (activeIdx >= 0)
+            {
+                _activeLlmCalls[activeIdx] = _activeLlmCalls[activeIdx] with
+                {
+                    CompletionTokens = tokens,
+                    DurationMs = durationMs,
+                    TokensPerSecond = tps,
+                    ReasoningTokens = reasoningTokens
+                };
+                ActiveLlmCalls = _activeLlmCalls.OrderBy(c => c.StartTime).ToArray();
+            }
+
             if (ActiveLlmCall?.CallId == callId)
             {
                 ActiveLlmCall = ActiveLlmCall with
@@ -174,6 +245,9 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            _activeLlmCalls.RemoveAll(c => c.CallId == call.CallId);
+            ActiveLlmCalls = _activeLlmCalls.OrderBy(c => c.StartTime).ToArray();
+
             var idx = _recentLlmCalls.FindIndex(c => c.CallId == call.CallId);
             if (idx >= 0)
             {
@@ -188,7 +262,8 @@ public class OperationsTelemetryUiService : IDisposable
 
             if (ActiveLlmCall?.CallId == call.CallId)
             {
-                ActiveLlmCall = _recentLlmCalls.FirstOrDefault(c => c.CallId != call.CallId && c.Status == LlmCallStatus.Running);
+                ActiveLlmCall = _activeLlmCalls.OrderByDescending(c => c.StartTime).FirstOrDefault()
+                    ?? _recentLlmCalls.FirstOrDefault(c => c.CallId != call.CallId && c.Status == LlmCallStatus.Running);
             }
 
             if (SelectedLlmCall?.CallId == call.CallId)
@@ -203,7 +278,18 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            var activeIdx = _activeShellCommands.FindIndex(c => c.CommandId == command.CommandId);
+            if (activeIdx >= 0)
+            {
+                _activeShellCommands[activeIdx] = command;
+            }
+            else
+            {
+                _activeShellCommands.Add(command);
+            }
+            ActiveShellCommands = _activeShellCommands.OrderBy(c => c.StartTime).ToArray();
             ActiveShellCommand = command;
+
             var idx = _recentShellCommands.FindIndex(c => c.CommandId == command.CommandId);
             if (idx >= 0)
             {
@@ -223,6 +309,23 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            var activeIdx = _activeShellCommands.FindIndex(c => c.CommandId == commandId);
+            if (activeIdx >= 0)
+            {
+                var existing = _activeShellCommands[activeIdx];
+                if (isError)
+                {
+                    var updated = (existing.ErrorPreview ?? "") + chunk;
+                    _activeShellCommands[activeIdx] = existing with { ErrorPreview = updated.Length > 10_000 ? updated[^10_000..] : updated };
+                }
+                else
+                {
+                    var updated = (existing.OutputPreview ?? "") + chunk;
+                    _activeShellCommands[activeIdx] = existing with { OutputPreview = updated.Length > 10_000 ? updated[^10_000..] : updated };
+                }
+                ActiveShellCommands = _activeShellCommands.OrderBy(c => c.StartTime).ToArray();
+            }
+
             if (ActiveShellCommand?.CommandId == commandId)
             {
                 if (isError)
@@ -276,6 +379,9 @@ public class OperationsTelemetryUiService : IDisposable
     {
         lock (_lock)
         {
+            _activeShellCommands.RemoveAll(c => c.CommandId == command.CommandId);
+            ActiveShellCommands = _activeShellCommands.OrderBy(c => c.StartTime).ToArray();
+
             var idx = _recentShellCommands.FindIndex(c => c.CommandId == command.CommandId);
             if (idx >= 0)
             {
@@ -290,7 +396,8 @@ public class OperationsTelemetryUiService : IDisposable
 
             if (ActiveShellCommand?.CommandId == command.CommandId)
             {
-                ActiveShellCommand = _recentShellCommands.FirstOrDefault(c => c.CommandId != command.CommandId && c.Status == ShellCommandStatus.Running);
+                ActiveShellCommand = _activeShellCommands.OrderByDescending(c => c.StartTime).FirstOrDefault()
+                    ?? _recentShellCommands.FirstOrDefault(c => c.CommandId != command.CommandId && c.Status == ShellCommandStatus.Running);
             }
 
             if (SelectedShellCommand?.CommandId == command.CommandId)
@@ -457,11 +564,32 @@ public class OperationsTelemetryUiService : IDisposable
         return !string.IsNullOrWhiteSpace(record.Reason) ? record.Reason : $"Warmup failed for '{record.Model}'";
     }
 
+    public static string FormatActiveLlmBadge(int count) =>
+        count > 1 ? $"{count} Inferring" : "Inferring";
+
+    public static string FormatActiveShellBadge(int count) =>
+        count > 1 ? $"{count} Executing" : "Executing";
+
+    public static string FormatActiveTaskBadge(int count) =>
+        count > 1 ? $"Running ({count})" : "Running";
+
     private void HandleModelPreloadChanged(ModelPreloadTelemetryRecord? record)
     {
         lock (_lock)
         {
             LatestModelPreload = record;
+        }
+        NotifyStateChanged();
+    }
+
+    private void HandleTelemetryActiveTasksChanged(IReadOnlyList<ActiveTaskSummary> tasks)
+    {
+        lock (_lock)
+        {
+            _activeTasks.Clear();
+            _activeTasks.AddRange(tasks.Where(AutonomousTaskClassifier.IsAutonomousTask));
+            ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
+            ActiveTask = _activeTasks.OrderByDescending(t => t.StartedAt).FirstOrDefault();
         }
         NotifyStateChanged();
     }
@@ -474,7 +602,32 @@ public class OperationsTelemetryUiService : IDisposable
             {
                 return;
             }
-            ActiveTask = task;
+
+            var teleTasks = _telemetryService.GetActiveTasks();
+            var validTeleTasks = teleTasks?.Where(AutonomousTaskClassifier.IsAutonomousTask).ToList();
+
+            if (task == null)
+            {
+                _activeTasks.Clear();
+                if (validTeleTasks is { Count: > 0 })
+                {
+                    _activeTasks.AddRange(validTeleTasks);
+                }
+            }
+            else if (validTeleTasks is { Count: > 0 })
+            {
+                _activeTasks.Clear();
+                _activeTasks.AddRange(validTeleTasks.Where(t => t.TaskId != task.TaskId));
+                _activeTasks.Add(task);
+            }
+            else
+            {
+                _activeTasks.RemoveAll(t => t.TaskId == task.TaskId);
+                _activeTasks.Add(task);
+            }
+
+            ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
+            ActiveTask = _activeTasks.OrderByDescending(t => t.StartedAt).FirstOrDefault();
         }
         NotifyStateChanged();
     }
@@ -492,37 +645,104 @@ public class OperationsTelemetryUiService : IDisposable
                 WorkerStatusConstants.IsWaitingForHuman(status) ||
                 WorkerStatusConstants.IsBlocked(status))
             {
-                var currentActive = _telemetryService.GetActiveTask();
-                if (activeTaskId.HasValue && currentActive != null && currentActive.TaskId != activeTaskId.Value)
+                if (!activeTaskId.HasValue)
                 {
-                    ActiveTask = currentActive;
-                }
-                else
-                {
+                    _activeTasks.Clear();
+                    ActiveTasks = Array.Empty<ActiveTaskSummary>();
                     ActiveTask = null;
                 }
-            }
-            else if (WorkerStatusConstants.IsRunning(status) && activeTaskId.HasValue && (ActiveTask == null || ActiveTask.TaskId != activeTaskId.Value))
-            {
-                var telemetryActive = _telemetryService.GetActiveTask();
-                if (telemetryActive != null && telemetryActive.TaskId == activeTaskId.Value)
+                else
                 {
-                    ActiveTask = telemetryActive;
+                    _activeTasks.RemoveAll(t => t.TaskId == activeTaskId.Value);
+
+                    var teleActive = _telemetryService.GetActiveTask();
+                    if (teleActive != null && AutonomousTaskClassifier.IsAutonomousTask(teleActive) && teleActive.TaskId != activeTaskId.Value)
+                    {
+                        if (!_activeTasks.Any(t => t.TaskId == teleActive.TaskId))
+                        {
+                            _activeTasks.Add(teleActive);
+                        }
+                    }
+
+                    var teleTasks = _telemetryService.GetActiveTasks();
+                    if (teleTasks != null && teleTasks.Count > 0)
+                    {
+                        _activeTasks.Clear();
+                        foreach (var t in teleTasks.Where(AutonomousTaskClassifier.IsAutonomousTask))
+                        {
+                            if (t.TaskId != activeTaskId.Value)
+                            {
+                                _activeTasks.Add(t);
+                            }
+                        }
+                    }
+
+                    ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
+                    ActiveTask = _activeTasks.OrderByDescending(t => t.StartedAt).FirstOrDefault();
+                }
+            }
+            else if (WorkerStatusConstants.IsRunning(status) && activeTaskId.HasValue)
+            {
+                var teleTasks = _telemetryService.GetActiveTasks();
+                var validTeleTasks = teleTasks?.Where(AutonomousTaskClassifier.IsAutonomousTask).ToList();
+                var teleMatch = validTeleTasks?.FirstOrDefault(t => t.TaskId == activeTaskId.Value)
+                    ?? _telemetryService.GetActiveTask(activeTaskId.Value);
+
+                var teleActive = _telemetryService.GetActiveTask();
+                if (teleMatch == null && teleActive != null && teleActive.TaskId == activeTaskId.Value)
+                {
+                    teleMatch = teleActive;
+                }
+
+                ActiveTaskSummary taskSummary;
+                if (teleMatch != null && AutonomousTaskClassifier.IsAutonomousTask(teleMatch))
+                {
+                    taskSummary = teleMatch with
+                    {
+                        CurrentStageId = stageId ?? teleMatch.CurrentStageId,
+                        HardwareTarget = string.IsNullOrWhiteSpace(hardwareTarget) ? teleMatch.HardwareTarget : hardwareTarget
+                    };
                 }
                 else
                 {
-                    ActiveTask = new ActiveTaskSummary(
-                        activeTaskId.Value,
-                        $"Task #{activeTaskId.Value}",
-                        stageId ?? "Executing",
-                        1,
-                        "default",
-                        DateTime.UtcNow,
-                        hardwareTarget);
+                    var existing = _activeTasks.FirstOrDefault(t => t.TaskId == activeTaskId.Value);
+                    taskSummary = existing != null
+                        ? existing with { CurrentStageId = stageId ?? existing.CurrentStageId, HardwareTarget = hardwareTarget }
+                        : new ActiveTaskSummary(
+                            activeTaskId.Value,
+                            $"Task #{activeTaskId.Value}",
+                            stageId ?? "Executing",
+                            1,
+                            "default",
+                            DateTime.UtcNow,
+                            hardwareTarget);
                 }
+
+                if (validTeleTasks is { Count: > 0 })
+                {
+                    _activeTasks.Clear();
+                    _activeTasks.AddRange(validTeleTasks.Where(t => t.TaskId != activeTaskId.Value));
+                    _activeTasks.Add(taskSummary);
+                }
+                else
+                {
+                    _activeTasks.RemoveAll(t => t.TaskId == activeTaskId.Value);
+                    _activeTasks.Add(taskSummary);
+                }
+
+                ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
+                ActiveTask = _activeTasks.OrderByDescending(t => t.StartedAt).FirstOrDefault();
             }
             else if (ActiveTask != null && stageId != null)
             {
+                for (int i = 0; i < _activeTasks.Count; i++)
+                {
+                    if (_activeTasks[i].TaskId == ActiveTask.TaskId)
+                    {
+                        _activeTasks[i] = _activeTasks[i] with { CurrentStageId = stageId, HardwareTarget = hardwareTarget };
+                    }
+                }
+                ActiveTasks = _activeTasks.OrderBy(t => t.StartedAt).ToArray();
                 ActiveTask = ActiveTask with { CurrentStageId = stageId, HardwareTarget = hardwareTarget };
             }
         }
@@ -548,6 +768,7 @@ public class OperationsTelemetryUiService : IDisposable
         _hubConnection.OnWorkerStatusReceived -= HandleWorkerStatusReceived;
         _telemetryService.OnLlmCallChanged -= HandleLlmCallChanged;
         _telemetryService.OnActiveTaskChanged -= HandleActiveTaskChanged;
+        _telemetryService.OnActiveTasksChanged -= HandleTelemetryActiveTasksChanged;
         _telemetryService.OnModelPreloadChanged -= HandleModelPreloadChanged;
     }
 }
