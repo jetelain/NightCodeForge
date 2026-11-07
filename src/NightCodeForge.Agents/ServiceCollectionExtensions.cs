@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NightCodeForge.Agents.Acp;
@@ -33,8 +34,18 @@ public static class ServiceCollectionExtensions
         // 1. Streaming & Realtime Telemetry
         services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
-        services.AddOptions<RetryPolicyOptions>();
-        services.AddOptions<LlmRetryPolicyOptions>();
+        services.AddOptions<RetryPolicyOptions>()
+            .Configure<IServiceProvider>((options, sp) =>
+            {
+                var config = sp.GetService<IConfiguration>();
+                config?.GetSection(RetryPolicyOptions.SectionName).Bind(options);
+            });
+        services.AddOptions<LlmRetryPolicyOptions>()
+            .Configure<IServiceProvider>((options, sp) =>
+            {
+                var config = sp.GetService<IConfiguration>();
+                config?.GetSection(LlmRetryPolicyOptions.SectionName).Bind(options);
+            });
 
         // 2. Canonical Tools & Context Services
         services.TryAddSingleton<IEditorConfigService, EditorConfigService>();

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -22,6 +23,7 @@ public class OperationsControlService : IOperationsControlService
     private readonly IWorkerStateService _workerStateService;
     private readonly ITaskCancellationManager _cancellationManager;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IOptions<OperationsControlOptions> _options;
     private readonly ILogger<OperationsControlService> _logger;
 
     private readonly SemaphoreSlim _operationsLock = new(1, 1);
@@ -36,6 +38,7 @@ public class OperationsControlService : IOperationsControlService
         IWorkerStateService workerStateService,
         ITaskCancellationManager cancellationManager,
         IServiceScopeFactory scopeFactory,
+        IOptions<OperationsControlOptions> options,
         ILogger<OperationsControlService> logger)
     {
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
@@ -43,11 +46,14 @@ public class OperationsControlService : IOperationsControlService
         _workerStateService = workerStateService ?? throw new ArgumentNullException(nameof(workerStateService));
         _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        ArgumentNullException.ThrowIfNull(options);
+        _ = options.Value ?? throw new ArgumentNullException(nameof(options));
+        _options = options;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         // Fail fast if database cannot be queried at startup: no synthetic un-paused state
         _isPaused = _stateStore.GetIsPausedAsync().GetAwaiter().GetResult();
-        _reclaimStatus = _isPaused ? OperationsReclaimStatus.Evicted : OperationsReclaimStatus.Idle;
+        _reclaimStatus = _isPaused && _options.Value.ShouldReclaimVramOnPause ? OperationsReclaimStatus.Evicted : OperationsReclaimStatus.Idle;
     }
 
     public bool IsPaused => _isPaused;
@@ -127,8 +133,9 @@ public class OperationsControlService : IOperationsControlService
                 throw new InvalidOperationException("Failed persisting operations pause state to storage.", ex);
             }
 
+            var shouldReclaimVram = _options.Value.ShouldReclaimVramOnPause;
             _isPaused = true;
-            ReclaimStatus = OperationsReclaimStatus.Evicting;
+            ReclaimStatus = shouldReclaimVram ? OperationsReclaimStatus.Evicting : OperationsReclaimStatus.Idle;
             LastReclaimError = null;
 
             OnOperationsStateChanged?.Invoke(true);
@@ -160,29 +167,41 @@ public class OperationsControlService : IOperationsControlService
                 }
             }
 
-            // 3. Trigger GPU VRAM unload
-            try
+            // 3. Trigger GPU VRAM unload if enabled
+            if (shouldReclaimVram)
             {
-                _logger.LogInformation("Triggering GPU VRAM reclamation...");
-                var success = await _ollamaRouterGatewayService.ReclaimVramAsync(cancellationToken);
-                if (success)
+                ReclaimStatus = OperationsReclaimStatus.Evicting;
+                LastReclaimError = null;
+
+                try
                 {
-                    ReclaimStatus = OperationsReclaimStatus.Evicted;
-                    LastReclaimError = null;
-                    _logger.LogInformation("GPU VRAM successfully reclaimed.");
+                    _logger.LogInformation("Triggering GPU VRAM reclamation...");
+                    var success = await _ollamaRouterGatewayService.ReclaimVramAsync(cancellationToken);
+                    if (success)
+                    {
+                        ReclaimStatus = OperationsReclaimStatus.Evicted;
+                        LastReclaimError = null;
+                        _logger.LogInformation("GPU VRAM successfully reclaimed.");
+                    }
+                    else
+                    {
+                        ReclaimStatus = OperationsReclaimStatus.Failed;
+                        LastReclaimError = "OllamaRouter reported VRAM reclaim failure or endpoint unavailable.";
+                        _logger.LogWarning("GPU VRAM reclaim failed: {Error}", LastReclaimError);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
+                    _logger.LogError(ex, "Failed to reclaim GPU VRAM during operations pause.");
                     ReclaimStatus = OperationsReclaimStatus.Failed;
-                    LastReclaimError = "OllamaRouter reported VRAM reclaim failure or endpoint unavailable.";
-                    _logger.LogWarning("GPU VRAM reclaim failed: {Error}", LastReclaimError);
+                    LastReclaimError = ex.Message;
                 }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogError(ex, "Failed to reclaim GPU VRAM during operations pause.");
-                ReclaimStatus = OperationsReclaimStatus.Failed;
-                LastReclaimError = ex.Message;
+                _logger.LogInformation("VRAM reclaim on pause is disabled by configuration (ReclaimVramOnPause is false). Skipping GPU VRAM eviction.");
+                ReclaimStatus = OperationsReclaimStatus.Idle;
+                LastReclaimError = null;
             }
 
             OnOperationsStateChanged?.Invoke(true);

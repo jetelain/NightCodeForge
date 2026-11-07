@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -47,6 +48,12 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWebSearchSettingsService, WebSearchSettingsService>();
         services.TryAddSingleton<IOperationsStateStore, OperationsStateStore>();
         services.TryAddSingleton<IWorkerStateService, Telemetry.TelemetryWorkerStateService>();
+        services.AddOptions<NightCodeForge.Core.Services.OperationsControlOptions>()
+            .Configure<IServiceProvider>((options, sp) =>
+            {
+                var config = sp.GetService<Microsoft.Extensions.Configuration.IConfiguration>();
+                config?.GetSection(NightCodeForge.Core.Services.OperationsControlOptions.SectionName).Bind(options);
+            });
         services.TryAddSingleton<IOperationsControlService, OperationsControlService>();
 
         // 3. Concurrency & DAG Engine

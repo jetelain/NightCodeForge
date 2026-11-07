@@ -1,10 +1,14 @@
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;
 using Xunit;
 
@@ -375,6 +379,45 @@ public class CrucibleTransientRetryTests : IDisposable
         var convs = await taskRepo.GetConversationsAsync(context.ForgeTask.Id);
         var conv = Assert.Single(convs);
         Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
+    }
+
+    [Fact]
+    public void AddNightCodeForgeAgents_WithoutConfigurationInDi_ResolvesRetryOptionsDefaultsWithoutThrowing()
+    {
+        var services = new ServiceCollection();
+        services.AddNightCodeForgeAgents(LlmProviderType.OllamaRouter);
+
+        using var sp = services.BuildServiceProvider();
+        var retryOptions = sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value;
+        var llmRetryOptions = sp.GetRequiredService<IOptions<LlmRetryPolicyOptions>>().Value;
+
+        Assert.Equal(RetryPolicyOptions.DefaultMaxRetries, retryOptions.MaxRetries);
+        Assert.Equal(LlmRetryPolicyOptions.DefaultLlmMaxRetries, llmRetryOptions.MaxRetries);
+    }
+
+    [Fact]
+    public void AddNightCodeForgeAgents_WithConfigurationInDi_BindsCanonicalRetryPolicySections()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["RetryPolicy:MaxRetries"] = "4",
+                ["LlmRetryPolicy:MaxRetries"] = "42",
+                ["LlmRetryPolicy:MaxRetryDurationSeconds"] = "900.0"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
+        services.AddNightCodeForgeAgents(LlmProviderType.OllamaRouter);
+
+        using var sp = services.BuildServiceProvider();
+        var retryOptions = sp.GetRequiredService<IOptions<RetryPolicyOptions>>().Value;
+        var llmRetryOptions = sp.GetRequiredService<IOptions<LlmRetryPolicyOptions>>().Value;
+
+        Assert.Equal(4, retryOptions.MaxRetries);
+        Assert.Equal(42, llmRetryOptions.MaxRetries);
+        Assert.Equal(TimeSpan.FromSeconds(900.0), llmRetryOptions.MaxRetryDuration);
     }
 
     private sealed class CallbackStreamer(Action<AgentActivityEvent> onEvent) : IAgentActivityStreamer

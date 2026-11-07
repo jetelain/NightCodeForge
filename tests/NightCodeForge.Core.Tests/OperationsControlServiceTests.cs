@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
@@ -41,19 +42,56 @@ public class OperationsControlServiceTests
         _stateStoreMock.Setup(s => s.GetIsPausedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
     }
 
+    private OperationsControlService CreateService(
+        OperationsControlOptions? options = null,
+        IOperationsStateStore? stateStore = null,
+        IServiceScopeFactory? scopeFactory = null)
+    {
+        return new OperationsControlService(
+            stateStore ?? _stateStoreMock.Object,
+            _gatewayMock.Object,
+            _workerStateMock.Object,
+            _cancellationManagerMock.Object,
+            scopeFactory ?? _scopeFactory,
+            Options.Create(options ?? new OperationsControlOptions()),
+            NullLogger<OperationsControlService>.Instance);
+    }
+
     [Fact]
-    public async Task PauseOperationsAsync_SetsIsPausedTrue_AndTriggersVramReclaim()
+    public async Task PauseOperationsAsync_SetsIsPausedTrue_AndSkipsVramReclaimByDefault()
+    {
+        _workerStateMock.Setup(w => w.ActiveTaskId).Returns((int?)null);
+
+        var service = CreateService();
+
+        var observedStatuses = new List<OperationsReclaimStatus>();
+        bool? stateChangedEventValue = null;
+        service.OnOperationsStateChanged += val =>
+        {
+            stateChangedEventValue = val;
+            observedStatuses.Add(service.ReclaimStatus);
+        };
+
+        var result = await service.PauseOperationsAsync();
+
+        Assert.True(result);
+        Assert.True(service.IsPaused);
+        Assert.Equal(OperationsReclaimStatus.Idle, service.ReclaimStatus);
+        Assert.Null(service.LastReclaimError);
+        Assert.True(stateChangedEventValue);
+        Assert.All(observedStatuses, status => Assert.Equal(OperationsReclaimStatus.Idle, status));
+
+        _gatewayMock.Verify(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _stateStoreMock.Verify(s => s.SetIsPausedAsync(true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task PauseOperationsAsync_WhenReclaimEnabled_SetsIsPausedTrue_AndTriggersVramReclaim()
     {
         _gatewayMock.Setup(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
         _workerStateMock.Setup(w => w.ActiveTaskId).Returns((int?)null);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         bool? stateChangedEventValue = null;
         service.OnOperationsStateChanged += val => stateChangedEventValue = val;
@@ -88,13 +126,7 @@ public class OperationsControlServiceTests
 
         _gatewayMock.Setup(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         var result = await service.PauseOperationsAsync();
 
@@ -109,13 +141,7 @@ public class OperationsControlServiceTests
         _gatewayMock.Setup(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
         _workerStateMock.Setup(w => w.ActiveTaskId).Returns((int?)null);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         var result = await service.PauseOperationsAsync();
 
@@ -133,13 +159,7 @@ public class OperationsControlServiceTests
             .ThrowsAsync(new HttpRequestException("Connection refused by OllamaRouter"));
         _workerStateMock.Setup(w => w.ActiveTaskId).Returns((int?)null);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         var result = await service.PauseOperationsAsync();
 
@@ -149,47 +169,53 @@ public class OperationsControlServiceTests
     }
 
     [Fact]
-    public async Task ResumeOperationsAsync_ReEnqueuesOpenTasks_OnlyWhenDagReady()
+    public async Task ResumeOperationsAsync_SetsIsPausedFalse_ClearsPauses_AndDispatchesDeferredTasks()
     {
+        var ws = new Workspace { Id = 1, Name = "Ws", RepositoryPath = "C:/ws" };
         var taskReady = new ForgeTask
         {
             Id = 10,
-            Title = "Ready Task",
+            Title = "Task Ready",
             Status = TaskOverallStatus.Open,
             InterruptedStageId = "impl",
+            CurrentStageId = "impl",
             IsDeferredByPause = true,
-            Priority = TaskPriority.High
+            Priority = TaskPriority.High,
+            Workspace = ws
         };
-        var taskBlocked = new ForgeTask
+        var taskBlockedPrereq = new ForgeTask
         {
             Id = 20,
-            Title = "Blocked Task",
+            Title = "Task Blocked Prereq",
             Status = TaskOverallStatus.Open,
             InterruptedStageId = "impl",
+            CurrentStageId = "impl",
             IsDeferredByPause = true,
-            Priority = TaskPriority.Normal
+            Priority = TaskPriority.Normal,
+            Workspace = ws
         };
-        var taskWaiting = new ForgeTask
+        var taskWaitingHuman = new ForgeTask
         {
             Id = 30,
-            Title = "Waiting Task",
+            Title = "Task Waiting Human",
             Status = TaskOverallStatus.Open,
             IsWaitingForHuman = true,
             IsDeferredByPause = true,
-            InterruptedStageId = "review"
+            Workspace = ws
         };
-        var taskIdleNotDeferred = new ForgeTask
+        var taskNotDeferred = new ForgeTask
         {
             Id = 40,
-            Title = "Idle Task Left After Restart",
+            Title = "Task Not Deferred",
             Status = TaskOverallStatus.Open,
             IsDeferredByPause = false,
-            InterruptedStageId = "impl"
+            Workspace = ws
         };
+
         await _taskRepository.CreateAsync(taskReady);
-        await _taskRepository.CreateAsync(taskBlocked);
-        await _taskRepository.CreateAsync(taskWaiting);
-        await _taskRepository.CreateAsync(taskIdleNotDeferred);
+        await _taskRepository.CreateAsync(taskBlockedPrereq);
+        await _taskRepository.CreateAsync(taskWaitingHuman);
+        await _taskRepository.CreateAsync(taskNotDeferred);
 
         _dependencyEngineMock.Setup(d => d.IsReadyForExecutionAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync(true);
         _dependencyEngineMock.Setup(d => d.IsReadyForExecutionAsync(20, It.IsAny<CancellationToken>())).ReturnsAsync(false);
@@ -208,13 +234,7 @@ public class OperationsControlServiceTests
 
         _stateStoreMock.Setup(s => s.GetIsPausedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService();
 
         bool? stateChangedEventValue = null;
         service.OnOperationsStateChanged += val => stateChangedEventValue = val;
@@ -263,13 +283,7 @@ public class OperationsControlServiceTests
         services.AddSingleton(_environmentProviderMock.Object);
         var sp = services.BuildServiceProvider();
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            sp.GetRequiredService<IServiceScopeFactory>(),
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(scopeFactory: sp.GetRequiredService<IServiceScopeFactory>());
 
         var count = await service.GetDeferredTaskCountAsync();
         Assert.Equal(2, count);
@@ -282,13 +296,7 @@ public class OperationsControlServiceTests
         storeMock.Setup(s => s.GetIsPausedAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("DB unavailable"));
 
-        Assert.Throws<InvalidOperationException>(() => new OperationsControlService(
-            storeMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance));
+        Assert.Throws<InvalidOperationException>(() => CreateService(stateStore: storeMock.Object));
     }
 
     [Fact]
@@ -298,13 +306,7 @@ public class OperationsControlServiceTests
         _stateStoreMock.Setup(s => s.SetIsPausedAsync(true, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("DB write failure"));
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.PauseOperationsAsync());
         Assert.Contains("Failed persisting operations pause state", ex.Message);
@@ -325,13 +327,7 @@ public class OperationsControlServiceTests
         _stateStoreMock.Setup(s => s.SetIsPausedAsync(false, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("DB write failure"));
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ResumeOperationsAsync());
         Assert.Contains("Failed persisting operations resume state", ex.Message);
@@ -386,13 +382,7 @@ public class OperationsControlServiceTests
 
         _stateStoreMock.Setup(s => s.GetIsPausedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService();
 
         var aggEx = await Assert.ThrowsAsync<AggregateException>(() => service.ResumeOperationsAsync());
         Assert.Single(aggEx.InnerExceptions);
@@ -440,13 +430,7 @@ public class OperationsControlServiceTests
         // Service is already unpaused (IsPaused = false)
         _stateStoreMock.Setup(s => s.GetIsPausedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService();
 
         Assert.False(service.IsPaused);
 
@@ -472,13 +456,7 @@ public class OperationsControlServiceTests
                 return true;
             });
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         // Start pause in background (it will await tcs.Task while holding lock)
         var pauseTask = service.PauseOperationsAsync();
@@ -516,13 +494,7 @@ public class OperationsControlServiceTests
         _workerStateMock.Setup(w => w.ActiveTaskId).Returns((int?)null);
         _gatewayMock.Setup(g => g.ReclaimVramAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
 
-        var service = new OperationsControlService(
-            _stateStoreMock.Object,
-            _gatewayMock.Object,
-            _workerStateMock.Object,
-            _cancellationManagerMock.Object,
-            _scopeFactory,
-            NullLogger<OperationsControlService>.Instance);
+        var service = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
 
         var result = await service.PauseOperationsAsync();
 
@@ -531,5 +503,71 @@ public class OperationsControlServiceTests
         _cancellationManagerMock.Verify(c => c.RequestPause(42), Times.Once);
         _environmentProviderMock.Verify(e => e.CleanupTaskContainerAsync(ws, 41, It.IsAny<CancellationToken>()), Times.Once);
         _environmentProviderMock.Verify(e => e.CleanupTaskContainerAsync(ws, 42, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public void OperationsControlOptions_DefaultValues_AndOverrides_WorkCorrectly()
+    {
+        // 1. Default should be false
+        var defaultOptions = new OperationsControlOptions();
+        Assert.False(defaultOptions.ReclaimVramOnPause);
+        Assert.Null(defaultOptions.DisableVramReclaimOnPause);
+        Assert.False(defaultOptions.ShouldReclaimVramOnPause);
+
+        // 2. Explicit ReclaimVramOnPause = true
+        var enabledOptions = new OperationsControlOptions { ReclaimVramOnPause = true };
+        Assert.True(enabledOptions.ReclaimVramOnPause);
+        Assert.True(enabledOptions.ShouldReclaimVramOnPause);
+
+        // 3. DisableVramReclaimOnPause = true forces off even if ReclaimVramOnPause was true
+        var forceDisabledOptions = new OperationsControlOptions
+        {
+            ReclaimVramOnPause = true,
+            DisableVramReclaimOnPause = true
+        };
+        Assert.False(forceDisabledOptions.ShouldReclaimVramOnPause);
+
+        // 4. DisableVramReclaimOnPause = false forces on
+        var forceEnabledOptions = new OperationsControlOptions
+        {
+            ReclaimVramOnPause = false,
+            DisableVramReclaimOnPause = false
+        };
+        Assert.True(forceEnabledOptions.ShouldReclaimVramOnPause);
+
+        // 5. Environment variable overrides both ReclaimVramOnPause and DisableVramReclaimOnPause (with trimming)
+        var previousEnv = Environment.GetEnvironmentVariable(OperationsControlOptions.ReclaimVramOnPauseEnvironmentVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(OperationsControlOptions.ReclaimVramOnPauseEnvironmentVariable, " true ");
+            Assert.True(defaultOptions.ReclaimVramOnPause);
+            Assert.True(forceDisabledOptions.ShouldReclaimVramOnPause);
+
+            Environment.SetEnvironmentVariable(OperationsControlOptions.ReclaimVramOnPauseEnvironmentVariable, " 0 ");
+            Assert.False(enabledOptions.ReclaimVramOnPause);
+            Assert.False(forceEnabledOptions.ShouldReclaimVramOnPause);
+
+            Environment.SetEnvironmentVariable(OperationsControlOptions.ReclaimVramOnPauseEnvironmentVariable, "invalid");
+            Assert.False(defaultOptions.ShouldReclaimVramOnPause);
+            Assert.True(enabledOptions.ShouldReclaimVramOnPause);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(OperationsControlOptions.ReclaimVramOnPauseEnvironmentVariable, previousEnv);
+        }
+    }
+
+    [Fact]
+    public void OperationsControlService_Constructor_WhenPausedAtStartup_SetsReclaimStatusBasedOnOptions()
+    {
+        _stateStoreMock.Setup(s => s.GetIsPausedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var defaultService = CreateService(new OperationsControlOptions { ReclaimVramOnPause = false });
+        Assert.True(defaultService.IsPaused);
+        Assert.Equal(OperationsReclaimStatus.Idle, defaultService.ReclaimStatus);
+
+        var reclaimService = CreateService(new OperationsControlOptions { ReclaimVramOnPause = true });
+        Assert.True(reclaimService.IsPaused);
+        Assert.Equal(OperationsReclaimStatus.Evicted, reclaimService.ReclaimStatus);
     }
 }
