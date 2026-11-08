@@ -362,5 +362,18 @@ window.NightCodeForge = window.NightCodeForge || {};
             foregroundHandler = null;
         }
     };
+
+    /**
+     * Registers the PWA service worker when supported and running in a secure context or loopback.
+     */
+    window.NightCodeForge.registerServiceWorker = function () {
+        if ('serviceWorker' in navigator && (window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '[::1]')) {
+            navigator.serviceWorker.register('/service-worker.js').catch(function (err) {
+                console.warn('Service worker registration failed:', err);
+            });
+        }
+    };
+
+    window.NightCodeForge.registerServiceWorker();
 })();
 

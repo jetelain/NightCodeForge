@@ -21,6 +21,7 @@ public class ContentSecurityPolicyMiddleware
         "img-src 'self' data: blob:; " +
         "connect-src 'self' ws: wss:; " +
         "worker-src 'self' blob:; " +
+        "manifest-src 'self'; " +
         "form-action 'self'; " +
         "frame-ancestors 'none'; " +
         "base-uri 'self';";

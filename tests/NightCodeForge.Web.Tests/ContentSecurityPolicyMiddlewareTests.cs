@@ -36,6 +36,7 @@ public class ContentSecurityPolicyMiddlewareTests
         Assert.Contains("img-src 'self' data: blob:", headerValue);
         Assert.Contains("connect-src 'self' ws: wss:", headerValue);
         Assert.Contains("worker-src 'self' blob:", headerValue);
+        Assert.Contains("manifest-src 'self'", headerValue);
         Assert.Contains("form-action 'self'", headerValue);
         Assert.Contains("frame-ancestors 'none'", headerValue);
         Assert.Contains("base-uri 'self'", headerValue);
