@@ -6,12 +6,17 @@ namespace NightCodeForge.Core.Domain;
 /// </summary>
 public class WebSearchSettings
 {
+    public const string DefaultProvider = "Ollama";
     public const string DefaultEndpoint = "https://ollama.com/api/web_search";
+    public const string OllamaApiKeyEnvironmentVariable = "OLLAMA_API_KEY";
+    public const int DefaultMaxResultsCount = 5;
+    public const int MinMaxResultsCount = 1;
+    public const int MaxMaxResultsCount = 10;
 
     /// <summary>
     /// Search provider name (default: "Ollama").
     /// </summary>
-    public string Provider { get; set; } = "Ollama";
+    public string Provider { get; set; } = DefaultProvider;
 
     /// <summary>
     /// API key for authentication with the search provider (e.g. Ollama cloud API key).
@@ -26,7 +31,7 @@ public class WebSearchSettings
     /// <summary>
     /// Default maximum results returned per search query (1 to 10).
     /// </summary>
-    public int DefaultMaxResults { get; set; } = 5;
+    public int DefaultMaxResults { get; set; } = DefaultMaxResultsCount;
 
     public WebSearchSettings Clone() => new()
     {

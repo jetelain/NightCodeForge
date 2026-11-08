@@ -3,6 +3,7 @@ using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tests;
@@ -47,6 +48,163 @@ public class CanonicalAIFunctionFactoryTests
         var permittedExplicitly = CanonicalAIFunctionFactory.CreateTools(tools, new[] { "read", "web_search" });
         Assert.Contains(permittedExplicitly, t => t.Name == CanonicalToolNames.WebSearch);
         Assert.Equal(2, permittedExplicitly.Count);
+    }
+
+    [Fact]
+    public void CreateTools_DoesNotAdvertiseWebSearch_WhenWebSearchIsDisabled_InAirGappedMode()
+    {
+        var airGappedSearch = new MockWebSearchService(
+            isConfigured: true,
+            isEnabled: false,
+            disabledReason: "Web search is disabled in Air-Gapped mode (external cloud search to ollama.com is prohibited).");
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: airGappedSearch);
+
+        Assert.True(tools.IsWebSearchConfigured);
+        Assert.False(tools.IsWebSearchEnabled);
+
+        // Even when permittedTools specifically requests web_search or is null
+        var allTools = CanonicalAIFunctionFactory.CreateTools(tools);
+        Assert.DoesNotContain(allTools, t => t.Name == CanonicalToolNames.WebSearch);
+
+        var permittedExplicitly = CanonicalAIFunctionFactory.CreateTools(tools, new[] { "read", "bash", "web_search" });
+        Assert.DoesNotContain(permittedExplicitly, t => t.Name == CanonicalToolNames.WebSearch);
+        Assert.Contains(permittedExplicitly, t => t.Name == "read");
+        Assert.Contains(permittedExplicitly, t => t.Name == "bash");
+    }
+
+    [Fact]
+    public async Task CanonicalTools_WebSearchAsync_ReturnsAirGappedErrorMessage_WhenAirGapped()
+    {
+        var airGappedSearch = new MockWebSearchService(
+            isConfigured: true,
+            isEnabled: false,
+            disabledReason: "Web search is disabled in Air-Gapped mode (external cloud search to ollama.com is prohibited).");
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: airGappedSearch);
+
+        var result = await tools.WebSearchAsync("ollama web search api");
+
+        Assert.Equal("Error: Web search is unavailable because the system is operating in Air-Gapped mode.", result);
+    }
+
+    [Fact]
+    public async Task CanonicalTools_WebSearchAsync_ReturnsAirGappedErrorMessage_WhenAirGapped_EvenIfUnconfigured()
+    {
+        var airGappedUnconfiguredSearch = new MockWebSearchService(
+            isConfigured: false,
+            isEnabled: false,
+            disabledReason: "Web search is disabled in Air-Gapped mode (external cloud search to ollama.com is prohibited).");
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: airGappedUnconfiguredSearch);
+
+        var result = await tools.WebSearchAsync("ollama web search api");
+
+        Assert.Equal("Error: Web search is unavailable because the system is operating in Air-Gapped mode.", result);
+    }
+
+    [Fact]
+    public async Task CanonicalTools_WebSearchAsync_ReturnsAirGappedErrorMessage_WhenDisabledWithoutExplicitAirGappedPhraseInReason()
+    {
+        var disabledSearch = new MockWebSearchService(
+            isConfigured: true,
+            isEnabled: false,
+            disabledReason: "External network access is prohibited.");
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: disabledSearch);
+
+        var result = await tools.WebSearchAsync("ollama web search api");
+
+        Assert.Equal("Error: Web search is unavailable because the system is operating in Air-Gapped mode.", result);
+    }
+
+    [Fact]
+    public async Task MockWebSearchService_SearchAsync_ThrowsExpectedDomainExceptions()
+    {
+        var airGappedSearch = new MockWebSearchService(
+            isConfigured: true,
+            isEnabled: false,
+            disabledReason: "Web search is disabled in Air-Gapped mode.");
+
+        await Assert.ThrowsAsync<AirGappedOperationException>(() => airGappedSearch.SearchAsync("test"));
+
+        var unconfiguredSearch = new MockWebSearchService(isConfigured: false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => unconfiguredSearch.SearchAsync("test"));
+    }
+
+    [Fact]
+    public async Task CanonicalTools_WebSearchAsync_ReturnsAirGappedErrorMessage_WhenServiceThrowsAirGappedOperationException()
+    {
+        var throwingService = new MockWebSearchService(
+            searchHandler: (q, max) => throw new AirGappedOperationException("Air-gapped policy triggered during search"),
+            isConfigured: true);
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: throwingService);
+
+        var result = await tools.WebSearchAsync("ollama web search api");
+
+        Assert.Equal(WebSearchConstants.AirGappedToolErrorMessage, result);
+    }
+
+    [Fact]
+    public async Task ToolDispatcher_ExecuteWebSearchAlias_ReturnsAirGappedErrorMessage_WhenAirGapped()
+    {
+        var airGappedSearch = new MockWebSearchService(
+            isConfigured: true,
+            isEnabled: false,
+            disabledReason: WebSearchConstants.AirGappedDisabledReason);
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: airGappedSearch);
+
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        var result = await dispatcher.ExecuteAsync("search_web", new Dictionary<string, object?>
+        {
+            ["q"] = "air gapped alias test"
+        });
+
+        Assert.Equal(WebSearchConstants.AirGappedToolErrorMessage, result?.ToString());
+    }
+
+    [Fact]
+    public async Task ToolDispatcher_ExecuteWebSearch_ReturnsAirGappedErrorMessage_WhenAirGapped()
+    {
+        var airGappedSearch = new MockWebSearchService(
+            isConfigured: true,
+            isEnabled: false,
+            disabledReason: "Web search is disabled in Air-Gapped mode (external cloud search to ollama.com is prohibited).");
+
+        var tools = TestCanonicalToolsBuilder.Create(
+            AppContext.BaseDirectory,
+            pathResolver: TestPathResolver.Create(),
+            webSearchService: airGappedSearch);
+
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        var result = await dispatcher.ExecuteAsync(CanonicalToolNames.WebSearch, new Dictionary<string, object?>
+        {
+            ["query"] = "air gapped security test"
+        });
+
+        Assert.Equal("Error: Web search is unavailable because the system is operating in Air-Gapped mode.", result?.ToString());
     }
 
     [Fact]

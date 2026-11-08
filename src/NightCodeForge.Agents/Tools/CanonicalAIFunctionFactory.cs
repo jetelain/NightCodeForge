@@ -47,7 +47,7 @@ public static class CanonicalAIFunctionFactory
         foreach (var fn in allCanonicalFunctions)
         {
             if (string.Equals(fn.Name, CanonicalToolNames.WebSearch, StringComparison.OrdinalIgnoreCase) &&
-                !tools.IsWebSearchConfigured)
+                !tools.IsWebSearchEnabled)
             {
                 continue;
             }

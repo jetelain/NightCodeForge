@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -95,6 +96,7 @@ public partial class CanonicalTools
 
     public IWebSearchService WebSearchService => _webSearchService;
     public bool IsWebSearchConfigured => _webSearchService.IsConfigured;
+    public bool IsWebSearchEnabled => _webSearchService.IsEnabled;
     public IWorkspaceSkillsService SkillsService => _skillsService;
     public int MaxReadFileBytes => _maxReadFileBytes;
 
@@ -714,12 +716,25 @@ public partial class CanonicalTools
     /// </summary>
     public async Task<string> WebSearchAsync(string query, int? maxResults = null, CancellationToken cancellationToken = default)
     {
-        if (!_webSearchService.IsConfigured)
+        if (!_webSearchService.IsEnabled && (_webSearchService.IsConfigured || _webSearchService.DisabledReason?.Contains("Air-Gapped", StringComparison.OrdinalIgnoreCase) == true))
         {
-            return "Web search is disabled because no API key is configured. Please solve the task using local repository inspection tools.";
+            return WebSearchConstants.AirGappedToolErrorMessage;
         }
 
-        var response = await _webSearchService.SearchAsync(query, maxResults ?? 5, cancellationToken);
+        if (!_webSearchService.IsConfigured)
+        {
+            return WebSearchConstants.UnconfiguredToolErrorMessage;
+        }
+
+        WebSearchResponse response;
+        try
+        {
+            response = await _webSearchService.SearchAsync(query, maxResults ?? WebSearchSettings.DefaultMaxResultsCount, cancellationToken);
+        }
+        catch (AirGappedOperationException)
+        {
+            return WebSearchConstants.AirGappedToolErrorMessage;
+        }
         if (response.Results.Count == 0)
         {
             return $"No web search results found for: '{query}'.";

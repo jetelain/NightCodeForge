@@ -421,6 +421,26 @@ public class CrucibleTransientRetryTests : IDisposable
     }
 
     [Fact]
+    public void AddNightCodeForgeAgents_BindsSecurityOptions()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Security:AirGappedMode"] = "true"
+            })
+            .Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
+        services.AddNightCodeForgeAgents(LlmProviderType.OllamaRouter);
+
+        using var sp = services.BuildServiceProvider();
+        var secOptions = sp.GetRequiredService<IOptions<NightCodeForge.Core.Security.SecurityOptions>>().Value;
+
+        Assert.True(secOptions.AirGappedMode);
+    }
+
+    [Fact]
     public void AddNightCodeForgeAgents_WhenConfigureCalledBeforeAddNightCodeForgeAgents_ExplicitConfigureOverridesConfiguration()
     {
         var config = new ConfigurationBuilder()

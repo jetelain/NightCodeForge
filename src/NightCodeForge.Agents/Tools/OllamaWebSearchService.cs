@@ -5,48 +5,83 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
 
 namespace NightCodeForge.Agents.Tools;
 
 /// <summary>
 /// Web search service backed by the official Ollama Web Search API (https://ollama.com/api/web_search).
 /// Supports credentials via IWebSearchSettingsService or the OLLAMA_API_KEY environment variable.
+/// Automatically disabled when Air-Gapped mode is active.
 /// </summary>
 public class OllamaWebSearchService : IWebSearchService
 {
     private readonly HttpClient _httpClient;
     private readonly IWebSearchSettingsService _settingsService;
+    private readonly IOptions<SecurityOptions> _securityOptions;
     private readonly ILogger<OllamaWebSearchService> _logger;
     private readonly string? _explicitApiKey;
     private readonly string? _explicitEndpoint;
 
-    public string ProviderName => "Ollama";
+    public string ProviderName => WebSearchSettings.DefaultProvider;
 
     /// <summary>
     /// Indicates whether an API key is configured either in settings or via environment variable.
     /// </summary>
     public bool IsConfigured => !string.IsNullOrWhiteSpace(GetEffectiveApiKey());
 
+    /// <summary>
+    /// Indicates whether web search is active and enabled for execution.
+    /// In Air-Gapped mode, web search is always deactivated even if credentials are configured.
+    /// </summary>
+    public bool IsEnabled => !_securityOptions.Value.AirGappedMode && IsConfigured;
+
+    /// <summary>
+    /// Explains why web search is disabled, or null if enabled.
+    /// </summary>
+    public string? DisabledReason
+    {
+        get
+        {
+            if (_securityOptions.Value.AirGappedMode)
+            {
+                return WebSearchConstants.AirGappedDisabledReason;
+            }
+
+            if (!IsConfigured)
+            {
+                return WebSearchConstants.UnconfiguredDisabledReason;
+            }
+
+            return null;
+        }
+    }
+
     [ActivatorUtilitiesConstructor]
     public OllamaWebSearchService(
         HttpClient httpClient,
         IWebSearchSettingsService settingsService,
+        IOptions<SecurityOptions> securityOptions,
         ILogger<OllamaWebSearchService> logger)
-        : this(httpClient, settingsService, logger, explicitApiKey: null, explicitEndpoint: null)
+        : this(httpClient, settingsService, securityOptions, logger, null, null)
     {
     }
 
     public OllamaWebSearchService(
         HttpClient httpClient,
         IWebSearchSettingsService settingsService,
+        IOptions<SecurityOptions> securityOptions,
         ILogger<OllamaWebSearchService> logger,
         string? explicitApiKey,
         string? explicitEndpoint)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+        _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _explicitApiKey = explicitApiKey;
         _explicitEndpoint = explicitEndpoint;
@@ -55,6 +90,12 @@ public class OllamaWebSearchService : IWebSearchService
     /// <inheritdoc />
     public async Task<WebSearchResponse> SearchAsync(string query, int maxResults = 5, CancellationToken cancellationToken = default)
     {
+        if (_securityOptions.Value.AirGappedMode)
+        {
+            _logger.LogWarning("Ollama search attempted while Air-Gapped mode is active.");
+            throw new AirGappedOperationException(DisabledReason ?? WebSearchConstants.AirGappedDisabledReason);
+        }
+
         if (string.IsNullOrWhiteSpace(query))
         {
             return new WebSearchResponse(Array.Empty<WebSearchResultItem>());
@@ -68,7 +109,7 @@ public class OllamaWebSearchService : IWebSearchService
         }
 
         var endpoint = GetEffectiveEndpoint();
-        var clampedMax = Math.Clamp(maxResults, 1, 10);
+        var clampedMax = Math.Clamp(maxResults, WebSearchSettings.MinMaxResultsCount, WebSearchSettings.MaxMaxResultsCount);
 
         _logger.LogInformation("[Ollama Search] Searching for: {Query} (max results: {MaxResults})", query, clampedMax);
 
@@ -132,7 +173,7 @@ public class OllamaWebSearchService : IWebSearchService
         if (!string.IsNullOrWhiteSpace(_explicitApiKey)) return _explicitApiKey;
         var settingsKey = _settingsService.GetSettings().ApiKey;
         if (!string.IsNullOrWhiteSpace(settingsKey)) return settingsKey;
-        return Environment.GetEnvironmentVariable("OLLAMA_API_KEY");
+        return Environment.GetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable);
     }
 
     public string GetEffectiveEndpoint()

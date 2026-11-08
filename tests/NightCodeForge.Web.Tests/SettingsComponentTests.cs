@@ -103,6 +103,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<ILlmContextWindowCache, NightCodeForge.Infrastructure.Inference.LlmContextWindowCache>();
         Services.AddSingleton<ILlmConfigurationWriter>(_configWriter);
         Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(_llmOptions));
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Security.SecurityOptions()));
         Services.AddSingleton<ICompanionToolInstaller>(new Mock<ICompanionToolInstaller>().Object);
         Services.AddSingleton<IWorkspaceSkillsServiceFactory>(new WorkspaceSkillsServiceFactory(
             new SkillsService(),
@@ -873,6 +874,77 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         // Verify settings were persisted
         Assert.Equal("ollama_pasted_key_12345", _webSearchSettingsService.CurrentSettings.ApiKey);
+    }
+
+    [Fact]
+    public void WebSearchSettingsTab_AirGappedMode_RendersWarningBannerAndDisablesControls()
+    {
+        var secDescriptor = Services.First(s => s.ServiceType == typeof(Microsoft.Extensions.Options.IOptions<NightCodeForge.Core.Security.SecurityOptions>));
+        Services.Remove(secDescriptor);
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Security.SecurityOptions { AirGappedMode = true }));
+
+        _webSearchSettingsService.CurrentSettings = new WebSearchSettings { ApiKey = "ollama_key_123" };
+
+        var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+
+        // Verify Warning Banner is displayed with exact text
+        Assert.Contains("🛡️ Air-Gapped Mode Active: External web search via ollama.com is currently deactivated to prevent external network traffic.", cut.Markup);
+
+        // Header status badge indicates Air-Gapped
+        Assert.Contains("🛡️ Search Deactivated (Air-Gapped)", cut.Markup);
+        Assert.DoesNotContain("Reset to Default", cut.Markup);
+
+        // Save & Reset buttons should be disabled and have explanatory tooltips
+        var buttons = cut.FindAll("button");
+        var saveBtn = buttons.First(b => b.TextContent.Contains("Save Search Settings"));
+        var resetBtn = buttons.First(b => b.TextContent.Contains("Reset Defaults"));
+        Assert.True(saveBtn.HasAttribute("disabled"));
+        Assert.True(resetBtn.HasAttribute("disabled"));
+        Assert.Equal("Configuration cannot be saved in Air-Gapped mode.", saveBtn.GetAttribute("title"));
+        Assert.Equal("Configuration cannot be reset in Air-Gapped mode.", resetBtn.GetAttribute("title"));
+
+        // Show/Hide and Clear API Key buttons should also be disabled with tooltips
+        var showBtn = buttons.First(b => b.TextContent.Contains("Show") || b.TextContent.Contains("Hide"));
+        var clearBtn = buttons.First(b => b.TextContent.Contains("Clear"));
+        Assert.True(showBtn.HasAttribute("disabled"));
+        Assert.True(clearBtn.HasAttribute("disabled"));
+        Assert.Equal("API key configuration is disabled in Air-Gapped mode.", showBtn.GetAttribute("title"));
+        Assert.Equal("API key configuration is disabled in Air-Gapped mode.", clearBtn.GetAttribute("title"));
+
+        // All inputs should be disabled
+        var inputs = cut.FindAll("input");
+        foreach (var input in inputs)
+        {
+            Assert.True(input.HasAttribute("disabled"), $"Input element should be disabled in air-gapped mode: {input.OuterHtml}");
+        }
+
+        // Test connection button should be disabled with tooltip
+        var testBtn = buttons.First(b => b.TextContent.Contains("Test Search Connection"));
+        Assert.True(testBtn.HasAttribute("disabled"));
+        Assert.Equal("Search testing is disabled in Air-Gapped mode.", testBtn.GetAttribute("title"));
+    }
+
+    [Fact]
+    public void WebSearchSettingsTab_AirGappedViaWebSearchService_RendersWarningBannerAndDisablesControls()
+    {
+        var searchDescriptor = Services.First(s => s.ServiceType == typeof(NightCodeForge.Agents.Tools.IWebSearchService));
+        Services.Remove(searchDescriptor);
+        Services.AddSingleton<NightCodeForge.Agents.Tools.IWebSearchService>(
+            new NightCodeForge.Agents.Tools.MockWebSearchService(
+                isConfigured: true,
+                isEnabled: false,
+                disabledReason: "Web search is disabled in Air-Gapped mode (external cloud search to ollama.com is prohibited)."));
+
+        _webSearchSettingsService.CurrentSettings = new WebSearchSettings { ApiKey = "ollama_key_123" };
+
+        var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+
+        Assert.Contains("🛡️ Air-Gapped Mode Active: External web search via ollama.com is currently deactivated to prevent external network traffic.", cut.Markup);
+        Assert.Contains("🛡️ Search Deactivated (Air-Gapped)", cut.Markup);
+
+        var buttons = cut.FindAll("button");
+        var saveBtn = buttons.First(b => b.TextContent.Contains("Save Search Settings"));
+        Assert.True(saveBtn.HasAttribute("disabled"));
     }
 
     #endregion

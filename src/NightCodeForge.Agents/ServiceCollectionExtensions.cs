@@ -18,6 +18,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Infrastructure.Resilience;
@@ -36,6 +37,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
         services.BindConfigurationSectionAsDefault<RetryPolicyOptions>(RetryPolicyOptions.SectionName);
         services.BindConfigurationSectionAsDefault<LlmRetryPolicyOptions>(LlmRetryPolicyOptions.SectionName);
+        services.BindConfigurationSectionAsDefault<SecurityOptions>(SecurityOptions.SectionName);
 
         // 2. Canonical Tools & Context Services
         services.TryAddSingleton<IEditorConfigService, EditorConfigService>();
