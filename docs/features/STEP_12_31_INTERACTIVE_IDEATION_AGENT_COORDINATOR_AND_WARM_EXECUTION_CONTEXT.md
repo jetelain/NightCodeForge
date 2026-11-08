@@ -4,7 +4,7 @@
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Planned  
 > *Target Projects:* [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Web`](../../src/NightCodeForge.Web), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests), [`tests/NightCodeForge.Infrastructure.Tests`](../../tests/NightCodeForge.Infrastructure.Tests), [`tests/NightCodeForge.Web.Tests`](../../tests/NightCodeForge.Web.Tests)  
-> *Related Steps:* [Step 12.1A: Backlog Context Digest & Cycle Rejection](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md), [Step 12.13A: Ideation Backlog Mutation Tools & Prompt Policy](../archive/phase-12/STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md), [Step 12.13B: "Refine in Ideation" Workflow & Mutation UI](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md), [Step 12.4: Ideation Quick Notes & Suggestions](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md), [Step 12.29: Smart Router Model Preload](STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)  
+> *Related Steps:* [Step 12.1A: Backlog Context Digest & Cycle Rejection](../archive/phase-12/STEP_12_1A_BACKLOG_CONTEXT_DIGEST_AND_IN_TOOL_CYCLE_REJECTION.md), [Step 12.13A: Ideation Backlog Mutation Tools & Prompt Policy](../archive/phase-12/STEP_12_13A_IDEATION_BACKLOG_MUTATION_TOOLS_AND_PROMPT_POLICY.md), [Step 12.13B: "Refine in Ideation" Workflow & Mutation UI](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md), [Step 12.4: Ideation Quick Notes & Suggestions](STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md), [Step 12.29: Smart Router Model Preload](../archive/phase-12/STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/ARCHITECTURE.md](../ARCHITECTURE.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -78,20 +78,28 @@ flowchart TD
 1. **Clean-Break Replacement of `IIdeationService` with `IIdeationConversationCoordinator`:**
    - Under the `AGENTS.md` clean-break policy, **completely replace** `IIdeationService` (`IdeationService`) with `IIdeationConversationCoordinator` (`IdeationConversationCoordinator` in `NightCodeForge.Agents.Ideation` / `NightCodeForge.Core.Interfaces`).
    - Update DI registrations in [`Agents/ServiceCollectionExtensions.cs`](../../src/NightCodeForge.Agents/ServiceCollectionExtensions.cs), UI consumers, and tests to use `IIdeationConversationCoordinator` exclusively.
+   - Extend `IdeationStreamUpdateKind` and `IdeationStreamUpdate` with an explicit `Error` variant (and error message payload) so turn errors can be broadcast and rendered cleanly.
    - Responsible for:
      - Starting new conversations, resuming task-refinement conversations (`?taskId={id}` via `IdeationRefinementService`), and restoring existing conversations from the database (`Conversation` and `ConversationTurn` entities).
      - Proactively warming up the execution context and preloading the LLM model when the Ideation page opens or the active workspace/config changes.
-     - Persisting user messages, assistant responses, reasoning traces (`<think>`), tool calls (`StageTurnRole.Tool` and `StageTurnRole.ToolResult` with `CallId` metadata), compaction checkpoints (`StageTurnRole.Optimization`), and structured proposals into `ConversationTurn` records in submission order.
+     - Persisting turns in structured execution order compatible with [`ConversationHistorySerializer`](../../src/NightCodeForge.Core/Workflow/ConversationHistorySerializer.cs) and UI rehydration:
+       - `StageTurnRole.User` (as soon as the user submits the prompt).
+       - `StageTurnRole.Thinking` (reasoning blocks with duration metadata).
+       - Paired `StageTurnRole.Tool` (with `{"CallId": "..."}` in `MetadataJson`) and `StageTurnRole.ToolResult` (with matching `CallId`, `DurationMs`, and `Answers` metadata for `ask` tool calls).
+       - `StageTurnRole.Optimization` (compaction checkpoints when `PiStyleCrucibleCompactionStrategy` compacts history).
+       - `StageTurnRole.Assistant` (final assistant message with discovered `List<IdeationProposal>` serialized in `MetadataJson`).
      - Running active turns independently of individual Blazor circuit lifetimes so in-flight turns continue uninterrupted across browser reloads or page navigation, while providing explicit cancellation (`CancelActiveTurnAsync`) when requested by the user.
      - Broadcasting live `IdeationStreamUpdate` notifications to attached UI subscribers.
 2. **DI Lifetimes & Scope Hygiene (`AGENTS.md` Compliance):**
    - Register [`IExecutionEnvironmentProvider`](../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs) as a **Singleton** in [`Infrastructure/ServiceCollectionExtensions.cs`](../../src/NightCodeForge.Infrastructure/ServiceCollectionExtensions.cs) (all its constructor dependencies are already singletons) so its `_cachedEnvironments` dictionary persists across DI scopes and Blazor circuits.
    - Register `IIdeationConversationCoordinator` as a **Singleton** so warm sessions and in-flight turns survive Blazor circuit reconnections and page reloads.
-   - Because `ITaskRepository`, `IWorkspaceRepository`, `IBacklogMutationToolService`, `ITaskMarkdownValidator`, and `IWebSearchService` are **Scoped** (backed by scoped `AppDbContext`), the singleton coordinator and warm `CanonicalTools` instance **must not** capture a single scoped `AppDbContext` across turns (avoiding captive-dependency bugs, `ObjectDisposedException`, and stale EF Core change tracking). Use `IServiceScopeFactory` (or per-turn scoped resolution) for database/tool operations, and strictly obey the `AGENTS.md` $\le 10$ required constructor parameter rule.
+   - Because `ICanonicalToolsetFactory`, `IAgentWorkspaceContextService`, `IHarnessAgentFactory`, `ITaskRepository`, `IWorkspaceRepository`, `IBacklogMutationToolService`, `ITaskMarkdownValidator`, and `IWebSearchService` are currently registered as **Scoped**, the singleton `IIdeationConversationCoordinator` **must not** inject `Scoped` services directly into its constructor (which would fail ASP.NET Core root scope validation) and **must not** capture a single scoped `AppDbContext` across turns. Resolve scoped collaborators via `IServiceScopeFactory` per operation/turn (or promote stateless factories to `Singleton` where all their dependencies allow), and strictly obey the `AGENTS.md` $\le 10$ required constructor parameter rule.
 3. **Full Database Persistence, Structured Turn Re-hydration & In-Flight Re-attachment:**
    - When resuming an ideation conversation from SQLite (cold start on an existing `Conversation`), the coordinator loads the turns from `ITaskRepository.GetConversationWithTurnsAsync()` and reconstructs both:
-     - The UI presentation state (`ChatMessage` view models, `ChatContentPart` items, and `IdeationProposalViewModel` cards), extracted out of `Ideation.razor` into a testable service/helper.
-     - The structured `Microsoft.Extensions.AI.ChatMessage` history (preserving `FunctionCallContent`, `FunctionResultContent`, and compaction checkpoints via `ConversationHistorySerializer` rather than flattening tool calls into raw text).
+     - The UI presentation state (`ChatMessage` view models, interleaved `ChatContentPart` items, and `IdeationProposalViewModel` cards), extracted out of `Ideation.razor` into a dedicated, unit-testable turn-rehydration service/helper that supports both the structured `Thinking` + `Tool` + `ToolResult` + `Assistant` turn sequence and legacy persisted turns.
+     - The structured `Microsoft.Extensions.AI.ChatMessage` history (preserving `FunctionCallContent`, `FunctionResultContent`, and compaction checkpoints via [`ConversationHistorySerializer`](../../src/NightCodeForge.Core/Workflow/ConversationHistorySerializer.cs) rather than flattening tool calls into raw text).
+   - **Open Conversation Status vs. Active Turn Generation (`IsGenerating`):**
+     - Note that `StartIdeationConversationAsync` sets `Conversation.Status = StageExecutionStatus.Running` in SQLite for any open (non-archived) ideation conversation until the user archives it via "Clear Chat". Therefore, `Conversation.Status == StageExecutionStatus.Running` in the database indicates an open session, **not** that a turn is actively streaming. Whether a turn is currently generating (`IsGenerating`) is determined strictly by the coordinator's live in-memory `WarmIdeationSession` state.
    - **In-Flight Turn Continuity Across Reloads:**
      - Disposing `Ideation.razor` (circuit disconnect, browser refresh, or navigating to another page) must only unsubscribe the UI listener and **must not** cancel the running turn's `CancellationTokenSource`.
      - While a turn is actively running (`IsGenerating == true`), the coordinator maintains the in-flight streaming state (`CurrentParts`, `CurrentThinkingBuffer`, `CurrentMessageBuffer`, `CurrentToolCalls`, and any active `PendingQuestions` awaiting human answers).
@@ -102,30 +110,33 @@ flowchart TD
 
 ### 3.2 Warm Execution Context, Page-Open Warmup & 48k Model Preload
 
-1. **Warm Session Cache:**
+1. **Warm Session Cache & Deterministic Router Session Affinity:**
    - The coordinator maintains an in-memory cache of warm ideation sessions keyed by `ConversationId` (and associated `WorkspaceId`):
      ```
      WarmIdeationSession:
        - WorkspaceId
        - ConversationId
+       - RouterSessionId ($"ncf-ideation-ws{WorkspaceId}-conv{ConversationId}")
        - EffectiveAgentProfile (ModelName, RoutingTarget, ThinkingEffort)
        - CustomSystemPrompt
        - CanonicalToolsetSession (Tools, Dispatcher, SkillsService, AITools)
-       - HarnessAgent & AgentSession (plus structured ChatHistory)
+       - HarnessAgent & Authoritative ChatHistory (List<ChatMessage>)
        - SystemPrompt & ContextDigest
        - InFlightTurnState (IsGenerating, CurrentParts, PendingQuestions, TurnCts)
        - LastAccessedAt (for LRU / idle eviction)
      ```
+   - Pass the deterministic `RouterSessionId` (`$"ncf-ideation-ws{workspaceId}-conv{conversationId}"`) to `HarnessAgentRequest.SessionId` (instead of a random per-turn `Guid`) so `ILlmChatClientFactory` sends a stable `X-NCF-Session-Id` header across every turn of the conversation, preserving sticky backend affinity and KV-cache reuse in `OllamaRouter`.
 2. **Proactive Warm-Up on Ideation Page Open & Smart Model Preload (`48k` = `49,152` Tokens):**
    - Define a named constant `IdeationDefaultContextIntentTokens = 49_152` (48k tokens).
    - Whenever the user opens `/ideation` (or switches active workspace, conversation, model override, or routing target), the coordinator triggers a non-blocking background warm-up (`WarmupSessionAsync`) before the user finishes typing their prompt:
-     1. **Execution Context Warm-Up:** Resolves `IExecutionEnvironment`, ingests `AGENTS.md` and the skills catalog, builds the backlog digest, initializes `CanonicalToolsetSession`, and constructs the `HarnessAgent` & `AgentSession` (seeded with restored `ChatHistory` if resuming an existing conversation). If the user submits a prompt while warm-up is already in progress, the turn awaits the in-flight warm-up task rather than starting a duplicate initialization.
-     2. **Smart Router Model Preload ([Step 12.29](STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)):** Concurrently invokes `ILlmModelPreloadService.PreloadModelAsync` (when `JitModelPreload` is enabled on the effective optimization flags and operations are not paused) with:
+     1. **Execution Context Warm-Up:** Resolves `IExecutionEnvironment`, ingests `AGENTS.md` and the skills catalog, builds the backlog digest, initializes `CanonicalToolsetSession`, and constructs the `HarnessAgent` (with restored `ChatHistory` if resuming an existing conversation). If the user submits a prompt while warm-up is already in progress, the turn awaits the in-flight warm-up task rather than starting a duplicate initialization.
+     2. **Smart Router Model Preload ([Step 12.29](../archive/phase-12/STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)):** Concurrently invokes `ILlmModelPreloadService.PreloadModelAsync` (when `JitModelPreload` is enabled on the effective optimization flags and operations are not paused) with:
         - `ContextIntentTokens = effectiveProfile.ContextWindowTokens is > 0 ? effectiveProfile.ContextWindowTokens : IdeationDefaultContextIntentTokens` (`49,152` / `48k` default).
         - `Target` set to the pinned routing target when `SelectedRoutingTarget` is explicitly set (`Local`, `Remote`, or `Cloud`), or `null` when `Auto`.
-3. **Instant Inference Dispatch Across Turns:**
+3. **Instant Inference Dispatch & Multi-Turn `ChatHistory` Continuity:**
    - Because the session is pre-warmed on page open (or assembled on the first turn if cold), and kept warm across turns:
-     - On **subsequent turns** within the same warm conversation, the coordinator appends only the new user prompt (`ChatMessage(ChatRole.User, prompt)`) to the existing warm agent session (avoiding message duplication in `AgentSession`) and preserves the exact `SystemPrompt` prefix so OllamaRouter's KV cache hits without re-prefilling.
+     - `WarmIdeationSession` maintains the authoritative `List<ChatMessage> ChatHistory` across turns (updated in-place by [`PerServiceCallChatHistoryPersistingChatClient`](../../src/NightCodeForge.Agents/Crucible/ChatClients/PerServiceCallChatHistoryPersistingChatClient.cs) and compacted when needed by [`PiStyleCrucibleCompactionStrategy`](../../src/NightCodeForge.Agents/Crucible/PiStyleCrucibleCompactionStrategy.cs)).
+     - On **subsequent turns** within the same warm conversation, the coordinator appends the new `ChatMessage(ChatRole.User, prompt)` to `ChatHistory` and invokes `agent.RunStreamingAsync(ChatHistory, await agent.CreateSessionAsync(ct))` (or passes only the delta message if reusing an existing MAF `AgentSession` instance) so prior messages are never duplicated in the LLM request payload while preserving the exact `SystemPrompt` prefix and `RouterSessionId` for OllamaRouter KV-cache reuse.
      - **Bypasses:** Backlog disk re-sync, host SDK discovery scripts, companion tool checking, MCP server directory scanning, context window HTTP discovery, and prompt/catalog re-ingestion.
      - Inference dispatch (`POST /api/chat` to OllamaRouter) must start within **< 1 second** of the user submitting the message.
 
@@ -166,6 +177,6 @@ flowchart TD
    - Refreshing the browser **mid-turn while the agent is streaming or waiting for an `ask` answer** keeps the turn running in `IIdeationConversationCoordinator` and seamlessly re-attaches the UI to the live streaming state and pending questions.
    - Refreshing the browser after a turn completes preserves all turns, reasoning blocks, proposals, and tool call histories loaded from SQLite.
 3. **Automated Testing:**
-   - Unit tests verifying `IIdeationConversationCoordinator` (replacing `IIdeationService`): page-open warm-up and `ILlmModelPreloadService` invocation with `ContextIntentTokens = 49152` (`48k`), warm session reuse, subsequent turn speed, non-duplication of messages across warm turns, mid-turn survival across subscriber disconnect/reconnect, config override invalidation (`RoutingTarget` / `CustomSystemPrompt`), non-blocking backlog sync, and session eviction on workspace switch or reset.
+   - Unit tests verifying `IIdeationConversationCoordinator` (replacing `IIdeationService`): page-open warm-up and `ILlmModelPreloadService` invocation with `ContextIntentTokens = 49152` (`48k`), deterministic `RouterSessionId` reuse across turns, warm session reuse, subsequent turn speed, non-duplication of messages across warm turns, mid-turn survival across subscriber disconnect/reconnect, config override invalidation (`RoutingTarget` / `CustomSystemPrompt`), non-blocking backlog sync, and session eviction on workspace switch or reset.
    - UI / Component tests verifying `Ideation.razor` binds cleanly to the coordinator without executing database or disk I/O logic in its code-behind, and that component disposal does not cancel an in-flight turn.
 

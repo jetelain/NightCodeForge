@@ -23,7 +23,11 @@ Building on `IEnvironmentDiagnosticShellService` ([Step 12.22A](STEP_12_22A_DIAG
 
 ## 2. Blazor Page Specifications (`EnvironmentDiagnosticShell.razor`)
 
-Route: `@page "/diagnostics/shell"` (linked in [`NavMenu.razor`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor) under `System` as **🐚 Container Shell**).
+Routes:
+- `@page "/diagnostics/shell"`
+- `@page "/w/{WorkspaceId:int}/diagnostics/shell"`
+
+Linked in [`NavMenu.razor`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor) under `System` as **🐚 Container Shell** via `href="@WorkspaceState.GetNavHref("diagnostics/shell")"`. When navigated via `/w/{WorkspaceId:int}/diagnostics/shell`, the page activates the route's `WorkspaceId` in `WorkspaceStateService` and syncs the Target Context Selector accordingly.
 
 ### 2.1 One-Click Preset Commands
 
@@ -36,15 +40,15 @@ Route: `@page "/diagnostics/shell"` (linked in [`NavMenu.razor`](../../src/Night
 | **Git & Worktree Status** | `git status && git rev-parse --git-dir --git-common-dir && git branch -a && git worktree list` | Diagnoses Git repository validity, relative worktree pointers, and `safe.directory`. |
 | **.NET & ICU Probe** | `dotnet --info` | Verifies mounted host `.NET` SDKs, runtime packs, and `libicu` globalization readiness. |
 
-### 2.2 Presentation Separation Guarantee
-In accordance with [AGENTS.md](../../AGENTS.md), `EnvironmentDiagnosticShell.razor` delegates all environment inspection, command execution, doctor checks, and container recreation to `IEnvironmentDiagnosticShellService`.
+### 2.2 Presentation Separation & Live Streaming Guarantee
+In accordance with [AGENTS.md](../../AGENTS.md), `EnvironmentDiagnosticShell.razor` remains focused on layout and user interaction, delegating environment inspection, command execution, doctor checks, and container recreation to `IEnvironmentDiagnosticShellService` and subscribing to `IOperationsTelemetryService` (`OnShellCommandChanged` / `OnShellCommandOutput`) for real-time line-by-line output streaming.
 
 ---
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Create `src/NightCodeForge.Web/Components/Pages/EnvironmentDiagnosticShell.razor` (`@page "/diagnostics/shell"`) and add `🐚 Container Shell` to `NavMenu.razor`.
+- [ ] Create `src/NightCodeForge.Web/Components/Pages/EnvironmentDiagnosticShell.razor` (`@page "/diagnostics/shell"` and `@page "/w/{WorkspaceId:int}/diagnostics/shell"`) and add `🐚 Container Shell` (`WorkspaceState.GetNavHref("diagnostics/shell")`) to `NavMenu.razor`.
 - [ ] Implement target scope selector, Environment & Mounts Inspector card, 1-click preset buttons, and Environment Doctor report view.
-- [ ] Implement interactive bash console with live output streaming via `IOperationsTelemetryService`, command history, exit code badges, and **⏹ Stop / SIGINT** cancellation.
-- [ ] Add bUnit component tests in `NightCodeForge.Web.Tests` verifying preset execution, inspection rendering, doctor results display, command execution, and cancellation UI states.
+- [ ] Implement interactive bash console with live output streaming via `IOperationsTelemetryService` shell events, command history, exit code badges, and **⏹ Stop / SIGINT** cancellation.
+- [ ] Add bUnit component tests in `NightCodeForge.Web.Tests` verifying workspace-scoped routing, preset execution, inspection rendering, doctor results display, live streaming output, command execution, and cancellation UI states.
 
