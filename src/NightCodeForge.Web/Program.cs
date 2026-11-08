@@ -134,6 +134,7 @@ builder.Services.Configure<HostOptions>(options =>
 // Tailscale: private remote access via `tailscale serve`, plus forwarded headers for requests coming through the local proxy.
 builder.Services.Configure<TailscaleOptions>(builder.Configuration.GetSection(TailscaleOptions.SectionName));
 builder.Services.AddSingleton<ITailscaleCliRunner, TailscaleCliRunner>();
+builder.Services.AddSingleton<ITailscaleConfigurationWriter, TailscaleConfigurationWriter>();
 builder.Services.AddSingleton<TailscaleServeHostedService>();
 builder.Services.AddSingleton<ITailscaleServeService>(sp => sp.GetRequiredService<TailscaleServeHostedService>());
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TailscaleServeHostedService>());

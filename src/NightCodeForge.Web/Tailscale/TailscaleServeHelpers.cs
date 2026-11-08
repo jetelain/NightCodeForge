@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 
 namespace NightCodeForge.Web.Tailscale;
@@ -8,22 +10,35 @@ public static class TailscaleTargetResolver
     private static readonly string[] WildcardHosts = ["+", "*", "[::]", "0.0.0.0"];
 
     /// <summary>
+    /// Attempts to pick the endpoint to proxy to without throwing. Plain HTTP is preferred; HTTPS is used only when no HTTP endpoint exists.
+    /// </summary>
+    public static bool TryResolve(IEnumerable<string> addresses, out TailscaleTarget? target)
+    {
+        var targets = new List<TailscaleTarget>();
+        foreach (var raw in addresses.SelectMany(a => a.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
+        {
+            if (TryParse(raw, out var parsed))
+            {
+                targets.Add(parsed);
+            }
+        }
+
+        target = targets.FirstOrDefault(t => t.Scheme == Uri.UriSchemeHttp) ?? targets.FirstOrDefault();
+        return target is not null;
+    }
+
+    /// <summary>
     /// Picks the endpoint to proxy to. Plain HTTP is preferred (no certificate hassle); HTTPS is used only when no HTTP endpoint exists.
     /// </summary>
     /// <exception cref="TailscaleServeException">No usable address.</exception>
     public static TailscaleTarget Resolve(IEnumerable<string> addresses)
     {
-        var targets = new List<TailscaleTarget>();
-        foreach (var raw in addresses.SelectMany(a => a.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
+        if (TryResolve(addresses, out var target) && target is not null)
         {
-            if (TryParse(raw, out var target))
-            {
-                targets.Add(target);
-            }
+            return target;
         }
 
-        var chosen = targets.FirstOrDefault(t => t.Scheme == Uri.UriSchemeHttp) ?? targets.FirstOrDefault();
-        return chosen ?? throw new TailscaleServeException(
+        throw new TailscaleServeException(
             "Unable to determine the local Kestrel port (no usable http/https address bound or configured in 'Urls').");
     }
 
@@ -121,6 +136,80 @@ public static class TailscaleStatusParser
             ? serviceName[ServicePrefix.Length..]
             : serviceName;
         return tailnetSuffix.Length > 0 ? $"{shortName}.{tailnetSuffix}" : shortName;
+    }
+
+    /// <summary>Returns this node's primary IPv4 WireGuard address (100.x.y.z), or null if absent.</summary>
+    public static string? GetTailscaleIpv4(string statusJson)
+    {
+        if (string.IsNullOrWhiteSpace(statusJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(statusJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("Self", out var self)
+                && self.ValueKind == JsonValueKind.Object
+                && self.TryGetProperty("TailscaleIPs", out var ips)
+                && ips.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in ips.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String
+                        && IPAddress.TryParse(item.GetString(), out var address)
+                        && address.AddressFamily == AddressFamily.InterNetwork)
+                    {
+                        return address.ToString();
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
+    /// <summary>Returns the tailnet domain suffix (e.g. <c>tail1234.ts.net</c>), or null if unknown.</summary>
+    public static string? GetTailnetDomain(string statusJson)
+    {
+        if (string.IsNullOrWhiteSpace(statusJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(statusJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("CurrentTailnet", out var ct)
+                && ct.ValueKind == JsonValueKind.Object
+                && ct.TryGetProperty("Name", out var name)
+                && name.ValueKind == JsonValueKind.String
+                && name.GetString() is { Length: > 0 } tailnetName)
+            {
+                return tailnetName.TrimEnd('.');
+            }
+        }
+        catch (JsonException)
+        {
+            // Fall back to node suffix parsing below
+        }
+
+        var node = GetNodeDnsName(statusJson);
+        if (string.IsNullOrWhiteSpace(node))
+        {
+            return null;
+        }
+
+        var separator = node.IndexOf('.');
+        return separator >= 0 && separator < node.Length - 1
+            ? node[(separator + 1)..]
+            : null;
     }
 }
 

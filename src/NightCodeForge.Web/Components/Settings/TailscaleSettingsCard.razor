@@ -1,0 +1,488 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using Microsoft.Extensions.Options
+@using Microsoft.JSInterop
+@using NightCodeForge.Web.Services
+@using NightCodeForge.Web.Tailscale
+@inject ITailscaleServeService ServeService
+@inject ITailscaleConfigurationWriter ConfigWriter
+@inject IOptionsMonitor<TailscaleOptions> OptionsMonitor
+@inject ToastService ToastService
+@inject IJSRuntime JSRuntime
+
+<div class="forge-card mt-3" style="padding: 2rem;">
+    <!-- Header -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; flex-wrap: wrap; gap: 1.5rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                <span style="font-size: 1.75rem;">🔒</span>
+                <h3 style="font-weight: 700; font-size: 1.35rem; margin: 0; color: var(--text-primary);">
+                    Remote &amp; Tailscale Access
+                </h3>
+                @switch (_snapshot?.State ?? TailscaleDaemonState.Inactive)
+                {
+                    case TailscaleDaemonState.Active:
+                        <span class="forge-badge badge-teal" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="tailscale-status-active">
+                            🟢 Active
+                        </span>
+                        break;
+                    case TailscaleDaemonState.Applying:
+                        <span class="forge-badge badge-amber" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="tailscale-status-applying">
+                            🟡 Draining / Applying
+                        </span>
+                        break;
+                    case TailscaleDaemonState.DaemonOfflineOrUnauthenticated:
+                        <span class="forge-badge badge-rose" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="tailscale-status-offline">
+                            🔴 Tailscale Daemon Offline / Unauthenticated
+                        </span>
+                        break;
+                    case TailscaleDaemonState.Inactive:
+                    default:
+                        <span class="forge-badge badge-gray" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="tailscale-status-inactive">
+                            ⚪ Inactive
+                        </span>
+                        break;
+                }
+            </div>
+            <p style="margin: 0; font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; max-width: 820px;">
+                Publish NightCodeForge securely across your private Tailnet using Tailscale Serve, with HTTPS MagicDNS routing and mobile PWA onboarding.
+            </p>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <button type="button" 
+                    class="forge-btn forge-btn-outline" 
+                    style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" 
+                    @onclick="RefreshStatusAsync" 
+                    disabled="@_isSaving">
+                ↻ Refresh Status
+            </button>
+            <button type="button" 
+                    class="forge-btn forge-btn-primary" 
+                    style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" 
+                    @onclick="SaveAndApplyAsync" 
+                    disabled="@_isSaving"
+                    data-testid="tailscale-save-btn">
+                @(_isSaving ? "Saving & Applying..." : "💾 Save & Apply")
+            </button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_errorMessage))
+    {
+        <div class="mb-4" style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--accent-rose); font-size: 0.9rem; display: flex; align-items: center; gap: 0.75rem;" data-testid="tailscale-error-alert">
+            <span style="font-size: 1.25rem;">⚠️</span>
+            <div style="flex: 1;">@_errorMessage</div>
+            <button type="button" class="forge-btn-ghost" style="color: var(--accent-rose); padding: 0.2rem 0.5rem;" @onclick="() => _errorMessage = null">✕</button>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(_snapshot?.LastErrorMessage))
+    {
+        <div class="mb-4" style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); color: var(--accent-amber); font-size: 0.9rem; display: flex; align-items: center; gap: 0.75rem;" data-testid="tailscale-daemon-error-alert">
+            <span style="font-size: 1.25rem;">⚠️</span>
+            <div style="flex: 1;">@_snapshot.LastErrorMessage</div>
+        </div>
+    }
+
+    <!-- Live Status & Mobile Onboarding Card -->
+    <div class="forge-subcard" style="padding: 1.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin-bottom: 2rem; box-shadow: var(--shadow-sm);">
+        <h4 style="font-size: 1.05rem; font-weight: 700; margin: 0 0 1.25rem 0; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+            📱 Mobile Onboarding &amp; Live Mesh Status
+        </h4>
+
+        @if (_snapshot?.State == TailscaleDaemonState.Active && !string.IsNullOrWhiteSpace(_snapshot.MagicDnsUrl))
+        {
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; align-items: center; margin-bottom: 1.75rem; padding-bottom: 1.75rem; border-bottom: 1px solid var(--border-subtle);">
+                <div>
+                    <label class="forge-field-label" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: block; margin-bottom: 0.4rem;">
+                        Resolved HTTPS MagicDNS URL
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                        <a href="@_snapshot.MagicDnsUrl" 
+                           target="_blank" 
+                           rel="noopener noreferrer" 
+                           class="font-mono" 
+                           style="font-size: 1.05rem; font-weight: 600; color: var(--accent-indigo); text-decoration: underline; word-break: break-all;"
+                           data-testid="tailscale-magicdns-url">
+                            @_snapshot.MagicDnsUrl
+                        </a>
+                        <button type="button" 
+                                class="forge-btn forge-btn-outline" 
+                                style="padding: 0.35rem 0.85rem; font-size: 0.85rem;" 
+                                @onclick="CopyMagicDnsUrlAsync"
+                                data-testid="tailscale-copy-url-btn">
+                            📋 Copy Link
+                        </button>
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.75rem 0 0 0; line-height: 1.5;">
+                        Scan the QR code with your mobile camera or barcode scanner while connected to your tailnet to open NightCodeForge on your phone or tablet and install it as a standalone PWA.
+                    </p>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_qrSvg))
+                {
+                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
+                        <div class="qr-code-box" style="background: #ffffff; padding: 1rem; border-radius: var(--radius-md); box-shadow: var(--shadow-sm); border: 1px solid var(--border-subtle); display: inline-flex; align-items: center; justify-content: center;" data-testid="tailscale-qr-code">
+                            <div style="width: 160px; height: 160px;">
+                                @((MarkupString)_qrSvg)
+                            </div>
+                        </div>
+                        <span style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.5rem;">
+                            ISO/IEC 18004 Standard QR
+                        </span>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px dashed var(--border-subtle); margin-bottom: 1.75rem; color: var(--text-secondary); font-size: 0.88rem;">
+                ℹ️ Remote URL and onboarding QR code will appear here once Remote Access is enabled and active.
+            </div>
+        }
+
+        <!-- Daemon Telemetry Grid -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+            <div style="background: var(--bg-card); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 0.25rem;">
+                    Tailscale CLI Version
+                </div>
+                <div class="font-mono" style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary);" data-testid="telemetry-cli-version">
+                    @(_snapshot?.CliVersion ?? "Not detected")
+                </div>
+            </div>
+            <div style="background: var(--bg-card); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 0.25rem;">
+                    Tailnet Domain
+                </div>
+                <div class="font-mono" style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary);" data-testid="telemetry-tailnet-domain">
+                    @(_snapshot?.TailnetDomain ?? "Not connected")
+                </div>
+            </div>
+            <div style="background: var(--bg-card); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 0.25rem;">
+                    Node WireGuard IP
+                </div>
+                <div class="font-mono" style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary);" data-testid="telemetry-wireguard-ip">
+                    @(_snapshot?.TailscaleIpv4 ?? "Not available")
+                </div>
+            </div>
+            <div style="background: var(--bg-card); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em; margin-bottom: 0.25rem;">
+                    Loopback Target
+                </div>
+                <div class="font-mono" style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary);" data-testid="telemetry-loopback-target">
+                    @(_snapshot?.LoopbackTarget ?? "Detecting...")
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Configuration Form -->
+    <div class="forge-subcard" style="padding: 1.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+        <h4 style="font-size: 1.05rem; font-weight: 700; margin: 0 0 1.25rem 0; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+            ⚙️ Exposition Configuration
+        </h4>
+
+        <!-- Master Toggle -->
+        <div style="margin-bottom: 1.5rem; padding: 1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+            <div>
+                <label for="auto-serve-toggle" style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary); display: block; margin-bottom: 0.25rem; cursor: pointer;">
+                    Enable Tailscale Serve Remote Access (AutoServe)
+                </label>
+                <span style="font-size: 0.82rem; color: var(--text-secondary); display: block;">
+                    When enabled, NightCodeForge registers and proxies traffic over Tailscale Serve automatically.
+                </span>
+            </div>
+            <input id="auto-serve-toggle" 
+                   type="checkbox" 
+                   style="width: 1.25rem; height: 1.25rem; cursor: pointer;" 
+                   @bind="_editableOptions.AutoServe" 
+                   data-testid="tailscale-autoserve-toggle" />
+        </div>
+
+        <!-- Mode Switcher -->
+        <div style="margin-bottom: 1.5rem;">
+            <label class="forge-field-label" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: block; margin-bottom: 0.5rem;">
+                Exposition Mode
+            </label>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+                <!-- Dedicated Service Mode -->
+                <div style="border: 2px solid @(_isServiceMode ? "var(--accent-indigo)" : "var(--border-subtle)"); background: @(_isServiceMode ? "rgba(99, 102, 241, 0.05)" : "var(--bg-card)"); border-radius: var(--radius-md); padding: 1.2rem; cursor: pointer; transition: all 0.15s ease;"
+                     @onclick="SelectServiceMode"
+                     data-testid="tailscale-mode-service">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
+                        <input type="radio" 
+                               name="expositionMode" 
+                               id="mode-service" 
+                               checked="@_isServiceMode" 
+                               @onchange="SelectServiceMode" />
+                        <label for="mode-service" style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary); cursor: pointer; margin: 0;">
+                            🌟 Dedicated Tailscale Service (@TailscaleOptions.DefaultServiceName)
+                        </label>
+                        <span class="forge-badge badge-teal" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">Recommended</span>
+                    </div>
+                    <p style="margin: 0.5rem 0 0 1.5rem; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.45;">
+                        Publishes NightCodeForge under an isolated MagicDNS subdomain (<code class="font-mono">https://ncf.&lt;tailnet&gt;.ts.net</code>). Avoids port conflicts with other local services.
+                    </p>
+                </div>
+
+                <!-- Device Node Mode -->
+                <div style="border: 2px solid @(!_isServiceMode ? "var(--accent-indigo)" : "var(--border-subtle)"); background: @(!_isServiceMode ? "rgba(99, 102, 241, 0.05)" : "var(--bg-card)"); border-radius: var(--radius-md); padding: 1.2rem; cursor: pointer; transition: all 0.15s ease;"
+                     @onclick="SelectDeviceMode"
+                     data-testid="tailscale-mode-device">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem;">
+                        <input type="radio" 
+                               name="expositionMode" 
+                               id="mode-device" 
+                               checked="@(!_isServiceMode)" 
+                               @onchange="SelectDeviceMode" />
+                        <label for="mode-device" style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary); cursor: pointer; margin: 0;">
+                            💻 Device Node Mode
+                        </label>
+                    </div>
+                    <p style="margin: 0.5rem 0 0 1.5rem; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.45;">
+                        Publishes directly under this machine's host MagicDNS name (<code class="font-mono">https://&lt;node-name&gt;.&lt;tailnet&gt;.ts.net</code>).
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 1.5rem;">
+            <!-- Service Name (Service Mode only) -->
+            @if (_isServiceMode)
+            {
+                <div>
+                    <label class="forge-field-label" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: block; margin-bottom: 0.4rem;">
+                        Tailscale Service Name
+                    </label>
+                    <input type="text" 
+                           class="forge-input font-mono" 
+                           style="width: 100%; font-size: 0.88rem;" 
+                           @bind="_editableOptions.ServiceName" 
+                           @bind:event="oninput" 
+                           placeholder="@TailscaleOptions.DefaultServiceName"
+                           data-testid="tailscale-service-name-input" />
+                    <span style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; display: block;">
+                        Service name identifier on your tailnet (default: <code class="font-mono">@TailscaleOptions.DefaultServiceName</code>).
+                    </span>
+                </div>
+            }
+
+            <!-- Listen Port -->
+            <div>
+                <label class="forge-field-label" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: block; margin-bottom: 0.4rem;">
+                    Tailscale Listen Port
+                </label>
+                <input type="number" 
+                       class="forge-input font-mono" 
+                       style="width: 100%; font-size: 0.88rem;" 
+                       @bind="_editableOptions.ListenPort" 
+                       min="@TailscaleOptions.MinListenPort" 
+                       max="@TailscaleOptions.MaxListenPort"
+                       data-testid="tailscale-listen-port-input" />
+                <span style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; display: block;">
+                    Public port exposed on the Tailscale mesh (standard HTTPS: @TailscaleOptions.DefaultListenPort).
+                </span>
+            </div>
+
+            <!-- Loopback Target (Read-only) -->
+            <div>
+                <label class="forge-field-label" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: block; margin-bottom: 0.4rem;">
+                    Local Loopback Target (Kestrel)
+                </label>
+                <input type="text" 
+                       class="forge-input font-mono" 
+                       style="width: 100%; font-size: 0.88rem;" 
+                       value="@(_snapshot?.LoopbackTarget ?? "Detecting...")" 
+                       disabled 
+                       readonly />
+                <span style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; display: block;">
+                    Auto-detected local Kestrel HTTP/HTTPS endpoint proxied by Tailscale Serve.
+                </span>
+            </div>
+        </div>
+
+        @if (_isServiceMode)
+        {
+            <!-- Auto-Advertise Toggle -->
+            <div style="padding: 0.85rem 1rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1.5rem;">
+                <div>
+                    <label for="advertise-toggle" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: block; margin-bottom: 0.15rem; cursor: pointer;">
+                        Advertise Service Route (<code class="font-mono">tailscale serve advertise</code>)
+                    </label>
+                    <span style="font-size: 0.78rem; color: var(--text-secondary); display: block;">
+                        Automatically advertise service route across the tailnet when served.
+                    </span>
+                </div>
+                <input id="advertise-toggle" 
+                       type="checkbox" 
+                       style="width: 1.15rem; height: 1.15rem; cursor: pointer;" 
+                       @bind="_editableOptions.Advertise" 
+                       data-testid="tailscale-advertise-toggle" />
+            </div>
+        }
+
+        <!-- First-Time Setup & Prerequisites Notice -->
+        <div style="padding: 1.15rem 1.35rem; border-radius: var(--radius-md); background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.25); color: var(--text-primary); font-size: 0.86rem; line-height: 1.55;"
+             data-testid="tailscale-setup-notice">
+            <div style="font-weight: 700; font-size: 0.92rem; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                <span>📌</span>
+                <span>Required First-Time Tailscale Setup Actions</span>
+            </div>
+            <ol style="margin: 0; padding-left: 1.35rem; display: flex; flex-direction: column; gap: 0.45rem; color: var(--text-secondary);">
+                <li>
+                    <strong style="color: var(--text-primary);">Allow Incoming Connections (Tailscale Tray Icon):</strong>
+                    Open the Tailscale icon in your system tray / menu bar on this host and ensure <strong style="color: var(--text-primary);">Allow incoming connections</strong> is enabled so devices on your tailnet can reach this machine.
+                </li>
+                <li>
+                    <strong style="color: var(--text-primary);">Enable the Service in the Tailscale Admin Console (First-Time Service Setup):</strong>
+                    When using Dedicated Tailscale Service mode (e.g. <code class="font-mono">@(_isServiceMode && !string.IsNullOrWhiteSpace(_editableOptions.ServiceName) ? _editableOptions.ServiceName.Trim() : TailscaleOptions.DefaultServiceName)</code>) for the first time, you must create and approve the service in the
+                    <a href="@TailscaleOptions.AdminConsoleServicesUrl"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       style="color: var(--accent-indigo); font-weight: 600; text-decoration: underline;"
+                       data-testid="tailscale-admin-services-link">Tailscale Admin Console (Services)</a>
+                    — see the
+                    <a href="@TailscaleOptions.TailscaleServicesDocsUrl"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       style="color: var(--accent-indigo); font-weight: 600; text-decoration: underline;"
+                       data-testid="tailscale-services-docs-link">Tailscale Services documentation</a>.
+                </li>
+            </ol>
+        </div>
+    </div>
+</div>
+
+@code {
+    private TailscaleOptions _editableOptions = new();
+    private TailscaleStatusSnapshot? _snapshot;
+    private string? _qrSvg;
+    private string? _errorMessage;
+    private bool _isSaving;
+    private bool _isServiceMode = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _editableOptions = (ServeService.GetCurrentOptions() ?? OptionsMonitor.CurrentValue).Clone();
+        _isServiceMode = !string.IsNullOrWhiteSpace(_editableOptions.ServiceName);
+        await RefreshStatusAsync();
+    }
+
+    private void SelectServiceMode()
+    {
+        _isServiceMode = true;
+        if (string.IsNullOrWhiteSpace(_editableOptions.ServiceName))
+        {
+            _editableOptions.ServiceName = TailscaleOptions.DefaultServiceName;
+        }
+    }
+
+    private void SelectDeviceMode()
+    {
+        _isServiceMode = false;
+        _editableOptions.ServiceName = null;
+    }
+
+    private async Task RefreshStatusAsync()
+    {
+        try
+        {
+            _snapshot = await ServeService.GetStatusSnapshotAsync();
+            UpdateQrSvg();
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Failed to query Tailscale daemon: {ex.Message}";
+        }
+    }
+
+    private void UpdateQrSvg()
+    {
+        if (_snapshot?.State == TailscaleDaemonState.Active && !string.IsNullOrWhiteSpace(_snapshot.MagicDnsUrl))
+        {
+            try
+            {
+                _qrSvg = QrCodeSvgGenerator.GenerateSvg(_snapshot.MagicDnsUrl);
+            }
+            catch (Exception ex)
+            {
+                _qrSvg = null;
+                _errorMessage = $"Failed to render QR Code: {ex.Message}";
+            }
+        }
+        else
+        {
+            _qrSvg = null;
+        }
+    }
+
+    private async Task SaveAndApplyAsync()
+    {
+        _isSaving = true;
+        _errorMessage = null;
+
+        try
+        {
+            if (!TailscaleOptions.IsValidListenPort(_editableOptions.ListenPort))
+            {
+                _errorMessage = $"Listen port must be between {TailscaleOptions.MinListenPort} and {TailscaleOptions.MaxListenPort}.";
+                return;
+            }
+
+            if (_isServiceMode && string.IsNullOrWhiteSpace(_editableOptions.ServiceName))
+            {
+                _errorMessage = "Service name is required when Dedicated Tailscale Service mode is selected.";
+                return;
+            }
+
+            var toSave = _editableOptions.Clone();
+            toSave.ServiceName = _isServiceMode ? toSave.GetNormalizedServiceName() : null;
+
+            await ConfigWriter.SaveTailscaleOptionsAsync(toSave);
+            await ServeService.ApplyConfigurationAsync(toSave);
+            await RefreshStatusAsync();
+
+            if (toSave.AutoServe && _snapshot?.State == TailscaleDaemonState.DaemonOfflineOrUnauthenticated)
+            {
+                ToastService.Show(
+                    "Tailscale Settings Saved (Daemon Offline)",
+                    _snapshot.LastErrorMessage ?? "Settings saved to config.json, but the Tailscale daemon is offline or unauthenticated.",
+                    ToastLevel.Warning);
+            }
+            else
+            {
+                ToastService.Show(
+                    "Tailscale Configuration Applied",
+                    "Remote access settings saved to config.json and serve route hot-applied.",
+                    ToastLevel.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Failed to save and apply Tailscale configuration: {ex.Message}";
+            ToastService.Show("Tailscale Configuration Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task CopyMagicDnsUrlAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_snapshot?.MagicDnsUrl))
+        {
+            return;
+        }
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", _snapshot.MagicDnsUrl);
+            ToastService.Show("Copied to Clipboard", "MagicDNS URL copied to clipboard.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Clipboard Notice", $"Could not copy URL: {ex.Message}", ToastLevel.Warning);
+        }
+    }
+}

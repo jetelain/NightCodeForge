@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -14,17 +13,9 @@ namespace NightCodeForge.Infrastructure.Configuration;
 /// </summary>
 public class LlmConfigurationWriter : ILlmConfigurationWriter
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        Converters = { new JsonStringEnumConverter() }
-    };
-
     private readonly IHostEnvironment _hostEnvironment;
     private readonly IOptions<LlmProviderOptions> _options;
     private readonly ILogger<LlmConfigurationWriter> _logger;
-    private readonly SemaphoreSlim _fileLock = new(1, 1);
 
     public LlmConfigurationWriter(
         IHostEnvironment hostEnvironment,
@@ -40,83 +31,73 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
     {
         ArgumentNullException.ThrowIfNull(updateAction);
 
-        await _fileLock.WaitAsync(cancellationToken);
-        try
-        {
-            var configFilePath = HostConfigurationSources.GetFullPath(_hostEnvironment.ContentRootPath);
-            var root = await ReadOrCreateConfigJsonAsync(configFilePath, cancellationToken);
-
-            var updatedOptions = GetBaseOptionsForUpdate(root);
-            updateAction(updatedOptions);
-
-            if (updatedOptions.OpenAiCompatible?.AllowedModels != null)
+        var configFilePath = await UserConfigJsonFile.UpdateAsync(
+            _hostEnvironment.ContentRootPath,
+            _logger,
+            root =>
             {
-                updatedOptions.OpenAiCompatible.AllowedModels = SanitizeAllowedModels(updatedOptions.OpenAiCompatible.AllowedModels);
-            }
+                var updatedOptions = GetBaseOptionsForUpdate(root);
+                updateAction(updatedOptions);
 
-            // Remove any alternate-casing section if present
-            FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
+                if (updatedOptions.OpenAiCompatible?.AllowedModels != null)
+                {
+                    updatedOptions.OpenAiCompatible.AllowedModels = SanitizeAllowedModels(updatedOptions.OpenAiCompatible.AllowedModels);
+                }
 
-            var llmNode = JsonSerializer.SerializeToNode(updatedOptions, JsonOptions) as JsonObject;
-            if (llmNode != null)
-            {
-                root[LlmProviderOptions.SectionName] = llmNode;
-            }
+                // Remove any alternate-casing section if present
+                UserConfigJsonFile.FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
 
-            await WriteConfigJsonAsync(configFilePath, root, cancellationToken);
-            _logger.LogInformation("Updated LLM provider configuration saved to {Path}", configFilePath);
-        }
-        finally
-        {
-            _fileLock.Release();
-        }
+                var llmNode = JsonSerializer.SerializeToNode(updatedOptions, UserConfigJsonFile.JsonOptions) as JsonObject;
+                if (llmNode != null)
+                {
+                    root[LlmProviderOptions.SectionName] = llmNode;
+                }
+            },
+            cancellationToken);
+
+        _logger.LogInformation("Updated LLM provider configuration saved to {Path}", configFilePath);
     }
 
     public async Task SaveAllowedModelsAsync(IEnumerable<OpenAiAllowedModel> allowedModels, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(allowedModels);
 
-        await _fileLock.WaitAsync(cancellationToken);
-        try
-        {
-            var configFilePath = HostConfigurationSources.GetFullPath(_hostEnvironment.ContentRootPath);
-            var root = await ReadOrCreateConfigJsonAsync(configFilePath, cancellationToken);
-
-            var llmNode = FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
-            if (llmNode == null)
+        var configFilePath = await UserConfigJsonFile.UpdateAsync(
+            _hostEnvironment.ContentRootPath,
+            _logger,
+            root =>
             {
-                llmNode = new JsonObject();
-                root[LlmProviderOptions.SectionName] = llmNode;
-            }
+                var llmNode = UserConfigJsonFile.FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
+                if (llmNode == null)
+                {
+                    llmNode = new JsonObject();
+                    root[LlmProviderOptions.SectionName] = llmNode;
+                }
 
-            var openAiNode = FindAndNormalizeSection(llmNode, nameof(LlmProviderOptions.OpenAiCompatible));
-            if (openAiNode == null)
-            {
-                openAiNode = new JsonObject();
-                llmNode[nameof(LlmProviderOptions.OpenAiCompatible)] = openAiNode;
-            }
+                var openAiNode = UserConfigJsonFile.FindAndNormalizeSection(llmNode, nameof(LlmProviderOptions.OpenAiCompatible));
+                if (openAiNode == null)
+                {
+                    openAiNode = new JsonObject();
+                    llmNode[nameof(LlmProviderOptions.OpenAiCompatible)] = openAiNode;
+                }
 
-            var sanitizedModels = SanitizeAllowedModels(allowedModels);
-            openAiNode[nameof(OpenAiCompatibleOptions.AllowedModels)] = JsonSerializer.SerializeToNode(sanitizedModels, JsonOptions);
+                var sanitizedModels = SanitizeAllowedModels(allowedModels);
+                openAiNode[nameof(OpenAiCompatibleOptions.AllowedModels)] = JsonSerializer.SerializeToNode(sanitizedModels, UserConfigJsonFile.JsonOptions);
+            },
+            cancellationToken);
 
-            await WriteConfigJsonAsync(configFilePath, root, cancellationToken);
-            _logger.LogInformation("Allowed models configuration saved to {Path}", configFilePath);
-        }
-        finally
-        {
-            _fileLock.Release();
-        }
+        _logger.LogInformation("Allowed models configuration saved to {Path}", configFilePath);
     }
 
     private LlmProviderOptions GetBaseOptionsForUpdate(JsonObject root)
     {
         var baseOptions = CloneCurrentOptions();
-        var existingLlmNode = FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
+        var existingLlmNode = UserConfigJsonFile.FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
         if (existingLlmNode != null)
         {
             try
             {
-                var baseNode = JsonSerializer.SerializeToNode(baseOptions, JsonOptions) as JsonObject ?? new JsonObject();
+                var baseNode = JsonSerializer.SerializeToNode(baseOptions, UserConfigJsonFile.JsonOptions) as JsonObject ?? new JsonObject();
                 MergeJsonNodes(baseNode, existingLlmNode);
 
                 // Preserve legacy ModelId if DefaultModelId was not explicitly set in config.json
@@ -127,7 +108,7 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
                     baseNode["DefaultModelId"] = legacyModelId.DeepClone();
                 }
 
-                return baseNode.Deserialize<LlmProviderOptions>(JsonOptions) ?? baseOptions;
+                return baseNode.Deserialize<LlmProviderOptions>(UserConfigJsonFile.JsonOptions) ?? baseOptions;
             }
             catch (JsonException ex)
             {
@@ -136,33 +117,6 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
         }
 
         return baseOptions;
-    }
-
-    private static JsonObject? FindAndNormalizeSection(JsonObject parent, string targetKey)
-    {
-        string? existingKey = null;
-        JsonNode? existingNode = null;
-
-        foreach (var (key, value) in parent)
-        {
-            if (string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase))
-            {
-                existingKey = key;
-                existingNode = value;
-                break;
-            }
-        }
-
-        if (existingKey != null && existingKey != targetKey)
-        {
-            parent.Remove(existingKey);
-            if (existingNode != null)
-            {
-                parent[targetKey] = existingNode;
-            }
-        }
-
-        return parent[targetKey] as JsonObject;
     }
 
     private static List<OpenAiAllowedModel> SanitizeAllowedModels(IEnumerable<OpenAiAllowedModel?>? allowedModels)
@@ -225,69 +179,10 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
         }
     }
 
-    private async Task<JsonObject> ReadOrCreateConfigJsonAsync(string path, CancellationToken cancellationToken)
-    {
-        if (!File.Exists(path))
-        {
-            return new JsonObject();
-        }
-
-        var text = await File.ReadAllTextAsync(path, cancellationToken);
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return new JsonObject();
-        }
-
-        try
-        {
-            var node = JsonNode.Parse(text);
-            return node as JsonObject ?? throw new InvalidOperationException(
-                $"Configuration file at '{path}' does not contain a JSON object.");
-        }
-        catch (JsonException ex)
-        {
-            _logger.LogError(ex, "Configuration file at '{Path}' contains invalid JSON.", path);
-            throw new InvalidOperationException(
-                $"Configuration file at '{path}' contains invalid JSON and cannot be safely updated.", ex);
-        }
-    }
-
-    private static async Task WriteConfigJsonAsync(string path, JsonObject root, CancellationToken cancellationToken)
-    {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var jsonString = root.ToJsonString(JsonOptions);
-        var tempFilePath = Path.Combine(directory ?? ".", $"{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-
-        try
-        {
-            await File.WriteAllTextAsync(tempFilePath, jsonString, cancellationToken);
-            File.Move(tempFilePath, path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(tempFilePath))
-            {
-                try
-                {
-                    File.Delete(tempFilePath);
-                }
-                catch
-                {
-                    // Best-effort cleanup of temporary file
-                }
-            }
-        }
-    }
-
     private LlmProviderOptions CloneCurrentOptions()
     {
         var current = _options.Value;
-        var json = JsonSerializer.Serialize(current, JsonOptions);
-        return JsonSerializer.Deserialize<LlmProviderOptions>(json, JsonOptions) ?? new LlmProviderOptions();
+        var json = JsonSerializer.Serialize(current, UserConfigJsonFile.JsonOptions);
+        return JsonSerializer.Deserialize<LlmProviderOptions>(json, UserConfigJsonFile.JsonOptions) ?? new LlmProviderOptions();
     }
 }

@@ -7,8 +7,17 @@ namespace NightCodeForge.Web.Tailscale;
 /// <summary>Manages the <c>tailscale serve</c> route exposing this app on the tailnet.</summary>
 public interface ITailscaleServeService
 {
+    /// <summary>Returns a clone of the currently effective Tailscale options (including any in-memory hot-applied override).</summary>
+    TailscaleOptions GetCurrentOptions();
+
     /// <summary>Applies the current options: configures the route when enabled, tears it down when disabled.</summary>
-    Task ApplyConfigurationAsync(CancellationToken cancellationToken);
+    Task ApplyConfigurationAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Immediately applies overridden options in-memory and reconfigures the route.</summary>
+    Task ApplyConfigurationAsync(TailscaleOptions overrideOptions, CancellationToken cancellationToken = default);
+
+    /// <summary>Queries the live Tailscale status and route state.</summary>
+    Task<TailscaleStatusSnapshot> GetStatusSnapshotAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -38,6 +47,11 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
     private bool _routeActive;
     private string? _activeServiceName;
 
+    private TailscaleOptions? _optionsOverride;
+    private TailscaleOptions? _lastAppliedOptions;
+    private volatile TailscaleDaemonState _currentState = TailscaleDaemonState.Inactive;
+    private volatile string? _lastErrorMessage;
+
     public TailscaleServeHostedService(
         IOptionsMonitor<TailscaleOptions> options,
         IServer server,
@@ -53,6 +67,8 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
         _cli = cli;
         _logger = logger;
     }
+
+    public TailscaleOptions GetCurrentOptions() => (_optionsOverride ?? _options.CurrentValue).Clone();
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -78,17 +94,120 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
         }
     }
 
-    public async Task ApplyConfigurationAsync(CancellationToken cancellationToken)
+    public async Task ApplyConfigurationAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            await ApplyCoreAsync(cancellationToken);
+            await ApplyUnderGateAsync(cancellationToken);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    public async Task ApplyConfigurationAsync(TailscaleOptions overrideOptions, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(overrideOptions);
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            _optionsOverride = overrideOptions.Clone();
+            await ApplyUnderGateAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task ApplyUnderGateAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _currentState = TailscaleDaemonState.Applying;
+            _lastErrorMessage = null;
+            await ApplyCoreAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _currentState = TailscaleDaemonState.Inactive;
+            _lastErrorMessage = ex.Message;
+            throw;
+        }
+    }
+
+    public async Task<TailscaleStatusSnapshot> GetStatusSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        var loopback = TailscaleTargetResolver.TryResolve(ResolveAddresses(), out var resolvedTarget)
+            ? resolvedTarget?.ToServeTarget()
+            : null;
+
+        if (_currentState == TailscaleDaemonState.Applying)
+        {
+            return new TailscaleStatusSnapshot(
+                TailscaleDaemonState.Applying,
+                null, null, null, null, loopback, null, null);
+        }
+
+        var versionResult = await _cli.RunAsync(["version"], ProbeTimeoutSeconds, cancellationToken);
+        var cliVersion = versionResult.Succeeded
+            ? versionResult.StandardOutput.Trim().Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()
+            : null;
+
+        var statusResult = await _cli.RunAsync(["status", "--json"], ProbeTimeoutSeconds, cancellationToken);
+        var isAuthenticated = statusResult.Succeeded && TailscaleStatusParser.IsAuthenticated(statusResult.StandardOutput);
+
+        string? nodeDns = isAuthenticated ? TailscaleStatusParser.GetNodeDnsName(statusResult.StandardOutput) : null;
+        string? tailnetDomain = isAuthenticated ? TailscaleStatusParser.GetTailnetDomain(statusResult.StandardOutput) : null;
+        string? tailscaleIp = isAuthenticated ? TailscaleStatusParser.GetTailscaleIpv4(statusResult.StandardOutput) : null;
+
+        TailscaleDaemonState state;
+        if (!versionResult.Succeeded || !isAuthenticated)
+        {
+            state = TailscaleDaemonState.DaemonOfflineOrUnauthenticated;
+        }
+        else if (_routeActive)
+        {
+            state = TailscaleDaemonState.Active;
+        }
+        else
+        {
+            state = TailscaleDaemonState.Inactive;
+        }
+
+        var options = _optionsOverride ?? _options.CurrentValue;
+        var serviceName = options.GetNormalizedServiceName();
+        var host = state == TailscaleDaemonState.Active
+            ? TailscaleStatusParser.GetServeHostName(statusResult.StandardOutput, serviceName)
+            : null;
+        string? magicDnsUrl = null;
+        if (host is not null)
+        {
+            var protocol = options.GetNormalizedProtocol();
+            var portSuffix = IsDefaultPort(protocol, options.ListenPort) ? string.Empty : $":{options.ListenPort}";
+            magicDnsUrl = $"{protocol}://{host}{portSuffix}";
+        }
+
+        var errorMessage = _lastErrorMessage;
+        if (state == TailscaleDaemonState.DaemonOfflineOrUnauthenticated && string.IsNullOrWhiteSpace(errorMessage))
+        {
+            errorMessage = !versionResult.Succeeded
+                ? "Tailscale CLI is not available in PATH."
+                : "Tailscale is not connected to a tailnet (run 'tailscale up').";
+        }
+
+        return new TailscaleStatusSnapshot(
+            state,
+            cliVersion,
+            nodeDns,
+            tailnetDomain,
+            tailscaleIp,
+            loopback,
+            magicDnsUrl,
+            errorMessage);
     }
 
     public void Dispose()
@@ -106,9 +225,40 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
 
     private async Task OnOptionsChangedAsync()
     {
-        if (_serverStarted)
+        if (!_serverStarted)
         {
-            await ApplySafelyAsync();
+            return;
+        }
+
+        try
+        {
+            await _gate.WaitAsync(_lifetime.ApplicationStopping);
+            try
+            {
+                var monitorOptions = _options.CurrentValue;
+                if (_lastAppliedOptions is not null
+                    && _lastAppliedOptions.ConfigurationEquals(monitorOptions)
+                    && _routeActive == monitorOptions.AutoServe)
+                {
+                    _optionsOverride = null;
+                    return;
+                }
+
+                _optionsOverride = null;
+                await ApplyUnderGateAsync(_lifetime.ApplicationStopping);
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Tailscale serve configuration cancelled (application stopping).");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Tailscale serve configuration failed; remote access over the tailnet is unavailable.");
         }
     }
 
@@ -130,7 +280,7 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
 
     private async Task ApplyCoreAsync(CancellationToken ct)
     {
-        var options = _options.CurrentValue;
+        var options = _optionsOverride ?? _options.CurrentValue;
 
         if (_routeActive)
         {
@@ -139,12 +289,16 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
 
         if (!options.AutoServe)
         {
+            _lastAppliedOptions = options.Clone();
+            _currentState = TailscaleDaemonState.Inactive;
             return;
         }
 
         var version = await _cli.RunAsync(["version"], ProbeTimeoutSeconds, ct);
         if (!version.Succeeded)
         {
+            _currentState = TailscaleDaemonState.DaemonOfflineOrUnauthenticated;
+            _lastErrorMessage = $"Tailscale CLI is not available in PATH ({version.StandardError})";
             _logger.LogWarning(
                 "Tailscale:AutoServe is enabled but the 'tailscale' CLI is not available in PATH ({Error}); skipping activation.",
                 version.StandardError);
@@ -154,6 +308,8 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
         var status = await _cli.RunAsync(["status", "--json"], ProbeTimeoutSeconds, ct);
         if (!status.Succeeded || !TailscaleStatusParser.IsAuthenticated(status.StandardOutput))
         {
+            _currentState = TailscaleDaemonState.DaemonOfflineOrUnauthenticated;
+            _lastErrorMessage = "Tailscale is not connected to a tailnet (run 'tailscale up').";
             _logger.LogWarning(
                 "Tailscale is not connected to a tailnet (run 'tailscale up'); skipping activation. {Error}",
                 status.StandardError);
@@ -161,8 +317,8 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
         }
 
         var target = TailscaleTargetResolver.Resolve(ResolveAddresses());
-        var serviceName = string.IsNullOrWhiteSpace(options.ServiceName) ? null : options.ServiceName.Trim();
-        var protocol = NormalizeProtocol(options.Protocol);
+        var serviceName = options.GetNormalizedServiceName();
+        var protocol = options.GetNormalizedProtocol();
 
         // Defensive pre-flight cleanup of stale routes left by abnormal terminations.
         await RunRequiredAsync(["serve", "reset"], ConfigureTimeoutSeconds, ct);
@@ -196,6 +352,9 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
             host ?? "<unknown MagicDNS name>",
             IsDefaultPort(protocol, options.ListenPort) ? string.Empty : $":{options.ListenPort}",
             target.ToServeTarget());
+
+        _lastAppliedOptions = options.Clone();
+        _currentState = TailscaleDaemonState.Active;
     }
 
     private async Task TeardownAsync(CancellationToken ct)
@@ -227,6 +386,10 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
         {
             _routeActive = false;
             _activeServiceName = null;
+            if (_currentState == TailscaleDaemonState.Active)
+            {
+                _currentState = TailscaleDaemonState.Inactive;
+            }
         }
     }
 
@@ -251,11 +414,6 @@ public class TailscaleServeHostedService : IHostedService, ITailscaleServeServic
         var configured = _configuration[UrlsConfigurationKey];
         return string.IsNullOrWhiteSpace(configured) ? [] : [configured];
     }
-
-    private static string NormalizeProtocol(string? protocol) =>
-        string.Equals(protocol?.Trim(), TailscaleOptions.HttpProtocol, StringComparison.OrdinalIgnoreCase)
-            ? TailscaleOptions.HttpProtocol
-            : TailscaleOptions.HttpsProtocol;
 
     private static bool IsDefaultPort(string normalizedProtocol, int listenPort) =>
         listenPort == (normalizedProtocol == TailscaleOptions.HttpsProtocol ? TailscaleOptions.DefaultListenPort : DefaultHttpPort);

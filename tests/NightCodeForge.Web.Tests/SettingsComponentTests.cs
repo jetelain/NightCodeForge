@@ -16,6 +16,7 @@ using NightCodeForge.Web.Components.Pages;
 using NightCodeForge.Web.Components.Settings;
 using NightCodeForge.Web.Components.Workspaces;
 using NightCodeForge.Web.Services;
+using NightCodeForge.Web.Tailscale;
 using Moq;
 using Xunit;
 
@@ -37,6 +38,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
     private readonly NightCodeForge.Agents.Tools.MockWebSearchService _webSearchService;
     private readonly MockLlmConfigurationWriter _configWriter;
     private readonly LlmProviderOptions _llmOptions;
+    private readonly Mock<ITailscaleServeService> _tailscaleServeService;
+    private readonly Mock<ITailscaleConfigurationWriter> _tailscaleConfigWriter;
+    private readonly Mock<IOptionsMonitor<TailscaleOptions>> _tailscaleOptionsMonitor;
 
     public SettingsComponentTests()
     {
@@ -66,6 +70,20 @@ public class SettingsComponentTests : BunitContext, IDisposable
         _webSearchService = new NightCodeForge.Agents.Tools.MockWebSearchService();
         _configWriter = new MockLlmConfigurationWriter();
         _llmOptions = new LlmProviderOptions();
+        _tailscaleServeService = new Mock<ITailscaleServeService>();
+        _tailscaleConfigWriter = new Mock<ITailscaleConfigurationWriter>();
+        _tailscaleOptionsMonitor = new Mock<IOptionsMonitor<TailscaleOptions>>();
+
+        _tailscaleOptionsMonitor.SetupGet(m => m.CurrentValue).Returns(new TailscaleOptions());
+        _tailscaleServeService.Setup(s => s.GetStatusSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TailscaleStatusSnapshot(
+                TailscaleDaemonState.Inactive,
+                "1.76.0",
+                "mybox.tail1234.ts.net",
+                "tail1234.ts.net",
+                "100.101.102.103",
+                "127.0.0.1:5270",
+                null));
 
         Services.AddDbContextFactory<AppDbContext>(opts => opts.UseSqlite(_connection));
         Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
@@ -93,6 +111,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<IGlobalSkillsManagerService>(new GlobalSkillsManagerService(
             new BundledSkillsProvider(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<GlobalSkillsManagerService>.Instance));
+        Services.AddSingleton<ITailscaleServeService>(_tailscaleServeService.Object);
+        Services.AddSingleton<ITailscaleConfigurationWriter>(_tailscaleConfigWriter.Object);
+        Services.AddSingleton<IOptionsMonitor<TailscaleOptions>>(_tailscaleOptionsMonitor.Object);
     }
 
     public new void Dispose()
@@ -161,12 +182,12 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public void SettingsPage_GlobalScope_RendersSevenGlobalTabs_ExcludesABTesting()
+    public void SettingsPage_GlobalScope_RendersEightGlobalTabs_ExcludesABTesting()
     {
         var cut = Render<Settings>();
 
         var globalTabs = cut.FindAll(".settings-tabs button");
-        Assert.Equal(7, globalTabs.Count);
+        Assert.Equal(8, globalTabs.Count);
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Local LLM Optimizations"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Agent Profiles"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Workflows & Stages"));
@@ -174,6 +195,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains(globalTabs, b => b.TextContent.Contains("OllamaRouter Gateway"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Cloud & Web Search"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Global Skills Store"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Remote & Tailscale"));
         Assert.DoesNotContain(globalTabs, b => b.TextContent.Contains("A/B Testing"));
     }
 
@@ -226,6 +248,22 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("Search Provider", cut.Markup);
         Assert.Contains("Ollama API Key", cut.Markup);
         Assert.Contains("Live Connectivity &amp; Search Tester", cut.Markup);
+    }
+
+    [Fact]
+    public void SettingsPage_NavigatesToTailscaleTab_AndRendersTailscaleCard()
+    {
+        var cut = Render<Settings>();
+
+        var tailscaleTab = cut.FindAll(".settings-tabs button")
+            .FirstOrDefault(b => b.TextContent.Contains("Remote & Tailscale"));
+        Assert.NotNull(tailscaleTab);
+
+        tailscaleTab.Click();
+
+        Assert.Contains("Remote &amp; Tailscale Access", cut.Markup);
+        Assert.Contains("Exposition Configuration", cut.Markup);
+        Assert.Contains("Mobile Onboarding &amp; Live Mesh Status", cut.Markup);
     }
 
     #endregion
