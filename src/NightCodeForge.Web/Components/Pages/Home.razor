@@ -16,6 +16,145 @@
 
 <PageTitle>Overview - NightCodeForge</PageTitle>
 
+<style>
+    .dashboard-task-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.85rem 1rem;
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: var(--radius-md);
+        transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .dashboard-task-row:hover {
+        border-color: var(--border-hover, var(--border-subtle));
+    }
+
+    .dashboard-task-content {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .dashboard-task-header-row {
+        display: contents;
+    }
+
+    .dashboard-task-ws {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        min-width: 120px;
+        max-width: 180px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex-shrink: 0;
+    }
+
+    .dashboard-task-ws-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .dashboard-task-priority {
+        display: inline-flex;
+        justify-content: center;
+        min-width: 2.2rem;
+        font-size: 0.75rem;
+        flex-shrink: 0;
+    }
+
+    .dashboard-task-title-link {
+        font-weight: 700;
+        color: var(--text-primary);
+        text-decoration: none;
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .dashboard-task-title-link:hover {
+        color: var(--accent-indigo, #6366f1);
+        text-decoration: underline;
+    }
+
+    .dashboard-task-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-shrink: 0;
+    }
+
+    .dashboard-task-actions {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-shrink: 0;
+        margin-left: auto;
+    }
+
+    @@media (max-width: 860px) {
+        .dashboard-task-row {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.75rem;
+        }
+
+        .dashboard-task-content {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .dashboard-task-header-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            width: 100%;
+        }
+
+        .dashboard-task-ws {
+            max-width: 100%;
+            min-width: 0;
+        }
+
+        .dashboard-task-title-link {
+            width: 100%;
+            white-space: normal;
+            word-break: break-word;
+        }
+
+        .dashboard-task-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            width: 100%;
+        }
+
+        .dashboard-task-actions {
+            width: 100%;
+            justify-content: flex-end;
+            border-top: 1px solid var(--border-subtle);
+            padding-top: 0.65rem;
+            margin-left: 0;
+        }
+    }
+</style>
+
 <div class="home-dashboard" style="display: flex; flex-direction: column; gap: 2rem;">
     <!-- 1. Top Command Center Banner, Question Inbox, Live Telemetry & Setup New Workspace -->
     <div class="forge-card" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1.25rem; padding: 1.5rem;">
@@ -200,243 +339,311 @@
         }
     </section>
 
-    <!-- 2b. Tasks Awaiting Human Code Review -->
-    <section id="home-pending-reviews-section" class="forge-card" style="padding: 1.5rem;">
-        <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
-            <span style="font-size: 1.35rem;">🔍</span>
-            <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Tasks Awaiting Human Code Review</h2>
-            <span class="forge-badge badge-indigo">@_snapshot.PendingReviewCount</span>
-        </div>
-
-        @if (_snapshot.PendingReviewTasks.Count == 0)
-        {
-            <div id="home-no-pending-reviews" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
-                No tasks are waiting for human code review.
-            </div>
-        }
-        else
-        {
-            <div style="display: flex; flex-direction: column; gap: 0.65rem;">
-                @foreach (var task in _snapshot.PendingReviewTasks)
-                {
-                    <div class="pending-review-row"
-                         id="home-pending-review-@task.TaskId"
-                         style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.85rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
-                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; flex: 1;">
-                            <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
-                                P@(task.Priority)
-                            </span>
-                            <a href="@task.ReviewUrl"
-                               style="font-weight: 700; color: var(--text-primary); text-decoration: none; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                #@task.TaskId: @task.Title
-                            </a>
-                            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
-                                🏢 @task.WorkspaceName
-                            </span>
-                            <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;">
-                                @task.FeatureBranch ➔ @task.BaseBranch
-                            </span>
-                            @if (task.HasResolvedConflict)
-                            {
-                                <span class="forge-badge badge-amber" style="font-size: 0.75rem;">⚠️ Conflict Resolved</span>
-                            }
-                        </div>
-
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <a href="@task.ReviewUrl"
-                               id="home-review-task-btn-@task.TaskId"
-                               class="forge-btn forge-btn-primary btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                🔍 Review &amp; Merge
-                            </a>
-                            <a href="@task.InspectorUrl"
-                               class="forge-btn forge-btn-secondary btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                🔍 Inspector
-                            </a>
-                            <a href="@task.TaskDetailUrl"
-                               class="forge-btn forge-btn-outline btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                📋 Details
-                            </a>
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-    </section>
-
-    <!-- 2c. Recent Failed & Closed Tasks (Last 24h) -->
-    <section id="home-recent-terminal-tasks-section" class="forge-card" style="padding: 1.5rem;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; flex-wrap: wrap; gap: 0.75rem;">
+    <!-- Activity Section -->
+    <section id="home-activity-section" style="display: flex; flex-direction: column; gap: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem;">
             <div style="display: flex; align-items: center; gap: 0.6rem;">
                 <span style="font-size: 1.35rem;">⚡</span>
-                <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Recent Failed &amp; Closed Tasks (Last 24h)</h2>
-                <span class="forge-badge badge-gray">@_snapshot.RecentFailedAndClosedTasks.Count</span>
+                <h2 style="margin: 0; font-size: 1.25rem; font-weight: 700;">Activity</h2>
             </div>
-            <a href="/tasks"
-               id="home-view-all-tasks-link"
-               class="forge-btn forge-btn-secondary"
-               style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
-                📜 View All Tasks ➔
-            </a>
         </div>
 
-        @if (_snapshot.RecentFailedAndClosedTasks.Count == 0)
-        {
-            <div id="home-no-recent-terminal-tasks" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
-                No failed or closed tasks in the last 24 hours.
+        <!-- 2b. Tasks Awaiting Human Code Review -->
+        <section id="home-pending-reviews-section" class="forge-card" style="padding: 1.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+                <span style="font-size: 1.35rem;">🔍</span>
+                <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Tasks Awaiting Human Code Review</h2>
+                <span class="forge-badge badge-indigo">@_snapshot.PendingReviewCount</span>
             </div>
-        }
-        else
-        {
-            <div style="display: flex; flex-direction: column; gap: 0.65rem;">
-                @foreach (var task in _snapshot.RecentFailedAndClosedTasks)
-                {
-                    <div class="recent-terminal-task-row"
-                         id="home-recent-terminal-task-@task.TaskId"
-                         style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.85rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
-                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; flex: 1;">
-                            @if (task.Status == TaskOverallStatus.Failed)
-                            {
-                                <span class="forge-badge badge-crimson font-mono" style="font-size: 0.75rem;">
-                                    ❌ Failed
-                                </span>
-                            }
-                            else
-                            {
-                                <span class="forge-badge badge-emerald font-mono" style="font-size: 0.75rem;">
-                                    ✅ Closed
-                                </span>
-                            }
 
-                            <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
-                                P@(task.Priority)
-                            </span>
-
-                            <a href="@task.TaskDetailUrl"
-                               style="font-weight: 700; color: var(--text-primary); text-decoration: none; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                #@task.TaskId: @task.Title
-                            </a>
-
-                            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
-                                🏢 @task.WorkspaceName
-                            </span>
-
-                            <span class="forge-badge badge-gray font-mono" style="font-size: 0.75rem;" title="@task.UpdatedAt.ToString("u")">
-                                🕒 @TaskRecencyAndRetentionHelper.FormatRelativeAge(task.UpdatedAt)
-                            </span>
-
-                            @if (!string.IsNullOrWhiteSpace(task.SquashCommitSha))
-                            {
-                                <span class="forge-badge badge-purple font-mono" style="font-size: 0.72rem;" title="Squash commit: @task.SquashCommitSha">
-                                    Commit: @(task.SquashCommitSha.Length > 8 ? task.SquashCommitSha[..8] : task.SquashCommitSha)
-                                </span>
-                            }
-                        </div>
-
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <a href="@task.InspectorUrl"
-                               id="home-recent-inspector-@task.TaskId"
-                               class="forge-btn forge-btn-secondary btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                🔍 Inspector
-                            </a>
-                            <a href="@task.TaskDetailUrl"
-                               id="home-recent-details-@task.TaskId"
-                               class="forge-btn forge-btn-outline btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                📋 Details
-                            </a>
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-    </section>
-
-    <!-- 3. Running Tasks & Next Scheduled Tasks (Limit 5) -->
-    <section id="home-scheduled-tasks-section" class="forge-card" style="padding: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
-            <div style="display: flex; align-items: center; gap: 0.6rem;">
-                <span style="font-size: 1.35rem;">⏱️</span>
-                <div>
-                    <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Running &amp; Next Scheduled Tasks</h2>
-                    <span style="font-size: 0.8rem; color: var(--text-muted);">
-                        Showing up to @HomeDashboardBuilder.MaxScheduledTasks active and upcoming tasks across all workspaces
-                    </span>
+            @if (_snapshot.PendingReviewTasks.Count == 0)
+            {
+                <div id="home-no-pending-reviews" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
+                    No tasks are waiting for human code review.
                 </div>
-            </div>
-            <a href="/dev-queue"
-               id="home-open-devqueue-link"
-               class="forge-btn forge-btn-secondary"
-               style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
-                ⏱️ Open Dev-Queue &amp; Locks ➔
-            </a>
-        </div>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                    @foreach (var task in _snapshot.PendingReviewTasks)
+                    {
+                        <div class="pending-review-row dashboard-task-row"
+                             id="home-pending-review-@task.TaskId">
+                            <div class="dashboard-task-content">
+                                <div class="dashboard-task-header-row">
+                                    <!-- 1. Workspace -->
+                                    <span class="forge-badge badge-teal dashboard-task-ws" title="@task.WorkspaceName">
+                                        <span>@task.WorkspaceEmoji</span>
+                                        <span class="dashboard-task-ws-name">@task.WorkspaceName</span>
+                                    </span>
 
-        @if (_snapshot.RunningAndNextTasks.Count == 0)
-        {
-            <div id="home-no-scheduled-tasks" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
-                No running or queued tasks right now. Promote a task from any workspace backlog to start execution.
-            </div>
-        }
-        else
-        {
-            <div style="display: flex; flex-direction: column; gap: 0.65rem;">
-                @foreach (var task in _snapshot.RunningAndNextTasks)
-                {
-                    <div class="scheduled-task-row"
-                         id="home-scheduled-task-@task.TaskId"
-                         style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; padding: 0.85rem 1rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);">
-                        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; min-width: 0; flex: 1;">
-                            @if (task.IsRunning)
-                            {
-                                <span class="badge-running" style="font-size: 0.75rem;">
-                                    <span class="pulse-dot"></span> Running
-                                </span>
-                            }
-                            else
-                            {
-                                <span class="forge-badge badge-indigo font-mono" style="font-size: 0.75rem;">
-                                    Next · @task.QueueLabel
-                                </span>
-                            }
+                                    <!-- 2. Priority -->
+                                    <span class="forge-badge badge-priority-@task.Priority font-mono dashboard-task-priority">
+                                        P@(task.Priority)
+                                    </span>
+                                </div>
 
-                            <span class="forge-badge badge-priority-@task.Priority font-mono" style="font-size: 0.75rem;">
-                                P@(task.Priority)
-                            </span>
+                                <!-- 3. Task number and title -->
+                                <a href="@task.ReviewUrl"
+                                   class="dashboard-task-title-link"
+                                   title="#@task.TaskId: @task.Title">
+                                    #@task.TaskId: @task.Title
+                                </a>
 
-                            <a href="@task.TaskDetailUrl"
-                               style="font-weight: 700; color: var(--text-primary); text-decoration: none; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                #@task.TaskId: @task.Title
-                            </a>
+                                <!-- Branches, Conflict & Age -->
+                                <div class="dashboard-task-meta">
+                                    <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;">
+                                        @task.FeatureBranch ➔ @task.BaseBranch
+                                    </span>
+                                    @if (task.HasResolvedConflict)
+                                    {
+                                        <span class="forge-badge badge-amber font-mono" style="font-size: 0.75rem;">⚠️ Conflict Resolved</span>
+                                    }
+                                    <span class="forge-badge badge-gray font-mono" style="font-size: 0.75rem;" title="@task.UpdatedAt.ToString("u")">
+                                        🕒 @TaskRecencyAndRetentionHelper.FormatRelativeAge(task.UpdatedAt)
+                                    </span>
+                                </div>
+                            </div>
 
-                            <span class="forge-badge badge-teal" style="font-size: 0.75rem;">
-                                🏢 @task.WorkspaceName
-                            </span>
-
-                            <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;">
-                                @task.StageId
-                            </span>
+                            <!-- Buttons (aligned right, new line on mobile) -->
+                            <div class="dashboard-task-actions">
+                                <a href="@task.ReviewUrl"
+                                   id="home-review-task-btn-@task.TaskId"
+                                   class="forge-btn forge-btn-primary btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    🔍 Review &amp; Merge
+                                </a>
+                                <a href="@task.InspectorUrl"
+                                   class="forge-btn forge-btn-secondary btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    🔍 Inspector
+                                </a>
+                                <a href="@task.TaskDetailUrl"
+                                   class="forge-btn forge-btn-outline btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    📋 Details
+                                </a>
+                            </div>
                         </div>
+                    }
+                </div>
+            }
+        </section>
 
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <a href="@task.InspectorUrl"
-                               class="forge-btn forge-btn-secondary btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                🔍 Inspector
-                            </a>
-                            <a href="@task.TaskDetailUrl"
-                               class="forge-btn forge-btn-outline btn-xs"
-                               style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
-                                📋 Details
-                            </a>
+        <!-- 2c. Recent Failed & Closed Tasks (Last 24h) -->
+        <section id="home-recent-terminal-tasks-section" class="forge-card" style="padding: 1.5rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem; flex-wrap: wrap; gap: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                    <span style="font-size: 1.35rem;">⚡</span>
+                    <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Recent Failed &amp; Closed Tasks (Last 24h)</h2>
+                    <span class="forge-badge badge-gray">@_snapshot.RecentFailedAndClosedTasks.Count</span>
+                </div>
+                <a href="/tasks"
+                   id="home-view-all-tasks-link"
+                   class="forge-btn forge-btn-secondary"
+                   style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
+                    📜 View All Tasks ➔
+                </a>
+            </div>
+
+            @if (_snapshot.RecentFailedAndClosedTasks.Count == 0)
+            {
+                <div id="home-no-recent-terminal-tasks" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
+                    No failed or closed tasks in the last 24 hours.
+                </div>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                    @foreach (var task in _snapshot.RecentFailedAndClosedTasks)
+                    {
+                        <div class="recent-terminal-task-row dashboard-task-row"
+                             id="home-recent-terminal-task-@task.TaskId">
+                            <div class="dashboard-task-content">
+                                <div class="dashboard-task-header-row">
+                                    <!-- 1. Workspace -->
+                                    <span class="forge-badge badge-teal dashboard-task-ws" title="@task.WorkspaceName">
+                                        <span>@task.WorkspaceEmoji</span>
+                                        <span class="dashboard-task-ws-name">@task.WorkspaceName</span>
+                                    </span>
+
+                                    <!-- 2. Priority -->
+                                    <span class="forge-badge badge-priority-@task.Priority font-mono dashboard-task-priority">
+                                        P@(task.Priority)
+                                    </span>
+                                </div>
+
+                                <!-- 3. Task number and title -->
+                                <a href="@task.TaskDetailUrl"
+                                   class="dashboard-task-title-link"
+                                   title="#@task.TaskId: @task.Title">
+                                    #@task.TaskId: @task.Title
+                                </a>
+
+                                <!-- 4. Status, 5. {N}h ago & optional Commit -->
+                                <div class="dashboard-task-meta">
+                                    @if (task.Status == TaskOverallStatus.Failed)
+                                    {
+                                        <span class="forge-badge badge-crimson font-mono" style="font-size: 0.75rem;">
+                                            ❌ Failed
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="forge-badge badge-emerald font-mono" style="font-size: 0.75rem;">
+                                            ✅ Closed
+                                        </span>
+                                    }
+
+                                    <span class="forge-badge badge-gray font-mono" style="font-size: 0.75rem;" title="@task.UpdatedAt.ToString("u")">
+                                        🕒 @TaskRecencyAndRetentionHelper.FormatRelativeAge(task.UpdatedAt)
+                                    </span>
+
+                                    @if (!string.IsNullOrWhiteSpace(task.SquashCommitSha))
+                                    {
+                                        <span class="forge-badge badge-purple font-mono" style="font-size: 0.72rem;" title="Squash commit: @task.SquashCommitSha">
+                                            Commit: @(task.SquashCommitSha.Length > 8 ? task.SquashCommitSha[..8] : task.SquashCommitSha)
+                                        </span>
+                                    }
+                                </div>
+                            </div>
+
+                            <!-- 6. Buttons (aligned right, new line on mobile) -->
+                            <div class="dashboard-task-actions">
+                                <a href="@task.InspectorUrl"
+                                   id="home-recent-inspector-@task.TaskId"
+                                   class="forge-btn forge-btn-secondary btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    🔍 Inspector
+                                </a>
+                                <a href="@task.TaskDetailUrl"
+                                   id="home-recent-details-@task.TaskId"
+                                   class="forge-btn forge-btn-outline btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    📋 Details
+                                </a>
+                            </div>
                         </div>
+                    }
+                </div>
+            }
+        </section>
+
+        <!-- 3. Running Tasks & Next Scheduled Tasks (Limit 5) -->
+        <section id="home-scheduled-tasks-section" class="forge-card" style="padding: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.75rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
+                <div style="display: flex; align-items: center; gap: 0.6rem;">
+                    <span style="font-size: 1.35rem;">⏱️</span>
+                    <div>
+                        <h2 style="margin: 0; font-size: 1.15rem; font-weight: 700;">Running &amp; Next Scheduled Tasks</h2>
+                        <span style="font-size: 0.8rem; color: var(--text-muted);">
+                            Showing up to @HomeDashboardBuilder.MaxScheduledTasks active and upcoming tasks across all workspaces
+                        </span>
                     </div>
-                }
+                </div>
+                <a href="/dev-queue"
+                   id="home-open-devqueue-link"
+                   class="forge-btn forge-btn-secondary"
+                   style="font-size: 0.82rem; padding: 0.35rem 0.85rem; text-decoration: none;">
+                    ⏱️ Open Dev-Queue &amp; Locks ➔
+                </a>
             </div>
-        }
+
+            @if (_snapshot.RunningAndNextTasks.Count == 0)
+            {
+                <div id="home-no-scheduled-tasks" style="padding: 1.75rem; text-align: center; color: var(--text-muted); background: var(--bg-surface); border-radius: var(--radius-md); font-size: 0.9rem;">
+                    No running or queued tasks right now. Promote a task from any workspace backlog to start execution.
+                </div>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.65rem;">
+                    @foreach (var task in _snapshot.RunningAndNextTasks)
+                    {
+                        <div class="scheduled-task-row dashboard-task-row"
+                             id="home-scheduled-task-@task.TaskId">
+                            <div class="dashboard-task-content">
+                                <div class="dashboard-task-header-row">
+                                    <!-- 1. Workspace -->
+                                    <span class="forge-badge badge-teal dashboard-task-ws" title="@task.WorkspaceName">
+                                        <span>@task.WorkspaceEmoji</span>
+                                        <span class="dashboard-task-ws-name">@task.WorkspaceName</span>
+                                    </span>
+
+                                    <!-- 2. Priority -->
+                                    <span class="forge-badge badge-priority-@task.Priority font-mono dashboard-task-priority">
+                                        P@(task.Priority)
+                                    </span>
+                                </div>
+
+                                <!-- 3. Task number and title -->
+                                <a href="@task.TaskDetailUrl"
+                                   class="dashboard-task-title-link"
+                                   title="#@task.TaskId: @task.Title">
+                                    #@task.TaskId: @task.Title
+                                </a>
+
+                                <!-- 5. Status, 6. Stage & 7. Time spent running -->
+                                <div class="dashboard-task-meta">
+                                    @if (task.IsRunning)
+                                    {
+                                        <span class="badge-running font-mono" style="font-size: 0.75rem;">
+                                            <span class="pulse-dot"></span> Running
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="forge-badge badge-indigo font-mono" style="font-size: 0.75rem;" title="@task.QueueLabel">
+                                            Queued
+                                        </span>
+                                    }
+
+                                    @if (task.IsRunning)
+                                    {
+                                        <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;" title="Current Stage">
+                                            @task.StageId
+                                        </span>
+                                    }
+                                    else if (task.IsPaused)
+                                    {
+                                        <span class="forge-badge badge-amber font-mono" style="font-size: 0.75rem;" title="Operations or task paused">
+                                            ⏸️ Paused
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="forge-badge badge-purple font-mono" style="font-size: 0.75rem;" title="Next Stage">
+                                            @task.StageId
+                                        </span>
+                                    }
+
+                                    @if (task.IsRunning && !string.IsNullOrWhiteSpace(task.RunningDurationFormatted))
+                                    {
+                                        <span class="forge-badge badge-gray font-mono" style="font-size: 0.75rem;" title="Time spent running">
+                                            ⏱️ @task.RunningDurationFormatted
+                                        </span>
+                                    }
+                                </div>
+                            </div>
+
+                            <!-- 8. Buttons (aligned right, new line on mobile) -->
+                            <div class="dashboard-task-actions">
+                                <a href="@task.InspectorUrl"
+                                   class="forge-btn forge-btn-secondary btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    🔍 Inspector
+                                </a>
+                                <a href="@task.TaskDetailUrl"
+                                   class="forge-btn forge-btn-outline btn-xs"
+                                   style="text-decoration: none; font-size: 0.78rem; padding: 0.3rem 0.65rem;">
+                                    📋 Details
+                                </a>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </section>
     </section>
 
     <!-- 4. Workspace-Independent Live Telemetry -->

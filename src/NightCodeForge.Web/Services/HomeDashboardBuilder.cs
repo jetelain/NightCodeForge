@@ -33,7 +33,8 @@ public record HomePendingReviewItem(
     DateTime UpdatedAt,
     string ReviewUrl,
     string InspectorUrl,
-    string TaskDetailUrl);
+    string TaskDetailUrl,
+    string WorkspaceEmoji = WorkspacePresentationHelper.DefaultEmoji);
 
 public record HomeScheduledTaskItem(
     int TaskId,
@@ -45,7 +46,10 @@ public record HomeScheduledTaskItem(
     int Priority,
     bool IsRunning,
     string InspectorUrl,
-    string TaskDetailUrl);
+    string TaskDetailUrl,
+    string WorkspaceEmoji = WorkspacePresentationHelper.DefaultEmoji,
+    bool IsPaused = false,
+    string? RunningDurationFormatted = null);
 
 public record HomeRecentTerminalTaskItem(
     int TaskId,
@@ -57,7 +61,8 @@ public record HomeRecentTerminalTaskItem(
     DateTime UpdatedAt,
     string? SquashCommitSha,
     string InspectorUrl,
-    string TaskDetailUrl);
+    string TaskDetailUrl,
+    string WorkspaceEmoji = WorkspacePresentationHelper.DefaultEmoji);
 
 public record HomeDashboardSnapshot(
     IReadOnlyList<RecentWorkspaceSummary> RecentWorkspaces,
@@ -216,6 +221,16 @@ public static class HomeDashboardBuilder
             RecentFailedAndClosedTasks: recentTerminalTasks);
     }
 
+    public static string FormatRunningDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero) duration = TimeSpan.Zero;
+        if (duration.TotalMinutes < 1)
+            return $"{(int)duration.TotalSeconds}s";
+        if (duration.TotalHours < 1)
+            return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
+        return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+    }
+
     public static IReadOnlyList<HomeRecentTerminalTaskItem> BuildRecentFailedAndClosedTasks(
         IEnumerable<ForgeTask> tasks,
         IReadOnlyDictionary<int, Workspace> workspacesById,
@@ -231,7 +246,9 @@ public static class HomeDashboardBuilder
             .ThenBy(t => t.Id)
             .Select(t =>
             {
-                var wsName = workspacesById.TryGetValue(t.WorkspaceId, out var ws) ? ws.Name : UnknownWorkspaceName;
+                var ws = workspacesById.TryGetValue(t.WorkspaceId, out var w) ? w : null;
+                var wsName = ws?.Name ?? UnknownWorkspaceName;
+                var wsEmoji = WorkspacePresentationHelper.ResolveEmoji(ws?.Emoji);
                 int? wsId = t.WorkspaceId > 0 ? t.WorkspaceId : null;
 
                 return new HomeRecentTerminalTaskItem(
@@ -244,7 +261,8 @@ public static class HomeDashboardBuilder
                     UpdatedAt: t.UpdatedAt,
                     SquashCommitSha: t.SquashCommitSha,
                     InspectorUrl: WorkspaceUrlHelper.BuildPath(wsId, $"inspector/{t.Id}"),
-                    TaskDetailUrl: WorkspaceUrlHelper.BuildPath(wsId, $"tasks/{t.Id}"));
+                    TaskDetailUrl: WorkspaceUrlHelper.BuildPath(wsId, $"tasks/{t.Id}"),
+                    WorkspaceEmoji: wsEmoji);
             })
             .ToList();
     }
@@ -263,7 +281,9 @@ public static class HomeDashboardBuilder
             .ThenBy(t => t.Id)
             .Select(t =>
             {
-                var wsName = workspacesById.TryGetValue(t.WorkspaceId, out var ws) ? ws.Name : UnknownWorkspaceName;
+                var ws = workspacesById.TryGetValue(t.WorkspaceId, out var w) ? w : null;
+                var wsName = ws?.Name ?? UnknownWorkspaceName;
+                var wsEmoji = WorkspacePresentationHelper.ResolveEmoji(ws?.Emoji);
                 int? wsId = t.WorkspaceId > 0 ? t.WorkspaceId : null;
                 var hasResolvedConflict = PipelineDataBag.FromJson(t.PipelineDataJson)
                     .Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) ?? false;
@@ -279,7 +299,8 @@ public static class HomeDashboardBuilder
                     UpdatedAt: t.UpdatedAt,
                     ReviewUrl: WorkspaceUrlHelper.BuildPath(wsId, $"review/{t.Id}"),
                     InspectorUrl: WorkspaceUrlHelper.BuildPath(wsId, $"inspector/{t.Id}"),
-                    TaskDetailUrl: WorkspaceUrlHelper.BuildPath(wsId, $"tasks/{t.Id}"));
+                    TaskDetailUrl: WorkspaceUrlHelper.BuildPath(wsId, $"tasks/{t.Id}"),
+                    WorkspaceEmoji: wsEmoji);
             })
             .ToList();
     }
@@ -288,8 +309,10 @@ public static class HomeDashboardBuilder
         DevQueueSnapshot? queueSnapshot,
         IReadOnlyDictionary<int, ForgeTask> tasksById,
         IReadOnlyDictionary<int, Workspace> workspacesById,
-        out int totalQueuedCount)
+        out int totalQueuedCount,
+        DateTime? utcNow = null)
     {
+        var now = utcNow ?? DateTime.UtcNow;
         var results = new List<HomeScheduledTaskItem>(MaxScheduledTasks);
         var seenTaskIds = new HashSet<int>();
 
@@ -314,7 +337,7 @@ public static class HomeDashboardBuilder
                     continue;
                 }
 
-                results.Add(CreateScheduledItemFromJob(job, isRunning: true, tasksById, workspacesById));
+                results.Add(CreateScheduledItemFromJob(job, isRunning: true, tasksById, workspacesById, queueSnapshot, now));
                 if (results.Count >= MaxScheduledTasks)
                 {
                     break;
@@ -342,7 +365,7 @@ public static class HomeDashboardBuilder
                         continue;
                     }
 
-                    results.Add(CreateScheduledItemFromTask(lockedTask, isRunning: true, RunningQueueLabel, workspacesById));
+                    results.Add(CreateScheduledItemFromTask(lockedTask, isRunning: true, RunningQueueLabel, workspacesById, queueSnapshot, now));
                     if (results.Count >= MaxScheduledTasks)
                     {
                         break;
@@ -373,7 +396,7 @@ public static class HomeDashboardBuilder
                     continue;
                 }
 
-                results.Add(CreateScheduledItemFromJob(job, isRunning: false, tasksById, workspacesById));
+                results.Add(CreateScheduledItemFromJob(job, isRunning: false, tasksById, workspacesById, queueSnapshot, now));
                 if (results.Count >= MaxScheduledTasks)
                 {
                     break;
@@ -396,7 +419,7 @@ public static class HomeDashboardBuilder
                     continue;
                 }
 
-                results.Add(CreateScheduledItemFromTask(task, isRunning: false, QueuedStageLabel, workspacesById));
+                results.Add(CreateScheduledItemFromTask(task, isRunning: false, QueuedStageLabel, workspacesById, queueSnapshot, now));
                 if (results.Count >= MaxScheduledTasks)
                 {
                     break;
@@ -411,17 +434,31 @@ public static class HomeDashboardBuilder
         QueuedJobItem job,
         bool isRunning,
         IReadOnlyDictionary<int, ForgeTask> tasksById,
-        IReadOnlyDictionary<int, Workspace> workspacesById)
+        IReadOnlyDictionary<int, Workspace> workspacesById,
+        DevQueueSnapshot? queueSnapshot = null,
+        DateTime? utcNow = null)
     {
+        var now = utcNow ?? DateTime.UtcNow;
         if (tasksById.TryGetValue(job.TaskId, out var task))
         {
-            var wsName = workspacesById.TryGetValue(task.WorkspaceId, out var ws)
-                ? ws.Name
-                : UnknownWorkspaceName;
+            var ws = workspacesById.TryGetValue(task.WorkspaceId, out var w) ? w : null;
+            var wsName = ws?.Name ?? UnknownWorkspaceName;
+            var wsEmoji = WorkspacePresentationHelper.ResolveEmoji(ws?.Emoji);
             var stageId = !string.IsNullOrWhiteSpace(task.CurrentStageId)
                 ? task.CurrentStageId
                 : (!string.IsNullOrWhiteSpace(job.StageId) ? job.StageId : DefaultStageLabel);
             var queueLabel = isRunning ? RunningQueueLabel : job.QueueName;
+            var isPaused = !isRunning && (task.IsDeferredByPause || task.IsWaitingForHuman);
+
+            string? runningDurationFormatted = null;
+            if (isRunning)
+            {
+                var activeLock = queueSnapshot?.ActiveLocks.FirstOrDefault(l => l.TaskId == task.Id);
+                var duration = activeLock != null
+                    ? activeLock.DurationHeld
+                    : (now >= job.EnqueuedAt ? now - job.EnqueuedAt : TimeSpan.Zero);
+                runningDurationFormatted = FormatRunningDuration(duration);
+            }
 
             return new HomeScheduledTaskItem(
                 TaskId: task.Id,
@@ -433,7 +470,20 @@ public static class HomeDashboardBuilder
                 Priority: task.Priority,
                 IsRunning: isRunning,
                 InspectorUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"inspector/{task.Id}"),
-                TaskDetailUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"tasks/{task.Id}"));
+                TaskDetailUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"tasks/{task.Id}"),
+                WorkspaceEmoji: wsEmoji,
+                IsPaused: isPaused,
+                RunningDurationFormatted: runningDurationFormatted);
+        }
+
+        string? unmappedDurationFormatted = null;
+        if (isRunning)
+        {
+            var activeLock = queueSnapshot?.ActiveLocks.FirstOrDefault(l => l.TaskId == job.TaskId);
+            var duration = activeLock != null
+                ? activeLock.DurationHeld
+                : (now >= job.EnqueuedAt ? now - job.EnqueuedAt : TimeSpan.Zero);
+            unmappedDurationFormatted = FormatRunningDuration(duration);
         }
 
         return new HomeScheduledTaskItem(
@@ -446,21 +496,40 @@ public static class HomeDashboardBuilder
             Priority: job.Priority,
             IsRunning: isRunning,
             InspectorUrl: WorkspaceUrlHelper.BuildPath(null, $"inspector/{job.TaskId}"),
-            TaskDetailUrl: WorkspaceUrlHelper.BuildPath(null, $"tasks/{job.TaskId}"));
+            TaskDetailUrl: WorkspaceUrlHelper.BuildPath(null, $"tasks/{job.TaskId}"),
+            WorkspaceEmoji: WorkspacePresentationHelper.DefaultEmoji,
+            IsPaused: false,
+            RunningDurationFormatted: unmappedDurationFormatted);
     }
 
     private static HomeScheduledTaskItem CreateScheduledItemFromTask(
         ForgeTask task,
         bool isRunning,
         string queueLabel,
-        IReadOnlyDictionary<int, Workspace> workspacesById)
+        IReadOnlyDictionary<int, Workspace> workspacesById,
+        DevQueueSnapshot? queueSnapshot = null,
+        DateTime? utcNow = null)
     {
-        var wsName = workspacesById.TryGetValue(task.WorkspaceId, out var ws)
-            ? ws.Name
-            : UnknownWorkspaceName;
+        var now = utcNow ?? DateTime.UtcNow;
+        var ws = workspacesById.TryGetValue(task.WorkspaceId, out var w) ? w : null;
+        var wsName = ws?.Name ?? UnknownWorkspaceName;
+        var wsEmoji = WorkspacePresentationHelper.ResolveEmoji(ws?.Emoji);
         var stageId = !string.IsNullOrWhiteSpace(task.CurrentStageId)
             ? task.CurrentStageId
             : DefaultStageLabel;
+        var isPaused = !isRunning && (task.IsDeferredByPause || task.IsWaitingForHuman);
+
+        string? runningDurationFormatted = null;
+        if (isRunning)
+        {
+            var activeLock = queueSnapshot?.ActiveLocks.FirstOrDefault(l => l.TaskId == task.Id);
+            var duration = activeLock != null
+                ? activeLock.DurationHeld
+                : (now >= (task.UpdatedAt > task.CreatedAt ? task.UpdatedAt : task.CreatedAt)
+                    ? now - (task.UpdatedAt > task.CreatedAt ? task.UpdatedAt : task.CreatedAt)
+                    : TimeSpan.Zero);
+            runningDurationFormatted = FormatRunningDuration(duration);
+        }
 
         return new HomeScheduledTaskItem(
             TaskId: task.Id,
@@ -472,7 +541,10 @@ public static class HomeDashboardBuilder
             Priority: task.Priority,
             IsRunning: isRunning,
             InspectorUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"inspector/{task.Id}"),
-            TaskDetailUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"tasks/{task.Id}"));
+            TaskDetailUrl: WorkspaceUrlHelper.BuildPath(task.WorkspaceId > 0 ? task.WorkspaceId : null, $"tasks/{task.Id}"),
+            WorkspaceEmoji: wsEmoji,
+            IsPaused: isPaused,
+            RunningDurationFormatted: runningDurationFormatted);
     }
 
     private static bool IsValidProcessingTaskForJob(ForgeTask task, string? jobId)

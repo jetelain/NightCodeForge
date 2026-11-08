@@ -833,4 +833,168 @@ public class HomeDashboardTests : BunitContext
         var detailsLink = cut.Find($"#home-recent-details-{failedTask.Id}");
         Assert.Contains($"/tasks/{failedTask.Id}", detailsLink.GetAttribute("href"));
     }
+
+    [Fact]
+    public void FormatRunningDuration_Formats_Seconds_Minutes_And_Hours_Correctly()
+    {
+        Assert.Equal("0s", HomeDashboardBuilder.FormatRunningDuration(TimeSpan.Zero));
+        Assert.Equal("35s", HomeDashboardBuilder.FormatRunningDuration(TimeSpan.FromSeconds(35)));
+        Assert.Equal("4m 12s", HomeDashboardBuilder.FormatRunningDuration(TimeSpan.FromSeconds(252)));
+        Assert.Equal("1h 15m", HomeDashboardBuilder.FormatRunningDuration(TimeSpan.FromMinutes(75)));
+    }
+
+    [Fact]
+    public async Task HomePage_RendersActivitySectionHeader_AndUsesWorkspaceEmojiInTaskRows()
+    {
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var taskRepo = new InMemoryTaskRepository();
+
+        var ws = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Name = "Rocket Core",
+            Emoji = "🚀",
+            RepositoryPath = "/repos/rocket"
+        });
+
+        var runningTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Orbital Launch Engine",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "implementation",
+            Priority = TaskPriority.Critical,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-5)
+        });
+
+        var pausedTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Telemetry Calibration",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "task-review",
+            Priority = TaskPriority.Normal,
+            IsDeferredByPause = true,
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-10)
+        });
+
+        var failedTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Nozzle Seal Rupture",
+            Status = TaskOverallStatus.Failed,
+            Priority = TaskPriority.High,
+            UpdatedAt = DateTime.UtcNow.AddHours(-2)
+        });
+
+        var reviewTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Heat Shield Review",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
+            CurrentStageId = "code-review",
+            Priority = TaskPriority.Critical,
+            FeatureBranch = "feat/shield",
+            BaseBranch = "main",
+            UpdatedAt = DateTime.UtcNow.AddMinutes(-15)
+        });
+
+        var devQueueMock = new Mock<IDevQueueService>();
+        devQueueMock
+            .Setup(s => s.GetSnapshotAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DevQueueSnapshot(
+                UrgentJobs: Array.Empty<QueuedJobItem>(),
+                CodeReviewJobs: Array.Empty<QueuedJobItem>(),
+                ImplementationJobs: Array.Empty<QueuedJobItem>(),
+                TaskReviewJobs: new[]
+                {
+                    new QueuedJobItem("job-paused", HangfireQueues.LlmTaskReview, pausedTask.Id, pausedTask.Title, "task-review", DateTime.UtcNow.AddMinutes(-10), "Queued", TaskPriority.Normal)
+                },
+                InferenceJobs: Array.Empty<QueuedJobItem>(),
+                UtilityJobs: Array.Empty<QueuedJobItem>(),
+                ProcessingJobs: new[]
+                {
+                    new QueuedJobItem("job-run", HangfireQueues.LlmImplementation, runningTask.Id, runningTask.Title, "implementation", DateTime.UtcNow.AddMinutes(-5), "Running", TaskPriority.Critical)
+                },
+                FailedJobs: Array.Empty<QueuedJobItem>(),
+                ActiveLocks: new[]
+                {
+                    new ActiveLockSnapshot(ws.Id, runningTask.Id, "TaskExclusive", DateTime.UtcNow.AddMinutes(-5), TimeSpan.FromMinutes(5))
+                },
+                SkippedJobs: Array.Empty<SkippedJobItem>()));
+
+        var workspaceState = new WorkspaceStateService();
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+        telemetryMock.Setup(t => t.GetRecentLlmCalls(It.IsAny<int>())).Returns(new List<LlmCallRecord>());
+        telemetryMock.Setup(t => t.GetRecentShellCommands(It.IsAny<int>())).Returns(new List<ShellCommandRecord>());
+        var workerState = WorkerStateTestHelper.Create(telemetryMock.Object);
+        var hubConnection = TestHubConnectionHelper.Create(workerStateService: workerState);
+        var gatewayMock = new Mock<ILlmGatewayService>();
+        gatewayMock.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
+
+        Services.AddSingleton<IWorkspaceRepository>(workspaceRepo);
+        Services.AddSingleton<ITaskRepository>(taskRepo);
+        Services.AddSingleton(devQueueMock.Object);
+        Services.AddSingleton(workspaceState);
+        Services.AddSingleton(workerState);
+        Services.AddSingleton(new OperationsTelemetryUiService(hubConnection, telemetryMock.Object));
+        Services.AddSingleton(TestServices.CreateOperationsControlService());
+        Services.AddSingleton(gatewayMock.Object);
+        Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton(NullLogger<Home>.Instance);
+        Services.AddSingleton(NullLogger<ActiveOperationsHero>.Instance);
+
+        var cut = Render<Home>();
+
+        cut.WaitForState(() => cut.FindAll("#home-activity-section").Count > 0);
+
+        // 1. Verify Activity Section exists with title
+        var activitySection = cut.Find("#home-activity-section");
+        Assert.NotNull(activitySection);
+        Assert.Contains("Activity", activitySection.QuerySelector("h2")?.TextContent);
+
+        // 2. Verify Review task row uses workspace emoji (🚀) and displays priority & branches
+        var reviewRow = cut.Find($"#home-pending-review-{reviewTask.Id}");
+        Assert.NotNull(reviewRow);
+        Assert.Contains("🚀", reviewRow.TextContent);
+        Assert.DoesNotContain("🏢", reviewRow.TextContent);
+        Assert.Contains("Rocket Core", reviewRow.TextContent);
+        Assert.Contains("P1", reviewRow.TextContent);
+        Assert.Contains("feat/shield ➔ main", reviewRow.TextContent);
+        Assert.NotNull(cut.Find($"#home-review-task-btn-{reviewTask.Id}"));
+
+        // 3. Verify Running task displays workspace emoji (🚀), priority, Running status, and elapsed duration
+        var runningRow = cut.Find($"#home-scheduled-task-{runningTask.Id}");
+        Assert.NotNull(runningRow);
+        Assert.Contains("🚀", runningRow.TextContent);
+        Assert.DoesNotContain("🏢", runningRow.TextContent);
+        Assert.Contains("P1", runningRow.TextContent);
+        Assert.Contains("Running", runningRow.TextContent);
+        Assert.Contains("5m 0s", runningRow.TextContent);
+
+        // 4. Verify Paused task displays "Queued" status and "⏸️ Paused" stage
+        var pausedRow = cut.Find($"#home-scheduled-task-{pausedTask.Id}");
+        Assert.NotNull(pausedRow);
+        Assert.Contains("🚀", pausedRow.TextContent);
+        Assert.Contains("Queued", pausedRow.TextContent);
+        Assert.Contains("⏸️ Paused", pausedRow.TextContent);
+        Assert.DoesNotContain("5m", pausedRow.TextContent); // Queued task does not display running duration
+
+        // 5. Verify Recent terminal task row uses workspace emoji (🚀), status ❌ Failed, and relative age
+        var failedRow = cut.Find($"#home-recent-terminal-task-{failedTask.Id}");
+        Assert.NotNull(failedRow);
+        Assert.Contains("🚀", failedRow.TextContent);
+        Assert.DoesNotContain("🏢", failedRow.TextContent);
+        Assert.Contains("P2", failedRow.TextContent);
+        Assert.Contains("❌ Failed", failedRow.TextContent);
+        Assert.Contains("2h ago", failedRow.TextContent);
+
+        // 6. Verify responsive classes on all rows
+        Assert.Contains("dashboard-task-row", reviewRow.ClassName);
+        Assert.Contains("dashboard-task-row", runningRow.ClassName);
+        Assert.Contains("dashboard-task-row", failedRow.ClassName);
+        Assert.NotNull(reviewRow.QuerySelector(".dashboard-task-actions"));
+        Assert.NotNull(runningRow.QuerySelector(".dashboard-task-actions"));
+        Assert.NotNull(failedRow.QuerySelector(".dashboard-task-actions"));
+    }
 }
