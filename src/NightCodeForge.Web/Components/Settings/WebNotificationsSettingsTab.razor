@@ -1,0 +1,255 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using NightCodeForge.Web.Services
+@inject IWebNotificationService NotificationService
+@inject ToastService ToastService
+
+<div class="forge-card mt-3" style="padding: 2rem;" data-testid="web-notifications-tab">
+    <!-- Header -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; flex-wrap: wrap; gap: 1.5rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                <span style="font-size: 1.75rem;">🔔</span>
+                <h3 style="font-weight: 700; font-size: 1.35rem; margin: 0; color: var(--text-primary);">
+                    Web Notifications &amp; Alerts
+                </h3>
+                @switch (_permissionState)
+                {
+                    case NotificationConstants.PermissionStates.Granted:
+                        <span class="forge-badge badge-teal" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="notification-permission-badge">
+                            🟢 Notifications Allowed
+                        </span>
+                        break;
+                    case NotificationConstants.PermissionStates.Denied:
+                        <span class="forge-badge badge-rose" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="notification-permission-badge">
+                            🔴 Notifications Blocked
+                        </span>
+                        break;
+                    case NotificationConstants.PermissionStates.Unsupported:
+                        <span class="forge-badge badge-gray" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="notification-permission-badge">
+                            ⚪ Push Notifications Unsupported
+                        </span>
+                        break;
+                    default:
+                        <span class="forge-badge badge-indigo" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;" data-testid="notification-permission-badge">
+                            🟡 Permission Prompt Required
+                        </span>
+                        break;
+                }
+            </div>
+            <p style="margin: 0; font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; max-width: 820px;">
+                Configure device-local background notifications dispatched via Service Worker for human input requests, review room readiness, and merged tasks.
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            @if (_permissionState == NotificationConstants.PermissionStates.Default)
+            {
+                <button type="button"
+                        class="forge-btn forge-btn-primary"
+                        style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;"
+                        @onclick="RequestPermissionAsync"
+                        disabled="@_isActionInProgress"
+                        data-testid="request-permission-btn">
+                    🔔 Request Notification Permission
+                </button>
+            }
+            else if (_permissionState == NotificationConstants.PermissionStates.Granted)
+            {
+                <button type="button"
+                        class="forge-btn forge-btn-outline"
+                        style="padding: 0.65rem 1.25rem; font-size: 0.92rem;"
+                        @onclick="SendTestNotificationAsync"
+                        disabled="@_isActionInProgress"
+                        data-testid="send-test-notification-btn">
+                    🔔 Send Test Notification
+                </button>
+            }
+        </div>
+    </div>
+
+    <!-- Permission Advisory Banners -->
+    @if (_permissionState == NotificationConstants.PermissionStates.Unsupported)
+    {
+        <div class="mb-4"
+             role="alert"
+             style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); display: flex; align-items: flex-start; gap: 1rem;"
+             data-testid="ios-safari-guidance">
+            <span style="font-size: 1.5rem; line-height: 1;">📱</span>
+            <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;">
+                <strong style="color: var(--text-primary);">Push Notifications Unavailable in Current Context:</strong>
+                <p style="margin: 0.35rem 0 0 0;">
+                    On iOS Safari, tap Share → Add to Home Screen to install NightCodeForge and enable Web Push notifications.
+                </p>
+            </div>
+        </div>
+    }
+    else if (_permissionState == NotificationConstants.PermissionStates.Denied)
+    {
+        <div class="mb-4"
+             role="alert"
+             style="padding: 1.25rem 1.5rem; border-radius: var(--radius-lg); background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35); display: flex; align-items: flex-start; gap: 1rem;"
+             data-testid="permission-denied-advisory">
+            <span style="font-size: 1.5rem; line-height: 1;">⚠️</span>
+            <div style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;">
+                <strong style="color: var(--text-primary);">Notifications Are Blocked by Your Browser:</strong>
+                <p style="margin: 0.35rem 0 0 0;">
+                    Your browser has denied notification permission for this site. To receive alerts, please open your browser's site settings, reset the permission for this origin to "Allow", and reload the page.
+                </p>
+            </div>
+        </div>
+    }
+
+    <!-- Preference Configuration Controls -->
+    <div class="forge-subcard" style="padding: 1.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+        <h4 style="font-size: 1.05rem; font-weight: 700; margin: 0 0 1.25rem 0; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
+            ⚙️ Device Notification Preferences
+        </h4>
+
+        <!-- Master Switch -->
+        <div style="margin-bottom: 1.5rem; padding: 1.1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
+            <div>
+                <label for="toggle-master" style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary); display: block; margin-bottom: 0.25rem; cursor: pointer;">
+                    Enable Web Notifications (Master Switch)
+                </label>
+                <span style="font-size: 0.82rem; color: var(--text-secondary); display: block;">
+                    Master toggle for all background and desktop push notifications on this device.
+                </span>
+            </div>
+            <input id="toggle-master"
+                   type="checkbox"
+                   style="width: 1.25rem; height: 1.25rem; cursor: pointer;"
+                   @bind="_preferences.MasterEnabled"
+                   @bind:after="SavePreferencesAsync"
+                   data-testid="toggle-master-enabled" />
+        </div>
+
+        <!-- Subject Switches -->
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <!-- Question Inbox -->
+            <div style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem; opacity: @(_preferences.MasterEnabled ? "1" : "0.55"); transition: opacity 0.2s ease;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                        <label for="toggle-question" style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary); margin: 0; cursor: pointer;">
+                            ❓ Clarification Questions Waiting
+                        </label>
+                        <span class="forge-badge badge-gray font-mono" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">question_inbox</span>
+                    </div>
+                    <span style="font-size: 0.82rem; color: var(--text-secondary); display: block;">
+                        Dispatches alerts when an agent asks a question and is blocked waiting for human input. Deep-links to the Question Inbox.
+                    </span>
+                </div>
+                <input id="toggle-question"
+                       type="checkbox"
+                       style="width: 1.25rem; height: 1.25rem; cursor: pointer;"
+                       disabled="@(!_preferences.MasterEnabled)"
+                       @bind="_preferences.NotifyOnQuestionInbox"
+                       @bind:after="SavePreferencesAsync"
+                       data-testid="toggle-question-inbox" />
+            </div>
+
+            <!-- Review Room -->
+            <div style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem; opacity: @(_preferences.MasterEnabled ? "1" : "0.55"); transition: opacity 0.2s ease;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                        <label for="toggle-review" style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary); margin: 0; cursor: pointer;">
+                            🔍 Review Room Sign-off Required
+                        </label>
+                        <span class="forge-badge badge-gray font-mono" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">review_room</span>
+                    </div>
+                    <span style="font-size: 0.82rem; color: var(--text-secondary); display: block;">
+                        Dispatches alerts when all automated verification gates pass and code is ready for human review and merge approval.
+                    </span>
+                </div>
+                <input id="toggle-review"
+                       type="checkbox"
+                       style="width: 1.25rem; height: 1.25rem; cursor: pointer;"
+                       disabled="@(!_preferences.MasterEnabled)"
+                       @bind="_preferences.NotifyOnReviewRoom"
+                       @bind:after="SavePreferencesAsync"
+                       data-testid="toggle-review-room" />
+            </div>
+
+            <!-- Task Merged -->
+            <div style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem; opacity: @(_preferences.MasterEnabled ? "1" : "0.55"); transition: opacity 0.2s ease;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                        <label for="toggle-merged" style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary); margin: 0; cursor: pointer;">
+                            🚀 Task Merged
+                        </label>
+                        <span class="forge-badge badge-gray font-mono" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">task_merged</span>
+                    </div>
+                    <span style="font-size: 0.82rem; color: var(--text-secondary); display: block;">
+                        Dispatches alerts when a verified task is successfully squash-merged into the base branch.
+                    </span>
+                </div>
+                <input id="toggle-merged"
+                       type="checkbox"
+                       style="width: 1.25rem; height: 1.25rem; cursor: pointer;"
+                       disabled="@(!_preferences.MasterEnabled)"
+                       @bind="_preferences.NotifyOnTaskMerged"
+                       @bind:after="SavePreferencesAsync"
+                       data-testid="toggle-task-merged" />
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _permissionState = NotificationConstants.PermissionStates.Default;
+    private NotificationPreferences _preferences = new();
+    private bool _isActionInProgress = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _permissionState = await NotificationService.GetPermissionStateAsync();
+        _preferences = await NotificationService.GetPreferencesAsync();
+    }
+
+    private async Task RequestPermissionAsync()
+    {
+        _isActionInProgress = true;
+        try
+        {
+            _permissionState = await NotificationService.RequestPermissionAsync();
+            if (_permissionState == NotificationConstants.PermissionStates.Granted)
+            {
+                ToastService.Show("Notifications Enabled", "You will now receive alerts for agent activities.", ToastLevel.Success);
+            }
+            else if (_permissionState == NotificationConstants.PermissionStates.Denied)
+            {
+                ToastService.Show("Permission Denied", "Notifications are blocked by your browser settings.", ToastLevel.Warning);
+            }
+        }
+        finally
+        {
+            _isActionInProgress = false;
+        }
+    }
+
+    private async Task SendTestNotificationAsync()
+    {
+        _isActionInProgress = true;
+        try
+        {
+            var sent = await NotificationService.SendTestNotificationAsync();
+            if (sent)
+            {
+                ToastService.Show("Test Notification Dispatched", "Check your operating system or notification center.", ToastLevel.Info);
+            }
+            else
+            {
+                ToastService.Show("Notification Dispatch Failed", "Unable to display test notification.", ToastLevel.Warning);
+            }
+        }
+        finally
+        {
+            _isActionInProgress = false;
+        }
+    }
+
+    private async Task SavePreferencesAsync()
+    {
+        await NotificationService.SavePreferencesAsync(_preferences);
+    }
+}
+

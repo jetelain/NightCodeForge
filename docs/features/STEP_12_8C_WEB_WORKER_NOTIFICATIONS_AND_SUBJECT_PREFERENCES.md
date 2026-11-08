@@ -4,7 +4,7 @@
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Steps:* [Step 12.8A: Mobile-Responsive Layout](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md) | [Step 12.8B: PWA Manifest & Service Worker Shell](STEP_12_8B_PROGRESSIVE_WEB_APP_MANIFEST_AND_SERVICE_WORKER.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -106,16 +106,33 @@ This step (Part 3 of Step 12.8) delivers:
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **JS Interop & Service Worker Click Handler:**
-  - [ ] Implement `wwwroot/js/notifications.js` (`ServiceWorkerRegistration.showNotification` + permission management + preferences storage + multi-tab guard).
-  - [ ] Add `notificationclick` deep-link handler to `wwwroot/service-worker.js`.
-  - [ ] Include `<script src="js/notifications.js"></script>` in `App.razor`.
-- [ ] **Notification Service & Preferences:**
-  - [ ] Implement `NotificationPreferences` model and `WebNotificationService` in `NightCodeForge.Web/Services` with SignalR subscription, wakeup catch-up, workspace-aware active route suppression, and signature deduplication.
-  - [ ] Mount `WebNotificationService` listener in `MainLayout.razor`.
-- [ ] **Settings UI (`WebNotificationsSettingsTab.razor`):**
-  - [ ] Build `WebNotificationsSettingsTab.razor` with permission state detection, user-click permission request, test notification trigger, iOS Safari guidance, and per-subject preference toggles.
-  - [ ] Register `WebNotificationsSettingsTab` under Global System Settings in `Settings.razor`.
-- [ ] **Automated Testing:**
-  - [ ] Unit tests for `WebNotificationService` covering preference filtering, task transition matching (`question_inbox`, `review_room`, `task_merged`), wakeup catch-up, and deduplication.
-  - [ ] bUnit tests for `WebNotificationsSettingsTab.razor` permission states, test notification trigger, and subject toggles.
+- [x] **JS Interop & Service Worker Click Handler:**
+  - [x] Implement `wwwroot/js/notifications.js` (`ServiceWorkerRegistration.showNotification` + permission management + preferences storage + multi-tab guard).
+  - [x] Add `notificationclick` deep-link handler to `wwwroot/service-worker.js`.
+  - [x] Include `<script src="js/notifications.js"></script>` in `App.razor`.
+- [x] **Notification Service & Preferences:**
+  - [x] Implement `NotificationPreferences` model and `WebNotificationService` in `NightCodeForge.Web/Services` with SignalR subscription, wakeup catch-up, workspace-aware active route suppression, and signature deduplication.
+  - [x] Mount `WebNotificationService` listener in `MainLayout.razor`.
+- [x] **Settings UI (`WebNotificationsSettingsTab.razor`):**
+  - [x] Build `WebNotificationsSettingsTab.razor` with permission state detection, user-click permission request, test notification trigger, iOS Safari guidance, and per-subject preference toggles.
+  - [x] Register `WebNotificationsSettingsTab` under Global System Settings in `Settings.razor`.
+- [x] **Automated Testing:**
+  - [x] Unit tests for `WebNotificationService` covering preference filtering, task transition matching (`question_inbox`, `review_room`, `task_merged`), wakeup catch-up, and deduplication.
+  - [x] bUnit tests for `WebNotificationsSettingsTab.razor` permission states, test notification trigger, and subject toggles.
+
+---
+
+## 4. Implementation Notes
+
+- **Service Worker Dispatch & Deep-Linking (`src/NightCodeForge.Web/wwwroot/`):**
+  - Implemented [`notifications.js`](../../src/NightCodeForge.Web/wwwroot/js/notifications.js) (`window.NightCodeForge.notifications`) with `isSupported()`, `getPermissionState()`, `requestPermission()`, `isDocumentVisible()`, `getPreferences()` / `savePreferences(prefs)` backed by `localStorage` (`ncf_notification_preferences_v1`), and `showNotification(title, options)` using `ServiceWorkerRegistration.showNotification` with desktop `new Notification()` fallback and a 2-second multi-tab deduplication window.
+  - Added the `notificationclick` listener in [`service-worker.js`](../../src/NightCodeForge.Web/wwwroot/service-worker.js) to close the notification and focus/navigate an existing client window (or open a new window) to `event.notification.data.url`.
+  - Registered `<script src="js/notifications.js"></script>` in [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor).
+- **Telemetry Hook, Wakeup Catch-Up & Deduplication (`src/NightCodeForge.Web/Services/`):**
+  - Added [`NotificationPreferences.cs`](../../src/NightCodeForge.Web/Services/NotificationPreferences.cs) (`NotificationSubject`, `NotificationPreferences`), [`NotificationConstants.cs`](../../src/NightCodeForge.Web/Services/NotificationConstants.cs), [`RingBufferDeduplicator.cs`](../../src/NightCodeForge.Web/Services/RingBufferDeduplicator.cs), [`IWebNotificationService.cs`](../../src/NightCodeForge.Web/Services/IWebNotificationService.cs), and [`WebNotificationService.cs`](../../src/NightCodeForge.Web/Services/WebNotificationService.cs).
+  - `WebNotificationService.InitializeAsync` seeds the baseline snapshot and deduplicator from existing `Ready`, `Closed`, and active runnable (`Open`, `Reviewed`, `Implemented` with `IsWaitingForHuman`) tasks as well as pending `Question` records, and starts `OrchestratorHubClientConnection` so real-time SignalR transitions (`OnStageTransitionReceived`, `OnWorkerStatusReceived`, `OnConnectionStateChanged`) are received on every page.
+  - Wired `NotificationService.InitializeAsync()` and `NotificationService.HandleTabForegroundedAsync()` in [`MainLayout.razor`](../../src/NightCodeForge.Web/Components/Layout/MainLayout.razor) (`OnTabForegrounded` JS interop callback) and registered `IWebNotificationService` as a scoped service in [`Program.cs`](../../src/NightCodeForge.Web/Program.cs).
+- **Settings UI & Automated Tests:**
+  - Added [`WebNotificationsSettingsTab.razor`](../../src/NightCodeForge.Web/Components/Settings/WebNotificationsSettingsTab.razor) and registered the `🔔 Web Notifications` tab (`"notifications"`) under Global System Settings in [`Settings.razor`](../../src/NightCodeForge.Web/Components/Pages/Settings.razor).
+  - Added unit and bUnit test suites in [`WebNotificationServiceTests.cs`](../../tests/NightCodeForge.Web.Tests/WebNotificationServiceTests.cs), [`WebNotificationsSettingsTabTests.cs`](../../tests/NightCodeForge.Web.Tests/WebNotificationsSettingsTabTests.cs), and updated [`SettingsComponentTests.cs`](../../tests/NightCodeForge.Web.Tests/SettingsComponentTests.cs).
+

@@ -115,6 +115,12 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<ITailscaleServeService>(_tailscaleServeService.Object);
         Services.AddSingleton<ITailscaleConfigurationWriter>(_tailscaleConfigWriter.Object);
         Services.AddSingleton<IOptionsMonitor<TailscaleOptions>>(_tailscaleOptionsMonitor.Object);
+
+        var mockNotificationService = new Mock<IWebNotificationService>();
+        mockNotificationService.Setup(n => n.GetPermissionStateAsync()).ReturnsAsync(NotificationConstants.PermissionStates.Default);
+        mockNotificationService.Setup(n => n.GetPreferencesAsync()).ReturnsAsync(new NotificationPreferences());
+        mockNotificationService.Setup(n => n.IsSupportedAsync()).ReturnsAsync(true);
+        Services.AddSingleton<IWebNotificationService>(mockNotificationService.Object);
     }
 
     public new void Dispose()
@@ -183,12 +189,12 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public void SettingsPage_GlobalScope_RendersEightGlobalTabs_ExcludesABTesting()
+    public void SettingsPage_GlobalScope_RendersGlobalTabs_ExcludesABTesting()
     {
         var cut = Render<Settings>();
 
         var globalTabs = cut.FindAll(".settings-tabs button");
-        Assert.Equal(8, globalTabs.Count);
+        Assert.Equal(9, globalTabs.Count);
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Local LLM Optimizations"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Agent Profiles"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Workflows & Stages"));
@@ -197,6 +203,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Cloud & Web Search"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Global Skills Store"));
         Assert.Contains(globalTabs, b => b.TextContent.Contains("Remote & Tailscale"));
+        Assert.Contains(globalTabs, b => b.TextContent.Contains("Web Notifications"));
         Assert.DoesNotContain(globalTabs, b => b.TextContent.Contains("A/B Testing"));
     }
 

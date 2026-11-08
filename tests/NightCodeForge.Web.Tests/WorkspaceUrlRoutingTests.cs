@@ -367,6 +367,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         mockGateway.Setup(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
         Services.AddSingleton(mockGateway.Object);
         Services.AddSingleton(new Mock<IWorkspaceProvisioningService>().Object);
+        Services.AddSingleton(new Mock<IWebNotificationService>().Object);
         Services.AddSingleton(NullLogger<TopNavBar>.Instance);
     }
 }

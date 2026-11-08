@@ -145,6 +145,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(ForwardedHeadersConfiguratio
 builder.Services.AddSignalR();
 builder.Services.AddNightCodeForgeSignalRBridge();
 builder.Services.AddScoped<OrchestratorHubClientConnection>();
+builder.Services.AddScoped<IWebNotificationService, WebNotificationService>();
+builder.Services.AddScoped<WebNotificationService>(sp => (WebNotificationService)sp.GetRequiredService<IWebNotificationService>());
 
 var app = builder.Build();
 appLogger = app.Logger;

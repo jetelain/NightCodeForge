@@ -49,4 +49,10 @@ public sealed class TestNavigationManager : NavigationManager
     {
         Initialize(baseUri, baseUri);
     }
+
+    protected override void NavigateToCore(string uri, NavigationOptions options)
+    {
+        Uri = ToAbsoluteUri(uri).ToString();
+        NotifyLocationChanged(options.HistoryEntryState != null);
+    }
 }

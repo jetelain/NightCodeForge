@@ -4,6 +4,7 @@
 @inject WorkspaceStateService WorkspaceState
 @inject NavigationManager Navigation
 @inject WorkerStateService WorkerState
+@inject IWebNotificationService NotificationService
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -75,6 +76,7 @@
 
         await HydrateWorkspaceFromUrlAsync(Navigation.Uri);
         await WorkerState.RefreshCountsFromRepositoryAsync(TaskRepository);
+        await NotificationService.InitializeAsync();
         _isWorkspaceReady = true;
     }
 
@@ -213,6 +215,7 @@
         {
             if (_disposed) return;
             await WorkerState.RefreshCountsFromRepositoryAsync(TaskRepository);
+            await NotificationService.HandleTabForegroundedAsync();
             StateHasChanged();
         });
     }
