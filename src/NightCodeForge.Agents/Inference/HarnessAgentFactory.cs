@@ -102,6 +102,18 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
         var tracingClient = request.CreateTracingClient(dispatchClient);
         var activeClient = request.DecorateTracingClient?.Invoke(tracingClient) ?? tracingClient;
 
+        if (!string.IsNullOrWhiteSpace(effectiveModel))
+        {
+            try
+            {
+                await _gatewayService.ResolveThinkingCapabilityAsync(effectiveModel, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to resolve thinking capability for '{Model}' during cold-start probe", effectiveModel);
+            }
+        }
+
         var chatOptions = _capabilityResolver.CreateChatOptions(profile, effectiveModel);
         chatOptions.Tools = request.Tools;
 

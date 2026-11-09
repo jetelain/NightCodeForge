@@ -89,7 +89,7 @@ public class TestCrucibleHarnessBuilder
             factory = new TestSingleChatClientFactory(client);
         }
 
-        var capabilityResolver = CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions);
+        var capabilityResolver = CapabilityResolver ?? new OllamaCapabilityResolver(LlmOptions, EmptyLlmContextWindowCache.Instance);
 
         var toolsetFactory = new CanonicalToolsetFactory(
             PathResolver,

@@ -22,7 +22,7 @@ public class HarnessAgentFactoryTests
         return new HarnessAgentFactory(
             new TestCrucibleHarnessBuilder.TestSingleChatClientFactory(client),
             gateway ?? new Mock<ILlmGatewayService>().Object,
-            new OllamaCapabilityResolver(llmOptions),
+            new OllamaCapabilityResolver(llmOptions, EmptyLlmContextWindowCache.Instance),
             global ?? new Mock<IGlobalOptimizationSettingsService>().Object,
             llmOptions,
             NullLogger<HarnessAgentFactory>.Instance);
@@ -214,7 +214,43 @@ public class HarnessAgentFactoryTests
     {
         var llm = Options.Create(new LlmProviderOptions());
         Assert.Throws<ArgumentNullException>(() => new HarnessAgentFactory(
-            null!, new Mock<ILlmGatewayService>().Object, new OllamaCapabilityResolver(llm),
+            null!, new Mock<ILlmGatewayService>().Object, new OllamaCapabilityResolver(llm, EmptyLlmContextWindowCache.Instance),
             new Mock<IGlobalOptimizationSettingsService>().Object, llm, NullLogger<HarnessAgentFactory>.Instance));
+    }
+
+    [Fact]
+    public async Task Create_AwaitsGatewayResolveThinkingCapabilityAsync_BeforeCreatingChatOptions()
+    {
+        var cache = new NightCodeForge.Infrastructure.Inference.LlmContextWindowCache(
+            new Microsoft.Extensions.Caching.Memory.MemoryCache(new Microsoft.Extensions.Caching.Memory.MemoryCacheOptions()));
+        var gateway = new Mock<ILlmGatewayService>();
+        gateway
+            .Setup(g => g.ResolveThinkingCapabilityAsync("custom-reasoner:latest", It.IsAny<CancellationToken>()))
+            .Callback<string, CancellationToken>((model, _) =>
+            {
+                cache.SetThinkingCapability(model, new ModelThinkingCapability(
+                    SupportsThinking: true,
+                    StringLevels: ["low", "medium", "xhigh"],
+                    SupportsBooleanOnly: false,
+                    DefaultLevel: "medium"));
+            })
+            .ReturnsAsync(new ModelThinkingCapability(true, ["low", "medium", "xhigh"], false, "medium"));
+
+        var llmOptions = Options.Create(new LlmProviderOptions { ModelId = "configured-model" });
+        var factory = new HarnessAgentFactory(
+            new TestCrucibleHarnessBuilder.TestSingleChatClientFactory(new Mock<IChatClient>().Object),
+            gateway.Object,
+            new OllamaCapabilityResolver(llmOptions, cache),
+            new Mock<IGlobalOptimizationSettingsService>().Object,
+            llmOptions,
+            NullLogger<HarnessAgentFactory>.Instance);
+
+        var setup = await factory.CreateAsync(
+            AgentRequest(new AgentProfile { Id = "p", ModelName = "custom-reasoner:latest", ThinkingEffort = ThinkingEffort.High }),
+            CancellationToken.None);
+
+        gateway.Verify(g => g.ResolveThinkingCapabilityAsync("custom-reasoner:latest", It.IsAny<CancellationToken>()), Times.Once);
+        Assert.NotNull(setup.Options.ChatOptions?.AdditionalProperties);
+        Assert.Equal("xhigh", setup.Options.ChatOptions!.AdditionalProperties!["think"]);
     }
 }

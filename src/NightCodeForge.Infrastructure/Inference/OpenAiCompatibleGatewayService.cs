@@ -128,6 +128,9 @@ public sealed class OpenAiCompatibleGatewayService : ILlmGatewayService
         return Task.FromResult(defaultTokens > 0 ? defaultTokens : LlmProviderOptions.DefaultContextWindowTokens);
     }
 
+    public Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default) =>
+        Task.FromResult<ModelThinkingCapability?>(null);
+
     public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default) =>
         ReclaimVramAsync(null, cancellationToken);
 

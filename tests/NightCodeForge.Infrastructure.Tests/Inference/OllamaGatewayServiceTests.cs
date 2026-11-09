@@ -82,4 +82,27 @@ public class OllamaGatewayServiceTests
 
         Assert.Equal(32768, resolved);
     }
+
+    [Fact]
+    public async Task ResolveThinkingCapabilityAsync_ProbesShowEndpointAndCachesResult()
+    {
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/show"
+            ? StubHttpHandler.Json("""{"model_info":{"llama.context_length":32768},"thinking":{"values":[false,"low","medium","xhigh"],"default":"medium"}}""")
+            : StubHttpHandler.Status(HttpStatusCode.NotFound));
+
+        var cache = new LlmContextWindowCache(new MemoryCache(new MemoryCacheOptions()));
+        var service = CreateService(handler, cache);
+        var capability = await service.ResolveThinkingCapabilityAsync("qwen3.8:27b");
+
+        Assert.NotNull(capability);
+        Assert.True(capability.SupportsThinking);
+        Assert.Equal(["low", "medium", "xhigh"], capability.StringLevels);
+        Assert.Equal("medium", capability.DefaultLevel);
+
+        // Verify cached
+        Assert.True(cache.TryGetThinkingCapability("qwen3.8:27b", out var cachedCap));
+        Assert.Equal(capability, cachedCap);
+        Assert.True(cache.TryGetContextWindow("qwen3.8:27b", out var cachedCtx));
+        Assert.Equal(32768, cachedCtx);
+    }
 }

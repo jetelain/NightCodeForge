@@ -157,7 +157,7 @@ public static class ModelCapabilityResolver
         string? modelId,
         string? requestedEffort = null)
     {
-        var resolver = new OllamaCapabilityResolver(Options.Create(options ?? new LlmProviderOptions()));
+        var resolver = new OllamaCapabilityResolver(Options.Create(options ?? new LlmProviderOptions()), EmptyLlmContextWindowCache.Instance);
         return resolver.ResolveReasoningEffort(modelId, requestedEffort);
     }
 
@@ -170,7 +170,7 @@ public static class ModelCapabilityResolver
         string? modelId,
         string? requestedEffort = null)
     {
-        var resolver = new OllamaCapabilityResolver(Options.Create(options ?? new LlmProviderOptions()));
+        var resolver = new OllamaCapabilityResolver(Options.Create(options ?? new LlmProviderOptions()), EmptyLlmContextWindowCache.Instance);
         return resolver.BuildReasoningProperties(modelId, requestedEffort);
     }
 }

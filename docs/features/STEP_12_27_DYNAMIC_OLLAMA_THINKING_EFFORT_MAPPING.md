@@ -224,13 +224,13 @@ By parsing this object in [`OllamaShowParser`](../../src/NightCodeForge.Infrastr
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Define `ModelThinkingCapability` record (with `FormattedBadge`) in `NightCodeForge.Core.Interfaces` and add `ThinkingCapability` to `AvailableModelInfo`.
-- [ ] Extend `OllamaShowParser` with `ParseThinkingCapability(JsonElement root)` handling `thinking.values`, `thinking.default`, legacy `capabilities: ["thinking"]`, and non-thinking payloads.
-- [ ] Extend `ILlmContextWindowCache` and `LlmContextWindowCache` with `TryGetThinkingCapability` and `SetThinkingCapability`.
-- [ ] Implement `OllamaThinkingEffortMapper` mapping `ThinkingEffort` (`None`, `Low`, `Medium`, `High`, `CustomBudget`) and string efforts deterministically based on `ModelThinkingCapability`.
-- [ ] Update `OllamaModelCatalogService` and `OllamaRouterModelCatalogService` to inject `ILlmContextWindowCache`, probe `POST /api/show`, and cache `ModelThinkingCapability`.
-- [ ] Add `ResolveThinkingCapabilityAsync` to `ILlmGatewayService` / `OllamaGatewayServiceBase` and invoke it in `HarnessAgentFactory.CreateAsync` before `CreateChatOptions` so cold-start worker runs always warm the capability cache.
-- [ ] Update `OllamaCapabilityResolver` to require `ILlmContextWindowCache` and resolve `"think"` parameters via `OllamaThinkingEffortMapper` with fallback to `ModelProfiles` when uncached.
-- [ ] Display `ModelThinkingCapability.FormattedBadge` in `AgentProfilesTab.razor`.
-- [ ] Author unit and integration tests in `OllamaShowParserTests`, `OllamaThinkingEffortMapperTests`, `OllamaCapabilityResolverTests`, and `LlmModelCatalogServiceTests`.
-- [ ] Verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Define `ModelThinkingCapability` record (with `FormattedBadge`) in `NightCodeForge.Core.Interfaces` and add `ThinkingCapability` to `AvailableModelInfo`.
+- [x] Extend `OllamaShowParser` with `ParseThinkingCapability(JsonElement root)` handling `thinking.values`, `thinking.default`, legacy `capabilities: ["thinking"]`, and non-thinking payloads.
+- [x] Extend `ILlmContextWindowCache` and `LlmContextWindowCache` with `TryGetThinkingCapability` and `SetThinkingCapability`.
+- [x] Implement `OllamaThinkingEffortMapper` mapping `ThinkingEffort` (`None`, `Low`, `Medium`, `High`, `CustomBudget`) and string efforts deterministically based on `ModelThinkingCapability`.
+- [x] Update `OllamaModelCatalogService` and `OllamaRouterModelCatalogService` to inject `ILlmContextWindowCache`, probe `POST /api/show`, and cache `ModelThinkingCapability`.
+- [x] Add `ResolveThinkingCapabilityAsync` to `ILlmGatewayService` / `OllamaGatewayServiceBase` and invoke it in `HarnessAgentFactory.CreateAsync` before `CreateChatOptions` so cold-start worker runs always warm the capability cache.
+- [x] Update `OllamaCapabilityResolver` to require `ILlmContextWindowCache` and resolve `"think"` parameters via `OllamaThinkingEffortMapper` with fallback to `ModelProfiles` when uncached.
+- [x] Display `ModelThinkingCapability.FormattedBadge` in `AgentProfilesTab.razor`.
+- [x] Author unit and integration tests in `OllamaShowParserTests`, `OllamaThinkingEffortMapperTests`, `OllamaCapabilityResolverTests`, and `LlmModelCatalogServiceTests`.
+- [x] Verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

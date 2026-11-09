@@ -127,6 +127,7 @@ public interface ILlmGatewayService
     Task<GatewayStatusReport> GetGatewayStatusAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default);
     Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default);
+    Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
 }

@@ -302,4 +302,27 @@ public class OllamaRouterGatewayServiceTests
         Assert.Equal("Unknown", target.Hardware.GpuVendor);
         Assert.Equal(0, target.Execution.InFlightRequests);
     }
+
+    [Fact]
+    public async Task ResolveThinkingCapabilityAsync_PreservesRouterRecommendedContextWindowOverApiShow()
+    {
+        var cache = new LlmContextWindowCache(new MemoryCache(new MemoryCacheOptions()));
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
+        {
+            var p when p.StartsWith("/api/router/models/") => StubHttpHandler.Json("""{"name":"qwen3.8:27b","nativeContextWindow":32768,"recommendedContextWindow":262144}"""),
+            "/api/show" => StubHttpHandler.Json("""{"model_info":{"qwen2.context_length":32768},"thinking":{"values":[false,"low","medium","xhigh"],"default":"medium"}}"""),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+        });
+        var service = CreateService(handler, cache);
+
+        // Cold-start order in HarnessAgentFactory: ResolveThinkingCapabilityAsync is called before ResolveContextWindowAsync
+        var capability = await service.ResolveThinkingCapabilityAsync("qwen3.8:27b");
+        var contextWindow = await service.ResolveContextWindowAsync("qwen3.8:27b");
+
+        Assert.NotNull(capability);
+        Assert.Equal(["low", "medium", "xhigh"], capability.StringLevels);
+        Assert.Equal(262144, contextWindow);
+        Assert.True(cache.TryGetContextWindow("qwen3.8:27b", out var cachedCtx));
+        Assert.Equal(262144, cachedCtx);
+    }
 }

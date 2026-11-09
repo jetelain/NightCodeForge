@@ -793,6 +793,24 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("The endpoint matches the configured provider", _toastService.Toasts.LastOrDefault()?.Message ?? "");
     }
 
+    [Fact]
+    public void AgentProfilesTab_DisplaysThinkingCapabilityBadge_WhenModelSupportsReasoning()
+    {
+        _catalogService.Models =
+        [
+            new(
+                ModelId: "qwen2.5-coder:32b",
+                DisplayName: "qwen2.5-coder:32b",
+                ContextWindowTokens: 131072,
+                SupportsReasoning: true,
+                ThinkingCapability: new ModelThinkingCapability(true, ["low", "medium", "xhigh"], false, "medium"))
+        ];
+
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        Assert.Contains("🧠 Reasoning: low, medium, xhigh", cut.Markup);
+    }
+
     #endregion
 
     #region GlobalOptimizationSettingsTab Tests
@@ -1057,6 +1075,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         public Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default) =>
             Task.FromResult(131072);
+
+        public Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ModelThinkingCapability?>(null);
 
         public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default) =>
             ReclaimVramAsync(null, cancellationToken);

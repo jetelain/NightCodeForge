@@ -13,14 +13,17 @@ namespace NightCodeForge.Infrastructure.Inference;
 public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
 {
     private const int MaxParallelShowCalls = 4;
+    private readonly ILlmContextWindowCache _contextWindowCache;
 
     public OllamaModelCatalogService(
         HttpClient httpClient,
         IOptions<LlmEndpointOptions> options,
         IDefaultModelSelector defaultModelSelector,
+        ILlmContextWindowCache contextWindowCache,
         ILogger<OllamaModelCatalogService> logger)
         : base(httpClient, options, defaultModelSelector, logger)
     {
+        _contextWindowCache = contextWindowCache ?? throw new ArgumentNullException(nameof(contextWindowCache));
     }
 
     protected override LlmProviderType ProviderType => LlmProviderType.Ollama;
@@ -70,7 +73,7 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
     private async Task<AvailableModelInfo> BuildModelInfoAsync(TagItem tag, string name, CancellationToken cancellationToken)
     {
         int? context = null;
-        var supportsReasoning = false;
+        var thinking = ModelThinkingCapability.None;
 
         try
         {
@@ -82,7 +85,13 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
             {
                 using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(showCts.Token), cancellationToken: showCts.Token);
                 context = OllamaShowParser.ParseContextWindow(doc.RootElement);
-                supportsReasoning = OllamaShowParser.SupportsThinking(doc.RootElement);
+                thinking = OllamaShowParser.ParseThinkingCapability(doc.RootElement);
+
+                if (context is { } tokens && tokens > 0)
+                {
+                    _contextWindowCache.SetContextWindow(name, tokens);
+                }
+                _contextWindowCache.SetThinkingCapability(name, thinking);
             }
             else
             {
@@ -100,7 +109,8 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
             ContextWindowTokens: context,
             SizeBytes: tag.Size > 0 ? tag.Size : null,
             ProviderType: ProviderType,
-            SupportsReasoning: supportsReasoning);
+            SupportsReasoning: thinking.SupportsThinking,
+            ThinkingCapability: thinking);
     }
 
     private sealed class TagsResponse

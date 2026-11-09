@@ -1,8 +1,10 @@
 using System.Net;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;
 
@@ -11,6 +13,7 @@ namespace NightCodeForge.Infrastructure.Tests.Inference;
 public class LlmModelCatalogServiceTests
 {
     private const string TagsJson = """{"models":[{"name":"a:1","size":1073741824},{"name":"b:2","size":2147483648}]}""";
+    private readonly ILlmContextWindowCache _cache = new LlmContextWindowCache(new MemoryCache(new MemoryCacheOptions()));
 
     private static HttpResponseMessage OllamaRoutes(HttpRequestMessage req) => req.RequestUri!.AbsolutePath switch
     {
@@ -23,7 +26,7 @@ public class LlmModelCatalogServiceTests
     public async Task Ollama_EnrichesModelsFromApiShow()
     {
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(new StubHttpHandler(OllamaRoutes)), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(new StubHttpHandler(OllamaRoutes)), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -33,7 +36,15 @@ public class LlmModelCatalogServiceTests
             Assert.Equal(LlmProviderType.Ollama, m.ProviderType);
             Assert.Equal(8192, m.ContextWindowTokens);
             Assert.True(m.SupportsReasoning);
+            Assert.NotNull(m.ThinkingCapability);
+            Assert.True(m.ThinkingCapability.SupportsThinking);
+            Assert.True(m.ThinkingCapability.SupportsBooleanOnly);
         });
+
+        Assert.True(_cache.TryGetContextWindow("a:1", out var ctx));
+        Assert.Equal(8192, ctx);
+        Assert.True(_cache.TryGetThinkingCapability("a:1", out var cap));
+        Assert.True(cap.SupportsThinking);
     }
 
     [Fact]
@@ -43,12 +54,43 @@ public class LlmModelCatalogServiceTests
             ? StubHttpHandler.Json("""{"capabilities":["completion"],"parameters":"num_ctx 4096"}""")
             : OllamaRoutes(req));
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaModelCatalogService>.Instance);
 
         var model = (await service.GetAvailableModelsAsync()).First();
 
         Assert.False(model.SupportsReasoning);
         Assert.Equal(4096, model.ContextWindowTokens);
+    }
+
+    [Fact]
+    public async Task Ollama_DiscoversThinkingCapabilityValues_AndCachesThem()
+    {
+        var qwenJson = """
+        {
+          "model_info": { "llama.context_length": 32768 },
+          "thinking": {
+            "values": [false, "low", "medium", "xhigh"],
+            "default": "medium"
+          }
+        }
+        """;
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/show"
+            ? StubHttpHandler.Json(qwenJson)
+            : OllamaRoutes(req));
+        var service = new OllamaModelCatalogService(
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaModelCatalogService>.Instance);
+
+        var models = await service.GetAvailableModelsAsync();
+        var model = models.First();
+
+        Assert.True(model.SupportsReasoning);
+        Assert.NotNull(model.ThinkingCapability);
+        Assert.Equal(["low", "medium", "xhigh"], model.ThinkingCapability.StringLevels);
+        Assert.Equal("medium", model.ThinkingCapability.DefaultLevel);
+        Assert.False(model.ThinkingCapability.SupportsBooleanOnly);
+
+        Assert.True(_cache.TryGetThinkingCapability(model.ModelId, out var cached));
+        Assert.Equal(["low", "medium", "xhigh"], cached.StringLevels);
     }
 
     [Fact]
@@ -58,7 +100,7 @@ public class LlmModelCatalogServiceTests
             ? StubHttpHandler.Json("""{"models":[{"name":"a:1","nativeContextWindow":131072,"recommendedContextWindow":65536},{"name":"b:2","nativeContextWindow":32768,"recommendedContextWindow":0}]}""")
             : OllamaRoutes(req));
         var service = new OllamaRouterModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaRouterModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaRouterModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -84,12 +126,23 @@ public class LlmModelCatalogServiceTests
           ]
         }
         """;
-        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/router/models"
-            ? StubHttpHandler.Json(json)
-            : StubHttpHandler.Status(HttpStatusCode.NotFound));
+        var showJson = """
+        {
+          "thinking": {
+            "values": [false, "low", "medium", "xhigh"],
+            "default": "medium"
+          }
+        }
+        """;
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
+        {
+            "/api/router/models" => StubHttpHandler.Json(json),
+            "/api/show" => StubHttpHandler.Json(showJson),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+        });
 
         var service = new OllamaRouterModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaRouterModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaRouterModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -99,6 +152,11 @@ public class LlmModelCatalogServiceTests
         Assert.Equal(262144, model.ContextWindowTokens);
         Assert.Equal(LlmProviderType.OllamaRouter, model.ProviderType);
         Assert.True(model.SupportsReasoning);
+        Assert.NotNull(model.ThinkingCapability);
+        Assert.Equal(["low", "medium", "xhigh"], model.ThinkingCapability.StringLevels);
+
+        Assert.True(_cache.TryGetThinkingCapability("Qwen3.8-27B:latest", out var cached));
+        Assert.Equal(["low", "medium", "xhigh"], cached.StringLevels);
     }
 
     [Fact]
@@ -106,7 +164,7 @@ public class LlmModelCatalogServiceTests
     {
         var service = new OllamaRouterModelCatalogService(
             StubHttpHandler.Client(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError))),
-            Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaRouterModelCatalogService>.Instance);
+            Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaRouterModelCatalogService>.Instance);
 
         Assert.Empty(await service.GetAvailableModelsAsync());
     }
@@ -116,7 +174,7 @@ public class LlmModelCatalogServiceTests
     {
         var service = new OllamaModelCatalogService(
             StubHttpHandler.Client(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError))),
-            Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
+            Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaModelCatalogService>.Instance);
 
         Assert.Empty(await service.GetAvailableModelsAsync());
     }
@@ -141,7 +199,7 @@ public class LlmModelCatalogServiceTests
         });
 
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
 
@@ -149,6 +207,34 @@ public class LlmModelCatalogServiceTests
         Assert.Equal(2, showCallCount);
         Assert.Contains(models, m => m.ModelId == "dup:1");
         Assert.Contains(models, m => m.ModelId == "unique:2");
+    }
+
+    [Fact]
+    public async Task Router_DeduplicatesModelsWithSameName()
+    {
+        const string duplicateRouterModels = """{"models":[{"name":"dup:1","recommendedContextWindow":65536},{"name":"DUP:1","recommendedContextWindow":65536},{"name":"unique:2","recommendedContextWindow":32768}]}""";
+        var showCallCount = 0;
+        var handler = new StubHttpHandler(req =>
+        {
+            if (req.RequestUri!.AbsolutePath == "/api/router/models")
+            {
+                return StubHttpHandler.Json(duplicateRouterModels);
+            }
+            if (req.RequestUri!.AbsolutePath == "/api/show")
+            {
+                Interlocked.Increment(ref showCallCount);
+                return StubHttpHandler.Json("""{"thinking":{"values":[false,"low","xhigh"],"default":"low"}}""");
+            }
+            return StubHttpHandler.Status(HttpStatusCode.NotFound);
+        });
+
+        var service = new OllamaRouterModelCatalogService(
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaRouterModelCatalogService>.Instance);
+
+        var models = await service.GetAvailableModelsAsync();
+
+        Assert.Equal(2, models.Count);
+        Assert.Equal(2, showCallCount);
     }
 
     [Fact]
@@ -162,10 +248,35 @@ public class LlmModelCatalogServiceTests
         });
 
         var service = new OllamaModelCatalogService(
-            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), NullLogger<OllamaModelCatalogService>.Instance);
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaModelCatalogService>.Instance);
 
         var models = await service.GetAvailableModelsAsync();
         Assert.Empty(models);
+    }
+
+    [Fact]
+    public async Task Router_WhenApiShowFails_FallsBackGracefullyWithoutFailingCatalog()
+    {
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath switch
+        {
+            "/api/router/models" => StubHttpHandler.Json("""{"models":[{"name":"resilient-model:1","recommendedContextWindow":65536}]}"""),
+            "/api/show" => StubHttpHandler.Status(HttpStatusCode.InternalServerError),
+            _ => StubHttpHandler.Status(HttpStatusCode.NotFound)
+        });
+
+        var service = new OllamaRouterModelCatalogService(
+            StubHttpHandler.Client(handler), Options.Create(new LlmEndpointOptions()), new OllamaDefaultModelSelector(), _cache, NullLogger<OllamaRouterModelCatalogService>.Instance);
+
+        var models = await service.GetAvailableModelsAsync();
+
+        var model = Assert.Single(models);
+        Assert.Equal("resilient-model:1", model.ModelId);
+        Assert.Equal(65536, model.ContextWindowTokens);
+        Assert.True(model.SupportsReasoning);
+        Assert.Null(model.ThinkingCapability);
+        Assert.True(_cache.TryGetContextWindow("resilient-model:1", out var cachedCtx));
+        Assert.Equal(65536, cachedCtx);
+        Assert.False(_cache.TryGetThinkingCapability("resilient-model:1", out _));
     }
 }
 

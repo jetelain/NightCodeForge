@@ -1,6 +1,7 @@
 @using System.Collections.Concurrent
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
 @using Microsoft.Extensions.Options
 @using NightCodeForge.Agents.Inference
 @using NightCodeForge.Core.Domain
@@ -13,6 +14,7 @@
 @inject ILlmContextWindowCache ContextWindowCache
 @inject IOptions<LlmProviderOptions> LlmOptions
 @inject ToastService ToastService
+@inject ILogger<AgentProfilesTab> Logger
 
 <div class="forge-card mt-3" style="padding: 2rem;">
     <!-- Header with Scope Badge & Action Buttons -->
@@ -182,6 +184,12 @@
                             {
                                 <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-top: 0.35rem; display: inline-block;">
                                     ⚡ @pTokens.ToString("N0") tokens discovered
+                                </span>
+                            }
+                            @if (GetThinkingBadge(profile.ModelName) is { Length: > 0 } thinkingBadge)
+                            {
+                                <span class="forge-badge badge-indigo" style="font-size: 0.72rem; margin-top: 0.35rem; margin-left: 0.35rem; display: inline-block;">
+                                    @thinkingBadge
                                 </span>
                             }
                         </div>
@@ -386,28 +394,41 @@
 
     private async Task ResolveModelContextWindowAsync(string modelName)
     {
-        if (!string.IsNullOrWhiteSpace(modelName) && !_discoveredContextWindows.ContainsKey(modelName))
+        if (!string.IsNullOrWhiteSpace(modelName))
         {
             if (ContextWindowCache.TryGetContextWindow(modelName, out var cached))
             {
                 _discoveredContextWindows[modelName] = cached;
-                await InvokeAsync(StateHasChanged);
-                return;
             }
-
-            try
+            else if (!_discoveredContextWindows.ContainsKey(modelName))
             {
-                var tokens = await GatewayService.ResolveContextWindowAsync(modelName);
-                if (tokens > 0)
+                try
                 {
-                    _discoveredContextWindows[modelName] = tokens;
-                    await InvokeAsync(StateHasChanged);
+                    var tokens = await GatewayService.ResolveContextWindowAsync(modelName);
+                    if (tokens > 0)
+                    {
+                        _discoveredContextWindows[modelName] = tokens;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Non-fatal probe failure resolving context window for '{Model}'.", modelName);
                 }
             }
-            catch (Exception)
+
+            if (!ContextWindowCache.TryGetThinkingCapability(modelName, out _))
             {
-                // Non-fatal probe failure: context resolution unavailable or model offline
+                try
+                {
+                    await GatewayService.ResolveThinkingCapabilityAsync(modelName);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Non-fatal probe failure resolving thinking capability for '{Model}'.", modelName);
+                }
             }
+
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -430,6 +451,10 @@
                 {
                     _discoveredContextWindows[m.ModelId] = m.ContextWindowTokens.Value;
                     ContextWindowCache.SetContextWindow(m.ModelId, m.ContextWindowTokens.Value);
+                }
+                if (m.ThinkingCapability != null)
+                {
+                    ContextWindowCache.SetThinkingCapability(m.ModelId, m.ThinkingCapability);
                 }
             }
         }
@@ -474,11 +499,13 @@
             var probeTasks = new List<Task>();
             foreach (var modelName in distinctModels)
             {
-                if (ContextWindowCache.TryGetContextWindow(modelName, out var cached))
+                var hasCachedContext = ContextWindowCache.TryGetContextWindow(modelName, out var cached);
+                if (hasCachedContext)
                 {
                     _discoveredContextWindows[modelName] = cached;
                 }
-                else
+
+                if (!hasCachedContext || !ContextWindowCache.TryGetThinkingCapability(modelName, out _))
                 {
                     probeTasks.Add(ResolveModelContextWindowAsync(modelName));
                 }
@@ -668,6 +695,22 @@
 
     private void CustomizeFlags(AgentProfile profile) => profile.OptimizationFlags = new LocalOptimizationFlags();
     private void RevertFlags(AgentProfile profile) => profile.OptimizationFlags = null;
+
+    private string? GetThinkingBadge(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        if (ContextWindowCache.TryGetThinkingCapability(modelName, out var cached) && !string.IsNullOrWhiteSpace(cached.FormattedBadge))
+        {
+            return cached.FormattedBadge;
+        }
+
+        var available = _availableModels.FirstOrDefault(m => string.Equals(m.ModelId, modelName, StringComparison.OrdinalIgnoreCase));
+        return available?.ThinkingCapability?.FormattedBadge;
+    }
 
     private static string GetProviderShortName(LlmProviderType provider) => provider switch
     {

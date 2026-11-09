@@ -12,7 +12,8 @@ public record AvailableModelInfo(
     IReadOnlyDictionary<string, object?>? Metadata = null,
     decimal? PromptCostPerMillion = null,
     decimal? CompletionCostPerMillion = null,
-    bool IsMoE = false)
+    bool IsMoE = false,
+    ModelThinkingCapability? ThinkingCapability = null)
 {
     /// <summary>Formatted badge for UI dropdowns (e.g. "19.8 GB" or "128k ctx").</summary>
     public string FormattedBadge => ContextWindowTokens.HasValue

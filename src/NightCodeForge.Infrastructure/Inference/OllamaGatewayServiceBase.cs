@@ -97,18 +97,59 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
             return cached;
         }
 
-        var discovered = await ProbeProviderContextWindowAsync(normalizedModelName, cancellationToken)
-            ?? await ProbeShowContextWindowAsync(normalizedModelName, cancellationToken);
-
-        if (discovered is { } tokens && tokens > 0)
+        var providerTokens = await ProbeProviderContextWindowAsync(normalizedModelName, cancellationToken);
+        if (providerTokens is { } provTokens && provTokens > 0)
         {
-            _contextWindowCache.SetContextWindow(normalizedModelName, tokens);
-            return tokens;
+            _contextWindowCache.SetContextWindow(normalizedModelName, provTokens);
+            return provTokens;
+        }
+
+        var showDetails = await ProbeShowModelDetailsAsync(normalizedModelName, cancellationToken);
+        if (showDetails != null)
+        {
+            _contextWindowCache.SetThinkingCapability(normalizedModelName, showDetails.ThinkingCapability);
+            if (showDetails.ContextWindow is { } tokens && tokens > 0)
+            {
+                _contextWindowCache.SetContextWindow(normalizedModelName, tokens);
+                return tokens;
+            }
         }
 
         // Discovery failed (not cached so a later call can retry): Ollama's own default applies.
         Logger.LogWarning("Could not discover the context window of '{Model}'; assuming Ollama default {Tokens} tokens.", modelName, OllamaDefaultContextTokens);
         return OllamaDefaultContextTokens;
+    }
+
+    public async Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        var normalizedModelName = modelName.Trim();
+        if (_contextWindowCache.TryGetThinkingCapability(normalizedModelName, out var cached))
+        {
+            return cached;
+        }
+
+        var showDetails = await ProbeShowModelDetailsAsync(normalizedModelName, cancellationToken);
+        if (showDetails != null)
+        {
+            _contextWindowCache.SetThinkingCapability(normalizedModelName, showDetails.ThinkingCapability);
+            if (!_contextWindowCache.TryGetContextWindow(normalizedModelName, out _))
+            {
+                var providerTokens = await ProbeProviderContextWindowAsync(normalizedModelName, cancellationToken);
+                var effectiveTokens = providerTokens is > 0 ? providerTokens : showDetails.ContextWindow;
+                if (effectiveTokens is { } tokens && tokens > 0)
+                {
+                    _contextWindowCache.SetContextWindow(normalizedModelName, tokens);
+                }
+            }
+            return showDetails.ThinkingCapability;
+        }
+
+        return null;
     }
 
     /// <summary>Provider-specific context window metadata; null falls through to <c>/api/show</c>.</summary>
@@ -144,7 +185,9 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
         !cancellationToken.IsCancellationRequested
         && ex is HttpRequestException or OperationCanceledException or JsonException or NotSupportedException;
 
-    private async Task<int?> ProbeShowContextWindowAsync(string modelName, CancellationToken cancellationToken)
+    private sealed record ShowModelDetails(int? ContextWindow, ModelThinkingCapability ThinkingCapability);
+
+    private async Task<ShowModelDetails?> ProbeShowModelDetailsAsync(string modelName, CancellationToken cancellationToken)
     {
         try
         {
@@ -159,7 +202,9 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
             }
 
             using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(showCts.Token), cancellationToken: showCts.Token);
-            return OllamaShowParser.ParseContextWindow(document.RootElement);
+            var ctx = OllamaShowParser.ParseContextWindow(document.RootElement);
+            var thinking = OllamaShowParser.ParseThinkingCapability(document.RootElement);
+            return new ShowModelDetails(ctx, thinking);
         }
         catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
         {

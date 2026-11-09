@@ -7,21 +7,47 @@ namespace NightCodeForge.Agents.Inference;
 
 /// <summary>
 /// Capability resolver specialized for Ollama and OllamaRouter:
-/// Configures thinking/reasoning properties using Ollama's <c>think: true</c> parameter
-/// and maps reasoning effort to Ollama/Qwen supported levels ("low", "medium", "xhigh").
+/// Configures thinking/reasoning properties using dynamic capability discovery (<see cref="ModelThinkingCapability"/>)
+/// and maps reasoning effort to Ollama/Qwen supported levels ("low", "medium", "xhigh") via <see cref="OllamaThinkingEffortMapper"/>,
+/// falling back to static model profiles when capabilities are uncached.
 /// </summary>
 public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
 {
-    private static readonly string[] EffortRank = ["minimal", "low", "medium", "high", "xhigh"];
+    private static readonly string[] EffortRank = ["minimal", "low", "medium", "high", "xhigh", "maximum"];
     private readonly IOptions<LlmProviderOptions> _options;
+    private readonly ILlmContextWindowCache _capabilityCache;
 
-    public OllamaCapabilityResolver(IOptions<LlmProviderOptions> options)
+    public OllamaCapabilityResolver(IOptions<LlmProviderOptions> options, ILlmContextWindowCache capabilityCache)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _capabilityCache = capabilityCache ?? throw new ArgumentNullException(nameof(capabilityCache));
     }
 
     public string ResolveReasoningEffort(string? modelId, string? requestedEffort = null)
     {
+        if (!string.IsNullOrWhiteSpace(modelId)
+            && _capabilityCache.TryGetThinkingCapability(modelId, out var capability)
+            && ShouldUseDynamicCapability(modelId, capability))
+        {
+            if (capability.StringLevels.Count > 0)
+            {
+                var effortToResolve = !string.IsNullOrWhiteSpace(requestedEffort)
+                    ? requestedEffort
+                    : _options.Value.ReasoningEffort;
+                return OllamaThinkingEffortMapper.ResolveReasoningEffort(effortToResolve, capability);
+            }
+
+            if (capability.SupportsBooleanOnly)
+            {
+                return "true";
+            }
+
+            if (!capability.SupportsThinking)
+            {
+                return string.Empty;
+            }
+        }
+
         var options = _options.Value;
         var profile = ModelCapabilityResolver.FindProfile(options, modelId);
         var requested = !string.IsNullOrWhiteSpace(requestedEffort)
@@ -65,6 +91,48 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
 
     public AdditionalPropertiesDictionary BuildReasoningProperties(string? modelId, string? requestedEffort = null)
     {
+        if (!string.IsNullOrWhiteSpace(modelId)
+            && _capabilityCache.TryGetThinkingCapability(modelId, out var capability)
+            && ShouldUseDynamicCapability(modelId, capability))
+        {
+            if (!capability.SupportsThinking)
+            {
+                return new AdditionalPropertiesDictionary();
+            }
+
+            if (capability.SupportsBooleanOnly && capability.StringLevels.Count == 0)
+            {
+                bool enableThink = !string.Equals(requestedEffort?.Trim(), "false", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(requestedEffort?.Trim(), "none", StringComparison.OrdinalIgnoreCase);
+                return new AdditionalPropertiesDictionary
+                {
+                    ["think"] = enableThink
+                };
+            }
+
+            if (capability.StringLevels.Count > 0)
+            {
+                if (string.Equals(requestedEffort?.Trim(), "false", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(requestedEffort?.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new AdditionalPropertiesDictionary
+                    {
+                        ["think"] = false
+                    };
+                }
+
+                var actual = !string.IsNullOrWhiteSpace(requestedEffort)
+                    ? requestedEffort
+                    : _options.Value.ReasoningEffort;
+
+                var resolved = OllamaThinkingEffortMapper.ResolveReasoningEffort(actual, capability);
+                return new AdditionalPropertiesDictionary
+                {
+                    ["think"] = resolved
+                };
+            }
+        }
+
         // https://docs.ollama.com/capabilities/thinking
         // think = false, true (default effort), or the effort
 
@@ -98,6 +166,33 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
             Temperature = (float?)profile?.Temperature
         };
 
+        if (!string.IsNullOrWhiteSpace(effectiveModel)
+            && _capabilityCache.TryGetThinkingCapability(effectiveModel, out var capability)
+            && ShouldUseDynamicCapability(effectiveModel, capability))
+        {
+            if (profile != null)
+            {
+                var mapped = OllamaThinkingEffortMapper.MapThinkingEffort(profile.ThinkingEffort, capability);
+                if (mapped != null)
+                {
+                    chatOptions.AdditionalProperties = new AdditionalPropertiesDictionary
+                    {
+                        ["think"] = mapped
+                    };
+                }
+            }
+            else
+            {
+                var props = BuildReasoningProperties(effectiveModel, null);
+                if (props.Count > 0)
+                {
+                    chatOptions.AdditionalProperties = props;
+                }
+            }
+
+            return chatOptions;
+        }
+
         if (profile?.ThinkingEffort == ThinkingEffort.None)
         {
             chatOptions.AdditionalProperties = new AdditionalPropertiesDictionary
@@ -113,6 +208,13 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
 
         chatOptions.AdditionalProperties = BuildReasoningProperties(effectiveModel, requestedEffort);
         return chatOptions;
+    }
+
+    private bool ShouldUseDynamicCapability(string modelId, ModelThinkingCapability capability)
+    {
+        var staticProfile = ModelCapabilityResolver.FindProfile(_options.Value, modelId);
+        bool hasStaticEfforts = staticProfile != null && staticProfile.SupportedEfforts.Count > 0;
+        return !(capability.SupportsBooleanOnly && capability.StringLevels.Count == 0 && hasStaticEfforts);
     }
 
     private static string? MapThinkingEffort(ThinkingEffort effort) => effort switch
