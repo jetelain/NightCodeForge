@@ -2,7 +2,7 @@
 
 > **Bug Fix & Resiliency Step (Execution Sandbox, Container Process Hygiene & WSL2 Recovery)**  
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Implemented  
 > *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Infrastructure.Tests`](../../tests/NightCodeForge.Infrastructure.Tests)  
 > *Dependencies:* [Step 11.21: Container ICU & Dynamic Timeouts](../archive/phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md), [Step 11.26: Container Reuse Validation & Task Lifecycle Cleanup](../archive/phase-11/STEP_11_26_CONTAINER_REUSE_VALIDATION_AND_TASK_LIFECYCLE_CLEANUP.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -35,7 +35,7 @@ When a command executed in `NightCodeForgeContainerExecutor` (or `WslExecutionEn
 ```mermaid
 flowchart TD
     Timeout["Command Timeout Detected in ExecuteAsync"] --> CloseShell["Close / Kill Host-Side Shell Session"]
-    CloseShell --> Step1["Step 1: In-Container Process Reaper<br/>1. Identify all processes except PID 1 (init/tail) & Whitelist (e.g. csnav)<br/>2. Send SIGTERM (-15)<br/>3. Poll up to 5s for exit<br/>4. Send SIGKILL (-9) to any survivors<br/>5. Purge stale .git/index.lock if no git process active"]
+    CloseShell --> Step1["Step 1: In-Container Process Reaper<br/>1. Identify all non-zombie processes except PID 1 (init/tail) & Whitelist (e.g. csnav)<br/>2. Send SIGTERM (-15)<br/>3. Poll up to 5s for exit<br/>4. Send SIGKILL (-9) to any survivors"]
     Step1 --> Probe1{"Step 2A: Run Liveness Probe<br/>(5s timeout)"}
     Probe1 -- "Pass (< 5s)" --> RestartShell["Ensure Interactive Shell Session Ready & Return Timeout Result (124)"]
     Probe1 -- "Fail / Timeout (5s)" --> KillContainer["Step 2B: Force-Kill & Recreate Container<br/>(docker rm -f & EnsureContainerRunning)"]
@@ -64,23 +64,20 @@ flowchart TD
 
 2. **Protected Process Whitelist:**
    - Maintain a configurable whitelist of process names (`ContainerExecutorOptions.ProcessKillWhitelist`) that must **not** be killed during timeout cleanup:
-     - **Always protected:** Container root process (`PID 1`, e.g., `docker-init`, `tini`, or `tail`), the `tail -f /dev/null` keep-alive process (which runs as a child of `PID 1` when `--init` is enabled and whose termination would cause the container to exit), and the reaper script's own process tree (`$$`).
+     - **Always protected:** Container root process (`PID 1`, e.g., `docker-init`, `tini`, or `tail`), the `tail -f /dev/null` keep-alive process (matched by `comm == "tail"` and `cmdline` containing `tail` and `/dev/null`, which runs as a child of `PID 1` when `--init` is enabled and whose termination would cause the container to exit), and the reaper script's own process tree (`$$`, `$BASHPID`, and `$PPID`).
      - **Default whitelist (`DefaultProcessKillWhitelist`):** `["csnav"]` (preserves the warm Roslyn navigation daemon across command timeouts so subsequent agent turns do not pay cold solution indexing latency).
-     - **Explicitly NOT whitelisted (must be reaped on timeout):** `dotnet` (non-`csnav`), `testhost`, `vstest.console`, `MSBuild`, `VBCSCompiler`, `node`, `npm`, `python3`, `pytest`, `cargo`, `git`, `bash`, `sh`, and any browser binaries (`chrome`, `chromium`, `msedge`, `firefox`) spawned by E2E tests.
+     - **Explicitly NOT whitelisted (must be reaped on timeout):** `dotnet` (non-`csnav`), `testhost`, `vstest.console`, `MSBuild`, `VBCSCompiler`, `node`, `npm`, `python3`, `pytest`, `cargo`, `git`, `bash`, `sh`, and any browser binaries (`chrome`, `chromium`, `msedge`, `msedgewebview2`, `firefox`) spawned by E2E tests.
      - Note: Because `csnav` runs as a .NET global tool (whose `/proc/<pid>/comm` may be `csnav` or `dotnet` with `csnav` in `/proc/<pid>/cmdline`), whitelist matching must inspect both the executable name (`comm`) and command-line arguments (`cmdline`) so `csnav server` is accurately preserved while `dotnet test` / `dotnet build` / `VBCSCompiler` are terminated.
 
-3. **Two-Phase Signal Escalation (`SIGTERM` $\to$ 5s $\to$ `SIGKILL`) & Container User Matching:**
+3. **Two-Phase Signal Escalation (`SIGTERM` $\to$ 5s $\to$ `SIGKILL`), Zombie Filtering & Container User Matching:**
    - Execute an out-of-band cleanup command inside the container (`docker exec --user <effectiveUser> <containerName> bash -c "..."`):
      - **User Identity Constraint:** Always pass the same `--user <effectiveUser>` as `BuildProcessStartSpec` (`1000:1000` when `IsRestrictedReadOnly == true`, or `options.UserUidGid`). In `RestrictedReadOnly` containers launched with `--cap-drop=ALL`, `root` lacks `CAP_KILL` and cannot signal processes owned by UID `1000`, whereas matching `--user` allows signalling all processes of that UID without elevated capabilities.
-     1. Enumerate all running PIDs inside the container excluding `PID 1`, the keep-alive `tail -f /dev/null`, the reaper script's own PID, and any process matching the whitelist.
+     1. Enumerate all running PIDs inside the container excluding `PID 1`, the keep-alive `tail -f /dev/null`, the reaper script's own PIDs (`$$`, `$BASHPID`, `$PPID`), `<defunct>` zombie/dead processes (`State: Z` or `X` in `/proc/<pid>/stat`), and any process matching the whitelist.
      2. If target PIDs exist, send `SIGTERM` (`kill -15 <pids>`).
-     3. Wait up to **5 seconds** (polling every `200ms–250ms` via `kill -0 <pid>`) for all targeted PIDs to terminate gracefully. As soon as all targeted PIDs have exited, proceed immediately without waiting the full 5 seconds.
-     4. After 5 seconds, if any targeted PIDs (or newly spawned descendants of those PIDs) remain alive, send `SIGKILL` (`kill -9 <survivor_pids>`).
+     3. Wait up to **5 seconds** (polling every `200ms` via `kill -0 <pid>` while skipping PIDs that have transitioned to `Z`/`X` in `/proc/<pid>/stat` so `<defunct>` zombies do not stall the grace loop) for all targeted PIDs to terminate gracefully. As soon as all targeted PIDs have exited, proceed immediately without waiting the full 5 seconds.
+     4. After 5 seconds, if any targeted PIDs (or newly spawned non-zombie descendants of those PIDs) remain alive, send `SIGKILL` (`kill -9 <survivor_pids>`).
    - Bound the Step 1 `docker exec` invocation itself with a hard host-side timeout (e.g., `10 seconds`) so a completely frozen container or Docker daemon immediately falls through to Step 2.
-
-4. **Post-Kill Stale Git Lock Hygiene (Worktree & Canonical Clone Aware):**
-   - If a `git` process was running when the timeout occurred, killing it can leave a stale `index.lock`.
-   - Because per-task sandboxes operate inside a Git worktree (`/workspace/task-{taskId}`) where `.git` is a pointer file (`gitdir: /workspace/clone/.git/worktrees/task-{taskId}`) rather than a directory, lock cleanup must resolve the actual Git directory (e.g. via `git rev-parse --git-dir` or inspecting `/workspace/clone/.git/worktrees/*/index.lock` and `/workspace/clone/.git/index.lock` as well as `/workspace/.git/index.lock`) and purge any dangling `index.lock` once Step 1 confirms no `git` process is running.
+   - Note: Do **not** blindly delete `.git/index.lock` files from inside the container reaper script, because multiple per-task containers mount the shared workspace directory (`/workspace`) and canonical clone (`/workspace/clone/.git/worktrees/*`) while each container only has visibility into its own PID namespace (`/proc`). Stale `index.lock` cleanup remains handled by the existing Git workspace/recovery layer.
 
 ---
 
@@ -114,7 +111,7 @@ flowchart TD
 
 2. **WSL2 Shutdown & Environment Re-Initialization:**
    - Log a critical warning that both the container probe and container recreation failed, triggering a full WSL2 utility VM reset (`wsl --shutdown`).
-   - Execute `wsl.exe --shutdown` via `IProcessRunner` (with a bounded timeout, e.g., 15 seconds).
+   - Execute `wsl.exe --shutdown` via `IProcessRunner` (with a bounded timeout of `120 seconds`, as tearing down a hung WSL2 utility VM can take a long time).
    - Because `wsl --shutdown` terminates the WSL2 VM and causes all host-side `wsl.exe` / `docker exec` client processes to exit (`HasExited == true`), any other cached `NightCodeForgeContainerExecutor` instances will automatically detect the exited session in `EnsureShellProcessRunning()` on their next command and invoke `EnsureContainerRunning()` + `StartShellProcess()` without requiring a circular reference between `NightCodeForgeContainerExecutor` and `ExecutionEnvironmentProvider` (an optional callback on `ContainerExecutorOptions` may also be used if proactive cache invalidation is desired).
    - Within the **30-second recovery window**:
      - Ensure the target WSL2 distribution boots and the Docker daemon inside WSL2 is reachable (if `docker info` fails because native `dockerd` inside WSL2 stopped on shutdown, attempt non-interactive daemon startup `wsl -u root -- sh -c "service docker start || systemctl start docker || true"`).
@@ -145,19 +142,19 @@ flowchart TD
      - Tear down its per-task sandbox container via [`ITaskWorkspacePreparer.CleanupTaskContainerSafeAsync`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs) so idle containers and in-container daemons (`csnav`) do not consume gigabytes of WSL2 memory while waiting for human action.
      - **Cross-Cohort Loopback Guard:** Do **not** key container teardown off `cohortExitReason == CohortExitReason.Failed` alone, because cross-cohort loopbacks (e.g., `HandleCrossCohortLoopBackAsync` or `ConflictVerificationOutcome.LoopedBackToImplementation`) set `cohortExitReason = CohortExitReason.Failed` while leaving `task.Status == TaskOverallStatus.Open` and immediately enqueuing the target stage. Always inspect the actual post-run task state (`Status`, `IsWaitingForHuman`, `IsDeferredByPause`).
      - When the task later resumes (e.g., human answers a question, requests changes in Review Room, or restarts a failed stage), `EnsureContainerRunning` transparently recreates the container on demand with all volume mounts and caches intact.
-   - Update [`TaskContainerReaper.ReapAsync`](../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) so periodic and startup sweeps also reap containers belonging to `Failed` tasks, `Ready` tasks, and `Open` tasks where `IsWaitingForHuman == true` or `IsDeferredByPause == true`.
+   - Update [`TaskContainerReaper.ReapAsync`](../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) (and share `TaskContainerReaper.ShouldReapTaskContainer`) so periodic and startup sweeps also reap containers belonging to `Failed` tasks, `Ready` tasks, and `Open` tasks where `IsWaitingForHuman == true` or `IsDeferredByPause == true`.
 
 3. **Idle Workspace Container TTL Eviction:**
    - Track `LastExecutionTimestampUtc` (initialized to `DateTime.UtcNow` and updated when `ExecuteAsync` completes) and `IsExecuting` (true while `_execLock` is held) on `NightCodeForgeContainerExecutor`.
-   - Expose an idle workspace container eviction method on [`IExecutionEnvironmentProvider`](../../src/NightCodeForge.Core/Interfaces/IExecutionEnvironment.cs) (implemented on [`ExecutionEnvironmentProvider`](../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs)) and invoke it during periodic maintenance sweeps ([`GitSyncService.PruneWorktreesAsync`](../../src/NightCodeForge.Web/Services/GitSyncService.cs) / `TaskContainerReaper.ReapAsync`).
-   - Any cached workspace-level container (`TaskId == null`, e.g., `ncf-sandbox-{workspaceId}`) that is not currently executing a command (`!IsExecuting`) and has been idle for longer than `IdleContainerTimeoutMinutes` (default: `30 minutes`) is removed from `_cachedEnvironments`, disposed, and its base container is removed via `IContainerEnvironmentFactory.RemoveBaseContainerAsync`.
+   - Expose `EvictIdleWorkspaceContainersAsync` on [`IExecutionEnvironmentProvider`](../../src/NightCodeForge.Core/Interfaces/IExecutionEnvironment.cs) (implemented on [`ExecutionEnvironmentProvider`](../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs)) and invoke it during periodic maintenance sweeps ([`GitSyncService.PruneWorktreesAsync`](../../src/NightCodeForge.Web/Services/GitSyncService.cs) / `TaskContainerReaper.ReapAsync`).
+   - Because all cached workspace-level executors (`TaskId == null` across `SandboxSecurityTier` values) share the same underlying base container (`ncf-sandbox-{workspaceId}`), `EvictIdleWorkspaceContainersAsync` evaluates all cached workspace-level executors for a workspace together: only when **all** cached workspace-level tier executors are not currently executing (`!IsExecuting`) and have been idle for at least `idleTimeout` (default: `30 minutes`) are all cached workspace-level entries removed, disposed, and the underlying base container removed once via `IContainerEnvironmentFactory.RemoveBaseContainerAsync`.
 
 ---
 
 ## 4. Verification & Test Strategy
 
 1. **In-Container Process Reaper Unit Tests (`NightCodeForge.Infrastructure.Tests`):**
-   - Verify that on command timeout (and on caller `OperationCanceledException` while a command is in-flight) in `NightCodeForgeContainerExecutor.ExecuteAsync`, Step 1 closes the stuck shell session and executes the process sweep as `--user <effectiveUser>` targeting non-whitelisted processes with `SIGTERM`, waits up to 5 seconds, escalates to `SIGKILL` while preserving `PID 1`, `tail`, and whitelisted `csnav`, and cleans up stale worktree/clone `index.lock` files.
+   - Verify that on command timeout (and on caller `OperationCanceledException` while a command is in-flight) in `NightCodeForgeContainerExecutor.ExecuteAsync`, Step 1 closes the stuck shell session and executes the process sweep as `--user <effectiveUser>` targeting non-whitelisted processes with `SIGTERM`, waits up to 5 seconds, and escalates to `SIGKILL` while preserving `PID 1`, `tail`, and whitelisted `csnav` (without touching shared `.git/index.lock` files across concurrent worktrees).
    - Verify custom `ProcessKillWhitelist` entries in `ContainerExecutorOptions` are respected.
 
 2. **3-Stage Escalation Ladder Unit Tests (`NightCodeForge.Infrastructure.Tests`):**
@@ -174,10 +171,10 @@ flowchart TD
 
 ## 5. Definition of Done (DoD) Checklist
 
-- [ ] Add `ProcessKillWhitelist` (defaulting to `["csnav"]`) and `PidsLimit` (defaulting to `4096`) to `ContainerExecutorOptions`, and include `--init` and `--pids-limit` in `BuildDockerRunArgs`.
-- [ ] Implement **Step 1 (In-Container Process Reaper)** on `bash` timeout (and in-flight caller cancellation) in `NightCodeForgeContainerExecutor`: close the stuck shell session, run the reaper as `--user <effectiveUser>`, send `SIGTERM` to all container processes except `PID 1`/`tail` and `ProcessKillWhitelist`, wait up to 5s, send `SIGKILL` to survivors, and purge dangling worktree/repository `index.lock` files.
-- [ ] Implement **Step 2 (Container Liveness Probe & Recycling)**: run a 5s probe command; if it fails or times out, force-remove and recreate the container (`docker rm -f` + `EnsureContainerRunning`) and retry the probe with a 5s timeout.
-- [ ] Implement **Step 3 (Windows WSL2 Shutdown Recovery)**: on Windows when `UseWsl` is enabled and Step 2's retry probe fails, execute `wsl --shutdown`, ensure Docker daemon & container recovery, and retry the probe with a 30s timeout (and apply matching 5s probe $\to$ `wsl --shutdown` $\to$ 30s probe recovery to `WslExecutionEnvironment`).
-- [ ] Expand `TaskContainerReaper` and task lifecycle transitions (`Failed`, `Ready`, `WaitingForHuman`) to tear down idle task containers automatically, plus idle workspace container TTL eviction.
-- [ ] Author unit tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Core.Tests` covering all 3 escalation stages, process whitelist preservation, `--init` and `--pids-limit` flag generation, and expanded container reaping; verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Add `ProcessKillWhitelist` (defaulting to `["csnav"]`) and `PidsLimit` (defaulting to `4096`) to `ContainerExecutorOptions`, and include `--init` and `--pids-limit` in `BuildDockerRunArgs`.
+- [x] Implement **Step 1 (In-Container Process Reaper)** on `bash` timeout (and in-flight caller cancellation) in `NightCodeForgeContainerExecutor`: close the stuck shell session, run the reaper as `--user <effectiveUser>`, send `SIGTERM` to all non-zombie container processes except `PID 1`/`tail` and `ProcessKillWhitelist`, wait up to 5s, and send `SIGKILL` to survivors.
+- [x] Implement **Step 2 (Container Liveness Probe & Recycling)**: run a 5s probe command; if it fails or times out, force-remove and recreate the container (`docker rm -f` + `EnsureContainerRunning`) and retry the probe with a 5s timeout.
+- [x] Implement **Step 3 (Windows WSL2 Shutdown Recovery)**: on Windows when `UseWsl` is enabled and Step 2's retry probe fails, execute `wsl --shutdown`, ensure Docker daemon & container recovery, and retry the probe with a 30s timeout (and apply matching 5s probe $\to$ `wsl --shutdown` $\to$ 30s probe recovery to `WslExecutionEnvironment`).
+- [x] Expand `TaskContainerReaper` and task lifecycle transitions (`Failed`, `Ready`, `WaitingForHuman`) to tear down idle task containers automatically, plus idle workspace container TTL eviction.
+- [x] Author unit tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Core.Tests` covering all 3 escalation stages, process whitelist preservation, `--init` and `--pids-limit` flag generation, and expanded container reaping; verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

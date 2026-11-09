@@ -111,7 +111,8 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
                 return new WslExecutionEnvironment(
                     _processRunner,
                     distribution: workspace.WslDistribution ?? _containerEnvironmentFactory.DefaultWslDistribution,
-                    defaultWorkingDirectory: defaultWorkingDir);
+                    defaultWorkingDirectory: defaultWorkingDir,
+                    logger: _logger);
             }),
 
             ExecutionMode.ContainerSandbox => _cachedEnvironments.GetOrAdd(
@@ -164,6 +165,72 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         }
 
         return _containerEnvironmentFactory.ListTaskContainerIdsAsync(workspace, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<int> EvictIdleWorkspaceContainersAsync(Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
+        {
+            return 0;
+        }
+
+        var now = DateTime.UtcNow;
+
+        var workspaceKeys = _cachedEnvironments.Keys
+            .Where(k => k.WorkspaceId == workspace.Id && k.TaskId == null)
+            .ToList();
+
+        if (workspaceKeys.Count == 0)
+        {
+            return 0;
+        }
+
+        var executors = new List<((int WorkspaceId, SandboxSecurityTier SecurityTier, int? TaskId) Key, NightCodeForgeContainerExecutor Executor)>();
+        foreach (var key in workspaceKeys)
+        {
+            if (_cachedEnvironments.TryGetValue(key, out var env) && env is NightCodeForgeContainerExecutor containerExecutor)
+            {
+                // All security tiers with TaskId == null share the same underlying workspace base container.
+                // If any tier is currently executing or active within the idle window, keep the base container alive.
+                if (containerExecutor.IsExecuting || (now - containerExecutor.LastExecutionTimestampUtc) < idleTimeout)
+                {
+                    return 0;
+                }
+
+                executors.Add((key, containerExecutor));
+            }
+        }
+
+        if (executors.Count == 0)
+        {
+            return 0;
+        }
+
+        var anyRemoved = false;
+        var minIdleDuration = executors.Min(e => now - e.Executor.LastExecutionTimestampUtc);
+        foreach (var (key, _) in executors)
+        {
+            if (_cachedEnvironments.TryRemove(key, out var removedEnv))
+            {
+                anyRemoved = true;
+                if (removedEnv is IDisposable disposable)
+                {
+                    disposable.Dispose();
+                }
+            }
+        }
+
+        if (!anyRemoved)
+        {
+            return 0;
+        }
+
+        await _containerEnvironmentFactory.RemoveBaseContainerAsync(workspace, cancellationToken);
+        _logger.LogInformation("Evicted idle workspace container for Workspace #{WorkspaceId} (idle duration: {IdleDuration}).",
+            workspace.Id, minIdleDuration);
+        return 1;
     }
 
     private void DiscardCachedWorkspaceEnvironments(int workspaceId)

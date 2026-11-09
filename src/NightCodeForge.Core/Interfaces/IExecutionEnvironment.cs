@@ -57,5 +57,10 @@ public interface IExecutionEnvironmentProvider
     /// Lists the ids of tasks that currently own a (running or stopped) sandbox container in the workspace.
     /// </summary>
     Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(NightCodeForge.Core.Domain.Workspace workspace, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evicts idle workspace-level sandbox containers that have been inactive longer than <paramref name="idleTimeout"/>.
+    /// </summary>
+    Task<int> EvictIdleWorkspaceContainersAsync(NightCodeForge.Core.Domain.Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default);
 }
 

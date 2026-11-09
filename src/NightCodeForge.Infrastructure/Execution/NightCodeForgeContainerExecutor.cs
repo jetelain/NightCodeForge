@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -84,6 +85,10 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
 """;
 
     public const string DefaultSharedMemorySize = "2g";
+    public static readonly IReadOnlyList<string> DefaultProcessKillWhitelist = ["csnav"];
+    public const int DefaultPidsLimit = 4096;
+    public const int DefaultIdleContainerTimeoutMinutes = 30;
+    public const string RestrictedReadOnlyUserUidGid = "1000:1000";
 
     public string ContainerNameOrId { get; set; } = "ncf-sandbox";
     public string? ContainerImage { get; set; } = DefaultAgentBaseImage;
@@ -94,6 +99,9 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
     public bool IsRestrictedReadOnly { get; set; } = false;
     public string? SharedMemorySize { get; set; } = DefaultSharedMemorySize;
     public Func<Process>? CustomProcessFactory { get; set; }
+    public IList<string> ProcessKillWhitelist { get; set; } = new List<string>(DefaultProcessKillWhitelist);
+    public int PidsLimit { get; set; } = DefaultPidsLimit;
+    public int IdleContainerTimeoutMinutes { get; set; } = DefaultIdleContainerTimeoutMinutes;
 
     /// <summary>
     /// Target container user identity formatted as 'uid:gid' (e.g. '1000:1000').
@@ -255,8 +263,11 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
     private readonly IHostUserIdentityResolver _userIdentityResolver;
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly SemaphoreSlim _execLock = new(1, 1);
+    private bool _isExecuting;
 
     public ContainerExecutorOptions Options => _options;
+    public bool IsExecuting => _isExecuting;
+    public DateTime LastExecutionTimestampUtc { get; private set; } = DateTime.UtcNow;
 
     private IProcessStreamSession? _shellSession;
     private Process? _shellProcess;
@@ -304,6 +315,10 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         CancellationToken cancellationToken = default)
     {
         await _execLock.WaitAsync(cancellationToken);
+        _isExecuting = true;
+        var buffer = new HeadTailBuffer(_options.MaxBufferBytes);
+        var stopwatch = Stopwatch.StartNew();
+        ShellCommandRecord? runningRecord = null;
         try
         {
             EnsureShellProcessRunning();
@@ -311,7 +326,6 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             var timeout = timeoutSeconds ?? _options.DefaultTimeoutSeconds;
             var sentinel = $"__NCF_SENTINEL_{Guid.NewGuid():N}__";
             var workDir = ResolveContainerWorkingDirectory(workingDirectory, _options);
-            var stopwatch = Stopwatch.StartNew();
 
             // Export computed PATH ensuring toolchains and standard utilities are smoothly accessible
             var computedPath = ComputePathEnvironmentVariable(_options);
@@ -360,7 +374,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
             var cleanCommand = command.Replace("\r", "").Trim();
             var commandId = Guid.NewGuid().ToString("N");
-            var runningRecord = new ShellCommandRecord(
+            runningRecord = new ShellCommandRecord(
                 CommandId: commandId,
                 CommandLine: cleanCommand,
                 WorkingDirectory: workDir,
@@ -379,58 +393,70 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
                 await _stdin.FlushAsync();
 
-                var (output, exitCode) = await ReadUntilSentinelAsync(sentinel, timeout, commandId, cancellationToken);
+                var exitCode = await ReadUntilSentinelAsync(sentinel, timeout, commandId, buffer, cancellationToken);
                 stopwatch.Stop();
                 var completedRecord = runningRecord with
                 {
                     DurationMs = stopwatch.Elapsed.TotalMilliseconds,
                     ExitCode = exitCode,
-                    OutputPreview = output.GetFormattedString(),
+                    OutputPreview = buffer.GetFormattedString(),
                     Status = exitCode == 0 ? ShellCommandStatus.Completed : ShellCommandStatus.Failed
                 };
                 _telemetryService.RecordShellCommandCompleted(completedRecord);
-                return new CommandResult(exitCode, output.GetFormattedString(), string.Empty, stopwatch.Elapsed, output.IsTruncated);
+                return new CommandResult(exitCode, buffer.GetFormattedString(), string.Empty, stopwatch.Elapsed, buffer.IsTruncated);
             }
             catch (TimeoutException)
             {
-                _logger.LogWarning("Command execution timed out after {Timeout}s. Sending SIGINT (\\x03)", timeout);
-                
-                // 1. Send SIGINT (Ctrl+C)
-                await _stdin!.WriteAsync('\x03');
-                await _stdin.FlushAsync();
+                _logger.LogWarning("Command execution timed out after {Timeout}s. Terminating shell session and executing escalation ladder.", timeout);
+                TerminateShellSession();
 
+                var stage = await RunTimeoutEscalationLadderAsync();
+                stopwatch.Stop();
+
+                var errorMessage = stage switch
+                {
+                    ContainerRecoveryStage.ProcessSweepSucceeded => $"Command timed out after {timeout}s (in-container processes reaped).",
+                    ContainerRecoveryStage.ContainerRecreated => $"Command timed out after {timeout}s (unresponsive container was recycled).",
+                    ContainerRecoveryStage.WslShutdownRecovered => $"Command timed out after {timeout}s (WSL2 environment was restarted).",
+                    _ => $"Command timed out after {timeout}s and recovery failed."
+                };
+
+                var timeoutRecord = runningRecord with
+                {
+                    DurationMs = stopwatch.Elapsed.TotalMilliseconds,
+                    ExitCode = TimeoutExitCode,
+                    OutputPreview = buffer.GetFormattedString(),
+                    ErrorPreview = errorMessage,
+                    Status = ShellCommandStatus.Failed,
+                    RecoveryStage = stage
+                };
+                _telemetryService.RecordShellCommandCompleted(timeoutRecord);
+                return new CommandResult(TimeoutExitCode, buffer.GetFormattedString(), errorMessage, stopwatch.Elapsed, buffer.IsTruncated);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Command execution was canceled by caller while in-flight. Terminating shell session and sweeping processes.");
+                TerminateShellSession();
                 try
                 {
-                    // 2. Wait 2-second grace period for shell to settle and emit sentinel
-                    var (graceOutput, exitCode) = await ReadUntilSentinelAsync(sentinel, 2, commandId, cancellationToken);
-                    stopwatch.Stop();
-                    var timeoutRecord = runningRecord with
-                    {
-                        DurationMs = stopwatch.Elapsed.TotalMilliseconds,
-                        ExitCode = exitCode,
-                        OutputPreview = graceOutput.GetFormattedString(),
-                        ErrorPreview = "Command timed out and was aborted with SIGINT.",
-                        Status = ShellCommandStatus.Failed
-                    };
-                    _telemetryService.RecordShellCommandCompleted(timeoutRecord);
-                    return new CommandResult(exitCode, graceOutput.GetFormattedString(), "Command timed out and was aborted with SIGINT.", stopwatch.Elapsed, graceOutput.IsTruncated);
+                    await RunInContainerProcessSweepAsync();
                 }
                 catch (Exception ex)
                 {
-                    // 3. Unresponsive: forcefully restart shell process
-                    _logger.LogError(ex, "Container shell process unresponsive or threw exception after SIGINT grace period: {Message}. Forcefully restarting shell.", ex.Message);
-                    ForceRestartShellProcess();
-                    stopwatch.Stop();
-                    var terminatedRecord = runningRecord with
-                    {
-                        DurationMs = stopwatch.Elapsed.TotalMilliseconds,
-                        ExitCode = 124,
-                        ErrorPreview = $"Command timed out after {timeout}s and was terminated.",
-                        Status = ShellCommandStatus.Failed
-                    };
-                    _telemetryService.RecordShellCommandCompleted(terminatedRecord);
-                    return new CommandResult(124, string.Empty, $"Command timed out after {timeout}s and was terminated.", stopwatch.Elapsed, false);
+                    _logger.LogDebug(ex, "In-container process sweep on cancellation encountered an exception");
                 }
+
+                stopwatch.Stop();
+                var cancelledRecord = runningRecord with
+                {
+                    DurationMs = stopwatch.Elapsed.TotalMilliseconds,
+                    ExitCode = -1,
+                    OutputPreview = buffer.GetFormattedString(),
+                    ErrorPreview = "Command execution was canceled by caller.",
+                    Status = ShellCommandStatus.Failed
+                };
+                _telemetryService.RecordShellCommandCompleted(cancelledRecord);
+                throw;
             }
             catch (Exception ex)
             {
@@ -439,6 +465,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 {
                     DurationMs = stopwatch.Elapsed.TotalMilliseconds,
                     ExitCode = -1,
+                    OutputPreview = buffer.GetFormattedString(),
                     ErrorPreview = ex.Message,
                     Status = ShellCommandStatus.Failed
                 };
@@ -446,19 +473,32 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 throw;
             }
         }
+        catch (Exception ex) when (runningRecord == null)
+        {
+            stopwatch.Stop();
+            _logger.LogError(ex, "Failed before command could be sent to container shell process");
+            throw;
+        }
         finally
         {
+            _isExecuting = false;
+            LastExecutionTimestampUtc = DateTime.UtcNow;
             _execLock.Release();
         }
     }
 
-    private async Task<(HeadTailBuffer Output, int ExitCode)> ReadUntilSentinelAsync(
+    private async Task<int> ReadUntilSentinelAsync(
         string sentinel,
         int timeoutSeconds,
         string commandId,
+        HeadTailBuffer buffer,
         CancellationToken cancellationToken)
     {
-        var buffer = new HeadTailBuffer(_options.MaxBufferBytes);
+        if (_stdout == null)
+        {
+            throw new InvalidOperationException("Container shell process stdout is not available.");
+        }
+
         var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -473,7 +513,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                 throw new TimeoutException($"Timed out waiting for sentinel '{sentinel}' after {timeoutSeconds}s.");
             }
 
-            var readLineTask = _stdout!.ReadLineAsync(linkedCts.Token).AsTask();
+            var readLineTask = _stdout.ReadLineAsync(linkedCts.Token).AsTask();
             var delayTask = Task.Delay(remaining, linkedCts.Token);
 
             var completedTask = await Task.WhenAny(readLineTask, delayTask);
@@ -505,13 +545,313 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
                     }
 
                     linkedCts.Cancel();
-                    return (buffer, exitCode);
+                    return exitCode;
                 }
             }
 
             _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", false);
             buffer.Append(line + "\n");
         }
+    }
+
+    public const int TimeoutExitCode = 124;
+    private const string ProbeSentinel = "__NCF_PROBE_OK__";
+    private const int LivenessProbeTimeoutSeconds = 5;
+    private const int ProcessReaperTimeoutSeconds = 10;
+    private const int ContainerRemoveTimeoutSeconds = 10;
+    private const int DockerInfoTimeoutSeconds = 10;
+    private const int WslShutdownTimeoutSeconds = 120;
+    private const int DockerDaemonStartTimeoutSeconds = 15;
+    private const int WslRecoveryProbeTimeoutSeconds = 30;
+
+    public static string BuildInContainerReaperScript(IEnumerable<string>? processWhitelist = null)
+    {
+        var whitelistTokens = (processWhitelist ?? ContainerExecutorOptions.DefaultProcessKillWhitelist)
+            .Where(w => !string.IsNullOrWhiteSpace(w))
+            .Select(w => ShellQuoting.QuotePosix(w.Trim()))
+            .Distinct()
+            .ToList();
+
+        var whitelistCheck = whitelistTokens.Count > 0
+            ? $$"""
+                for w in {{string.Join(" ", whitelistTokens)}}; do
+                  if [[ "$comm" == *"$w"* ]] || [[ "$cmdline" == *"$w"* ]]; then
+                    whitelisted=1
+                    break
+                  fi
+                done
+            """
+            : string.Empty;
+
+        return $$"""
+get_targets() {
+  local targets=()
+  for p in /proc/[0-9]*; do
+    [ -d "$p" ] || continue
+    local pid="${p##*/}"
+    [ "$pid" = "1" ] && continue
+    [ "$pid" = "$$" ] && continue
+    [ "$pid" = "$BASHPID" ] && continue
+    [ "$pid" = "$PPID" ] && continue
+
+    local stat_line state
+    if read -r stat_line < "$p/stat" 2>/dev/null; then
+      state="${stat_line##*) }"
+      state="${state%% *}"
+      if [ "$state" = "Z" ] || [ "$state" = "X" ]; then
+        continue
+      fi
+    fi
+
+    local comm cmdline
+    comm=$(cat "$p/comm" 2>/dev/null || true)
+    cmdline=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null || true)
+
+    if [[ "$comm" == "tail" ]] && [[ "$cmdline" == *"tail"*"/dev/null"* ]]; then
+      continue
+    fi
+
+    local whitelisted=0
+    {{whitelistCheck}}
+    [ $whitelisted -eq 1 ] && continue
+
+    targets+=("$pid")
+  done
+  echo "${targets[@]}"
+}
+
+targets=($(get_targets))
+if [ ${#targets[@]} -gt 0 ]; then
+  kill -15 "${targets[@]}" 2>/dev/null || true
+  for i in {1..25}; do
+    alive=0
+    for pid in "${targets[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        if read -r stat_line < "/proc/$pid/stat" 2>/dev/null; then
+          state="${stat_line##*) }"
+          state="${state%% *}"
+          if [ "$state" = "Z" ] || [ "$state" = "X" ]; then
+            continue
+          fi
+        fi
+        alive=1
+        break
+      fi
+    done
+    [ $alive -eq 0 ] && break
+    sleep 0.2
+  done
+
+  survivors=($(get_targets))
+  if [ ${#survivors[@]} -gt 0 ]; then
+    kill -9 "${survivors[@]}" 2>/dev/null || true
+  fi
+fi
+""";
+    }
+
+    private void TerminateShellSession()
+    {
+        try
+        {
+            if (_shellSession != null && !_shellSession.HasExited)
+            {
+                _shellSession.Kill();
+            }
+            else if (_shellProcess != null && !_shellProcess.HasExited)
+            {
+                _shellProcess.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Exception while terminating shell session");
+        }
+        finally
+        {
+            _shellSession?.Dispose();
+            _shellSession = null;
+            _shellProcess?.Dispose();
+            _shellProcess = null;
+            _stdin = null;
+            _stdout = null;
+        }
+    }
+
+    private async Task RunInContainerProcessSweepAsync()
+    {
+        try
+        {
+            var reaperScript = BuildInContainerReaperScript(_options.ProcessKillWhitelist);
+            var effectiveUser = _options.IsRestrictedReadOnly ? ContainerExecutorOptions.RestrictedReadOnlyUserUidGid : _options.UserUidGid;
+            var dockerArgs = new List<string> { "exec" };
+            if (!string.IsNullOrWhiteSpace(effectiveUser))
+            {
+                dockerArgs.AddRange(["--user", effectiveUser]);
+            }
+            dockerArgs.AddRange([_options.ContainerNameOrId, "bash", "-c", reaperScript]);
+            var reaperSpec = BuildDockerProcessSpec(_options, dockerArgs, timeoutSeconds: ProcessReaperTimeoutSeconds);
+            await _processRunner.RunAsync(reaperSpec, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "In-container process reaper encountered an exception for container {Container}", _options.ContainerNameOrId);
+        }
+    }
+
+    private async Task<bool> RunLivenessProbeAsync(int timeoutSeconds)
+    {
+        try
+        {
+            var effectiveUser = _options.IsRestrictedReadOnly ? ContainerExecutorOptions.RestrictedReadOnlyUserUidGid : _options.UserUidGid;
+            var dockerArgs = new List<string> { "exec" };
+            if (!string.IsNullOrWhiteSpace(effectiveUser))
+            {
+                dockerArgs.AddRange(["--user", effectiveUser]);
+            }
+            dockerArgs.AddRange([_options.ContainerNameOrId, "echo", ProbeSentinel]);
+            var probeSpec = BuildDockerProcessSpec(_options, dockerArgs, timeoutSeconds: timeoutSeconds);
+            var res = await _processRunner.RunAsync(probeSpec, CancellationToken.None);
+            return res.ExitCode == 0 && res.StandardOutput.Contains(ProbeSentinel);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Container liveness probe failed for container {Container}", _options.ContainerNameOrId);
+            return false;
+        }
+    }
+
+    private bool TryStartShellProcess()
+    {
+        try
+        {
+            StartShellProcess();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to start interactive shell session for container {Container} after recovery probe", _options.ContainerNameOrId);
+            return false;
+        }
+    }
+
+    private void ForceRecycleContainer()
+    {
+        if (_options.CustomProcessFactory != null)
+        {
+            return;
+        }
+
+        _logger.LogWarning("Container {Container} is unresponsive after timeout and is being recycled.", _options.ContainerNameOrId);
+        try
+        {
+            var rmSpec = BuildDockerProcessSpec(_options, ["rm", "-f", _options.ContainerNameOrId], timeoutSeconds: ContainerRemoveTimeoutSeconds);
+            _processRunner.Run(rmSpec);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to remove wedged container {Container}", _options.ContainerNameOrId);
+        }
+
+        var prevAutoStart = _options.AutoStartContainer;
+        try
+        {
+            _options.AutoStartContainer = true;
+            EnsureContainerRunning();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to recreate container {Container} during recovery", _options.ContainerNameOrId);
+        }
+        finally
+        {
+            _options.AutoStartContainer = prevAutoStart;
+        }
+    }
+
+    private async Task<ContainerRecoveryStage> ExecuteWslRecoveryAsync()
+    {
+        _logger.LogWarning("Container probe and recycling failed. Triggering full WSL2 reset for container {Container}", _options.ContainerNameOrId);
+        try
+        {
+            var wslShutdownSpec = new ProcessStartSpec
+            {
+                FileName = _options.WslExecutable,
+                ArgumentList = ["--shutdown"],
+                TimeoutSeconds = WslShutdownTimeoutSeconds
+            };
+            await _processRunner.RunAsync(wslShutdownSpec, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "wsl --shutdown failed during Step 3 recovery");
+        }
+
+        try
+        {
+            var dockerInfoSpec = BuildDockerProcessSpec(_options, ["info"], timeoutSeconds: DockerInfoTimeoutSeconds);
+            var dockerInfoResult = await _processRunner.RunAsync(dockerInfoSpec, CancellationToken.None);
+            if (dockerInfoResult.ExitCode != 0)
+            {
+                var daemonStartArgs = new List<string>();
+                if (!string.IsNullOrWhiteSpace(_options.WslDistribution))
+                {
+                    daemonStartArgs.AddRange(["-d", _options.WslDistribution.Trim()]);
+                }
+                daemonStartArgs.AddRange(["-u", "root", "--", "sh", "-c", "service docker start || systemctl start docker || true"]);
+                var daemonStartSpec = new ProcessStartSpec
+                {
+                    FileName = _options.WslExecutable,
+                    ArgumentList = daemonStartArgs,
+                    TimeoutSeconds = DockerDaemonStartTimeoutSeconds
+                };
+                await _processRunner.RunAsync(daemonStartSpec, CancellationToken.None);
+            }
+
+            ForceRecycleContainer();
+
+            var probe30 = await RunLivenessProbeAsync(timeoutSeconds: WslRecoveryProbeTimeoutSeconds);
+            if (probe30 && TryStartShellProcess())
+            {
+                return ContainerRecoveryStage.WslShutdownRecovered;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Step 3 WSL recovery failed for container {Container}", _options.ContainerNameOrId);
+        }
+
+        return ContainerRecoveryStage.RecoveryFailed;
+    }
+
+    private async Task<ContainerRecoveryStage> RunTimeoutEscalationLadderAsync()
+    {
+        // Step 1: In-container process reaper
+        await RunInContainerProcessSweepAsync();
+
+        // Step 2A: Initial Liveness Probe (5s)
+        if (await RunLivenessProbeAsync(timeoutSeconds: LivenessProbeTimeoutSeconds) && TryStartShellProcess())
+        {
+            return ContainerRecoveryStage.ProcessSweepSucceeded;
+        }
+
+        // Step 2B: Force-kill and recreate container
+        ForceRecycleContainer();
+
+        // Step 2C: Retry liveness probe (5s)
+        if (await RunLivenessProbeAsync(timeoutSeconds: LivenessProbeTimeoutSeconds) && TryStartShellProcess())
+        {
+            return ContainerRecoveryStage.ContainerRecreated;
+        }
+
+        // Step 3: Windows + WSL?
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && _options.UseWsl)
+        {
+            return await ExecuteWslRecoveryAsync();
+        }
+
+        _logger.LogError("Critical recovery failure: container {Container} remains unresponsive.", _options.ContainerNameOrId);
+        return ContainerRecoveryStage.RecoveryFailed;
     }
 
     private void EnsureShellProcessRunning()
@@ -1692,6 +2032,12 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
 
         args.AddRange(["--ulimit", "core=0"]);
+        args.Add("--init");
+
+        if (options.PidsLimit > 0)
+        {
+            args.AddRange(["--pids-limit", options.PidsLimit.ToString()]);
+        }
 
         if (options.IsRestrictedReadOnly)
         {
@@ -1775,31 +2121,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
     public void ForceRestartShellProcess()
     {
-        try
-        {
-            if (_shellSession != null && !_shellSession.HasExited)
-            {
-                _shellSession.Kill();
-            }
-            else if (_shellProcess != null && !_shellProcess.HasExited)
-            {
-                _shellProcess.Kill(entireProcessTree: true);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Exception while killing unresponsive shell process");
-        }
-        finally
-        {
-            _shellSession?.Dispose();
-            _shellSession = null;
-            _shellProcess?.Dispose();
-            _shellProcess = null;
-            _stdin = null;
-            _stdout = null;
-        }
-
+        TerminateShellSession();
         StartShellProcess();
     }
 
@@ -1811,22 +2133,16 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         try
         {
             _stdin?.WriteLine("exit");
-            _shellSession?.Kill();
-            if (_shellProcess != null && !_shellProcess.HasExited)
-            {
-                _shellProcess.Kill(entireProcessTree: true);
-            }
+            TerminateShellSession();
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Best-effort shell process termination during executor disposal finished with notice");
+            _logger.LogDebug(ex, "Exception while disposing container executor");
         }
-
-        _shellSession?.Dispose();
-        _shellSession = null;
-        _shellProcess?.Dispose();
-        _shellProcess = null;
-        _execLock.Dispose();
+        finally
+        {
+            _execLock.Dispose();
+        }
     }
 
     public ValueTask DisposeAsync()

@@ -86,6 +86,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         PipelineContext? pipelineContext = null;
         var cohortSw = System.Diagnostics.Stopwatch.StartNew();
         CohortExitReason cohortExitReason = CohortExitReason.Aborted;
+        var lockAcquired = false;
 
         try
         {
@@ -99,6 +100,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
             // 2. ForgeTask Lock Acquisition (Enables concurrent execution of different tasks on the same workspace)
             using var lockReleaser = await _workspacePreparer.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
+            lockAcquired = true;
 
             // Re-read task state after acquiring the lock to guarantee we have the latest persisted state
             var reloadedTask = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
@@ -124,6 +126,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 _logger.LogInformation("ForgeTask #{TaskId} execution was superseded while waiting for lock (Old JobId: '{OldJobId}', New JobId: '{NewJobId}'); aborting stale execution.",
                     taskId, initialJobId, reloadedTask.LastHangfireJobId);
+                lockAcquired = false;
                 return;
             }
 
@@ -202,6 +205,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     _logger.LogInformation("ForgeTask #{TaskId} execution was superseded while waiting for BareHost workspace lock (Old JobId: '{OldJobId}', New JobId: '{NewJobId}'); aborting stale execution.",
                         taskId, initialJobId, reloadedAfterBareHost.LastHangfireJobId);
+                    lockAcquired = false;
                     return;
                 }
 
@@ -1956,6 +1960,26 @@ public class TaskOrchestrator : ITaskOrchestrator
             {
                 _lifecycleMutationCoordinator.UnregisterExecutionCancellation(taskId, taskCts);
                 taskCts.Dispose();
+            }
+
+            if (lockAcquired)
+            {
+                try
+                {
+                    var finalTask = await _taskRepository.GetByIdAsync(taskId, CancellationToken.None);
+                    if (finalTask is not null && NightCodeForge.Core.Services.TaskContainerReaper.ShouldReapTaskContainer(finalTask))
+                    {
+                        var ws = await _workspacePreparer.GetWorkspaceAsync(finalTask, CancellationToken.None);
+                        if (ws != null)
+                        {
+                            await _workspacePreparer.CleanupTaskContainerSafeAsync(ws, taskId, finalTask.Status.ToString().ToLowerInvariant(), CancellationToken.None);
+                        }
+                    }
+                }
+                catch (Exception cleanupEx)
+                {
+                    _logger.LogDebug(cleanupEx, "Failed to clean up container for non-executing task #{TaskId}", taskId);
+                }
             }
         }
     }

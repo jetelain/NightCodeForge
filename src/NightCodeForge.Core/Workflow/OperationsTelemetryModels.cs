@@ -48,6 +48,18 @@ public enum ShellCommandStatus
 }
 
 /// <summary>
+/// Stage of self-healing escalation achieved during command timeout recovery.
+/// </summary>
+public enum ContainerRecoveryStage
+{
+    None = 0,
+    ProcessSweepSucceeded = 1,
+    ContainerRecreated = 2,
+    WslShutdownRecovered = 3,
+    RecoveryFailed = 4
+}
+
+/// <summary>
 /// Telemetry record capturing a shell / CLI command execution.
 /// </summary>
 public record ShellCommandRecord(
@@ -59,4 +71,5 @@ public record ShellCommandRecord(
     int? ExitCode,
     ShellCommandStatus Status,
     string? OutputPreview,
-    string? ErrorPreview);
+    string? ErrorPreview,
+    ContainerRecoveryStage RecoveryStage = ContainerRecoveryStage.None);

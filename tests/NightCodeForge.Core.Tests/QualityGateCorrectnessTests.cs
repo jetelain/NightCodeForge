@@ -24,6 +24,7 @@ public class QualityGateCorrectnessTests
         public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);
+        public Task<int> EvictIdleWorkspaceContainersAsync(Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default) => Task.FromResult(0);
 
         public Task<CommandResult> ExecuteAsync(
             string command,
@@ -398,6 +399,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);
+        public Task<int> EvictIdleWorkspaceContainersAsync(Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default) => Task.FromResult(0);
 
         public Task<CommandResult> ExecuteAsync(
             string command,

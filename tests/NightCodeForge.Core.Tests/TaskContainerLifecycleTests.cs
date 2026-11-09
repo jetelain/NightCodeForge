@@ -78,29 +78,40 @@ public class TaskContainerLifecycleTests
     }
 
     [Fact]
-    public async Task TaskContainerReaper_ReapsContainersForClosedRejectedCancelledAndMissingTasks_PreservesActiveOnes()
+    public async Task TaskContainerReaper_ReapsContainersForClosedRejectedCancelledFailedReadyWaitingAndMissingTasks_PreservesActiveOnes()
     {
         var closed = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Closed });
         var rejected = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Rejected });
         var cancelled = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Cancelled });
-        var open = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Open });
+        var failed = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Failed });
         var ready = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Ready });
+        var draft = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Draft });
+        var suggested = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Suggested });
+        var waiting = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Open, IsWaitingForHuman = true });
+        var deferred = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Open, IsDeferredByPause = true });
+        var open = await _taskRepo.CreateAsync(new ForgeTask { WorkspaceId = 1, Status = TaskOverallStatus.Open, IsWaitingForHuman = false, IsDeferredByPause = false });
         const int missingTaskId = 99999;
 
         var provider = new Mock<IExecutionEnvironmentProvider>();
         provider.Setup(p => p.ListTaskContainerIdsAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { closed.Id, rejected.Id, cancelled.Id, open.Id, ready.Id, missingTaskId });
+            .ReturnsAsync(new[] { closed.Id, rejected.Id, cancelled.Id, failed.Id, ready.Id, draft.Id, suggested.Id, waiting.Id, deferred.Id, open.Id, missingTaskId });
 
         var reaped = await TaskContainerReaper.ReapAsync(
             provider.Object, _taskRepo, _workspace, NullLogger.Instance, CancellationToken.None);
 
-        Assert.Equal(4, reaped);
+        Assert.Equal(10, reaped);
         provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, closed.Id, It.IsAny<CancellationToken>()), Times.Once);
         provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, rejected.Id, It.IsAny<CancellationToken>()), Times.Once);
         provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, cancelled.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, failed.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, ready.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, draft.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, suggested.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, waiting.Id, It.IsAny<CancellationToken>()), Times.Once);
+        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, deferred.Id, It.IsAny<CancellationToken>()), Times.Once);
         provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, missingTaskId, It.IsAny<CancellationToken>()), Times.Once);
         provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, open.Id, It.IsAny<CancellationToken>()), Times.Never);
-        provider.Verify(p => p.CleanupTaskContainerAsync(_workspace, ready.Id, It.IsAny<CancellationToken>()), Times.Never);
+        provider.Verify(p => p.EvictIdleWorkspaceContainersAsync(_workspace, TaskContainerReaper.DefaultIdleWorkspaceContainerTimeout, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -237,5 +248,118 @@ public class TaskContainerLifecycleTests
         var updated = await _taskRepo.GetByIdAsync(task.Id);
         Assert.NotNull(updated);
         Assert.Equal(TaskOverallStatus.Rejected, updated.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenSupersededWhileWaitingForLock_DoesNotCleanupActiveTaskContainer()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 401,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            LastHangfireJobId = "job-old",
+            CurrentStageId = StandardStageIds.TaskReview
+        });
+        _depStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+
+        var builder = CreateBuilder();
+        var lockProviderMock = new Mock<IWorkspaceLockProvider>();
+        lockProviderMock
+            .Setup(l => l.AcquireTaskLockAsync(1, task.Id, It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                // Simulate another operation superseding the job while waiting for lock, and leaving task in WaitingForHuman or Failed
+                task.LastHangfireJobId = "job-new";
+                task.IsWaitingForHuman = true;
+                await _taskRepo.UpdateAsync(task);
+                return Mock.Of<IDisposable>();
+            });
+        builder.LockProvider = lockProviderMock.Object;
+
+        await builder.Build().ProcessTaskAsync(task.Id);
+
+        builder.EnvironmentProviderMock.Verify(
+            p => p.CleanupTaskContainerAsync(It.IsAny<Workspace>(), task.Id, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenCrossCohortLoopbackOccurs_DoesNotCleanupOpenTaskContainer()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 402,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.PostReviewVerification
+        });
+        _depStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+
+        var implStage = new TestWorkflowStage(StandardStageIds.Implementation, WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.Implementation
+        };
+        var verifyStage = new TestWorkflowStage(
+            StandardStageIds.PostReviewVerification,
+            WorkflowStageKind.Deterministic)
+        {
+            QueueTier = StageQueueTier.CodeReview,
+            LoopBackStageId = StandardStageIds.Implementation,
+            Handler = (_, _) => Task.FromResult(NightCodeForge.Core.Workflow.StageExecutionResult.Failure("Gate failed"))
+        };
+
+        var builder = CreateBuilder();
+        builder.PipelineProvider = new NightCodeForge.Core.Workflow.DefaultWorkflowPipelineProvider(
+            new NightCodeForge.Core.Workflow.WorkflowPipeline(new[] { implStage, verifyStage }));
+
+        await builder.Build().ProcessTaskAsync(task.Id);
+
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(TaskOverallStatus.Open, updated.Status);
+        Assert.Equal(StandardStageIds.Implementation, updated.CurrentStageId);
+
+        builder.EnvironmentProviderMock.Verify(
+            p => p.CleanupTaskContainerAsync(It.IsAny<Workspace>(), task.Id, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenTaskTransitionsToWaitingForHuman_CleansUpTaskContainer()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 403,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview
+        });
+        _depStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+
+        var reviewStage = new TestWorkflowStage(
+            StandardStageIds.TaskReview,
+            WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.TaskReview,
+            Handler = (_, _) => Task.FromResult(NightCodeForge.Core.Workflow.StageExecutionResult.WaitingForHuman(new[]
+            {
+                new Question { Prompt = "Need clarification?" }
+            }))
+        };
+
+        var builder = CreateBuilder();
+        builder.PipelineProvider = new NightCodeForge.Core.Workflow.DefaultWorkflowPipelineProvider(
+            new NightCodeForge.Core.Workflow.WorkflowPipeline(new[] { reviewStage }));
+
+        await builder.Build().ProcessTaskAsync(task.Id);
+
+        var updated = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updated);
+        Assert.True(updated.IsWaitingForHuman);
+
+        builder.EnvironmentProviderMock.Verify(
+            p => p.CleanupTaskContainerAsync(It.Is<Workspace>(w => w.Id == 1), task.Id, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

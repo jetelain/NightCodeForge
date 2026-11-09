@@ -143,6 +143,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                     cancellationToken: cancellationToken);
                 await _dependencyStore.SetWaitingForHumanAsync(task.Id, true, cancellationToken);
                 await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+                await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, "waiting-for-human", cancellationToken);
 
                 await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                 {
@@ -485,6 +486,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                 cancellationToken: cancellationToken);
             await _dependencyStore.SetWaitingForHumanAsync(task.Id, true, cancellationToken);
             await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+            await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, "waiting-for-human", cancellationToken);
 
             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
             {
