@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 2 of 2 — `IMarkdownFetchSafetyService`, `mdfetch-safety.json` & Settings Tab)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.20A: Air-Gapped Mode & Web Search Deactivation](STEP_12_20A_AIR_GAPPED_MODE_AND_WEB_SEARCH_DEACTIVATION.md)  
+> *Prerequisite Step:* [Step 12.20A: Air-Gapped Mode & Web Search Deactivation](../archive/phase-12/STEP_12_20A_AIR_GAPPED_MODE_AND_WEB_SEARCH_DEACTIVATION.md)  
 > *Related Steps:* [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)

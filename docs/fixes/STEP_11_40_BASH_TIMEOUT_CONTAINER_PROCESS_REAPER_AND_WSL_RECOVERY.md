@@ -56,8 +56,10 @@ flowchart TD
 
 ### 3.1 Step 1: In-Container Process Sweep (`SIGTERM` $\to$ 5s Wait $\to$ `SIGKILL`)
 
-1. **Trigger Condition:**
-   - Whenever a command in `NightCodeForgeContainerExecutor.ExecuteAsync` times out (`TimeoutException`), or is aborted via caller `OperationCanceledException` while a command is already in-flight on `_stdin`, first terminate and dispose the host-side `docker exec -i` shell session so the stuck or desynchronized subshell client is closed.
+1. **Trigger Condition & Removal of Broken `\x03` Stdin Grace Period:**
+   - Whenever a command in `NightCodeForgeContainerExecutor.ExecuteAsync` times out (`TimeoutException`), or is aborted via caller `OperationCanceledException` while a command is already in-flight on `_stdin`, **immediately** terminate and dispose the host-side `docker exec -i` shell session (`_shellSession` / `_shellProcess`) so the stuck or desynchronized subshell client is closed.
+   - Remove the legacy `\x03` (`Ctrl+C`) write to `_stdin` and its 2-second grace `ReadUntilSentinelAsync` retry, which cannot signal non-PTY processes reading from `/dev/null` and can corrupt `_stdin` if the command finishes near the deadline.
+   - Preserve any partial stdout lines already accumulated in `HeadTailBuffer` prior to the timeout so the returned timeout `CommandResult.StandardOutput` and `ShellCommandRecord.OutputPreview` retain the output leading up to the hang (or `string.Empty` if no output was emitted).
    - Note: On caller `OperationCanceledException`, after closing the desynchronized shell session and running Step 1 process cleanup (using `CancellationToken.None` with a bounded cleanup timeout), rethrow the `OperationCanceledException` to preserve standard cancellation semantics.
 
 2. **Protected Process Whitelist:**
@@ -84,17 +86,20 @@ flowchart TD
 
 ### 3.2 Step 2: Container Liveness Probe (5s) & Container Recycling (5s Retry)
 
-1. **Initial Liveness Probe (5-Second Timeout):**
-   - Immediately after Step 1 completes (or if Step 1 timed out / failed), run a lightweight probe command inside the container (e.g., `docker exec <containerName> echo __NCF_PROBE_OK__` or equivalent sentinel check) with a strict **5-second timeout**.
+1. **Recovery Telemetry Contract (`ContainerRecoveryStage`):**
+   - Define `ContainerRecoveryStage` (`None`, `ProcessSweepSucceeded`, `ContainerRecreated`, `WslShutdownRecovered`, `RecoveryFailed`) in [`OperationsTelemetryModels.cs`](../../src/NightCodeForge.Core/Workflow/OperationsTelemetryModels.cs) and include it as an optional property on `ShellCommandRecord` (`ContainerRecoveryStage RecoveryStage = ContainerRecoveryStage.None`) so recovery outcomes are recorded on `RecordShellCommandCompleted` without adding new dependencies to `NightCodeForgeContainerExecutor`.
+
+2. **Initial Liveness Probe (5-Second Timeout):**
+   - Immediately after Step 1 completes (or if Step 1 timed out / failed), run a lightweight probe command inside the container (e.g., `docker exec <containerName> echo __NCF_PROBE_OK__` or equivalent sentinel check) via `_processRunner.RunAsync` with a strict **5-second timeout**.
    - If the probe exits with code `0` and emits the expected probe token within 5 seconds:
      - Start a fresh interactive shell session (`StartShellProcess()`).
      - Record recovery telemetry (`ContainerRecoveryStage.ProcessSweepSucceeded`) and return the timeout `CommandResult` (exit code `124`).
 
-2. **Container Kill, Recreation & Probe Retry (5-Second Timeout):**
+3. **Container Kill, Recreation & Probe Retry (5-Second Timeout):**
    - If the initial probe times out after 5 seconds or returns a non-zero exit code:
      - Log a warning indicating that container `{ContainerName}` is unresponsive after timeout and is being recycled.
      - Force-remove the wedged container (`docker rm -f <containerName>` with a bounded timeout, e.g., 10s).
-     - Recreate and start a clean container instance (`EnsureContainerRunning()`).
+     - Recreate and start a clean container instance (`EnsureContainerRunning()`, ensuring container creation proceeds during recovery when `CustomProcessFactory == null`).
      - **Retry the liveness probe with a 5-second timeout.**
      - If the retry probe succeeds within 5 seconds:
        - Start a fresh interactive shell session (`StartShellProcess()`).
@@ -116,12 +121,14 @@ flowchart TD
      - Recreate/start the container via `EnsureContainerRunning()`.
      - **Retry the container liveness probe with a 30-second timeout.**
    - If the 30-second probe succeeds, start a fresh interactive shell session and record telemetry (`ContainerRecoveryStage.WslShutdownRecovered`).
-   - If the 30-second probe still fails, log an error with full diagnostic context and surface a clear failure message in the command result.
+   - If the 30-second probe still fails, log an error with full diagnostic context, record `ContainerRecoveryStage.RecoveryFailed`, and surface a clear failure message in the timeout `CommandResult` (exit code `124`).
 
 3. **`WslExecutionEnvironment` (`WslDirect` Mode) Parity:**
-   - When a command times out in `WslExecutionEnvironment` on Windows:
+   - In [`WslExecutionEnvironment.ExecuteAsync`](../../src/NightCodeForge.Infrastructure/Execution/WslExecutionEnvironment.cs), command timeouts surface either as `res.ExitCode == 124` (from `IProcessRunner`) or `OperationCanceledException when (!cancellationToken.IsCancellationRequested)` (from the internal timeout `CancellationTokenSource`).
+   - On Windows (`RuntimeInformation.IsOSPlatform(OSPlatform.Windows)`), both timeout paths must:
      - Run a 5-second WSL probe (`wsl.exe [-d <distro>] -- echo __NCF_PROBE_OK__`).
-     - If the 5-second probe fails, execute `wsl.exe --shutdown` and retry the probe with a **30-second timeout**.
+     - If the 5-second probe fails or times out, execute `wsl.exe --shutdown` and retry the probe with a **30-second timeout**.
+     - Always return the standard timeout `CommandResult` (`ExitCode: 124`, `Truncated: true`, `StandardError` containing `"WSL command execution timed out"`) whether the recovery probe succeeded or failed.
 
 ---
 
@@ -133,14 +140,17 @@ flowchart TD
    - Existing containers created prior to this change do not require forced drift-detection recreation solely for `--init`/`--pids-limit`; they will adopt the new flags naturally as containers are reaped or recycled.
 
 2. **Expand `TaskContainerReaper` & Lifecycle Teardown to Non-Active States:**
-   - When a task transitions to `Ready` (awaiting human review in Review Room), `WaitingForHuman` (awaiting human answer in Inbox), or `Failed` (in [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs), or in `TaskLifecycleMutationCoordinator` / `TaskOrchestrator` once [Step 11.38D](STEP_11_38D_TASK_ORCHESTRATOR_AND_STARTUP_RECOVERY_DECOMPOSITION.md) is applied):
-     - Tear down its per-task sandbox container (`CleanupTaskContainerAsync`) so idle containers and in-container daemons (`csnav`) do not consume gigabytes of WSL2 memory while waiting for human action.
+   - When a task finishes a worker turn in [`TaskOrchestrator.ProcessTaskAsync`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) (and [`TaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs)) and its resulting state is non-executing:
+     - Specifically, when `task.Status` is `Ready` (awaiting human review in Review Room), `Failed`, `Cancelled`, `Closed`, or `Rejected`, **or** when `task.IsWaitingForHuman == true` (awaiting human answer or manual conflict rebase in Inbox) or `task.IsDeferredByPause == true`:
+     - Tear down its per-task sandbox container via [`ITaskWorkspacePreparer.CleanupTaskContainerSafeAsync`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs) so idle containers and in-container daemons (`csnav`) do not consume gigabytes of WSL2 memory while waiting for human action.
+     - **Cross-Cohort Loopback Guard:** Do **not** key container teardown off `cohortExitReason == CohortExitReason.Failed` alone, because cross-cohort loopbacks (e.g., `HandleCrossCohortLoopBackAsync` or `ConflictVerificationOutcome.LoopedBackToImplementation`) set `cohortExitReason = CohortExitReason.Failed` while leaving `task.Status == TaskOverallStatus.Open` and immediately enqueuing the target stage. Always inspect the actual post-run task state (`Status`, `IsWaitingForHuman`, `IsDeferredByPause`).
      - When the task later resumes (e.g., human answers a question, requests changes in Review Room, or restarts a failed stage), `EnsureContainerRunning` transparently recreates the container on demand with all volume mounts and caches intact.
    - Update [`TaskContainerReaper.ReapAsync`](../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) so periodic and startup sweeps also reap containers belonging to `Failed` tasks, `Ready` tasks, and `Open` tasks where `IsWaitingForHuman == true` or `IsDeferredByPause == true`.
 
 3. **Idle Workspace Container TTL Eviction:**
-   - Track `LastExecutionTimestampUtc` on `NightCodeForgeContainerExecutor`.
-   - During periodic maintenance sweeps (e.g., `GitSyncService` / `TaskContainerReaper`), any shared workspace container (`ncf-sandbox-{workspaceId}` or `-ro` container) that is not currently executing a command and has been idle for longer than `IdleContainerTimeoutMinutes` (default: `30 minutes`) is stopped and removed.
+   - Track `LastExecutionTimestampUtc` (initialized to `DateTime.UtcNow` and updated when `ExecuteAsync` completes) and `IsExecuting` (true while `_execLock` is held) on `NightCodeForgeContainerExecutor`.
+   - Expose an idle workspace container eviction method on [`IExecutionEnvironmentProvider`](../../src/NightCodeForge.Core/Interfaces/IExecutionEnvironment.cs) (implemented on [`ExecutionEnvironmentProvider`](../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs)) and invoke it during periodic maintenance sweeps ([`GitSyncService.PruneWorktreesAsync`](../../src/NightCodeForge.Web/Services/GitSyncService.cs) / `TaskContainerReaper.ReapAsync`).
+   - Any cached workspace-level container (`TaskId == null`, e.g., `ncf-sandbox-{workspaceId}`) that is not currently executing a command (`!IsExecuting`) and has been idle for longer than `IdleContainerTimeoutMinutes` (default: `30 minutes`) is removed from `_cachedEnvironments`, disposed, and its base container is removed via `IContainerEnvironmentFactory.RemoveBaseContainerAsync`.
 
 ---
 

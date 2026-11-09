@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 1 of 2 — Backend Hosted Service, Proxy Lifecycle & Kestrel Headers)**  
 > *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Companion Step (Post-MVP UI):* [Step 12.16B: Tailscale Settings UI, QR Code Onboarding & Live Mesh Status](../../features/STEP_12_16B_TAILSCALE_SETTINGS_UI_AND_LIVE_STATUS.md)  
+> *Companion Step (Post-MVP UI):* [Step 12.16B: Tailscale Settings UI, QR Code Onboarding & Live Mesh Status](STEP_12_16B_TAILSCALE_SETTINGS_UI_AND_LIVE_STATUS.md)  
 > *Related Steps:* [Step 12.8A: Mobile-Responsive Layout & Touch Ergonomics](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)  
 > *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)

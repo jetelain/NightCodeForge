@@ -1,11 +1,11 @@
 # 📱 Step 12.8B: Installable Progressive Web App (PWA) Manifest & Service Worker Shell
 
 > **Feature Implementation Step (Part 2 of 3 — PWA Packaging, Service Worker & CSP Alignment)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.8A: Mobile-Responsive Layout & Touch Ergonomics](../archive/phase-12/STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Prerequisite Step:* [Step 12.8A: Mobile-Responsive Layout & Touch Ergonomics](STEP_12_8A_MOBILE_RESPONSIVE_LAYOUT_AND_TOUCH_ERGONOMICS.md)  
 > *Companion Step:* [Step 12.8C: Web Worker Notifications & Subject Preferences](STEP_12_8C_WEB_WORKER_NOTIFICATIONS_AND_SUBJECT_PREFERENCES.md)  
-> *Related Steps:* [Step 12.16A: Tailscale Serve & HTTPS](../archive/phase-12/STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
+> *Related Steps:* [Step 12.16A: Tailscale Serve & HTTPS](STEP_12_16A_TAILSCALE_SERVE_SERVICE_AND_FORWARDED_HEADERS.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* ✅ Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -19,7 +19,7 @@ Running NightCodeForge inside standard mobile browser tabs wastes vertical scree
 This step (Part 2 of Step 12.8) configures NightCodeForge as an **installable Progressive Web App (PWA)**:
 1. **Web App Manifest (`wwwroot/manifest.webmanifest`) & Icons:** Provide a valid web manifest with `display: "standalone"`, MIME type `application/manifest+json`, and raster icons (`icon-192.png` at $192\times 192\text{px}$ and `icon-512.png` at $512\times 512\text{px}$) with maskable purpose alongside `favicon.svg`.
 2. **Service Worker (`wwwroot/service-worker.js`):** Implement a network-first static asset caching service worker that strictly bypasses non-`GET` requests, dynamic Blazor Server circuits (`/_blazor`), SignalR hubs (`/hubs/`), and Hangfire (`/hangfire`), with offline app-shell navigation fallback.
-3. **CSP & `App.razor` Registration:** Update [`ContentSecurityPolicyMiddleware.cs`](../../src/NightCodeForge.Web/Middleware/ContentSecurityPolicyMiddleware.cs) to allow `manifest-src 'self';` and register the manifest, Apple/mobile meta tags, and service worker in [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor).
+3. **CSP & `App.razor` Registration:** Update [`ContentSecurityPolicyMiddleware.cs`](../../../src/NightCodeForge.Web/Middleware/ContentSecurityPolicyMiddleware.cs) to allow `manifest-src 'self';` and register the manifest, Apple/mobile meta tags, and service worker in [`App.razor`](../../../src/NightCodeForge.Web/Components/App.razor).
 
 ---
 
@@ -134,8 +134,8 @@ self.addEventListener('fetch', (event) => {
 });
 ```
 
-### 2.3 Registration in [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor), [`app.js`](../../src/NightCodeForge.Web/wwwroot/js/app.js) & CSP Alignment
-1. **CSP Header Update:** Ensure [`ContentSecurityPolicyMiddleware.cs`](../../src/NightCodeForge.Web/Middleware/ContentSecurityPolicyMiddleware.cs) explicitly includes `manifest-src 'self';` alongside `worker-src 'self' blob:;`.
+### 2.3 Registration in [`App.razor`](../../../src/NightCodeForge.Web/Components/App.razor), [`app.js`](../../../src/NightCodeForge.Web/wwwroot/js/app.js) & CSP Alignment
+1. **CSP Header Update:** Ensure [`ContentSecurityPolicyMiddleware.cs`](../../../src/NightCodeForge.Web/Middleware/ContentSecurityPolicyMiddleware.cs) explicitly includes `manifest-src 'self';` alongside `worker-src 'self' blob:;`.
 2. **Manifest & Meta Tags in `App.razor`:** Add the manifest link, mobile web-app meta tags:
    - `<link rel="manifest" href="manifest.webmanifest" />`
    - `<meta name="theme-color" content="#4f46e5" />`
@@ -164,7 +164,7 @@ self.addEventListener('fetch', (event) => {
   - [x] Ensure `.webmanifest` is served with `application/manifest+json`.
 - [x] **Service Worker & CSP:**
   - [x] Implement `wwwroot/service-worker.js` with `GET`-only network-first static asset caching, navigational `/` fallback (`Response.error()` when uncached offline), and `/_blazor` + `/hubs/` + `/hangfire` bypass.
-  - [x] Update [`ContentSecurityPolicyMiddleware.cs`](../../src/NightCodeForge.Web/Middleware/ContentSecurityPolicyMiddleware.cs) to include `manifest-src 'self';`.
-  - [x] Wire manifest link and meta tags in [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor), and secure-context Service Worker registration in [`app.js`](../../src/NightCodeForge.Web/wwwroot/js/app.js).
+  - [x] Update [`ContentSecurityPolicyMiddleware.cs`](../../../src/NightCodeForge.Web/Middleware/ContentSecurityPolicyMiddleware.cs) to include `manifest-src 'self';`.
+  - [x] Wire manifest link and meta tags in [`App.razor`](../../../src/NightCodeForge.Web/Components/App.razor), and secure-context Service Worker registration in [`app.js`](../../../src/NightCodeForge.Web/wwwroot/js/app.js).
 - [x] **Automated Testing:**
-  - [x] Unit/integration tests in [`PwaManifestAndServiceWorkerTests.cs`](../../tests/NightCodeForge.Web.Tests/PwaManifestAndServiceWorkerTests.cs) and [`ContentSecurityPolicyMiddlewareTests.cs`](../../tests/NightCodeForge.Web.Tests/ContentSecurityPolicyMiddlewareTests.cs) verifying `ContentSecurityPolicyMiddleware` emits `manifest-src 'self';`, `/manifest.webmanifest` + `/service-worker.js` MIME types, PNG icon dimensions/headers, dynamic `PRECACHE_URLS` existence in `wwwroot`, and `App.razor` / `app.js` wiring.
+  - [x] Unit/integration tests in [`PwaManifestAndServiceWorkerTests.cs`](../../../tests/NightCodeForge.Web.Tests/PwaManifestAndServiceWorkerTests.cs) and [`ContentSecurityPolicyMiddlewareTests.cs`](../../../tests/NightCodeForge.Web.Tests/ContentSecurityPolicyMiddlewareTests.cs) verifying `ContentSecurityPolicyMiddleware` emits `manifest-src 'self';`, `/manifest.webmanifest` + `/service-worker.js` MIME types, PNG icon dimensions/headers, dynamic `PRECACHE_URLS` existence in `wwwroot`, and `App.razor` / `app.js` wiring.

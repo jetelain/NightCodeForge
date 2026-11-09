@@ -34,6 +34,6 @@
 ## 3. Completed Post-MVP Features (Phase 12 Archive)
 
 - **Master Archive Summary:** [12_EXTEND_FEATURES.md](12_EXTEND_FEATURES.md)
-- **Step Specifications Directory:** [`phase-12/`](phase-12/) (11 completed steps: `12.1A`, `12.3`, `12.8A`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.17`, `12.19`, `12.24`, `12.26`)
+- **Step Specifications Directory:** [`phase-12/`](phase-12/) (19 completed steps: `12.1A`, `12.3`, `12.8A`, `12.8B`, `12.8C`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.16B`, `12.17`, `12.19`, `12.20A`, `12.24`, `12.25A`, `12.25B`, `12.26`, `12.29`, `12.30`)
 - **Remaining Features:** Tracked in [`docs/features/README.md`](../features/README.md)
 
