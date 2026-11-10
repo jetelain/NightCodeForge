@@ -129,5 +129,16 @@ public class OpenAiCompatibleGatewayServiceTests
         var ctx = await gateway.ResolveContextWindowAsync(null!);
         Assert.Equal(64000, ctx);
     }
+
+    [Fact]
+    public async Task SessionUsageAndAffinityRelease_OnOpenAiCompatible_ReturnNullAndFalseAsNoOps()
+    {
+        var options = Options.Create(new LlmProviderOptions());
+        var cache = new OpenAiModelAllowlistCache();
+        var gateway = new OpenAiCompatibleGatewayService(new HttpClient(), options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleGatewayService>.Instance);
+
+        Assert.Null(await gateway.GetSessionUsageAsync("ncf-task1-stage-1"));
+        Assert.False(await gateway.ReleaseSessionAffinityAsync("ncf-task1-stage-1"));
+    }
 }
 

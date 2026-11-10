@@ -120,6 +120,7 @@ public class TestCrucibleHarnessBuilder
         var coordinator = new CrucibleConversationCoordinator(
             TaskRepository,
             TranscriptService,
+            GatewayService,
             NullLogger<CrucibleConversationCoordinator>.Instance);
 
         return new CrucibleAgentHarness(

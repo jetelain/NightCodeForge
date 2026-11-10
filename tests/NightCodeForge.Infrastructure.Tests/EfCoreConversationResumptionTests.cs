@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
 using Xunit;
@@ -211,5 +212,83 @@ public class EfCoreConversationResumptionTests : IDisposable
         // Next turn added after sanitization gets TurnIndex == 3
         var nextTurn = await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Assistant, content: "Resumed and completed");
         Assert.Equal(3, nextTurn.TurnIndex);
+    }
+
+    [Fact]
+    public async Task UpdateConversationUsageAsync_AccumulatesCostAndTokensAcrossMultipleTurns_AndPersistsStageExecutionRecordCosts()
+    {
+        using var context = await CreateContextAsync();
+        var ws = new Workspace { Name = "Test WS", RepositoryPath = "/repos/test" };
+        context.Workspaces.Add(ws);
+        await context.SaveChangesAsync();
+
+        var task = new ForgeTask { WorkspaceId = ws.Id, Title = "Cost Tracking Task", Status = TaskOverallStatus.Open };
+        context.Tasks.Add(task);
+        await context.SaveChangesAsync();
+
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
+        var conv = await repo.StartConversationAsync(task.Id, "implementation", WorkflowStageKind.Agentic, 1);
+
+        var delta1 = new SessionUsageDelta(
+            InputTokens: 1000,
+            OutputTokens: 200,
+            CachedInputTokens: 600,
+            Cost: 0.004,
+            ActualCloudCost: 0.001,
+            ElectricityCost: 0.003,
+            CloudSavings: 0.025,
+            Currency: "$");
+
+        var delta2 = new SessionUsageDelta(
+            InputTokens: 1500,
+            OutputTokens: 300,
+            CachedInputTokens: 1100,
+            Cost: 0.006,
+            ActualCloudCost: 0.002,
+            ElectricityCost: 0.004,
+            CloudSavings: 0.035,
+            Currency: "$");
+
+        await repo.UpdateConversationUsageAsync(conv.Id, delta1);
+        await repo.UpdateConversationUsageAsync(conv.Id, delta2);
+
+        await repo.AddExecutionRecordAsync(new StageExecutionRecord
+        {
+            TaskId = task.Id,
+            StageId = "implementation",
+            StageKind = WorkflowStageKind.Agentic.ToString(),
+            HarnessId = "crucible",
+            ModelName = "qwen3:32b",
+            PromptTokens = 1000,
+            CompletionTokens = 200,
+            TotalTokens = 1200,
+            CachedInputTokens = 600,
+            Cost = 0.004,
+            ActualCloudCost = 0.001,
+            ElectricityCost = 0.003,
+            CloudSavings = 0.025,
+            Currency = "$",
+            Status = StageExecutionStatus.Completed
+        });
+
+        using var verifyContext = new AppDbContext(_options);
+        var reloadedConv = await verifyContext.Conversations.FindAsync(conv.Id);
+        Assert.NotNull(reloadedConv);
+        Assert.Equal(2500, reloadedConv.InputTokens);
+        Assert.Equal(500, reloadedConv.OutputTokens);
+        Assert.Equal(1700, reloadedConv.CachedInputTokens);
+        Assert.Equal(0.010, reloadedConv.Cost!.Value, precision: 6);
+        Assert.Equal(0.003, reloadedConv.ActualCloudCost!.Value, precision: 6);
+        Assert.Equal(0.007, reloadedConv.ElectricityCost!.Value, precision: 6);
+        Assert.Equal(0.060, reloadedConv.CloudSavings!.Value, precision: 6);
+        Assert.Equal("$", reloadedConv.Currency);
+
+        var reloadedRecord = await verifyContext.StageExecutionRecords.SingleAsync(r => r.TaskId == task.Id);
+        Assert.Equal(600, reloadedRecord.CachedInputTokens);
+        Assert.Equal(0.004, reloadedRecord.Cost!.Value, precision: 6);
+        Assert.Equal(0.001, reloadedRecord.ActualCloudCost!.Value, precision: 6);
+        Assert.Equal(0.003, reloadedRecord.ElectricityCost!.Value, precision: 6);
+        Assert.Equal(0.025, reloadedRecord.CloudSavings!.Value, precision: 6);
+        Assert.Equal("$", reloadedRecord.Currency);
     }
 }

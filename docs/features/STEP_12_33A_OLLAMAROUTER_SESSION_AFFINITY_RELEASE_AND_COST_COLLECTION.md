@@ -3,8 +3,8 @@
 > **Feature Specification (Part 1 of 2 — Backend Engine, Session Lifecycle, Gateway API & Delta Accounting)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisites:* [Step 11.33: Unified LLM Provider & Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.29: Smart Router Model Preload & Context-Intent Warmup](../archive/phase-12/STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)  
-> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Agents.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests`  
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
 > *OpenAPI Specification:* OllamaRouter OpenAPI 3.1.1 (`/api/router/sessions/affinity/release`, `/api/router/monitor/sessions/{sessionId}`)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
@@ -188,8 +188,10 @@ For any conversation lifecycle session with identifier `sessionId`:
    - Extend `ILlmGatewayService` (implemented by `OllamaRouterGatewayService`, `OllamaGatewayServiceBase`, and `OpenAiCompatibleGatewayService`):
      - `Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default);`
      - `Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default);`
-   - In `OllamaRouterGatewayService.ReleaseSessionAffinityAsync`:
-     - Construct a per-request `HttpRequestMessage(HttpMethod.Post, OllamaApiPaths.RouterSessionAffinityRelease)` and attach `request.Headers.TryAddWithoutValidation(OllamaRoutingHeaders.SessionId, sessionId.Trim())` (never mutate shared `Http.DefaultRequestHeaders`).
+   - In `OllamaRouterGatewayService.GetSessionUsageAsync` and `ReleaseSessionAffinityAsync`:
+     - Enforce `StatusTimeout` via a linked `CancellationTokenSource` so neither call can block callers when the router is slow or unreachable.
+     - In `GetSessionUsageAsync`, treat `404 Not Found` as normal zero usage (`null` without warning noise), and log structured warnings on non-404 HTTP errors or recoverable transport/timeout failures.
+     - In `ReleaseSessionAffinityAsync`, construct a per-request `HttpRequestMessage(HttpMethod.Post, OllamaApiPaths.RouterSessionAffinityRelease)` and attach `request.Headers.TryAddWithoutValidation(OllamaRoutingHeaders.SessionId, sessionId.Trim())` (never mutate shared `Http.DefaultRequestHeaders`).
 
 ### 4.2 Domain Entity, Metrics & Repository Updates
 1. **`StageExecutionRecord` (`src/NightCodeForge.Core/Domain/StageExecutionRecord.cs`):**
@@ -225,16 +227,16 @@ For any conversation lifecycle session with identifier `sessionId`:
      - Derive `sessionId = LlmSessionIds.ForStage(taskId, stageId)`, query `GetSessionUsageAsync(sessionId)` to capture $S_{\text{start}}$, and store both `SessionId` and `BaselineUsage` on `CrucibleConversationState`.
    - In `CrucibleConversationCoordinator.SaveTranscriptAsync`:
      - Note that every exit path in `CrucibleAgentHarness` (`Completed`, `RequestChanges`, `WaitingForHuman`, `Failed`, `AbortOnCancellationAsync`, and `SuspendOnPauseAsync`) already invokes `SaveAsync` $\rightarrow$ `SaveTranscriptAsync`.
-     - Inside `SaveTranscriptAsync`, query `GetSessionUsageAsync(state.SessionId)` to compute `SessionUsageDelta`, store `state.LastUsageDelta`, accumulate usage onto the `Conversation` entity, and call `ReleaseSessionAffinityAsync(state.SessionId)`.
+     - Inside `SaveTranscriptAsync` (using a `SessionTelemetryTimeout` of 5 seconds), query `GetSessionUsageAsync(state.SessionId)` to compute `SessionUsageDelta`, store `state.LastUsageDelta`, and accumulate usage onto the `Conversation` entity via `UpdateConversationUsageAsync` **before** saving the markdown transcript (enriching `TranscriptMetadata.Metrics` with router token/cost deltas) and **before** transitioning `Conversation.Status` via `CompleteConversationAsync`, then call `ReleaseSessionAffinityAsync(state.SessionId)`.
      - `CrucibleAgentHarness.CurrentMetrics(...)` reads `conversationState.LastUsageDelta` so `AgentRunResult.Metrics` carries the computed cost/token delta into `TaskOrchestrator` and live telemetry events.
 2. **Ideation Lifecycle (`LlmSessionIds`, `IdeationService`, & `Ideation.razor`):**
-   - **Stable Per-Conversation Session ID:** Add `LlmSessionIds.ForIdeation(int workspaceId, int? conversationId = null)` in `src/NightCodeForge.Agents/Inference/OllamaRoutingHeaders.cs`, returning `ncf-ideation-ws{workspaceId}-conv{conversationId}` when `conversationId` is provided (falling back to `ncf-ideation-ws{workspaceId}-{Guid.NewGuid():N}` only for transient/unpersisted calls). Pass `conversationId: Session.ActiveConversationId` into `IdeationService.ConverseStreamingAsync` so all turns of an Ideation conversation reuse the same router session ID and KV-cache lease.
-   - **Per-Turn Delta Capture (Without Premature Lease Release):** At the start of each `ConverseStreamingAsync` turn, capture $S_{\text{start}}$ for the ideation `sessionId`; at the end of the turn (in `finally`, using a short timeout token if cancelled), capture $S_{\text{final}}$, compute `SessionUsageDelta`, accumulate it onto the active `Conversation` via `ITaskRepository` (and attach it to `IdeationResult`), **without** releasing session affinity between active user turns so the next turn stays warm on the same node.
-   - **Explicit Affinity Release When Leaving/Ending Session:** Add a method on `IIdeationService` (e.g., `ReleaseConversationSessionAsync(int workspaceId, int conversationId, CancellationToken cancellationToken = default)`) or call `ILlmGatewayService.ReleaseSessionAffinityAsync` when:
+   - **Stable Per-Conversation Session ID:** Define `OllamaRoutingHeaders` and `LlmSessionIds.ForIdeation(int workspaceId, int? conversationId = null)` in `src/NightCodeForge.Core/Inference/OllamaRoutingHeaders.cs`, returning `ncf-ideation-ws{workspaceId}-conv{conversationId}` when `conversationId` is provided (falling back to `ncf-ideation-ws{workspaceId}-{Guid.NewGuid():N}` only for transient/unpersisted calls). Pass `conversationId: Session.ActiveConversationId` into `IdeationService.ConverseStreamingAsync` so all turns of an Ideation conversation reuse the same router session ID and KV-cache lease.
+   - **Per-Turn Delta Capture (Without Premature Lease Release):** At the start of each `ConverseStreamingAsync` turn, capture $S_{\text{start}}$ for the ideation `sessionId`; at the end of the turn (via `CaptureAndPersistSessionUsageDeltaAsync` before saving the markdown transcript on normal completion, and in `finally` if interrupted/cancelled mid-stream), capture $S_{\text{final}}$ using `SessionTelemetryTimeout` (5s), compute `SessionUsageDelta`, accumulate it onto the active `Conversation` via `ITaskRepository.UpdateConversationUsageAsync` (and attach it to `IdeationResult` and `TranscriptMetadata.Metrics`), **without** releasing session affinity between active user turns so the next turn stays warm on the same node.
+   - **Explicit Affinity Release When Leaving/Ending Session:** Add `ReleaseConversationSessionAsync(int workspaceId, int conversationId, CancellationToken cancellationToken = default)` on `IIdeationService`, and invoke it in `Ideation.razor` using the conversation's bound workspace ID (`Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id`) when:
      - The user clicks "Clear Chat" (`ResetSession` in `Ideation.razor`),
-     - The user switches to a different saved session (`HandleSessionSelectedAsync` in `Ideation.razor`),
+     - The user switches to a different saved session (`HandleSessionSelectedAsync` in `Ideation.razor`) or task refinement session (`TryInitializeTaskRefinementAsync`),
      - The user cancels an active generation (`CancelGenerationAsync`), or
-     - The workspace changes / `Ideation.razor` is disposed (`HandleWorkspaceChanged` / `Dispose`).
+     - The workspace changes / `Ideation.razor` is disposed (`HandleWorkspaceChanged` / `Dispose`, ensuring the *previous* workspace's ID is passed even after `WorkspaceState.ActiveWorkspace` has updated).
 3. **Fail-Fast & Provider Agnosticism:**
    - Network timeouts during telemetry or cost inspection must log structured warnings and fall back to a null/zero delta, while unexpected deserialization breaks must never be swallowed with bare `catch { }` blocks.
    - Calling `ReleaseSessionAffinityAsync` or `GetSessionUsageAsync` when connected to standalone Ollama (`OllamaGatewayService`) or OpenAI-Compatible (`OpenAiCompatibleGatewayService`) providers returns `false` / `null` without throwing or emitting warnings.
@@ -244,19 +246,30 @@ For any conversation lifecycle session with identifier `sessionId`:
 ## 5. Verification & Acceptance Criteria
 
 ### 5.1 Automated Unit & Integration Tests
-1. **`OllamaRouterGatewayServiceTests`:**
+1. **`OllamaRouterGatewayServiceTests`, `OllamaGatewayServiceTests`, & `OpenAiCompatibleGatewayServiceTests`:**
    - Verify `ReleaseSessionAffinityAsync` issues `POST api/router/sessions/affinity/release` with a per-request `X-OllamaRouter-Session-Id` header and parses `released: true/false`.
-   - Verify `GetSessionUsageAsync` issues `GET api/router/monitor/sessions/{sessionId}`, returns parsed DTO on 200, and returns `null` on 404.
-   - Verify standalone `OllamaGatewayService` and `OpenAiCompatibleGatewayService` return `false` / `null` as no-ops.
-2. **`SessionDeltaAccountingTests`:**
+   - Verify `GetSessionUsageAsync` issues `GET api/router/monitor/sessions/{sessionId}`, returns parsed DTO on 200, and returns `null` on 404 or HTTP 500.
+   - Verify standalone `OllamaGatewayService` and `OpenAiCompatibleGatewayService` return `false` / `null` as no-ops without issuing HTTP calls.
+2. **`SessionDeltaAccountingTests` & `EfCoreConversationResumptionTests`:**
    - Test delta math with baseline zero, baseline existing (stage retry / resumed session), and unconfigured pricing (`Cost == null` preserved as `null`, never coerced to `0.0`).
    - Verify tokens and costs are clamped to $\ge 0$.
+   - Verify `EfCoreTaskRepository.UpdateConversationUsageAsync` accumulates token and cost deltas across multiple calls in SQLite and persists `StageExecutionRecord` cost fields.
 3. **`CrucibleConversationCoordinatorLifecycleTests`:**
    - Verify `BeginAsync` captures baseline $S_{\text{start}}$ for `LlmSessionIds.ForStage(taskId, stageId)`.
    - Verify `SaveTranscriptAsync` captures $S_{\text{final}}$, computes `state.LastUsageDelta`, accumulates cost/tokens onto `Conversation`, and invokes `ReleaseSessionAffinityAsync`.
-   - Verify affinity release and delta capture occur across all termination paths (`Completed`, `WaitingForHuman`, `Failed`, and cancellation).
-   - Verify `TaskOrchestrator` maps `AgentRunMetrics` cost fields onto `StageExecutionRecord`.
-4. **`IdeationLifecycleTests`:**
+   - Verify affinity release and delta capture occur across all termination paths (`Completed`, `WaitingForHuman`, `Failed`, `Cancelled`, and `Interrupted`).
+   - Verify `CrucibleAgentHarness.RunStageAsync` propagates `LastUsageDelta` and fallback token counts to `AgentRunResult.Metrics`, and `TaskOrchestrator` maps `AgentRunMetrics` cost fields onto `StageExecutionRecord`.
+4. **`IdeationLifecycleTests` & `IdeationPageTests`:**
    - Verify `LlmSessionIds.ForIdeation(workspaceId, conversationId)` produces a deterministic session ID across turns of the same conversation.
-   - Verify each turn accumulates delta usage onto the `Conversation` without releasing affinity mid-chat, and that session reset/switch/cancel/dispose triggers `ReleaseSessionAffinityAsync`.
+   - Verify each turn accumulates delta usage onto the `Conversation` (including in `finally` when cancelled mid-stream) without releasing affinity mid-chat, and that session reset/switch/workspace-change triggers `ReleaseConversationSessionAsync` with the bound `(workspaceId, conversationId)`.
+
+### 5.2 Definition of Done (DoD) Checklist
+- [x] Add `RouterSessionAffinityRelease` and `RouterMonitorSessionsPrefix` route constants to `OllamaApiPaths` in `LlmEndpointOptions.cs`.
+- [x] Define `RouterSessionUsage`, `RouterSessionUsageTargetItem`, `RouterSessionAffinityReleaseResult`, and `SessionUsageDelta` (with null-preserving cost delta math and `ApplyTo(Conversation)`) in `IOllamaRouterGatewayService.cs`.
+- [x] Extend `ILlmGatewayService`, `OllamaRouterGatewayService` (with `StatusTimeout` and structured warning logging), `OllamaGatewayServiceBase`, and `OpenAiCompatibleGatewayService` with `GetSessionUsageAsync` and `ReleaseSessionAffinityAsync`.
+- [x] Add cost and token properties (`Cost`, `ActualCloudCost`, `ElectricityCost`, `CloudSavings`, `Currency`, `CachedInputTokens`, `InputTokens`, `OutputTokens`) to `StageExecutionRecord`, `Conversation`, and `AgentRunMetrics`, and map them in `TaskOrchestrator.MapAgentRunResultToStageResult`.
+- [x] Implement `UpdateConversationUsageAsync` in `ITaskRepository`, `EfCoreTaskRepository`, and `InMemoryTaskRepository`, and add EF Core migration `20261110110000_AddSessionCostAndTokenMetrics` with pre-migration baselining in `AppDbContext`.
+- [x] Wire baseline snapshot capture, final delta computation, conversation usage accumulation, and session affinity release into `CrucibleConversationCoordinator` and `CrucibleAgentHarness` (preserving the $\le 10$ constructor parameter ceiling).
+- [x] Wire deterministic ideation session IDs (`LlmSessionIds.ForIdeation`), per-turn delta accounting in `IdeationService`, and explicit session affinity release in `Ideation.razor` on session switch, reset, cancellation, task refinement switch, workspace change, and disposal.
+- [x] Author unit, integration, and component tests in `OllamaRouterGatewayServiceTests`, `OllamaGatewayServiceTests`, `OpenAiCompatibleGatewayServiceTests`, `SessionDeltaAccountingTests`, `EfCoreConversationResumptionTests`, `CrucibleConversationCoordinatorLifecycleTests`, `IdeationLifecycleTests`, and `IdeationPageTests`, and verify all tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 

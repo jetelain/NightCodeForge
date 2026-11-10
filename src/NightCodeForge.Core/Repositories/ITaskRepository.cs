@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Core.Repositories;
 
@@ -60,6 +61,11 @@ public interface ITaskRepository
         StageExecutionStatus status,
         string? summary = null,
         string? transcriptFileName = null,
+        CancellationToken cancellationToken = default);
+
+    Task UpdateConversationUsageAsync(
+        int conversationId,
+        SessionUsageDelta usageDelta,
         CancellationToken cancellationToken = default);
 
     Task<ConversationTurn> AddConversationTurnAsync(
@@ -667,6 +673,23 @@ public class InMemoryTaskRepository : ITaskRepository
                     : DateTime.UtcNow;
                 if (summary != null) conversation.Summary = summary;
                 if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task UpdateConversationUsageAsync(
+        int conversationId,
+        SessionUsageDelta usageDelta,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(usageDelta);
+        lock (_lock)
+        {
+            if (_conversations.TryGetValue(conversationId, out var conversation))
+            {
+                usageDelta.ApplyTo(conversation);
             }
             return Task.CompletedTask;
         }

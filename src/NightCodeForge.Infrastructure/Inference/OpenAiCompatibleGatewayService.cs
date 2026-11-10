@@ -70,6 +70,12 @@ public sealed class OpenAiCompatibleGatewayService : ILlmGatewayService
     public Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ResidentModelInfo>>(Array.Empty<ResidentModelInfo>());
 
+    public Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<RouterSessionUsage?>(null);
+
+    public Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
     public Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default)
     {
         string effectiveModel;

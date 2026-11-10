@@ -105,4 +105,15 @@ public class OllamaGatewayServiceTests
         Assert.True(cache.TryGetContextWindow("qwen3.8:27b", out var cachedCtx));
         Assert.Equal(32768, cachedCtx);
     }
+
+    [Fact]
+    public async Task SessionUsageAndAffinityRelease_OnStandaloneOllama_AreNoOpsWithoutHttpCalls()
+    {
+        var handler = new StubHttpHandler(Routes);
+        var service = CreateService(handler);
+
+        Assert.Null(await service.GetSessionUsageAsync("ncf-task1-stage-1"));
+        Assert.False(await service.ReleaseSessionAffinityAsync("ncf-task1-stage-1"));
+        Assert.Empty(handler.Requests);
+    }
 }

@@ -23,7 +23,8 @@ public record IdeationResult(
     IReadOnlyList<IdeationProposal> ProposedTasks,
     IReadOnlyList<IdeationToolCallInfo>? ToolCalls = null,
     string? TranscriptPath = null,
-    string? FullTranscriptMarkdown = null);
+    string? FullTranscriptMarkdown = null,
+    SessionUsageDelta? UsageDelta = null);
 
 public enum IdeationStreamUpdateKind
 {
@@ -83,6 +84,7 @@ public interface IIdeationService
         IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
         AgentProfile? agentProfile = null,
         string? customSystemPrompt = null,
+        int? conversationId = null,
         CancellationToken cancellationToken = default);
 
     Task<IdeationResult> ConverseAsync(
@@ -98,6 +100,7 @@ public interface IIdeationService
         IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
         AgentProfile? agentProfile = null,
         string? customSystemPrompt = null,
+        int? conversationId = null,
         CancellationToken cancellationToken = default);
 
     IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
@@ -105,5 +108,10 @@ public interface IIdeationService
         string userPrompt,
         IReadOnlyList<(string Role, string Content)>? conversationHistory,
         string? customSystemPrompt,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> ReleaseConversationSessionAsync(
+        int workspaceId,
+        int conversationId,
         CancellationToken cancellationToken = default);
 }

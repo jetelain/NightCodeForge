@@ -317,9 +317,16 @@ public class TelemetryChatClientTests
             .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
             .Callback<LlmCallRecord>(r => completedRecord = r);
 
-        await foreach (var _ in _client.GetStreamingResponseAsync(messages, cancellationToken: cts.Token))
+        try
         {
-            if (cts.IsCancellationRequested) break;
+            await foreach (var _ in _client.GetStreamingResponseAsync(messages, cancellationToken: cts.Token))
+            {
+                if (cts.IsCancellationRequested) break;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when cancellation fires during MoveNextAsync.
         }
 
         Assert.NotNull(completedRecord);

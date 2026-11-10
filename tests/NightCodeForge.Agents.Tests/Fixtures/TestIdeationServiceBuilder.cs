@@ -44,6 +44,7 @@ public class TestIdeationServiceBuilder
     public IGlobalOptimizationSettingsService GlobalOptimizationSettings { get; set; } = new Mock<IGlobalOptimizationSettingsService>().Object;
     public IWorkspaceSkillsServiceFactory SkillsServiceFactory { get; set; } = new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance);
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
+    public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
     public IMcpClientManager McpManager { get; set; } = CreateDefaultMcpManager();
     public IWorkspaceSymbolService SymbolService { get; set; } = new Mock<IWorkspaceSymbolService>().Object;
@@ -115,6 +116,8 @@ public class TestIdeationServiceBuilder
             ActivityStreamer,
             TranscriptService,
             WorkspaceRepository,
+            TaskRepository,
+            GatewayService,
             Logger,
             TimeProvider);
     }

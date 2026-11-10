@@ -555,6 +555,20 @@
             var refinement = await RefinementService.InitializeTaskRefinementAsync(workspaceId, taskId);
             _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(workspaceId);
 
+            var oldConvId = Session.ActiveConversationId;
+            var oldWsId = Session.BoundWorkspaceId ?? workspaceId;
+            if (oldConvId.HasValue && oldConvId.Value != refinement.Conversation.Id)
+            {
+                try
+                {
+                    await IdeationService.ReleaseConversationSessionAsync(oldWsId, oldConvId.Value);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to release session affinity when switching to task refinement session #{ConversationId}", oldConvId.Value);
+                }
+            }
+
             if (refinement.IsNew)
             {
                 Session.Reset();
@@ -619,6 +633,20 @@
 
                 if (Session.BoundWorkspaceId != active.Id)
                 {
+                    var oldWsId = Session.BoundWorkspaceId;
+                    var oldConvId = Session.ActiveConversationId;
+                    if (oldWsId.HasValue && oldConvId.HasValue)
+                    {
+                        try
+                        {
+                            await IdeationService.ReleaseConversationSessionAsync(oldWsId.Value, oldConvId.Value);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Failed to release session affinity when changing bound workspace for session #{ConversationId}", oldConvId.Value);
+                        }
+                    }
+
                     var activeConv = await TaskRepository.GetActiveIdeationConversationAsync(active.Id);
                     if (activeConv != null)
                     {
@@ -645,6 +673,7 @@
                     }
                     else if (activeConv != null)
                     {
+                        Session.BoundWorkspaceId = active.Id;
                         Session.ActiveConversationId = activeConv.Id;
                         Session.ActiveConversationTitle = activeConv.Title;
                     }
@@ -653,6 +682,7 @@
                         var newConv = await TaskRepository.StartIdeationConversationAsync(
                             active.Id,
                             title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
+                        Session.BoundWorkspaceId = active.Id;
                         Session.ActiveConversationId = newConv.Id;
                         Session.ActiveConversationTitle = newConv.Title;
                         _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
@@ -668,6 +698,20 @@
         }
         else
         {
+            var oldWsId = Session.BoundWorkspaceId;
+            var oldConvId = Session.ActiveConversationId;
+            if (oldWsId.HasValue && oldConvId.HasValue)
+            {
+                try
+                {
+                    await IdeationService.ReleaseConversationSessionAsync(oldWsId.Value, oldConvId.Value);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to release session affinity when clearing active workspace for session #{ConversationId}", oldConvId.Value);
+                }
+            }
+
             _workspaceTasks = Array.Empty<ForgeTask>();
             _workspaceSessions = Array.Empty<Conversation>();
         }
@@ -678,7 +722,7 @@
     private void LoadConversationIntoSession(Conversation conv)
     {
         Session.Reset();
-        Session.BoundWorkspaceId = conv.WorkspaceId;
+        Session.BoundWorkspaceId = conv.WorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
         Session.ActiveConversationId = conv.Id;
         Session.ActiveConversationTitle = conv.Title;
 
@@ -864,6 +908,20 @@
     {
         if (int.TryParse(e.Value?.ToString(), out var selectedId))
         {
+            var oldConvId = Session.ActiveConversationId;
+            var oldWsId = Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
+            if (oldConvId.HasValue && oldConvId.Value != selectedId && oldWsId.HasValue)
+            {
+                try
+                {
+                    await IdeationService.ReleaseConversationSessionAsync(oldWsId.Value, oldConvId.Value);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to release session affinity when switching ideation session #{ConversationId}", oldConvId.Value);
+                }
+            }
+
             var conv = await TaskRepository.GetConversationWithTurnsAsync(selectedId);
             if (conv != null)
             {
@@ -990,6 +1048,7 @@
                         ws.Id,
                         title: ChatPresentationHelper.Truncate(prompt, 50),
                         cancellationToken: CancellationToken.None);
+                    Session.BoundWorkspaceId = ws.Id;
                     Session.ActiveConversationId = newConv.Id;
                     Session.ActiveConversationTitle = newConv.Title;
                     _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id, CancellationToken.None);
@@ -1044,6 +1103,7 @@
                 history,
                 agentProfile: effectiveProfile,
                 customSystemPrompt: Session.CustomSystemPrompt,
+                conversationId: Session.ActiveConversationId,
                 cancellationToken: _cts.Token))
             {
                 switch (update.Kind)
@@ -1359,18 +1419,24 @@
         }
     }
 
-    private Task CancelGenerationAsync()
+    private async Task CancelGenerationAsync()
     {
         try
         {
             Session.CancelPendingQuestions();
             _cts?.Cancel();
+
+            var wsId = Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
+            var convId = Session.ActiveConversationId;
+            if (wsId.HasValue && convId.HasValue)
+            {
+                await IdeationService.ReleaseConversationSessionAsync(wsId.Value, convId.Value);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignored
+            Logger.LogWarning(ex, "Failed to release session affinity on ideation cancellation.");
         }
-        return Task.CompletedTask;
     }
 
     private async Task ResetSession()
@@ -1381,8 +1447,19 @@
         {
             if (Session.ActiveConversationId.HasValue)
             {
+                var convId = Session.ActiveConversationId.Value;
+                var releaseWsId = Session.BoundWorkspaceId ?? ws.Id;
+                try
+                {
+                    await IdeationService.ReleaseConversationSessionAsync(releaseWsId, convId);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to release session affinity when resetting ideation session #{ConversationId}", convId);
+                }
+
                 await TaskRepository.CompleteConversationAsync(
-                    Session.ActiveConversationId.Value,
+                    convId,
                     StageExecutionStatus.Completed,
                     summary: "Session archived by user via Clear Chat.");
             }
@@ -1508,6 +1585,24 @@
         _cts?.Dispose();
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         Session.OnChange -= HandleSessionChanged;
+
+        var wsId = Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
+        var convId = Session.ActiveConversationId;
+        if (wsId.HasValue && convId.HasValue)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await IdeationService.ReleaseConversationSessionAsync(wsId.Value, convId.Value);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to release session affinity on disposal for session #{ConversationId}", convId.Value);
+                }
+            });
+        }
+
         try
         {
             _ = JS.InvokeVoidAsync("NightCodeForge.disposeAutoScroll", ChatPresentationHelper.ChatMessagesContainerId);

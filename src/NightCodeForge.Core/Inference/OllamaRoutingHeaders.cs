@@ -1,6 +1,6 @@
 using NightCodeForge.Core.Domain;
 
-namespace NightCodeForge.Agents.Inference;
+namespace NightCodeForge.Core.Inference;
 
 /// <summary>OllamaRouter request headers (routing pin and session affinity).</summary>
 public static class OllamaRoutingHeaders
@@ -42,4 +42,13 @@ public static class LlmSessionIds
         ArgumentException.ThrowIfNullOrWhiteSpace(stageId);
         return $"{Prefix}-task{taskId}-{stageId}";
     }
+
+    /// <summary>Session id for an ideation conversation.</summary>
+    public static string ForIdeation(int workspaceId, int? conversationId = null)
+    {
+        return conversationId.HasValue
+            ? $"{Prefix}-ideation-ws{workspaceId}-conv{conversationId.Value}"
+            : $"{Prefix}-ideation-ws{workspaceId}-{Guid.NewGuid():N}";
+    }
 }
+

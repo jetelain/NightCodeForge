@@ -2494,6 +2494,12 @@ public class TaskOrchestrator : ITaskOrchestrator
             PromptTokens = (int)metrics.PromptTokens,
             CompletionTokens = (int)metrics.CompletionTokens,
             TotalTokens = (int)metrics.TotalTokens,
+            CachedInputTokens = metrics.CachedInputTokens,
+            Cost = metrics.Cost,
+            ActualCloudCost = metrics.ActualCloudCost,
+            ElectricityCost = metrics.ElectricityCost,
+            CloudSavings = metrics.CloudSavings,
+            Currency = metrics.Currency,
             Status = runResult.Status switch
             {
                 AgentRunStatus.Completed => StageExecutionStatus.Completed,

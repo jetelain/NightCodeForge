@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 
 namespace NightCodeForge.Infrastructure.Data.Repositories;
@@ -639,6 +640,22 @@ public class EfCoreTaskRepository : ITaskRepository
                 : DateTime.UtcNow;
             if (summary != null) conversation.Summary = summary;
             if (transcriptFileName != null) conversation.TranscriptFileName = transcriptFileName;
+            await context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task UpdateConversationUsageAsync(
+        int conversationId,
+        SessionUsageDelta usageDelta,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(usageDelta);
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var conversation = await context.Conversations.FindAsync(new object[] { conversationId }, cancellationToken);
+        if (conversation != null)
+        {
+            usageDelta.ApplyTo(conversation);
             await context.SaveChangesAsync(cancellationToken);
         }
     }

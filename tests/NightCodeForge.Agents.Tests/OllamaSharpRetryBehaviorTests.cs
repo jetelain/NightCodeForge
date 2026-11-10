@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Resilience;
 
 namespace NightCodeForge.Agents.Tests;

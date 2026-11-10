@@ -1087,6 +1087,12 @@ public class SettingsComponentTests : BunitContext, IDisposable
             ReclaimCalled = true;
             return Task.FromResult(true);
         }
+
+        public Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<RouterSessionUsage?>(null);
+
+        public Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
     }
 
     private class MockWslMetadataService : IWslMetadataService

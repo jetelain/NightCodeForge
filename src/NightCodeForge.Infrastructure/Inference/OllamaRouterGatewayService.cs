@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.Inference;
@@ -76,6 +77,74 @@ public sealed class OllamaRouterGatewayService : OllamaGatewayServiceBase
         catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
         {
             Logger.LogWarning(ex, "OllamaRouter VRAM reclaim request failed at {BaseAddress}.", Http.BaseAddress);
+            return false;
+        }
+    }
+
+    public override async Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var trimmedSessionId = sessionId.Trim();
+        var path = $"{OllamaApiPaths.RouterMonitorSessionsPrefix}{Uri.EscapeDataString(trimmedSessionId)}";
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(StatusTimeout);
+
+            using var response = await Http.GetAsync(path, timeoutCts.Token);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.LogWarning("OllamaRouter session usage query for session '{SessionId}' failed with HTTP {Status}.", trimmedSessionId, (int)response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<RouterSessionUsage>(timeoutCts.Token);
+        }
+        catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
+        {
+            Logger.LogWarning(ex, "OllamaRouter session usage query failed for session '{SessionId}' at {BaseAddress}.", trimmedSessionId, Http.BaseAddress);
+            return null;
+        }
+    }
+
+    public override async Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return false;
+        }
+
+        var trimmedSessionId = sessionId.Trim();
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(StatusTimeout);
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, OllamaApiPaths.RouterSessionAffinityRelease);
+            request.Headers.TryAddWithoutValidation(OllamaRoutingHeaders.SessionId, trimmedSessionId);
+
+            using var response = await Http.SendAsync(request, timeoutCts.Token);
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.LogWarning("OllamaRouter affinity release for session '{SessionId}' failed with HTTP {Status}.", trimmedSessionId, (int)response.StatusCode);
+                return false;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<RouterSessionAffinityReleaseResult>(timeoutCts.Token);
+            return result?.Released == true;
+        }
+        catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
+        {
+            Logger.LogWarning(ex, "OllamaRouter affinity release failed for session '{SessionId}' at {BaseAddress}.", trimmedSessionId, Http.BaseAddress);
             return false;
         }
     }

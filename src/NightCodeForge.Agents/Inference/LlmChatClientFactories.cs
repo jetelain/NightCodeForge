@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;

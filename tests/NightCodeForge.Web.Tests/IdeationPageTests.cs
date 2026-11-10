@@ -732,11 +732,68 @@ public class IdeationPageTests : BunitContext
             }
         }
     }
+
+    [Fact]
+    public async Task ResetSession_And_SessionSwitch_And_WorkspaceChange_ReleasePreviousSessionAffinity()
+    {
+        var ws1 = new Workspace { Id = 10, Name = "Workspace One", DefaultBaseBranch = "main" };
+        var ws2 = new Workspace { Id = 20, Name = "Workspace Two", DefaultBaseBranch = "main" };
+
+        var conv1 = await _taskRepository.StartIdeationConversationAsync(ws1.Id, title: "Session A");
+        var conv2 = await _taskRepository.StartIdeationConversationAsync(ws1.Id, title: "Session B");
+        await _taskRepository.CompleteConversationAsync(conv1.Id, StageExecutionStatus.Completed, "Archived A");
+
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var cut = Render<Ideation>();
+        cut.WaitForAssertion(() => Assert.Equal(conv2.Id, _sessionState.ActiveConversationId));
+        Assert.Equal(ws1.Id, _sessionState.BoundWorkspaceId);
+
+        // 1. Switch from conv2 to conv1 via dropdown -> releases (ws1.Id, conv2.Id)
+        var select = cut.Find("select.session-select");
+        await cut.InvokeAsync(() => select.Change(conv1.Id.ToString()));
+
+        Assert.Single(_ideationService.ReleasedSessions);
+        Assert.Equal((ws1.Id, conv2.Id), _ideationService.ReleasedSessions[0]);
+        Assert.Equal(conv1.Id, _sessionState.ActiveConversationId);
+
+        // 2. Click Clear Chat (ResetSession) -> releases (ws1.Id, conv1.Id) and starts a new conversation
+        _ideationService.ReleasedSessions.Clear();
+        var clearBtn = cut.Find("button.reset-session-btn");
+        await cut.InvokeAsync(() => clearBtn.Click());
+
+        Assert.Single(_ideationService.ReleasedSessions);
+        Assert.Equal((ws1.Id, conv1.Id), _ideationService.ReleasedSessions[0]);
+        var conv3Id = _sessionState.ActiveConversationId;
+        Assert.NotNull(conv3Id);
+        Assert.NotEqual(conv1.Id, conv3Id.Value);
+
+        // 3. Switch active workspace from ws1 to ws2 -> must release (ws1.Id, conv3Id), NOT (ws2.Id, conv3Id)!
+        _ideationService.ReleasedSessions.Clear();
+        _workspaceState.SetActiveWorkspace(ws2);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains((ws1.Id, conv3Id.Value), _ideationService.ReleasedSessions);
+        });
+        Assert.DoesNotContain(_ideationService.ReleasedSessions, s => s.WorkspaceId == ws2.Id && s.ConversationId == conv3Id.Value);
+
+        // 4. Same-workspace metadata update (NotifyWorkspaceUpdated) -> must NOT release the active session on ws2!
+        var ws2ConvId = _sessionState.ActiveConversationId;
+        Assert.NotNull(ws2ConvId);
+        _ideationService.ReleasedSessions.Clear();
+        _workspaceState.NotifyWorkspaceUpdated(new Workspace { Id = 20, Name = "Workspace Two Renamed", DefaultBaseBranch = "main", Emoji = "🚀" });
+
+        cut.WaitForAssertion(() => Assert.Equal(ws2.Id, _sessionState.BoundWorkspaceId));
+        Assert.Empty(_ideationService.ReleasedSessions);
+    }
 }
 
 public class MockIdeationService : IIdeationService
 {
     public List<IdeationStreamUpdate> StreamUpdatesToYield { get; set; } = new();
+    public List<(int WorkspaceId, int ConversationId)> ReleasedSessions { get; } = new();
+    public int? LastConversationId { get; private set; }
 
     public Task<IdeationResult> ConverseAsync(
         Workspace workspace,
@@ -798,6 +855,41 @@ public class MockIdeationService : IIdeationService
                 }
             }
         }
+    }
+
+    public IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
+        Workspace workspace,
+        string userPrompt,
+        IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
+        AgentProfile? agentProfile = null,
+        string? customSystemPrompt = null,
+        int? conversationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastConversationId = conversationId;
+        return ConverseStreamingAsync(workspace, userPrompt, conversationHistory, agentProfile, customSystemPrompt, cancellationToken);
+    }
+
+    public Task<IdeationResult> ConverseAsync(
+        Workspace workspace,
+        string userPrompt,
+        IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
+        AgentProfile? agentProfile = null,
+        string? customSystemPrompt = null,
+        int? conversationId = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastConversationId = conversationId;
+        return ConverseAsync(workspace, userPrompt, conversationHistory, agentProfile, customSystemPrompt, cancellationToken);
+    }
+
+    public Task<bool> ReleaseConversationSessionAsync(
+        int workspaceId,
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        ReleasedSessions.Add((workspaceId, conversationId));
+        return Task.FromResult(true);
     }
 
     public IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(

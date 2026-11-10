@@ -244,6 +244,12 @@ public class AppDbContext : DbContext
             b.Property(r => r.HarnessId).IsRequired().HasMaxLength(64);
             b.Property(r => r.ModelName).IsRequired().HasMaxLength(256);
             b.Property(r => r.Status).HasConversion<int>();
+            b.Property(r => r.Cost);
+            b.Property(r => r.ActualCloudCost);
+            b.Property(r => r.ElectricityCost);
+            b.Property(r => r.CloudSavings);
+            b.Property(r => r.Currency).HasMaxLength(16);
+            b.Property(r => r.CachedInputTokens);
         });
 
         // 8. ExecutionLog
@@ -278,6 +284,14 @@ public class AppDbContext : DbContext
             b.Property(c => c.HarnessId).HasMaxLength(64);
             b.Property(c => c.ModelName).HasMaxLength(256);
             b.Property(c => c.TranscriptFileName).HasMaxLength(256);
+            b.Property(c => c.Cost);
+            b.Property(c => c.ActualCloudCost);
+            b.Property(c => c.ElectricityCost);
+            b.Property(c => c.CloudSavings);
+            b.Property(c => c.Currency).HasMaxLength(16);
+            b.Property(c => c.InputTokens);
+            b.Property(c => c.OutputTokens);
+            b.Property(c => c.CachedInputTokens);
 
             b.HasIndex(c => new { c.TaskId, c.StageId, c.AttemptIndex });
             b.HasIndex(c => c.WorkspaceId);
@@ -440,6 +454,11 @@ public class AppDbContext : DbContext
     public const string AddAgentProfileMaxOutputTokensMigrationId = "20261110074050_AddAgentProfileMaxOutputTokens";
 
     /// <summary>
+    /// Migration identifier for stage execution record and conversation cost and token metrics.
+    /// </summary>
+    public const string AddSessionCostAndTokenMetricsMigrationId = "20261110110000_AddSessionCostAndTokenMetrics";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -589,6 +608,17 @@ VALUES ('" + AddWorkspaceEmojiAndColorCodeMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddAgentProfileMaxOutputTokensMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('StageExecutionRecords') WHERE name = 'Cost';";
+                var hasCostColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasCostColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddSessionCostAndTokenMetricsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

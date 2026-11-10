@@ -109,6 +109,122 @@ public record GatewayStatusReport(
     public bool IsRouterProxy => IsConnected && ProviderType == LlmProviderType.OllamaRouter;
 }
 
+public record RouterSessionUsageTargetItem(
+    string Target,
+    int Requests,
+    int InputTokens,
+    int CachedInputTokens,
+    int OutputTokens,
+    double ElapsedMs,
+    double? CloudValue,
+    double? ElectricityCost,
+    double? Savings);
+
+public record RouterSessionUsage(
+    string SessionId,
+    int Requests,
+    int InputTokens,
+    int CachedInputTokens,
+    int OutputTokens,
+    double ElapsedMs,
+    DateTimeOffset? LastSeenAt,
+    double? CloudValue,
+    double? ElectricityCost,
+    double? Savings,
+    double? ActualCloudCost,
+    double? Cost,
+    string? Currency,
+    IReadOnlyList<RouterSessionUsageTargetItem>? PerTarget);
+
+public record RouterSessionAffinityReleaseResult(
+    string SessionId,
+    bool Released);
+
+public record SessionUsageDelta(
+    int InputTokens,
+    int OutputTokens,
+    int CachedInputTokens,
+    double? Cost,
+    double? ActualCloudCost,
+    double? ElectricityCost,
+    double? CloudSavings,
+    string? Currency)
+{
+    public static SessionUsageDelta? Compute(RouterSessionUsage? finalUsage, RouterSessionUsage? baselineUsage)
+    {
+        if (finalUsage == null)
+        {
+            return null;
+        }
+
+        var baseline = baselineUsage;
+        var inputTokens = Math.Max(0, finalUsage.InputTokens - (baseline?.InputTokens ?? 0));
+        var outputTokens = Math.Max(0, finalUsage.OutputTokens - (baseline?.OutputTokens ?? 0));
+        var cachedInputTokens = Math.Max(0, finalUsage.CachedInputTokens - (baseline?.CachedInputTokens ?? 0));
+
+        if (!finalUsage.Cost.HasValue)
+        {
+            return new SessionUsageDelta(
+                InputTokens: inputTokens,
+                OutputTokens: outputTokens,
+                CachedInputTokens: cachedInputTokens,
+                Cost: null,
+                ActualCloudCost: null,
+                ElectricityCost: null,
+                CloudSavings: null,
+                Currency: null);
+        }
+
+        var cost = Math.Max(0.0, finalUsage.Cost.Value - (baseline?.Cost ?? 0.0));
+        var actualCloudCost = Math.Max(0.0, (finalUsage.ActualCloudCost ?? 0.0) - (baseline?.ActualCloudCost ?? 0.0));
+        var electricityCost = Math.Max(0.0, (finalUsage.ElectricityCost ?? 0.0) - (baseline?.ElectricityCost ?? 0.0));
+        var cloudSavings = Math.Max(0.0, (finalUsage.Savings ?? 0.0) - (baseline?.Savings ?? 0.0));
+        var currency = finalUsage.Currency ?? baseline?.Currency;
+
+        return new SessionUsageDelta(
+            InputTokens: inputTokens,
+            OutputTokens: outputTokens,
+            CachedInputTokens: cachedInputTokens,
+            Cost: cost,
+            ActualCloudCost: actualCloudCost,
+            ElectricityCost: electricityCost,
+            CloudSavings: cloudSavings,
+            Currency: currency);
+    }
+
+    public void ApplyTo(Conversation conversation)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        conversation.InputTokens = (conversation.InputTokens ?? 0) + InputTokens;
+        conversation.OutputTokens = (conversation.OutputTokens ?? 0) + OutputTokens;
+        if (CachedInputTokens > 0 || conversation.CachedInputTokens != null)
+        {
+            conversation.CachedInputTokens = (conversation.CachedInputTokens ?? 0) + CachedInputTokens;
+        }
+
+        if (Cost.HasValue)
+        {
+            conversation.Cost = (conversation.Cost ?? 0.0) + Cost.Value;
+        }
+        if (ActualCloudCost.HasValue)
+        {
+            conversation.ActualCloudCost = (conversation.ActualCloudCost ?? 0.0) + ActualCloudCost.Value;
+        }
+        if (ElectricityCost.HasValue)
+        {
+            conversation.ElectricityCost = (conversation.ElectricityCost ?? 0.0) + ElectricityCost.Value;
+        }
+        if (CloudSavings.HasValue)
+        {
+            conversation.CloudSavings = (conversation.CloudSavings ?? 0.0) + CloudSavings.Value;
+        }
+        if (!string.IsNullOrWhiteSpace(Currency))
+        {
+            conversation.Currency = Currency;
+        }
+    }
+}
+
 /// <summary>
 /// Gateway to the configured LLM inference backend (Ollama, OllamaRouter, OpenAI-Compatible).
 /// The implementation is selected once at startup; consumers never branch on the provider.
@@ -130,4 +246,6 @@ public interface ILlmGatewayService
     Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
+    Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default);
+    Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default);
 }

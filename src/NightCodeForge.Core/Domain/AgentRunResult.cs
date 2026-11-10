@@ -19,7 +19,13 @@ public record AgentRunMetrics(
     long DurationMs = 0,
     long PromptTokens = 0,
     long CompletionTokens = 0,
-    long TotalTokens = 0);
+    long TotalTokens = 0,
+    int? CachedInputTokens = null,
+    double? Cost = null,
+    double? ActualCloudCost = null,
+    double? ElectricityCost = null,
+    double? CloudSavings = null,
+    string? Currency = null);
 
 /// <summary>
 /// The result of an agent stage execution.

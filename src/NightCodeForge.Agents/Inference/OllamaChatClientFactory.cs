@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using OllamaSharp;

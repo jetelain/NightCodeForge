@@ -8,6 +8,7 @@ using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
@@ -56,6 +57,15 @@ public sealed class CrucibleConversationState
     public Conversation Conversation { get; }
 
     public int AttemptIndex { get; }
+
+    /// <summary>Stable router session identifier for sticky routing affinity and KV-cache reuse.</summary>
+    public string? SessionId { get; set; }
+
+    /// <summary>Baseline LLM session usage captured at conversation start for delta accounting.</summary>
+    public RouterSessionUsage? BaselineUsage { get; set; }
+
+    /// <summary>Computed LLM session delta usage from the most recent save/completion.</summary>
+    public SessionUsageDelta? LastUsageDelta { get; set; }
 
     /// <summary>True when this stage execution resumed an existing conversation or restored serialized session state.</summary>
     public bool IsResumedConversation { get; internal set; }
@@ -209,18 +219,22 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
     private const string LoopbackDiagnosticPrimingType = "LoopbackDiagnostic";
     private const string CompactionRole = "COMPACTION";
     private const string LegacyCompactionMarker = ConversationHistorySerializer.CompactionCheckpointHeader;
+    private static readonly TimeSpan SessionTelemetryTimeout = TimeSpan.FromSeconds(5);
 
     private readonly ITaskRepository _taskRepository;
     private readonly SessionTranscriptService _transcriptService;
+    private readonly ILlmGatewayService _llmGatewayService;
     private readonly ILogger<CrucibleConversationCoordinator> _logger;
 
     public CrucibleConversationCoordinator(
         ITaskRepository taskRepository,
         SessionTranscriptService transcriptService,
+        ILlmGatewayService llmGatewayService,
         ILogger<CrucibleConversationCoordinator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
+        _llmGatewayService = llmGatewayService ?? throw new ArgumentNullException(nameof(llmGatewayService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -344,6 +358,20 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             var resumedWaitingConversation = ReferenceEquals(conversation, waitingConversation);
             ApplyPendingHumanAnswer(state, context, resumedWaitingConversation);
         }
+
+        var sessionId = LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId);
+        RouterSessionUsage? baselineUsage = null;
+        try
+        {
+            baselineUsage = await _llmGatewayService.GetSessionUsageAsync(sessionId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to capture baseline LLM session usage for session '{SessionId}'", sessionId);
+        }
+
+        state.SessionId = sessionId;
+        state.BaselineUsage = baselineUsage;
 
         await state.DrainAsync();
         return state;
@@ -645,6 +673,55 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         // Every queued conversation turn must be persisted before the conversation is closed.
         await state.DrainAsync();
 
+        SessionUsageDelta? usageDelta = null;
+        if (!string.IsNullOrWhiteSpace(state.SessionId))
+        {
+            try
+            {
+                using var costCts = new CancellationTokenSource(SessionTelemetryTimeout);
+                var finalUsage = await _llmGatewayService.GetSessionUsageAsync(state.SessionId, costCts.Token);
+                usageDelta = SessionUsageDelta.Compute(finalUsage, state.BaselineUsage);
+                state.LastUsageDelta = usageDelta;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to capture final LLM session usage for session '{SessionId}'", state.SessionId);
+            }
+
+            if (usageDelta == null && (request.PromptTokens > 0 || request.CompletionTokens > 0))
+            {
+                usageDelta = new SessionUsageDelta(
+                    InputTokens: (int)Math.Min(int.MaxValue, request.PromptTokens),
+                    OutputTokens: (int)Math.Min(int.MaxValue, request.CompletionTokens),
+                    CachedInputTokens: 0,
+                    Cost: null,
+                    ActualCloudCost: null,
+                    ElectricityCost: null,
+                    CloudSavings: null,
+                    Currency: null);
+            }
+            else if (usageDelta != null && (request.PromptTokens > usageDelta.InputTokens || request.CompletionTokens > usageDelta.OutputTokens))
+            {
+                usageDelta = usageDelta with
+                {
+                    InputTokens = (int)Math.Min(int.MaxValue, Math.Max(request.PromptTokens, usageDelta.InputTokens)),
+                    OutputTokens = (int)Math.Min(int.MaxValue, Math.Max(request.CompletionTokens, usageDelta.OutputTokens))
+                };
+            }
+
+            if (usageDelta != null)
+            {
+                try
+                {
+                    await _taskRepository.UpdateConversationUsageAsync(state.Conversation.Id, usageDelta, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to accumulate conversation usage delta for conversation #{ConversationId}", state.Conversation.Id);
+                }
+            }
+        }
+
         var context = request.Context;
         var tracingClient = request.TracingClient;
         var harnessOptions = request.HarnessOptions;
@@ -675,13 +752,27 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                     opts.ResolutionSource ?? "Unknown");
             }
 
+            long effectivePrompt = Math.Max(request.PromptTokens, usageDelta?.InputTokens ?? 0);
+            long effectiveCompletion = Math.Max(request.CompletionTokens, usageDelta?.OutputTokens ?? 0);
+            var transcriptMetrics = new AgentRunMetrics(
+                DurationMs: request.ElapsedMs,
+                PromptTokens: effectivePrompt,
+                CompletionTokens: effectiveCompletion,
+                TotalTokens: effectivePrompt + effectiveCompletion,
+                CachedInputTokens: usageDelta?.CachedInputTokens,
+                Cost: usageDelta?.Cost,
+                ActualCloudCost: usageDelta?.ActualCloudCost,
+                ElectricityCost: usageDelta?.ElectricityCost,
+                CloudSavings: usageDelta?.CloudSavings,
+                Currency: usageDelta?.Currency);
+
             var meta = new TranscriptMetadata(
                 context.ForgeTask.Id,
                 context.StageId,
                 context.Profile.Name,
                 context.Profile.ModelName,
                 request.ElapsedMs,
-                new AgentRunMetrics(request.ElapsedMs, request.PromptTokens, request.CompletionTokens, request.PromptTokens + request.CompletionTokens),
+                transcriptMetrics,
                 context.OptimizationFlags ?? new LocalOptimizationFlags(),
                 request.Status,
                 KvCacheHitRate: null,
@@ -724,6 +815,19 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to complete Conversation #{ConversationId}", state.Conversation.Id);
+        }
+
+        if (!string.IsNullOrWhiteSpace(state.SessionId))
+        {
+            try
+            {
+                using var releaseCts = new CancellationTokenSource(SessionTelemetryTimeout);
+                await _llmGatewayService.ReleaseSessionAffinityAsync(state.SessionId, releaseCts.Token);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to release LLM session affinity for session '{SessionId}'", state.SessionId);
+            }
         }
 
         return transcriptFileName;

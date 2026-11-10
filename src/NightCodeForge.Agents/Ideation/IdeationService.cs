@@ -18,6 +18,7 @@ using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Resilience;
@@ -43,6 +44,7 @@ public partial class IdeationService : IIdeationService
     private const string IdeationAgentId = "ideation-agent";
     private const string IdeationAgentName = "IdeationAgent";
     private const float DefaultTemperature = 0.3f;
+    private static readonly TimeSpan SessionTelemetryTimeout = TimeSpan.FromSeconds(5);
 
     [GeneratedRegex(@"```(?:json)?\s*\[\s*\{.*?\}\s*\]\s*```", RegexOptions.Singleline)]
     private static partial Regex TaskJsonArrayRegex();
@@ -53,6 +55,8 @@ public partial class IdeationService : IIdeationService
     private readonly IAgentActivityStreamer _activityStreamer;
     private readonly SessionTranscriptService _transcriptService;
     private readonly IWorkspaceRepository _workspaceRepository;
+    private readonly ITaskRepository _taskRepository;
+    private readonly ILlmGatewayService _gatewayService;
     private readonly ILogger<IdeationService> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -63,6 +67,8 @@ public partial class IdeationService : IIdeationService
         IAgentActivityStreamer activityStreamer,
         SessionTranscriptService transcriptService,
         IWorkspaceRepository workspaceRepository,
+        ITaskRepository taskRepository,
+        ILlmGatewayService gatewayService,
         ILogger<IdeationService> logger,
         TimeProvider timeProvider)
     {
@@ -72,6 +78,8 @@ public partial class IdeationService : IIdeationService
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
+        _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        _gatewayService = gatewayService ?? throw new ArgumentNullException(nameof(gatewayService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
@@ -102,7 +110,7 @@ public partial class IdeationService : IIdeationService
         string? customSystemPrompt,
         CancellationToken cancellationToken = default)
     {
-        return ConverseAsync(workspace, userPrompt, conversationHistory, null, customSystemPrompt, cancellationToken);
+        return ConverseAsync(workspace, userPrompt, conversationHistory, null, customSystemPrompt, null, cancellationToken);
     }
 
     public async Task<IdeationResult> ConverseAsync(
@@ -111,6 +119,7 @@ public partial class IdeationService : IIdeationService
         IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
         AgentProfile? agentProfile = null,
         string? customSystemPrompt = null,
+        int? conversationId = null,
         CancellationToken cancellationToken = default)
     {
         IdeationResult? finalResult = null;
@@ -120,6 +129,7 @@ public partial class IdeationService : IIdeationService
             conversationHistory,
             agentProfile,
             customSystemPrompt,
+            conversationId,
             cancellationToken).ConfigureAwait(false))
         {
             if (update.Kind == IdeationStreamUpdateKind.Completed && update.FinalResult != null)
@@ -131,6 +141,17 @@ public partial class IdeationService : IIdeationService
         return finalResult ?? new IdeationResult(string.Empty, Array.Empty<IdeationProposal>());
     }
 
+    public Task<IdeationResult> ConverseAsync(
+        Workspace workspace,
+        string userPrompt,
+        IReadOnlyList<(string Role, string Content)>? conversationHistory,
+        AgentProfile? agentProfile,
+        string? customSystemPrompt,
+        CancellationToken cancellationToken)
+    {
+        return ConverseAsync(workspace, userPrompt, conversationHistory, agentProfile, customSystemPrompt, null, cancellationToken);
+    }
+
     public IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
         Workspace workspace,
         string userPrompt,
@@ -138,7 +159,27 @@ public partial class IdeationService : IIdeationService
         string? customSystemPrompt,
         CancellationToken cancellationToken = default)
     {
-        return ConverseStreamingAsync(workspace, userPrompt, conversationHistory, null, customSystemPrompt, cancellationToken);
+        return ConverseStreamingAsync(workspace, userPrompt, conversationHistory, null, customSystemPrompt, null, cancellationToken);
+    }
+
+    public IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
+        Workspace workspace,
+        string userPrompt,
+        IReadOnlyList<(string Role, string Content)>? conversationHistory,
+        AgentProfile? agentProfile,
+        string? customSystemPrompt,
+        CancellationToken cancellationToken)
+    {
+        return ConverseStreamingAsync(workspace, userPrompt, conversationHistory, agentProfile, customSystemPrompt, null, cancellationToken);
+    }
+
+    public async Task<bool> ReleaseConversationSessionAsync(
+        int workspaceId,
+        int conversationId,
+        CancellationToken cancellationToken = default)
+    {
+        var sessionId = LlmSessionIds.ForIdeation(workspaceId, conversationId);
+        return await _gatewayService.ReleaseSessionAffinityAsync(sessionId, cancellationToken);
     }
 
     public async IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
@@ -147,6 +188,7 @@ public partial class IdeationService : IIdeationService
         IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
         AgentProfile? agentProfile = null,
         string? customSystemPrompt = null,
+        int? conversationId = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var profile = agentProfile;
@@ -162,7 +204,7 @@ public partial class IdeationService : IIdeationService
             }
         }
 
-        var sessionId = $"ideation-{workspace.Id}-{Guid.NewGuid():N}";
+        var sessionId = LlmSessionIds.ForIdeation(workspace.Id, conversationId);
         var metadata = new Dictionary<string, object?>
         {
             ["workspaceId"] = workspace.Id,
@@ -170,6 +212,21 @@ public partial class IdeationService : IIdeationService
             ["model"] = profile.ModelName
         };
 
+        RouterSessionUsage? baselineUsage = null;
+        try
+        {
+            baselineUsage = await _gatewayService.GetSessionUsageAsync(sessionId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to capture baseline LLM session usage for ideation session '{SessionId}'", sessionId);
+        }
+
+        SessionUsageDelta? usageDelta = null;
+        bool deltaCaptured = false;
+        ThinkingAndActivityTracingChatClient? tracingClient = null;
+        try
+        {
         await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageStarted, "Starting ideation discovery", cancellationToken, metadata);
 
         // Pre-sync existing backlog tasks into clone/docs/tasks so the ideation agent has full visibility of existing tasks
@@ -379,7 +436,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                 Dispatcher: toolset.Dispatcher),
             cancellationToken);
 
-        var tracingClient = setup.TracingClient;
+        tracingClient = setup.TracingClient;
         var harnessOptions = setup.Options;
         var agent = setup.Agent;
         var session = await agent.CreateSessionAsync(cancellationToken);
@@ -623,18 +680,40 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         string? transcriptPath = null;
         string? fullTranscriptMarkdown = null;
 
+        usageDelta = await CaptureAndPersistSessionUsageDeltaAsync(
+            sessionId,
+            baselineUsage,
+            conversationId,
+            tracingClient.TotalMeasuredInputTokens,
+            tracingClient.TotalMeasuredOutputTokens);
+        deltaCaptured = true;
+
         if (_transcriptService != null)
         {
             try
             {
                 var targetDir = Path.Combine(repoPath, "docs", "transcripts");
+                long promptTokens = Math.Max(tracingClient.TotalMeasuredInputTokens, usageDelta?.InputTokens ?? 0);
+                long completionTokens = Math.Max(tracingClient.TotalMeasuredOutputTokens, usageDelta?.OutputTokens ?? 0);
+                var transcriptMetrics = new AgentRunMetrics(
+                    DurationMs: sessionStopwatch.ElapsedMilliseconds,
+                    PromptTokens: promptTokens,
+                    CompletionTokens: completionTokens,
+                    TotalTokens: promptTokens + completionTokens,
+                    CachedInputTokens: usageDelta?.CachedInputTokens,
+                    Cost: usageDelta?.Cost,
+                    ActualCloudCost: usageDelta?.ActualCloudCost,
+                    ElectricityCost: usageDelta?.ElectricityCost,
+                    CloudSavings: usageDelta?.CloudSavings,
+                    Currency: usageDelta?.Currency);
+
                 var metadataRecord = new TranscriptMetadata(
                     TaskId: workspace?.Id ?? 0,
                     StageId: StandardStageIds.Ideation,
                     AgentProfile: profile.Id,
                     ModelName: profile.ModelName ?? "default",
                     DurationMs: sessionStopwatch.ElapsedMilliseconds,
-                    Metrics: new AgentRunMetrics(sessionStopwatch.ElapsedMilliseconds, 0, 0, 0),
+                    Metrics: transcriptMetrics,
                     Optimizations: profile.OptimizationFlags ?? new LocalOptimizationFlags(),
                     Status: AgentRunStatus.Completed,
                     KvCacheHitRate: null,
@@ -668,10 +747,78 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
             }
         }
 
-        var finalResult = new IdeationResult(fullText, sessionProposals, allToolCalls, transcriptPath, fullTranscriptMarkdown);
+        var finalResult = new IdeationResult(fullText, sessionProposals, allToolCalls, transcriptPath, fullTranscriptMarkdown, usageDelta);
         await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageCompleted, $"Ideation completed with {sessionProposals.Count} proposal(s).", cancellationToken, metadata);
 
         yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.Completed, FinalResult: finalResult);
+        }
+        finally
+        {
+            if (!deltaCaptured)
+            {
+                await CaptureAndPersistSessionUsageDeltaAsync(
+                    sessionId,
+                    baselineUsage,
+                    conversationId,
+                    tracingClient?.TotalMeasuredInputTokens ?? 0,
+                    tracingClient?.TotalMeasuredOutputTokens ?? 0);
+            }
+        }
+    }
+
+    private async Task<SessionUsageDelta?> CaptureAndPersistSessionUsageDeltaAsync(
+        string sessionId,
+        RouterSessionUsage? baselineUsage,
+        int? conversationId,
+        long measuredInputTokens = 0,
+        long measuredOutputTokens = 0)
+    {
+        SessionUsageDelta? usageDelta = null;
+        try
+        {
+            using var costCts = new CancellationTokenSource(SessionTelemetryTimeout);
+            var finalUsage = await _gatewayService.GetSessionUsageAsync(sessionId, costCts.Token);
+            usageDelta = SessionUsageDelta.Compute(finalUsage, baselineUsage);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to capture final LLM session usage for ideation session '{SessionId}'", sessionId);
+        }
+
+        if (usageDelta == null && (measuredInputTokens > 0 || measuredOutputTokens > 0))
+        {
+            usageDelta = new SessionUsageDelta(
+                InputTokens: (int)Math.Min(int.MaxValue, measuredInputTokens),
+                OutputTokens: (int)Math.Min(int.MaxValue, measuredOutputTokens),
+                CachedInputTokens: 0,
+                Cost: null,
+                ActualCloudCost: null,
+                ElectricityCost: null,
+                CloudSavings: null,
+                Currency: null);
+        }
+        else if (usageDelta != null && (measuredInputTokens > usageDelta.InputTokens || measuredOutputTokens > usageDelta.OutputTokens))
+        {
+            usageDelta = usageDelta with
+            {
+                InputTokens = (int)Math.Min(int.MaxValue, Math.Max(measuredInputTokens, usageDelta.InputTokens)),
+                OutputTokens = (int)Math.Min(int.MaxValue, Math.Max(measuredOutputTokens, usageDelta.OutputTokens))
+            };
+        }
+
+        if (usageDelta != null && conversationId.HasValue)
+        {
+            try
+            {
+                await _taskRepository.UpdateConversationUsageAsync(conversationId.Value, usageDelta, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to accumulate conversation usage delta for ideation conversation #{ConversationId}", conversationId.Value);
+            }
+        }
+
+        return usageDelta;
     }
 
     private List<IdeationProposal> ParseProposals(string text)

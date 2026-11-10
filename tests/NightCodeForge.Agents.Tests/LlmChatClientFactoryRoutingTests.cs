@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;

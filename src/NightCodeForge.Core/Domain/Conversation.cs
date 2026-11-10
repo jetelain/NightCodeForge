@@ -40,6 +40,15 @@ public class Conversation
     public string? Summary { get; set; }
     public string? TranscriptFileName { get; set; }
 
+    public int? InputTokens { get; set; }
+    public int? OutputTokens { get; set; }
+    public int? CachedInputTokens { get; set; }
+    public double? Cost { get; set; }
+    public double? ActualCloudCost { get; set; }
+    public double? ElectricityCost { get; set; }
+    public double? CloudSavings { get; set; }
+    public string? Currency { get; set; }
+
     public ForgeTask? ForgeTask { get; set; }
     public Workspace? Workspace { get; set; }
     public ICollection<ConversationTurn> Turns { get; set; } = new List<ConversationTurn>();

@@ -42,8 +42,15 @@ public class CrucibleConversationCoordinatorTests : IDisposable
         PendingHumanAnswer = pendingAnswer,
         SerializedStateJson = serializedState
     };
-    private static CrucibleConversationCoordinator CreateCoordinator(ITaskRepository repository, SessionTranscriptService? transcripts = null) =>
-        new(repository, transcripts ?? new SessionTranscriptService(), NullLogger<CrucibleConversationCoordinator>.Instance);
+    private static CrucibleConversationCoordinator CreateCoordinator(
+        ITaskRepository repository,
+        SessionTranscriptService? transcripts = null,
+        ILlmGatewayService? gateway = null) =>
+        new(
+            repository,
+            transcripts ?? new SessionTranscriptService(),
+            gateway ?? new Mock<ILlmGatewayService>().Object,
+            NullLogger<CrucibleConversationCoordinator>.Instance);
 
     [Fact]
     public async Task Coordinator_Begin_StartsConversationAndSeedsBootstrapHistory()
@@ -352,6 +359,14 @@ public class CrucibleConversationCoordinatorTests : IDisposable
     [Fact]
     public void Constructor_RejectsNullDependencies()
     {
-        Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(null!, new SessionTranscriptService(), NullLogger<CrucibleConversationCoordinator>.Instance));
+        var repo = new InMemoryTaskRepository();
+        var transcripts = new SessionTranscriptService();
+        var gateway = new Mock<ILlmGatewayService>().Object;
+        var logger = NullLogger<CrucibleConversationCoordinator>.Instance;
+
+        Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(null!, transcripts, gateway, logger));
+        Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, null!, gateway, logger));
+        Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, transcripts, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, transcripts, gateway, null!));
     }
 }

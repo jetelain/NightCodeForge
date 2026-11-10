@@ -55,6 +55,12 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
     public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default) =>
         ReclaimVramAsync(null, cancellationToken);
 
+    public virtual Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<RouterSessionUsage?>(null);
+
+    public virtual Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(false);
+
     public async Task<LlmProviderType?> DetectProviderAsync(CancellationToken cancellationToken = default)
     {
         var info = await TryGetJsonAsync<RouterInfoProbe>(OllamaApiPaths.RouterInfo, ProbeTimeout, cancellationToken);

@@ -14,6 +14,7 @@ using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Resilience;

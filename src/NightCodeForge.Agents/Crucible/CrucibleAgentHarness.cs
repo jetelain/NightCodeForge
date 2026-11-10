@@ -17,6 +17,7 @@ using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;
@@ -343,6 +344,24 @@ public partial class CrucibleAgentHarness : IAgentHarness
         AgentRunMetrics CurrentMetrics()
         {
             var (effPrompt, effCompletion) = GetEffectiveTokenTotals();
+            var delta = conversationState.LastUsageDelta;
+            if (delta != null)
+            {
+                long prompt = delta.InputTokens > 0 ? Math.Max(effPrompt, delta.InputTokens) : effPrompt;
+                long completion = delta.OutputTokens > 0 ? Math.Max(effCompletion, delta.OutputTokens) : effCompletion;
+                return new(
+                    DurationMs: stopwatch.ElapsedMilliseconds,
+                    PromptTokens: prompt,
+                    CompletionTokens: completion,
+                    TotalTokens: prompt + completion,
+                    CachedInputTokens: delta.CachedInputTokens,
+                    Cost: delta.Cost,
+                    ActualCloudCost: delta.ActualCloudCost,
+                    ElectricityCost: delta.ElectricityCost,
+                    CloudSavings: delta.CloudSavings,
+                    Currency: delta.Currency);
+            }
+
             return new(stopwatch.ElapsedMilliseconds, effPrompt, effCompletion, effPrompt + effCompletion);
         }
 

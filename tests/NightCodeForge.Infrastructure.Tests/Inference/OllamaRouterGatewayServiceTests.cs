@@ -325,4 +325,124 @@ public class OllamaRouterGatewayServiceTests
         Assert.True(cache.TryGetContextWindow("qwen3.8:27b", out var cachedCtx));
         Assert.Equal(262144, cachedCtx);
     }
+
+    [Fact]
+    public async Task ReleaseSessionAffinityAsync_SendsPostWithHeaderAndParsesResult()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new StubHttpHandler(req =>
+        {
+            capturedRequest = req;
+            if (req.RequestUri!.AbsolutePath == "/api/router/sessions/affinity/release" && req.Method == HttpMethod.Post)
+            {
+                return StubHttpHandler.Json("""{"sessionId":"ncf-task42-stage-3","released":true}""");
+            }
+            return StubHttpHandler.Status(HttpStatusCode.BadRequest);
+        });
+
+        var service = CreateService(handler);
+        var released = await service.ReleaseSessionAffinityAsync("ncf-task42-stage-3");
+
+        Assert.True(released);
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(HttpMethod.Post, capturedRequest.Method);
+        Assert.Equal("/api/router/sessions/affinity/release", capturedRequest.RequestUri!.AbsolutePath);
+        Assert.True(capturedRequest.Headers.Contains("X-OllamaRouter-Session-Id"));
+        Assert.Equal("ncf-task42-stage-3", capturedRequest.Headers.GetValues("X-OllamaRouter-Session-Id").Single());
+    }
+
+    [Fact]
+    public async Task ReleaseSessionAffinityAsync_WhenFalseOrError_ReturnsFalseGracefully()
+    {
+        var falseHandler = new StubHttpHandler(req => StubHttpHandler.Json("""{"sessionId":"ncf-task42-stage-3","released":false}"""));
+        var serviceFalse = CreateService(falseHandler);
+        Assert.False(await serviceFalse.ReleaseSessionAffinityAsync("ncf-task42-stage-3"));
+
+        var errorHandler = new StubHttpHandler(req => StubHttpHandler.Status(HttpStatusCode.InternalServerError));
+        var serviceError = CreateService(errorHandler);
+        Assert.False(await serviceError.ReleaseSessionAffinityAsync("ncf-task42-stage-3"));
+
+        Assert.False(await serviceFalse.ReleaseSessionAffinityAsync("   "));
+        Assert.False(await serviceFalse.ReleaseSessionAffinityAsync(null!));
+    }
+
+    [Fact]
+    public async Task GetSessionUsageAsync_WhenFound_ParsesFullUsageAndPerTarget()
+    {
+        const string SessionJson = """
+            {
+              "currency": "$",
+              "sessionId": "ncf-task42-stage-3",
+              "requests": 8,
+              "inputTokens": 34500,
+              "cachedInputTokens": 26000,
+              "outputTokens": 4120,
+              "elapsedMs": 28430.2,
+              "lastSeenAt": "2026-11-09T20:45:12.345Z",
+              "cloudValue": 0.0890,
+              "electricityCost": 0.0052,
+              "savings": 0.0838,
+              "actualCloudCost": 0.0000,
+              "cost": 0.0052,
+              "perTarget": [
+                {
+                  "target": "aiserver1",
+                  "requests": 8,
+                  "inputTokens": 34500,
+                  "cachedInputTokens": 26000,
+                  "outputTokens": 4120,
+                  "elapsedMs": 28430.2,
+                  "cloudValue": 0.0890,
+                  "electricityCost": 0.0052,
+                  "savings": 0.0838
+                }
+              ]
+            }
+            """;
+
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new StubHttpHandler(req =>
+        {
+            capturedRequest = req;
+            if (req.RequestUri!.AbsolutePath == "/api/router/monitor/sessions/ncf-task42-stage-3")
+            {
+                return StubHttpHandler.Json(SessionJson);
+            }
+            return StubHttpHandler.Status(HttpStatusCode.NotFound);
+        });
+
+        var service = CreateService(handler);
+        var usage = await service.GetSessionUsageAsync("ncf-task42-stage-3");
+
+        Assert.NotNull(usage);
+        Assert.Equal("ncf-task42-stage-3", usage.SessionId);
+        Assert.Equal(8, usage.Requests);
+        Assert.Equal(34500, usage.InputTokens);
+        Assert.Equal(26000, usage.CachedInputTokens);
+        Assert.Equal(4120, usage.OutputTokens);
+        Assert.Equal(0.0052, usage.Cost);
+        Assert.Equal(0.0052, usage.ElectricityCost);
+        Assert.Equal(0.0, usage.ActualCloudCost);
+        Assert.Equal(0.0838, usage.Savings);
+        Assert.Equal("$", usage.Currency);
+        Assert.NotNull(usage.PerTarget);
+        Assert.Single(usage.PerTarget);
+        Assert.Equal("aiserver1", usage.PerTarget[0].Target);
+    }
+
+    [Fact]
+    public async Task GetSessionUsageAsync_When404OrEmpty_ReturnsNull()
+    {
+        var handler = new StubHttpHandler(req => StubHttpHandler.Status(HttpStatusCode.NotFound));
+        var service = CreateService(handler);
+
+        var usage = await service.GetSessionUsageAsync("unknown-session");
+        Assert.Null(usage);
+
+        Assert.Null(await service.GetSessionUsageAsync("  "));
+        Assert.Null(await service.GetSessionUsageAsync(null!));
+
+        var errorService = CreateService(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError)));
+        Assert.Null(await errorService.GetSessionUsageAsync("ncf-task42-stage-3"));
+    }
 }

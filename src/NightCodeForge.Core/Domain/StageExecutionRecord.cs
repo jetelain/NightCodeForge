@@ -18,6 +18,12 @@ public class StageExecutionRecord
     public int PromptTokens { get; set; }
     public int CompletionTokens { get; set; }
     public int TotalTokens { get; set; }
+    public int? CachedInputTokens { get; set; }
+    public double? Cost { get; set; }
+    public double? ActualCloudCost { get; set; }
+    public double? ElectricityCost { get; set; }
+    public double? CloudSavings { get; set; }
+    public string? Currency { get; set; }
     public string? TargetRouting { get; set; }
     public StageExecutionStatus Status { get; set; } = StageExecutionStatus.Pending;
     public string? OutputDataJson { get; set; }
