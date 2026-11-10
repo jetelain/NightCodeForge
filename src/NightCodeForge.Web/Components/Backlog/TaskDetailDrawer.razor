@@ -25,6 +25,12 @@
                             <span class="forge-badge @(Task.MergeMode == MergeMode.Automatic ? "badge-teal" : "badge-indigo")">
                                 @(Task.MergeMode == MergeMode.Automatic ? "Auto-Merge" : "Manual Review")
                             </span>
+                            @if (TaskCostPresentationHelper.ComputeTaskCost(Task) is { HasCostData: true } drawerCostSummary)
+                            {
+                                <span class="forge-badge badge-neutral font-mono" title="@TaskCostPresentationHelper.BuildCostBreakdownTooltip(drawerCostSummary)">
+                                    💰 @TaskCostPresentationHelper.FormatCost(drawerCostSummary.TotalCost, drawerCostSummary.Currency)
+                                </span>
+                            }
                         </div>
                         @if (_isEditingTitle)
                         {
@@ -328,7 +334,15 @@
                                     <div class="timeline-content">
                                         <div style="display: flex; justify-content: space-between; align-items: center;">
                                             <strong>@rec.StageId</strong>
-                                            <span class="text-muted" style="font-size: 0.75rem;">@(rec.DurationMs)ms</span>
+                                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                                @if (rec.Cost.HasValue)
+                                                {
+                                                    <span class="font-mono text-muted" style="font-size: 0.75rem;" title="@TaskCostPresentationHelper.BuildStageCostTooltip(rec)">
+                                                        💰 @TaskCostPresentationHelper.FormatStageCost(rec)
+                                                    </span>
+                                                }
+                                                <span class="text-muted" style="font-size: 0.75rem;">@(rec.DurationMs)ms</span>
+                                            </div>
                                         </div>
                                         <div style="font-size: 0.8rem; color: var(--text-secondary);">
                                             Agent: @rec.AgentProfileId | Model: @rec.ModelName

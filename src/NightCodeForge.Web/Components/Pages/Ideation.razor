@@ -68,6 +68,12 @@
                         break;
                 }
             </span>
+            @if (Session.ActiveSessionCost.HasCostData)
+            {
+                <span class="forge-badge badge-neutral font-mono" title="@TaskCostPresentationHelper.BuildCostBreakdownTooltip(Session.ActiveSessionCost)">
+                    💰 @TaskCostPresentationHelper.FormatCost(Session.ActiveSessionCost.TotalCost, Session.ActiveSessionCost.Currency)
+                </span>
+            }
             <button type="button" 
                     class="forge-btn forge-btn-secondary transcript-btn" 
                     @onclick="OpenTranscriptModal"
@@ -725,6 +731,7 @@
         Session.BoundWorkspaceId = conv.WorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
         Session.ActiveConversationId = conv.Id;
         Session.ActiveConversationTitle = conv.Title;
+        Session.ActiveSessionCost = TaskCostPresentationHelper.ComputeConversationCost(conv);
 
         var pendingTools = new List<IdeationToolCallViewModel>();
         var pendingParts = new List<ChatContentPart>();
@@ -1252,6 +1259,10 @@
                     case IdeationStreamUpdateKind.Completed when update.FinalResult != null:
                         Session.LatestTranscriptPath = update.FinalResult.TranscriptPath;
                         Session.LatestFullTranscriptMarkdown = update.FinalResult.FullTranscriptMarkdown;
+                        if (update.FinalResult.UsageDelta != null)
+                        {
+                            Session.ActiveSessionCost = TaskCostPresentationHelper.AccumulateCost(Session.ActiveSessionCost, update.FinalResult.UsageDelta);
+                        }
 
                         if (update.FinalResult.ProposedTasks != null)
                         {
@@ -1353,6 +1364,12 @@
                         thinkingTrace: string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
                         metadataJson: metadataJson,
                         cancellationToken: CancellationToken.None);
+
+                    var refreshedConv = await TaskRepository.GetConversationWithTurnsAsync(Session.ActiveConversationId.Value);
+                    if (refreshedConv != null)
+                    {
+                        Session.ActiveSessionCost = TaskCostPresentationHelper.ComputeConversationCost(refreshedConv);
+                    }
                 }
             }
         }
@@ -1399,6 +1416,12 @@
                         content: Session.CurrentMessageBuffer + "\n\n*(Generation stopped by user)*",
                         thinkingTrace: string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
                         cancellationToken: CancellationToken.None);
+
+                    var cancelledRefreshedConv = await TaskRepository.GetConversationWithTurnsAsync(Session.ActiveConversationId.Value);
+                    if (cancelledRefreshedConv != null)
+                    {
+                        Session.ActiveSessionCost = TaskCostPresentationHelper.ComputeConversationCost(cancelledRefreshedConv);
+                    }
                 }
             }
         }

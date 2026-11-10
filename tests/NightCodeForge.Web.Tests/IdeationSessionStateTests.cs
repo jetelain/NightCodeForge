@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Services;
 
 namespace NightCodeForge.Web.Tests;
@@ -18,6 +19,7 @@ public class IdeationSessionStateTests
         Assert.Empty(session.CurrentMessageBuffer);
         Assert.Null(session.BoundWorkspaceId);
         Assert.Null(session.CustomSystemPrompt);
+        Assert.Equal(TaskCostSummary.Empty, session.ActiveSessionCost);
     }
 
     [Fact]
@@ -67,6 +69,7 @@ public class IdeationSessionStateTests
         session.CurrentThinkingBuffer = "thinking...";
         session.CurrentMessageBuffer = "output...";
         session.IsGenerating = true;
+        session.ActiveSessionCost = new TaskCostSummary(0.05, 0.04, 0.01, 0.1, "$", HasCostData: true);
 
         var notified = false;
         session.OnChange += () => notified = true;
@@ -79,6 +82,7 @@ public class IdeationSessionStateTests
         Assert.Empty(session.CurrentMessageBuffer);
         Assert.Empty(session.CurrentToolCalls);
         Assert.False(session.IsGenerating);
+        Assert.Equal(TaskCostSummary.Empty, session.ActiveSessionCost);
         Assert.True(notified);
     }
 

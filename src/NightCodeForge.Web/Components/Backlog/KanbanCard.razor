@@ -71,6 +71,12 @@
 
     <!-- Status & Gating Indicators -->
     <div class="card-status-row">
+        @if (TaskCostPresentationHelper.ComputeTaskCost(Task) is { HasCostData: true } cardCostSummary)
+        {
+            <span class="forge-badge badge-neutral font-mono" style="font-size: 0.72rem; padding: 2px 6px;" title="@TaskCostPresentationHelper.BuildCostBreakdownTooltip(cardCostSummary)">
+                💰 @TaskCostPresentationHelper.FormatCost(cardCostSummary.TotalCost, cardCostSummary.Currency)
+            </span>
+        }
         @if (Task.IsWaitingForHuman)
         {
             <span class="badge-waiting-human" title="Execution paused awaiting human input">

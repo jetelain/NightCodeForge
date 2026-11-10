@@ -747,6 +747,17 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
             }
         }
 
+        if (usageDelta?.Cost.HasValue == true || usageDelta?.ActualCloudCost.HasValue == true || usageDelta?.ElectricityCost.HasValue == true)
+        {
+            var totalCost = usageDelta.Cost ?? ((usageDelta.ActualCloudCost ?? 0) + (usageDelta.ElectricityCost ?? 0));
+            metadata[AgentActivityMetadataKeys.Cost] = totalCost;
+            metadata[AgentActivityMetadataKeys.Currency] = usageDelta.Currency ?? TaskCostSummary.DefaultCurrency;
+            metadata[AgentActivityMetadataKeys.ElectricityCost] = usageDelta.ElectricityCost;
+            metadata[AgentActivityMetadataKeys.ActualCloudCost] = usageDelta.ActualCloudCost;
+            metadata[AgentActivityMetadataKeys.CloudSavings] = usageDelta.CloudSavings;
+            metadata[AgentActivityMetadataKeys.CachedInputTokens] = usageDelta.CachedInputTokens;
+        }
+
         var finalResult = new IdeationResult(fullText, sessionProposals, allToolCalls, transcriptPath, fullTranscriptMarkdown, usageDelta);
         await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.StageCompleted, $"Ideation completed with {sessionProposals.Count} proposal(s).", cancellationToken, metadata);
 

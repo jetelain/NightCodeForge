@@ -64,4 +64,10 @@ public static class AgentActivityMetadataKeys
     public const string KeepAlive = "KeepAlive";
     public const string Reason = "Reason";
     public const string Warning = "Warning";
+    public const string Cost = "cost";
+    public const string Currency = "currency";
+    public const string ElectricityCost = "electricityCost";
+    public const string ActualCloudCost = "actualCloudCost";
+    public const string CloudSavings = "cloudSavings";
+    public const string CachedInputTokens = "cachedInputTokens";
 }

@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -315,6 +316,7 @@ public class IdeationSessionState
     public string? ActiveConversationTitle { get; set; }
     public string? LatestTranscriptPath { get; set; }
     public string? LatestFullTranscriptMarkdown { get; set; }
+    public TaskCostSummary ActiveSessionCost { get; set; } = TaskCostSummary.Empty;
     public List<IdeationQuestion> PendingQuestions { get; } = new();
 
     public void CancelPendingQuestions()
@@ -445,6 +447,7 @@ public class IdeationSessionState
         LatestFullTranscriptMarkdown = null;
         ActiveConversationId = null;
         ActiveConversationTitle = null;
+        ActiveSessionCost = TaskCostSummary.Empty;
         SelectedRoutingTarget = OllamaRoutingTarget.Auto;
         SelectedModelOverride = null;
         IsGenerating = false;

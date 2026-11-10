@@ -392,14 +392,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
             var summary = $"Reviewer requested changes: {reqChange.Feedback}";
             await SaveAsync(AgentRunStatus.Completed, summary, cancellationToken);
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken);
+            var completionMetrics = CurrentMetrics();
+            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, $"Changes requested: {reqChange.Feedback}", cancellationToken, BuildCostMetadata(completionMetrics));
 
             var proposals = canonicalTools.PendingProposals.Count > 0
                 ? (IReadOnlyList<TaskProposal>)canonicalTools.PendingProposals.ToList()
                 : null;
 
             return AgentRunResult.Completed(
-                CurrentMetrics(),
+                completionMetrics,
                 commitHash: null,
                 updatedState: latestSerializedState,
                 summary: summary,
@@ -1135,11 +1136,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
             : null;
 
         await SaveAsync(AgentRunStatus.Completed, extraction.Summary, cancellationToken);
+        var finalMetrics = CurrentMetrics();
 
-        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken);
+        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken, BuildCostMetadata(finalMetrics));
 
         return AgentRunResult.Completed(
-            CurrentMetrics(),
+            finalMetrics,
             commitHash: null,
             updatedState: latestSerializedState,
             summary: extraction.Summary,
@@ -1212,6 +1214,26 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         return cursor < ordered.Count ? ordered[cursor].TurnIndex : ordered[^1].TurnIndex + 1;
+    }
+
+    private static Dictionary<string, object?>? BuildCostMetadata(AgentRunMetrics metrics)
+    {
+        if (!metrics.Cost.HasValue && !metrics.ActualCloudCost.HasValue && !metrics.ElectricityCost.HasValue)
+        {
+            return null;
+        }
+
+        var totalCost = metrics.Cost ?? ((metrics.ActualCloudCost ?? 0) + (metrics.ElectricityCost ?? 0));
+
+        return new Dictionary<string, object?>
+        {
+            [AgentActivityMetadataKeys.Cost] = totalCost,
+            [AgentActivityMetadataKeys.Currency] = metrics.Currency ?? TaskCostSummary.DefaultCurrency,
+            [AgentActivityMetadataKeys.ElectricityCost] = metrics.ElectricityCost,
+            [AgentActivityMetadataKeys.ActualCloudCost] = metrics.ActualCloudCost,
+            [AgentActivityMetadataKeys.CloudSavings] = metrics.CloudSavings,
+            [AgentActivityMetadataKeys.CachedInputTokens] = metrics.CachedInputTokens
+        };
     }
 
     private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct, Dictionary<string, object?>? metadata = null)
