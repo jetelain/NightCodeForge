@@ -19,9 +19,12 @@ Provide a modular, **fully optional** GitHub client, **GitHub App Device Flow** 
    - On Windows, encrypt and decrypt the token file at rest using **DPAPI** (`ProtectedData.Protect` / `ProtectedData.Unprotect` with `DataProtectionScope.CurrentUser` via the `System.Security.Cryptography.ProtectedData` package). On Unix platforms, enforce `0600` (`UserRead | UserWrite`) file permissions.
 2. **GitHub Client Abstraction (`IGitHubClientService`) & Workspace Settings (`GitHubIntegrationSettings`):**
    - Provide a clean, DI-registered GitHub client resolving credentials from `IGitHubDeviceAuthService` / `IGitHubTokenStore` with fail-fast validation and per-workspace configuration persisted on the [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) entity and editable in `/settings`.
-3. **Pull Request Delivery Mode via `MergeMode.ExternalPullRequest`:**
+3. **Pull Request Delivery Mode via `MergeMode.ExternalPullRequest` (with Multi-User NCF Collaboration Safeguards):**
    - Provide an alternative to direct squash-and-merge into the developer's local working copy: deliver completed tasks via **GitHub Pull Requests**.
-   - Pushes the isolated feature branch (`feature/task-{id}`) to the remote GitHub repository (`https://github.com/{RepositoryOwner}/{RepositoryName}.git`) using ephemeral HTTP header authentication without persisting tokens in `.git/config`.
+   - **Multi-User NCF Safety:** Because multiple developers on the same team may each run their own NightCodeForge instance against the same GitHub repository (each with an independent local SQLite database and auto-incrementing `task.Id`), outbound PR delivery enforces:
+     - **User-Namespaced Remote Branches (`ncf/{githubLogin}/task-{id}`):** Pushes the isolated local feature branch (`feature/task-{id}`) to `refs/heads/ncf/{sanitizedLogin}/task-{id}` on GitHub (`https://github.com/{RepositoryOwner}/{RepositoryName}.git`) using ephemeral HTTP header authentication without persisting tokens in `.git/config`, preventing remote branch collisions when two developers both have a local `Task #12`.
+     - **Exclusion of Local `docs/tasks/*.md` State Files from Outbound PRs:** Strips/reverts local NCF task tracking markdown files (`docs/tasks/*.md`) from the pushed branch before opening/updating the PR so that merging the PR into `main` never pollutes the shared repository with active local task files or triggers duplicate task ingestion in teammates' NCF instances.
+     - **Remote Base Branch Sync:** Fetches the latest `task.BaseBranch` from GitHub before branching/baseline verification so tasks build on top of teammates' latest merged PRs.
    - Opens (or updates) a GitHub Pull Request against `task.BaseBranch` with an automated markdown summary detailing the task objective, stage execution history, and deterministic quality gate metrics (coverage delta, warning ratchet, test results).
    - Surfaces **"Open GitHub Pull Request"** / **"Create GitHub Pull Request"** actions in the Review Room UI (`Review.razor`) and Task Details (`TaskDetail.razor` / `TaskDetailDrawer.razor`).
 
@@ -45,6 +48,7 @@ public class GitHubIntegrationSettings
     
     // Sub-feature A: Untrusted Issue Intake & Triage (Step 12.11B)
     public bool IssueTriageEnabled { get; set; } = false;
+    public GitHubIssueTriageScope IssueTriageScope { get; set; } = GitHubIssueTriageScope.AssignedToMeOrUnassigned;
     public string? IssueFilterLabel { get; set; }
     public int PollingIntervalMinutes { get; set; } = 15;
 
@@ -53,10 +57,19 @@ public class GitHubIntegrationSettings
     public bool CreateAsDraft { get; set; } = false;
     public bool CloseTaskOnPrMerge { get; set; } = true;
 
-    // Sub-feature C: Task Mirroring (Step 12.11B)
+    // Sub-feature C: Task Mirroring & Multi-User Coordination (Step 12.11B)
     public bool TaskMirroringEnabled { get; set; } = false;
+    public bool CreateGitHubIssuesForLocalTasks { get; set; } = false;
+    public bool AutoAssignIssueOnStart { get; set; } = true;
     public bool SyncStatusLabels { get; set; } = true;
     public bool PostMilestoneComments { get; set; } = true;
+}
+
+public enum GitHubIssueTriageScope
+{
+    AssignedToMeOrUnassigned = 0, // Default: skips issues assigned to other GitHub users
+    AssignedToMeOnly = 1,         // Only triages issues explicitly assigned to the authenticated user
+    AllOpenIssues = 2             // Triages all matching open issues regardless of assignee
 }
 ```
 
@@ -130,21 +143,37 @@ public enum MergeMode
 
 ---
 
-## 3. Pull Request Delivery Specification
+## 3. Pull Request Delivery & Multi-User Collaboration Specification
 
-### 3.1 Pull Request Generation & Lifecycle Flow
+### 3.1 Multi-User NCF Collaboration Model
+When multiple developers on the same team use NightCodeForge against a shared GitHub repository (`{RepositoryOwner}/{RepositoryName}`), each developer runs an independent NCF instance with its own local SQLite database:
+1. **Remote Branch Disambiguation (`ncf/{githubLogin}/task-{id}`):**
+   - Local `ForgeTask.Id` values (`1, 2, 3...`) are scoped to each developer's local SQLite database. If Developer A (`alice`) and Developer B (`bob`) both push `refs/heads/feature/task-5` to GitHub, their branches will collide.
+   - To guarantee zero remote branch collisions while keeping local worktree branch naming (`feature/task-{id}`) unchanged, the remote branch ref pushed to GitHub is always namespaced with the authenticated GitHub user's login (`AuthenticatedUserLogin` from `IGitHubTokenStore`, sanitized to lowercase alphanumeric and `-`, falling back to `"user"` only if unavailable):
+     $$\text{RemoteHeadBranch} = \texttt{ncf/\{sanitizedLogin\}/task-\{taskId\}}$$
+2. **Preventing `docs/tasks/*.md` Leakage Across NCF Instances:**
+   - During Stage 1 (`task-review`), the agent updates the task's markdown specification in `docs/tasks/YYYY-MM-DD-<slug>.md` inside the task worktree, and `TaskMarkdownSyncService.SyncAllTasksFromDiskAsync` imports that updated specification into `ForgeTask.Description` in SQLite.
+   - In `MergeMode.ExternalPullRequest`, the PR is opened while the task is still in `TaskOverallStatus.Ready` (before `ArchiveTaskMarkdownAsync` deletes the file on task closure). If `docs/tasks/*.md` were included in the pushed PR branch and merged into `main` on GitHub, every other NCF user pulling `main` would ingest that unarchived `status: Open` file with a colliding local `id:`!
+   - Therefore, immediately before pushing the branch to GitHub, the PR delivery service **must strip any `docs/tasks/` additions or modifications from the outbound commit** on the task branch (e.g., restoring `docs/tasks/` to match `task.BaseBranch` and committing the cleanup if needed, after ensuring SQLite `ForgeTask.Description` has already captured Stage 1's specification).
+3. **Syncing Latest Remote `BaseBranch` Before Task Branching:**
+   - When `workspace.GitHubSettings is { Enabled: true, PullRequestDeliveryEnabled: true }`, during `PrepareTaskBranchAndMirrorAsync` (and prior to Stage 2 `PreImplementationBaseline`), fetch the latest `task.BaseBranch` from `https://github.com/{RepositoryOwner}/{RepositoryName}.git` into the canonical clone (and fast-forward local `BaseBranch` when clean) so new task branches always start from teammates' latest merged GitHub commits.
+
+### 3.2 Pull Request Generation & Lifecycle Flow
 To respect the maximum 10-constructor-parameter rule in [AGENTS.md](../../AGENTS.md) (since [`TaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs) already has 10 parameters and [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) has 9), encapsulate outbound PR delivery in a cohesive service (or route via [`ITaskWorkspacePreparer`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs)):
 
 When a task completes all verification stages (`PostReviewVerification` passes) and `task.MergeMode == MergeMode.ExternalPullRequest`:
-1. **Push Branch to GitHub Remote (Ephemeral Auth, Ext4 Mirror Compatible):**
-   - Because `origin` in the canonical ext4 clone (`Ext4MirrorPath`) points to the local host repository path rather than GitHub, push `feature/task-{id}` directly to `https://github.com/{RepositoryOwner}/{RepositoryName}.git`.
-   - Authenticate the `git push` command using the refresh-aware access token from `IGitHubDeviceAuthService.GetValidAccessTokenAsync` via an ephemeral per-command HTTP header (`git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" push https://github.com/{owner}/{repo}.git feature/task-{id}:refs/heads/feature/task-{id} --force-with-lease`) so the short-lived `ghu_...` token is **never** written into `.git/config`.
+1. **Clean Outbound Branch & Push to GitHub Remote (Ephemeral Auth, Ext4 Mirror Compatible):**
+   - Ensure `docs/tasks/` changes on `feature/task-{id}` are stripped/reverted to match `task.BaseBranch` so local NCF task state files are never pushed to the shared GitHub repository.
+   - Compute `remoteBranch = $"ncf/{SanitizeGitHubLogin(tokenPayload.AuthenticatedUserLogin)}/task-{task.Id}"`.
+   - Because `origin` in the canonical ext4 clone (`Ext4MirrorPath`) points to the local host repository path rather than GitHub, push `feature/task-{id}` directly to `https://github.com/{RepositoryOwner}/{RepositoryName}.git` onto `refs/heads/{remoteBranch}`.
+   - Authenticate the `git push` command using the refresh-aware access token from `IGitHubDeviceAuthService.GetValidAccessTokenAsync` via an ephemeral per-command HTTP header (`git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" push https://github.com/{owner}/{repo}.git feature/task-{id}:refs/heads/{remoteBranch} --force-with-lease`) so the short-lived `ghu_...` token is **never** written into `.git/config`.
    - Also sync the feature branch to the local host repository (`PushToHostAsync`) so the developer's local repository has the branch ref.
-2. **Build PR Body (Shared Quality Gate Metrics Extraction):**
+2. **Build PR Title & Body (Shared Quality Gate Metrics Extraction):**
    - Extract deterministic quality gate metrics from `PipelineDataBag` using a shared helper in `NightCodeForge.Core` (consolidating the logic currently in [`TaskReviewService.ExtractGateMetrics`](../../src/NightCodeForge.Web/Services/TaskReviewService.cs)).
+   - Format the PR title using the task title (and issue reference when `ExternalSource == "GitHub"` and `ExternalReferenceId` is populated, e.g. `"{TaskTitle} (#{ExternalReferenceId})"` rather than exposing only the developer-local `Task #{TaskId}`).
    - Format a structured PR description (including `Resolves #{ExternalReferenceId}` only when `ExternalSource == "GitHub"` and `ExternalReferenceId` is populated):
      ```markdown
-     ## 🚀 Autonomous Implementation: Task #{TaskId} - {TaskTitle}
+     ## 🚀 {TaskTitle}
      
      Resolves #{IssueNumber}
      
@@ -158,11 +187,11 @@ When a task completes all verification stages (`PostReviewVerification` passes) 
      - **Linter / Warning Ratchet:** ✅ 0 new compiler warnings
      
      ---
-     *Generated by [NightCodeForge](https://github.com/jetelain/NightCodeForge)*
+     *Generated via [NightCodeForge](https://github.com/jetelain/NightCodeForge) by @{AuthenticatedUserLogin} (Local Task #{TaskId})*
      ```
 3. **Open or Update Pull Request & Transition to `Ready`:**
-   - If `task.PullRequestNumber` / `task.PullRequestUrl` is not yet set, invoke `IGitHubClientService.CreatePullRequestAsync` (`POST /repos/{owner}/{repo}/pulls`) with `head = feature/task-{id}`, `base = task.BaseBranch`, `draft = settings.CreateAsDraft`, and store `task.PullRequestNumber` and `task.PullRequestUrl`.
-   - If `task.PullRequestNumber` already exists (e.g., after a maintainer "Request Changes" loopback), pushing `feature/task-{id}` updates the PR head automatically, and `IGitHubClientService` updates the PR body/title with the latest gate metrics.
+   - If `task.PullRequestNumber` / `task.PullRequestUrl` is not yet set, invoke `IGitHubClientService.CreatePullRequestAsync` (`POST /repos/{owner}/{repo}/pulls`) with `head = remoteBranch` (`ncf/{sanitizedLogin}/task-{id}`), `base = task.BaseBranch`, `draft = settings.CreateAsDraft`, and store `task.PullRequestNumber` and `task.PullRequestUrl`.
+   - If `task.PullRequestNumber` already exists (e.g., after a maintainer "Request Changes" loopback), pushing `feature/task-{id}:refs/heads/{remoteBranch}` updates the PR head automatically, and `IGitHubClientService` updates the PR body/title with the latest gate metrics.
    - Transition `task.Status` to `TaskOverallStatus.Ready` so the task remains visible in the Review Room while the PR is open on GitHub.
 4. **Review Room UI Presentation (`Review.razor`):**
    - When `_snapshot.MergeMode == MergeMode.ExternalPullRequest` (or whenever `_snapshot.PullRequestUrl` is populated):
@@ -183,9 +212,9 @@ When a task completes all verification stages (`PostReviewVerification` passes) 
   - [ ] Add `MergeMode.ExternalPullRequest = 2`, `GitHubIntegrationSettings` on `Workspace`, and `ExternalSource`, `ExternalReferenceId`, `PullRequestNumber`, and `PullRequestUrl` on `ForgeTask`.
   - [ ] Add EF Core migration and update `AppDbContext.BaselineExistingPreMigrationDatabaseAsync`, `InMemoryTaskRepository`, `TaskWorkspacePreparer.CopyTaskMetadata`, `TaskMarkdownSyncService`, `BacklogMutationToolService`, and `KanbanCard.razor`.
 - [ ] **GitHub Client Abstraction (`IGitHubClientService`):**
-  - [ ] Implement client in `NightCodeForge.Infrastructure/GitHub` using `HttpClient` resolving refresh-aware credentials via `IGitHubDeviceAuthService.GetValidAccessTokenAsync` with strict constructor DI and fail-fast validation (`CreatePullRequestAsync`, `UpdatePullRequestAsync`, `GetPullRequestAsync`, `ListIssuesAsync`, `CreateIssueAsync`, `UpdateIssueAsync`, `AddIssueCommentAsync`).
-- [ ] **PR Delivery via `MergeMode.ExternalPullRequest`:**
-  - [ ] Implement ephemeral-auth branch push to `https://github.com/{Owner}/{Repo}.git` and automated PR creation/update upon Stage 6 completion without exceeding the 10-constructor-parameter limit on orchestrator services.
+  - [ ] Implement client in `NightCodeForge.Infrastructure/GitHub` using `HttpClient` resolving refresh-aware credentials via `IGitHubDeviceAuthService.GetValidAccessTokenAsync` with strict constructor DI and fail-fast validation (`CreatePullRequestAsync`, `UpdatePullRequestAsync`, `GetPullRequestAsync`, `GetIssueAsync`, `ListIssuesAsync`, `CreateIssueAsync`, `UpdateIssueAsync`, `AddIssueCommentAsync`).
+- [ ] **PR Delivery via `MergeMode.ExternalPullRequest` (Multi-User NCF Safe):**
+  - [ ] Implement remote base branch fetch, stripping of local `docs/tasks/*.md` state files from the outbound PR commit, ephemeral-auth branch push to `refs/heads/ncf/{sanitizedLogin}/task-{id}` on `https://github.com/{Owner}/{Repo}.git`, and automated PR creation/update upon Stage 6 completion without exceeding the 10-constructor-parameter limit on orchestrator services.
 - [ ] **Blazor UI Integration:**
   - [ ] Add GitHub Integration workspace settings tab (`GitHubSettingsTab.razor` in `/settings` under Workspace Scope) with `RepositoryOwner`, `RepositoryName`, interactive GitHub App Device Flow connect/disconnect UI (`user_code`, copy button, `https://github.com/login/device` link, GitHub App repository installation link, connected user status badge), and sub-feature toggles.
   - [ ] Enable `MergeMode.ExternalPullRequest` option in task creation, promotion, and detail selectors when `PullRequestDeliveryEnabled` is active.

@@ -222,7 +222,7 @@ To avoid configuring executable paths, arguments, and container mounts repeatedl
    - Update `IHarnessActivityRecorder` / `HarnessActivityRecorder` (injecting `ITaskRepository`) so that ACP stage executions:
      - Start or resume an `Agentic` `Conversation` in SQLite at stage start (`StartConversationAsync` with `context.Profile.Id`, `StandardHarnessIds.Acp`, `context.Profile.ModelName`, and computed `attemptIndex`).
      - Persist `StageTurnRole.User` (bootstrap prompt), `StageTurnRole.Assistant` (flushed assistant text and accumulated `thinkingTrace` from `agent_thought_chunk`), `StageTurnRole.Tool` (`tool_call`), and `StageTurnRole.ToolResult` (`tool_call_update`).
-     - Complete the `Conversation` (`CompleteConversationAsync`) with the saved `transcriptFileName` and final `StageExecutionStatus` (`Completed`, `WaitingForHuman`, `Cancelled`, or `Failed`).
+     - Complete the `Conversation` (`CompleteConversationAsync`) with the saved `transcriptFileName`, final `StageExecutionStatus` (`Completed`, `WaitingForHuman`, `Cancelled`, or `Failed`), and token usage delta (`InputTokens`, `OutputTokens`, `CachedInputTokens` from `result.usage`, keeping `Cost = null` for subscription-backed Antigravity ACP sessions so Step 12.33B displays token counts without a synthetic `$0.00` badge).
 4. **Read-Only Enforcement, Stage Routing & Post-Run Validation:**
    - When `profile.Mode == AgentMode.ReadOnly` (e.g., `triage`, `ideation`, or plan-only stages):
      - Set `agy acp` session config option `mode = "plan"`.

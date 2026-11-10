@@ -4,7 +4,7 @@
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
 > *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
-> *Dependencies:* [Step 11.37A: HTTP Transport Hardening & Outage Retry Policy](../archive/phase-11/STEP_11_37A_HTTP_TRANSPORT_HARDENING_AND_OUTAGE_RETRY_POLICY.md), [Step 11.45: Measured-Token Compaction Trigger & Pmad.AI Estimator](../archive/phase-11/STEP_11_45_MEASURED_TOKEN_COMPACTION_TRIGGER_AND_PMAD_AI_ESTIMATOR.md), [Step 11.47: Compaction Checkpoint Persistence, Resume Fidelity & Telemetry](../archive/phase-11/STEP_11_47_COMPACTION_CHECKPOINT_PERSISTENCE_RESUME_FIDELITY_AND_IN_FLIGHT_TELEMETRY.md)  
+> *Dependencies:* [Step 11.37A: HTTP Transport Hardening & Outage Retry Policy](../archive/phase-11/STEP_11_37A_HTTP_TRANSPORT_HARDENING_AND_OUTAGE_RETRY_POLICY.md), [Step 11.45: Measured-Token Compaction Trigger & Pmad.AI Estimator](../archive/phase-11/STEP_11_45_MEASURED_TOKEN_COMPACTION_TRIGGER_AND_PMAD_AI_ESTIMATOR.md), [Step 11.47: Compaction Checkpoint Persistence, Resume Fidelity & Telemetry](../archive/phase-11/STEP_11_47_COMPACTION_CHECKPOINT_PERSISTENCE_RESUME_FIDELITY_AND_IN_FLIGHT_TELEMETRY.md), [Step 11.49: Two-Phase Streaming Idle Watchdog & Output Token Cap](STEP_11_49_STREAMING_IDLE_WATCHDOG_OUTPUT_TOKEN_CAP_AND_TIMEOUT_DIAGNOSTICS.md), [Step 12.33A: OllamaRouter Session Affinity Lease Release](../features/STEP_12_33A_OLLAMAROUTER_SESSION_AFFINITY_RELEASE_AND_COST_COLLECTION.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -157,7 +157,7 @@ flowchart TD
 
 ---
 
-### 3.4 Outage State Reset & Execution Resumption
+### 3.4 Outage State Reset, Session Affinity Release & Execution Resumption
 
 1. **Outage Counter & Timer Reset:**
    - Clear the outage tracking timestamps:
@@ -169,7 +169,9 @@ flowchart TD
    - Reset transient retry counter:
      - `streamRetryCount = 0;`
      - `nonStreamingRetries = 0;`
-2. **Session & Enumerator Refresh:**
+2. **Release Stale OllamaRouter Session Affinity Lease (Step 12.33A Integration):**
+   - Because the active context was just compacted from $> 100\text{k}$ down to $\sim 30\text{k}$ tokens (invalidating any prior $> 100\text{k}$ KV-cache prefix) and the target node holding the sticky session lease (`LlmSessionIds.ForStage(taskId, stageId)`) may be overloaded or stalled, release the sticky session affinity lease via `conversationCoordinator` / `ILlmGatewayService.ReleaseSessionAffinityAsync(conversationState.SessionId)` before resuming. This allows OllamaRouter to place the freshly compacted $\sim 30\text{k}$ prompt on the healthiest available node in the fleet.
+3. **Session & Enumerator Refresh:**
    - Refresh or recreate the agent session:
      ```csharp
      session = await agent.CreateSessionAsync(cancellationToken);

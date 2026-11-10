@@ -84,6 +84,7 @@ To preserve NightCodeForge's profile inheritance model (Global profiles vs. Work
        public int? ThinkingTokenBudget { get; set; }
        public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto;
        public int? ContextWindowTokens { get; set; }
+       public int? MaxOutputTokens { get; set; }
        public string? HarnessConfigurationJson { get; set; }
 
        public DifficultyStageOverride Clone() => new()
@@ -94,6 +95,7 @@ To preserve NightCodeForge's profile inheritance model (Global profiles vs. Work
            ThinkingTokenBudget = ThinkingTokenBudget,
            RoutingTarget = RoutingTarget,
            ContextWindowTokens = ContextWindowTokens,
+           MaxOutputTokens = MaxOutputTokens,
            HarnessConfigurationJson = HarnessConfigurationJson
        };
    }
