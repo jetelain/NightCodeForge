@@ -242,7 +242,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var harnessOptions = setup.Options;
         var agent = setup.Agent;
 
-        if (harnessOptions.CompactionStrategy is PiStyleCrucibleCompactionStrategy piStrategy)
+        var piStrategy = harnessOptions.CompactionStrategy as PiStyleCrucibleCompactionStrategy;
+        if (piStrategy != null)
         {
             piStrategy.OnCompacting = async (preTokens, msgCount, ct) =>
             {
@@ -763,6 +764,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             int streamRetryCount = 0;
             int streamTimeoutRetries = 0;
             long? streamOutageStartTimestamp = null;
+            var recoveryState = new TurnRecoveryState();
 
             IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
                 .GetAsyncEnumerator(interruptionCts.Token);
@@ -833,6 +835,51 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                         if (timeoutExhausted || streamRetryCount >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
                         {
+                            await enumerator.DisposeAsync();
+                            enumerator = null;
+
+                            try
+                            {
+                                if (await TryRecoverFromLargeContextTimeoutAsync(
+                                    ex,
+                                    isTimeout,
+                                    recoveryState,
+                                    piStrategy,
+                                    chatHistory,
+                                    accumulatedText,
+                                    accumulatedReasoning,
+                                    context,
+                                    conversationState,
+                                    sessionId,
+                                    setup.EffectiveModelId,
+                                    elapsed,
+                                    cancellationToken))
+                                {
+                                    latestSerializedState = SerializeSession(chatHistory);
+                                    historySnapshot = chatHistory.ToList();
+                                    streamRetryCount = 0;
+                                    streamTimeoutRetries = 0;
+                                    streamOutageStartTimestamp = null;
+
+                                    session = await agent.CreateSessionAsync(cancellationToken);
+                                    enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
+                                        .GetAsyncEnumerator(interruptionCts.Token);
+                                    continue;
+                                }
+                                latestSerializedState = SerializeSession(chatHistory);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                                if (isPause)
+                                {
+                                    await SuspendOnPauseAsync();
+                                    throw;
+                                }
+                                await AbortOnCancellationAsync();
+                                throw;
+                            }
+
                             if (streamRetryCount > 0)
                             {
                                 ex.Data[ResilienceConstants.RetriedKey] = true;
@@ -915,6 +962,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         streamRetryCount = 0;
                         streamTimeoutRetries = 0;
                         streamOutageStartTimestamp = null;
+                        recoveryState.HasAttemptedTimeoutRecoveryCompaction = false;
                     }
 
                     if (await ProcessUpdateAsync(currentUpdate, streaming: true))
@@ -1015,6 +1063,45 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                         if (timeoutExhausted || nonStreamingRetries >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
                         {
+                            try
+                            {
+                                if (await TryRecoverFromLargeContextTimeoutAsync(
+                                    ex,
+                                    isTimeout,
+                                    recoveryState,
+                                    piStrategy,
+                                    chatHistory,
+                                    accumulatedText,
+                                    accumulatedReasoning,
+                                    context,
+                                    conversationState,
+                                    sessionId,
+                                    setup.EffectiveModelId,
+                                    elapsed,
+                                    cancellationToken))
+                                {
+                                    latestSerializedState = SerializeSession(chatHistory);
+                                    nonStreamingRetries = 0;
+                                    nonStreamingTimeoutRetries = 0;
+                                    nonStreamingOutageStartTimestamp = null;
+
+                                    session = await agent.CreateSessionAsync(cancellationToken);
+                                    continue;
+                                }
+                                latestSerializedState = SerializeSession(chatHistory);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                                if (isPause)
+                                {
+                                    await SuspendOnPauseAsync();
+                                    throw;
+                                }
+                                await AbortOnCancellationAsync();
+                                throw;
+                            }
+
                             if (nonStreamingRetries > 0)
                             {
                                 ex.Data[ResilienceConstants.RetriedKey] = true;
@@ -1148,6 +1235,128 @@ public partial class CrucibleAgentHarness : IAgentHarness
             targetRouting: extraction.TargetRouting,
             reviewerFeedback: extraction.ReviewerFeedback,
             proposals: proposals);
+    }
+
+    private sealed class TurnRecoveryState
+    {
+        public bool HasAttemptedTimeoutRecoveryCompaction { get; set; }
+    }
+
+    private async Task<bool> TryRecoverFromLargeContextTimeoutAsync(
+        Exception ex,
+        bool isTimeout,
+        TurnRecoveryState recoveryState,
+        PiStyleCrucibleCompactionStrategy? piStrategy,
+        List<ChatMessage> chatHistory,
+        StringBuilder accumulatedText,
+        StringBuilder accumulatedReasoning,
+        AgentSessionContext context,
+        CrucibleConversationState conversationState,
+        string sessionId,
+        string? effectiveModelId,
+        TimeSpan elapsed,
+        CancellationToken cancellationToken)
+    {
+        if (!isTimeout)
+        {
+            return false;
+        }
+
+        if (recoveryState.HasAttemptedTimeoutRecoveryCompaction)
+        {
+            _logger.LogInformation(
+                "Crucible timeout retry exhausted; emergency compaction was already attempted for the current turn. Bypassing secondary recovery.");
+            return false;
+        }
+
+        if (piStrategy == null || !piStrategy.Options.EnableTimeoutRecoveryCompaction)
+        {
+            return false;
+        }
+
+        int estimatedTokens = ModelCalibratedTokenEstimator.EstimateMessagesTokens(chatHistory, effectiveModelId);
+        int projectedTokens = piStrategy.CalculateProjectedPromptTokens(PiStyleCrucibleCompactionStrategy.CreateIndex(chatHistory));
+        int activeTokens = Math.Max(Math.Max(piStrategy.LastMeasuredInputTokens, projectedTokens), estimatedTokens);
+        int threshold = piStrategy.Options.LargeContextTimeoutRecoveryThresholdTokens;
+
+        if (activeTokens < threshold)
+        {
+            _logger.LogInformation(
+                "Crucible timeout retry exhausted, but active context ({ActiveTokens:N0} tokens) is below recovery threshold ({Threshold:N0} tokens). Bypassing emergency compaction.",
+                activeTokens,
+                threshold);
+            return false;
+        }
+
+        recoveryState.HasAttemptedTimeoutRecoveryCompaction = true;
+
+        await BroadcastAsync(
+            sessionId,
+            context.ForgeTask.Id,
+            context.StageId,
+            AgentActivityKind.Notice,
+            $"LLM invocation timed out after {Math.Round(elapsed.TotalMinutes, 0)} minutes with {activeTokens:N0} tokens context (suspected KV cache loss). Attempting emergency context compaction...",
+            cancellationToken);
+
+        accumulatedText.Clear();
+        accumulatedReasoning.Clear();
+        SanitizeInFlightTurns(chatHistory);
+        await conversationState.DrainAsync();
+        await conversationState.SanitizeTrailingInterruptedTurnsAsync(cancellationToken);
+
+        int preTokens = activeTokens;
+        bool compacted;
+        try
+        {
+            compacted = await piStrategy.CompactEmergencyAsync(chatHistory, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception compEx)
+        {
+            _logger.LogError(
+                compEx,
+                "Emergency context compaction threw an exception for task #{TaskId}, stage '{StageId}' ({PreTokens:N0} tokens).",
+                context.ForgeTask.Id,
+                context.StageId,
+                preTokens);
+            return false;
+        }
+
+        if (!compacted)
+        {
+            _logger.LogError(
+                "Emergency context compaction failed to reduce context for task #{TaskId}, stage '{StageId}' ({PreTokens:N0} tokens).",
+                context.ForgeTask.Id,
+                context.StageId,
+                preTokens);
+            return false;
+        }
+
+        int postTokens = ModelCalibratedTokenEstimator.EstimateMessagesTokens(chatHistory, effectiveModelId);
+
+        _logger.LogWarning(
+            "LLM invocation timed out after {ElapsedMinutes:F0}m with {PreCompactionTokens:N0} tokens context (suspected KV cache loss). Emergency context compaction recovered active context to {PostCompactionTokens:N0} tokens. Resuming agent execution... (TaskId: {TaskId}, StageId: {StageId}, ElapsedSeconds: {ElapsedSeconds:F1})",
+            elapsed.TotalMinutes,
+            preTokens,
+            postTokens,
+            context.ForgeTask.Id,
+            context.StageId,
+            elapsed.TotalSeconds);
+
+        await BroadcastAsync(
+            sessionId,
+            context.ForgeTask.Id,
+            context.StageId,
+            AgentActivityKind.Notice,
+            $"LLM invocation timed out after {Math.Round(elapsed.TotalMinutes, 0)} minutes with {preTokens:N0} tokens context (suspected KV cache loss). Emergency context compaction recovered active context to {postTokens:N0} tokens. Resuming agent execution...",
+            cancellationToken);
+
+        await _conversationCoordinator.ReleaseSessionAffinityAsync(conversationState.SessionId, cancellationToken);
+
+        return true;
     }
 
     private static int? ResolveCompactionCutTurnIndex(

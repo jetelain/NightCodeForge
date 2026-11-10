@@ -163,8 +163,29 @@ public sealed class CrucibleConversationState
         }
     }
 
-    public Task SanitizeTrailingInterruptedTurnsAsync(CancellationToken cancellationToken) =>
-        _repository.SanitizeTrailingInterruptedTurnsAsync(Conversation.Id, cancellationToken);
+    public async Task SanitizeTrailingInterruptedTurnsAsync(CancellationToken cancellationToken)
+    {
+        await _repository.SanitizeTrailingInterruptedTurnsAsync(Conversation.Id, cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+        {
+            if (_trackedTurns.Count > 0)
+            {
+                var toRemove = ConversationHistorySerializer.GetTrailingInterruptedTurns(_trackedTurns);
+                foreach (var turn in toRemove)
+                {
+                    _trackedTurns.Remove(turn);
+                    if (turn.Role == StageTurnRole.Tool)
+                    {
+                        var callId = CrucibleConversationCoordinator.ExtractCallId(turn);
+                        if (!string.IsNullOrEmpty(callId))
+                        {
+                            _writtenToolCallIds.TryRemove(callId, out _);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// <summary>Call id of the most recent persisted <c>ask</c> tool turn, if any.</summary>
     public string? FindLastAskCallId() =>
@@ -201,6 +222,9 @@ public interface ICrucibleConversationCoordinator
 
     /// <summary>Persists the session transcript and completes the database conversation. Returns the transcript file name.</summary>
     Task<string?> SaveTranscriptAsync(CrucibleConversationState state, CrucibleTranscriptRequest request, CancellationToken cancellationToken);
+
+    /// <summary>Releases sticky router session affinity for the specified session (e.g. on stage completion or after emergency context compaction).</summary>
+    Task ReleaseSessionAffinityAsync(string? sessionId, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -819,18 +843,36 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
         if (!string.IsNullOrWhiteSpace(state.SessionId))
         {
-            try
-            {
-                using var releaseCts = new CancellationTokenSource(SessionTelemetryTimeout);
-                await _llmGatewayService.ReleaseSessionAffinityAsync(state.SessionId, releaseCts.Token);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to release LLM session affinity for session '{SessionId}'", state.SessionId);
-            }
+            await ReleaseSessionAffinityAsync(state.SessionId, CancellationToken.None);
         }
 
         return transcriptFileName;
+    }
+
+    /// <summary>
+    /// Releases sticky router session affinity for the specified session (e.g. on stage completion or after emergency context compaction).
+    /// </summary>
+    public async Task ReleaseSessionAffinityAsync(string? sessionId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return;
+        }
+
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(SessionTelemetryTimeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+            await _llmGatewayService.ReleaseSessionAffinityAsync(sessionId, linkedCts.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to release LLM session affinity for session '{SessionId}'", sessionId);
+        }
     }
 
     public static List<TranscriptEntry> BuildTranscriptEntries(IReadOnlyList<ChatMessage> chatHistory)

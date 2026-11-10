@@ -46,6 +46,9 @@ public sealed class CrucibleCompactionOptions
     /// <summary>Default cold-cache resumption compaction threshold (128k tokens).</summary>
     public const int DefaultColdResumeThresholdTokens = 131072;
 
+    /// <summary>Default context token threshold triggering pre-abandonment context compaction recovery on 30m timeout (100k tokens).</summary>
+    public const int DefaultLargeContextTimeoutRecoveryThresholdTokens = 100_000;
+
     /// <summary>Default hard ceiling on total summarizer LLM prompt tokens (96,000 tokens).</summary>
     public const int DefaultMaxSummarizerInputTokens = 96000;
 
@@ -123,6 +126,18 @@ public sealed class CrucibleCompactionOptions
     /// before the first resumed LLM call (defaults to 131,072 / 128k tokens).
     /// </summary>
     public int ColdResumeThresholdTokens { get; set; } = DefaultColdResumeThresholdTokens;
+
+    /// <summary>
+    /// Whether emergency context compaction is attempted before failing when an LLM call
+    /// times out (30m) with a large context window (>100k tokens).
+    /// </summary>
+    public bool EnableTimeoutRecoveryCompaction { get; set; } = true;
+
+    /// <summary>
+    /// Context size threshold in tokens above which a 30-minute timeout triggers emergency
+    /// context compaction rather than immediate failure (defaults to 100,000 tokens).
+    /// </summary>
+    public int LargeContextTimeoutRecoveryThresholdTokens { get; set; } = DefaultLargeContextTimeoutRecoveryThresholdTokens;
 
     /// <summary>
     /// Hard ceiling on total summarizer LLM prompt tokens (System + &lt;conversation&gt; + &lt;previous-summary&gt; + instructions).

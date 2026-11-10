@@ -103,6 +103,28 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     /// <summary>Maximum characters kept per user message in the deterministic fallback summary.</summary>
     public const int MaxDeterministicGoalChars = 500;
 
+    private static readonly Func<IList<ChatMessage>, Microsoft.ML.Tokenizers.Tokenizer?, CompactionMessageIndex> _createIndexDelegate = CreateIndexFactory();
+
+    private static Func<IList<ChatMessage>, Microsoft.ML.Tokenizers.Tokenizer?, CompactionMessageIndex> CreateIndexFactory()
+    {
+        var method = typeof(CompactionMessageIndex).GetMethod(
+            "Create",
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
+            [typeof(IList<ChatMessage>), typeof(Microsoft.ML.Tokenizers.Tokenizer)])
+            ?? throw new InvalidOperationException("Failed to locate CompactionMessageIndex.Create(IList<ChatMessage>, Tokenizer?) factory method.");
+
+        return method.CreateDelegate<Func<IList<ChatMessage>, Microsoft.ML.Tokenizers.Tokenizer?, CompactionMessageIndex>>();
+    }
+
+    /// <summary>
+    /// Creates a <see cref="CompactionMessageIndex"/> from a list of <see cref="ChatMessage"/> instances using MAF's internal grouping engine.
+    /// </summary>
+    public static CompactionMessageIndex CreateIndex(IList<ChatMessage> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        return _createIndexDelegate(messages, null);
+    }
+
     public sealed record CompactionCheckpointNotification(
         ChatMessage SummaryMessage,
         IReadOnlyList<ChatMessage> IncludedMessages,
@@ -415,6 +437,87 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         return Math.Min(_options.KeepRecentTokens, dynamicBudget);
     }
 
+    /// <summary>
+    /// Executes an on-demand emergency compaction pass over an active <see cref="CompactionMessageIndex"/>,
+    /// bypassing regular trigger thresholds (<see cref="CrucibleCompactionOptions.TriggerThresholdTokens"/>, <see cref="CrucibleCompactionOptions.ColdResumeThresholdTokens"/>)
+    /// and debounce cooldowns (<see cref="CrucibleCompactionOptions.DebounceTurnCooldown"/>, <see cref="CrucibleCompactionOptions.DebounceTokenDelta"/>),
+    /// while preserving all task anchor, tool atomicity, tool result clamping, and 96k headroom invariants.
+    /// </summary>
+    public Task<bool> CompactEmergencyAsync(CompactionMessageIndex index, CancellationToken cancellationToken = default) =>
+        CompactEmergencyAsync(index, _logger, cancellationToken);
+
+    /// <summary>
+    /// Executes an on-demand emergency compaction pass over an active <see cref="CompactionMessageIndex"/> with a specified logger.
+    /// </summary>
+    public async Task<bool> CompactEmergencyAsync(
+        CompactionMessageIndex index,
+        ILogger logger,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        if (!_options.EnableTimeoutRecoveryCompaction) return false;
+
+        var effectiveLogger = logger ?? _logger;
+        try
+        {
+            return await ExecuteCompactionPassAsync(
+                index,
+                isEmergencyPass: true,
+                isColdResumeCompaction: false,
+                effectiveLogger,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            effectiveLogger.LogError(ex, "Emergency context compaction pass encountered an unhandled exception.");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Executes an on-demand emergency compaction pass directly over an active conversation history (<see cref="IList{ChatMessage}"/>),
+    /// constructing a <see cref="CompactionMessageIndex"/>, executing emergency compaction, and mutating the list in place with the compacted history.
+    /// </summary>
+    public async Task<bool> CompactEmergencyAsync(
+        IList<ChatMessage> chatHistory,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(chatHistory);
+        if (!_options.EnableTimeoutRecoveryCompaction) return false;
+
+        try
+        {
+            var index = CreateIndex(chatHistory);
+            bool success = await CompactEmergencyAsync(index, _logger, cancellationToken);
+            if (success)
+            {
+                var included = index.GetIncludedMessages().ToList();
+                if (!chatHistory.SequenceEqual(included))
+                {
+                    chatHistory.Clear();
+                    foreach (var msg in included)
+                    {
+                        chatHistory.Add(msg);
+                    }
+                }
+            }
+            return success;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Emergency context compaction failed during index creation or execution.");
+            return false;
+        }
+    }
+
     protected override async ValueTask<bool> CompactCoreAsync(
         CompactionMessageIndex index,
         ILogger logger,
@@ -440,14 +543,38 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             return false;
         }
 
-        var groups = index.Groups;
-        if (groups.Count == 2
-            && groups[1].Kind == CompactionGroupKind.ToolCall
-            && groups[1].Messages.Count >= 4)
+        return await ExecuteCompactionPassAsync(
+            index,
+            isEmergencyPass: false,
+            isColdResumeCompaction: isColdResumeCompaction,
+            effectiveLogger,
+            cancellationToken);
+    }
+
+    private async ValueTask<bool> ExecuteCompactionPassAsync(
+        CompactionMessageIndex index,
+        bool isEmergencyPass,
+        bool isColdResumeCompaction,
+        ILogger effectiveLogger,
+        CancellationToken cancellationToken)
+    {
+        int projectedPromptTokens = CalculateProjectedPromptTokens(index);
+        if (!isEmergencyPass && !isColdResumeCompaction && projectedPromptTokens <= _options.TriggerThresholdTokens)
         {
-            SplitConsecutiveToolCallChain(index, 1);
-            groups = index.Groups;
+            return false;
         }
+
+        var groups = index.Groups;
+        for (int i = groups.Count - 1; i >= 0; i--)
+        {
+            if (!groups[i].IsExcluded
+                && groups[i].Kind == CompactionGroupKind.ToolCall
+                && groups[i].Messages.Count >= 4)
+            {
+                SplitConsecutiveToolCallChain(index, i);
+            }
+        }
+        groups = index.Groups;
 
         if (groups.Count <= 2)
         {
@@ -482,7 +609,8 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             (int)(_options.ContextWindowTokens * _options.EmergencyThresholdRatio));
 
         bool hasMeasuredServerBaseline = LastMeasuredInputTokens > 0;
-        bool isEmergency = isColdResumeCompaction
+        bool isEmergency = isEmergencyPass
+            || isColdResumeCompaction
             || projectedPromptTokens >= emergencyThresholdTokens
             || (hasMeasuredServerBaseline
                 && projectedPromptTokens > _options.TriggerThresholdTokens
@@ -639,7 +767,8 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             _options.SummarizerModelId);
 
         effectiveLogger.LogInformation(
-            "Starting Pi-style context compaction (ColdResume: {IsColdResume}, PreCompactionTokens: {PreTokens}, TriggerThreshold: {Threshold}, SummarizingGroups: {GroupCount}, SummarizingMessages: {MessageCount}).",
+            "Starting Pi-style context compaction (Emergency: {IsEmergency}, ColdResume: {IsColdResume}, PreCompactionTokens: {PreTokens}, TriggerThreshold: {Threshold}, SummarizingGroups: {GroupCount}, SummarizingMessages: {MessageCount}).",
+            isEmergencyPass,
             isColdResumeCompaction,
             projectedPromptTokens,
             _options.TriggerThresholdTokens,
@@ -658,6 +787,10 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             try
             {
                 summaryBody = await GenerateLlmSummaryAsync(serializedTranscript, previousSummary, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -695,16 +828,39 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         // 9. Enforce Post-Compaction 96k Token Ceiling on active included context
         EnforcePostCompactionTokenCeiling(groups, anchorEndIndex + 1, estimator, effectiveLogger);
 
+        int postCompactionTokens = groups
+            .Where(g => !g.IsExcluded)
+            .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+
+        if (isEmergencyPass && (postCompactionTokens >= includedEstimatedTokens || postCompactionTokens >= projectedPromptTokens))
+        {
+            index.Groups.RemoveAt(anchorEndIndex + 1);
+            foreach (var g in groupsToSummarize)
+            {
+                g.IsExcluded = false;
+                g.ExcludeReason = null;
+            }
+            if (existingSummaryGroup != null)
+            {
+                existingSummaryGroup.IsExcluded = false;
+                existingSummaryGroup.ExcludeReason = null;
+            }
+
+            effectiveLogger.LogWarning(
+                "Emergency context compaction did not reduce context size: pre {PreTokens} (estimated {PreEstimatedTokens}), post {PostTokens}",
+                projectedPromptTokens, includedEstimatedTokens, postCompactionTokens);
+            return false;
+        }
+
         sw.Stop();
         _lastCompactedTurnCount = totalAssistantTurns;
         _lastCompactedIncludedTurnCount = groups
             .Where(g => !g.IsExcluded)
             .Sum(g => g.Messages.Count(m => m.Role == ChatRole.Assistant));
-        _lastCompactedIncludedTokenCount = groups
-            .Where(g => !g.IsExcluded)
-            .Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
+        _lastCompactedIncludedTokenCount = postCompactionTokens;
         _lastCompactedTokenCount = groups.Sum(g => ModelCalibratedTokenEstimator.EstimateGroupTokens(g, estimator));
         ResetMeasuredBaseline();
+        DisarmColdResumeCompaction();
 
         effectiveLogger.LogInformation(
             "Pi-style context compaction succeeded in {DurationMs:F0}ms. Pre-compaction: {PreTokens} tokens -> Post-compaction: {PostTokens} tokens. Summarized {GroupCount} groups ({MessageCount} messages). Injected summary with {FileOpsLength} file ops characters.",

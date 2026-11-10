@@ -2,7 +2,7 @@
 
 > **Bug Fix, Resiliency & Inference Recovery Step (KV-Cache Stall Recovery, 30m Timeout Interception, Pre-Abandonment Context Compaction & Seamless Resumption)**  
 > *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Proposed  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
 > *Dependencies:* [Step 11.37A: HTTP Transport Hardening & Outage Retry Policy](../archive/phase-11/STEP_11_37A_HTTP_TRANSPORT_HARDENING_AND_OUTAGE_RETRY_POLICY.md), [Step 11.45: Measured-Token Compaction Trigger & Pmad.AI Estimator](../archive/phase-11/STEP_11_45_MEASURED_TOKEN_COMPACTION_TRIGGER_AND_PMAD_AI_ESTIMATOR.md), [Step 11.47: Compaction Checkpoint Persistence, Resume Fidelity & Telemetry](../archive/phase-11/STEP_11_47_COMPACTION_CHECKPOINT_PERSISTENCE_RESUME_FIDELITY_AND_IN_FLIGHT_TELEMETRY.md), [Step 11.49: Two-Phase Streaming Idle Watchdog & Output Token Cap](STEP_11_49_STREAMING_IDLE_WATCHDOG_OUTPUT_TOKEN_CAP_AND_TIMEOUT_DIAGNOSTICS.md), [Step 12.33A: OllamaRouter Session Affinity Lease Release](../features/STEP_12_33A_OLLAMAROUTER_SESSION_AFFINITY_RELEASE_AND_COST_COLLECTION.md)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -221,23 +221,23 @@ public class CrucibleCompactionOptions
 
 ## 5. Definition of Done (DoD) Checklist
 
-- [ ] **Configuration & Domain Options:**
-  - [ ] Add `EnableTimeoutRecoveryCompaction` (default: `true`) and `LargeContextTimeoutRecoveryThresholdTokens` (default: `100_000`) to `CrucibleCompactionOptions`.
-- [ ] **Compaction Strategy Enhancement:**
-  - [ ] Implement on-demand emergency compaction execution in `PiStyleCrucibleCompactionStrategy` that can be invoked directly on an active message list or index when triggered by timeout recovery, bypassing `TriggerThresholdTokens`, `ColdResumeThresholdTokens`, and debounce cooldowns.
-  - [ ] Verify that deterministic fallback (`GenerateDeterministicSummary`) is utilized if the summarizer client times out or throws an error during emergency compaction, while propagating `OperationCanceledException` when the caller's stage `cancellationToken` is explicitly cancelled.
-- [ ] **Crucible Harness Pre-Abandonment Interceptor:**
-  - [ ] Factorize and implement timeout recovery in `CrucibleAgentHarness` for both `RunStreamingAsync` and `RunAsync` catch blocks.
-  - [ ] Enforce the three guard conditions: `TransientErrorDetector.IsHttpTimeout(ex)`, context tokens >= `LargeContextTimeoutRecoveryThresholdTokens`, and recovery not yet attempted for the current turn (`hasAttemptedTimeoutRecoveryCompaction`, reset only on tool result completion or full turn completion).
-  - [ ] Sanitize partial streaming state (`accumulatedText`, `accumulatedReasoning`, `SanitizeInFlightTurns(chatHistory)`) before executing emergency compaction.
-  - [ ] On successful compaction: ensure `chatHistory` (and `historySnapshot`) is updated and a single `StageTurnRole.Optimization` checkpoint turn is persisted in `ConversationTurns` (via `OnCompacted` without duplication), reset outage timers and retry counters, broadcast `AgentActivityKind.Notice` via `IAgentActivityStreamer`, recreate the session/enumerator, and resume execution.
-  - [ ] On compaction failure or subsequent timeout: fail fast with `FailAsync` without infinite loops.
-- [ ] **Automated Testing:**
-  - [ ] Add unit tests in `NightCodeForge.Agents.Tests` verifying:
+- [x] **Configuration & Domain Options:**
+  - [x] Add `EnableTimeoutRecoveryCompaction` (default: `true`) and `LargeContextTimeoutRecoveryThresholdTokens` (default: `100_000`) to `CrucibleCompactionOptions`.
+- [x] **Compaction Strategy Enhancement:**
+  - [x] Implement on-demand emergency compaction execution in `PiStyleCrucibleCompactionStrategy` that can be invoked directly on an active message list or index when triggered by timeout recovery, bypassing `TriggerThresholdTokens`, `ColdResumeThresholdTokens`, and debounce cooldowns.
+  - [x] Verify that deterministic fallback (`GenerateDeterministicSummary`) is utilized if the summarizer client times out or throws an error during emergency compaction, while propagating `OperationCanceledException` when the caller's stage `cancellationToken` is explicitly cancelled.
+- [x] **Crucible Harness Pre-Abandonment Interceptor:**
+  - [x] Factorize and implement timeout recovery in `CrucibleAgentHarness` for both `RunStreamingAsync` and `RunAsync` catch blocks.
+  - [x] Enforce the three guard conditions: `TransientErrorDetector.IsHttpTimeout(ex)`, context tokens >= `LargeContextTimeoutRecoveryThresholdTokens`, and recovery not yet attempted for the current turn (`hasAttemptedTimeoutRecoveryCompaction`, reset only on tool result completion or full turn completion).
+  - [x] Sanitize partial streaming state (`accumulatedText`, `accumulatedReasoning`, `SanitizeInFlightTurns(chatHistory)`) before executing emergency compaction.
+  - [x] On successful compaction: ensure `chatHistory` (and `historySnapshot`) is updated and a single `StageTurnRole.Optimization` checkpoint turn is persisted in `ConversationTurns` (via `OnCompacted` without duplication), reset outage timers and retry counters, broadcast `AgentActivityKind.Notice` via `IAgentActivityStreamer`, recreate the session/enumerator, and resume execution.
+  - [x] On compaction failure or subsequent timeout: fail fast with `FailAsync` without infinite loops.
+- [x] **Automated Testing:**
+  - [x] Add unit tests in `NightCodeForge.Agents.Tests` verifying:
     - When timeout retry policy is exhausted and context is < 100k tokens, harness fails fast without attempting compaction.
     - When timeout retry policy is exhausted and context is >= 100k tokens, harness triggers emergency compaction, updates history, resets counters, and resumes.
     - If emergency compaction fails, harness immediately fails fast.
     - If resumed call times out again after compaction, harness fails fast without looping.
     - Streaming and non-streaming modes both exhibit identical recovery behavior.
-  - [ ] Run all unit tests with `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and ensure 100% pass rate.
+  - [x] Run all unit tests with `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and ensure 100% pass rate.
 

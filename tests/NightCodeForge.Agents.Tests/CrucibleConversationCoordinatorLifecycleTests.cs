@@ -421,5 +421,56 @@ public class CrucibleConversationCoordinatorLifecycleTests
             }
         }
     }
+
+    [Fact]
+    public async Task SaveTranscriptAsync_WhenCallerCancellationTokenIsCancelled_StillReleasesSessionAffinityWithoutThrowing()
+    {
+        var context = CreateContext(taskId: 90, stageId: "implementation");
+        var expectedSessionId = LlmSessionIds.ForStage(90, "implementation");
+
+        _mockGateway.Setup(g => g.GetSessionUsageAsync(expectedSessionId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((RouterSessionUsage?)null);
+
+        bool releaseCalledWithNonCancelledToken = false;
+        _mockGateway.Setup(g => g.ReleaseSessionAffinityAsync(expectedSessionId, It.IsAny<CancellationToken>()))
+            .Callback<string, CancellationToken>((_, ct) => releaseCalledWithNonCancelledToken = !ct.IsCancellationRequested)
+            .ReturnsAsync(true);
+
+        var coordinator = CreateCoordinator();
+        var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "crucible-cancelled-release-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            using var cancelledCts = new CancellationTokenSource();
+            cancelledCts.Cancel();
+
+            var request = new CrucibleTranscriptRequest(
+                Context: context,
+                WorkspacePath: tempDir,
+                ChatHistory: [],
+                ElapsedMs: 500,
+                PromptTokens: 100,
+                CompletionTokens: 20,
+                Status: AgentRunStatus.Cancelled,
+                Summary: "Stage cancelled",
+                TracingClient: null,
+                HarnessOptions: null,
+                ActiveSkills: null);
+
+            await coordinator.SaveTranscriptAsync(state, request, cancelledCts.Token);
+
+            Assert.True(releaseCalledWithNonCancelledToken);
+            _mockGateway.Verify(g => g.ReleaseSessionAffinityAsync(expectedSessionId, It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
 }
 
