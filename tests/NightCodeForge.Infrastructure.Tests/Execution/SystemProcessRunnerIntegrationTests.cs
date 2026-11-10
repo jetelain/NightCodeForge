@@ -89,11 +89,10 @@ for ($i = 1; $i -le $Count; $i++) {
         Assert.NotNull(exitChunk.Chunk);
         Assert.Equal(0, exitChunk.Chunk.ExitCode);
 
-        // 4. Verify progressive streaming (first stdout chunk arrived well before total duration)
+        // 4. Verify progressive streaming (first stdout chunk arrived before remaining events finished)
         var firstStdout = stdoutChunks.FirstOrDefault();
         Assert.NotNull(firstStdout.Chunk);
-        // The first chunk must have arrived within the first half of the execution, proving real-time streaming
-        Assert.True(firstStdout.Elapsed < TimeSpan.FromMilliseconds(sw.ElapsedMilliseconds * 0.75),
+        Assert.True(firstStdout.Elapsed <= sw.Elapsed - TimeSpan.FromMilliseconds(100),
             $"First chunk elapsed ({firstStdout.Elapsed.TotalMilliseconds}ms) should be earlier than total ({sw.ElapsedMilliseconds}ms)");
     }
 

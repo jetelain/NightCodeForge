@@ -12,7 +12,7 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
     public const double DefaultLlmMaxDelaySeconds = 30.0;
     public const double DefaultLlmMaxRetryDurationSeconds = 1800.0; // 30 minutes
     public const int DefaultLlmMaxTimeoutRetries = 3;
-    public const double DefaultStreamIdleTimeoutMinutes = 5.0; // 5 minutes
+    public const double DefaultStreamIdleTimeoutMinutes = 10.0; // 10 minutes
 
     private TimeSpan? _streamIdleTimeout;
 
@@ -23,7 +23,7 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
 
     /// <summary>
     /// Maximum silence interval between consecutive streamed chunks once generation has started.
-    /// Defaults to 5 minutes.
+    /// Defaults to 10 minutes.
     /// </summary>
     public TimeSpan StreamIdleTimeout
     {

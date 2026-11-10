@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -121,5 +122,41 @@ public class TaskDiskSyncCoordinator : ITaskDiskSyncCoordinator
             TasksWrittenToDisk: writtenCount,
             RefreshedTasks: fromDiskTasks,
             WrittenPaths: writtenPaths);
+    }
+
+    /// <summary>
+    /// Starts file watchers and concurrently synchronizes docs/tasks across all valid workspaces on application startup,
+    /// isolating each workspace in its own <see cref="IServiceScope"/> and logging per-workspace failures without aborting startup.
+    /// </summary>
+    public static async Task SynchronizeWorkspacesOnStartupAsync(
+        IEnumerable<Workspace> workspaces,
+        IServiceProvider serviceProvider,
+        ITaskMarkdownSyncService markdownSyncService,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspaces);
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+        ArgumentNullException.ThrowIfNull(markdownSyncService);
+
+        await Task.WhenAll(workspaces.Select(async ws =>
+        {
+            if (ws == null || string.IsNullOrWhiteSpace(ws.RepositoryPath) || !Directory.Exists(ws.RepositoryPath))
+            {
+                return;
+            }
+
+            markdownSyncService.StartWatching(ws.Id, ws.RepositoryPath);
+            try
+            {
+                using var wsScope = serviceProvider.CreateScope();
+                var wsDiskSyncCoordinator = wsScope.ServiceProvider.GetRequiredService<ITaskDiskSyncCoordinator>();
+                await wsDiskSyncCoordinator.SyncWorkspaceDocsTasksAsync(ws, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning(ex, "Failed to synchronize docs/tasks for workspace #{WorkspaceId} ({WorkspaceName}) during startup.", ws.Id, ws.Name);
+            }
+        }));
     }
 }

@@ -13,6 +13,8 @@ using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Workflow;
 using Pmad.AI.Tokens;
+using StreamingChatCompletionUpdate = OpenAI.Chat.StreamingChatCompletionUpdate;
+using StreamingChatToolCallUpdate = OpenAI.Chat.StreamingChatToolCallUpdate;
 
 namespace NightCodeForge.Agents.Inference;
 
@@ -220,8 +222,13 @@ public class TelemetryChatClient : DelegatingChatClient
         var startTimestamp = _timeProvider.GetTimestamp();
         var reasoningBuffer = new StringBuilder();
         var textBuffer = new StringBuilder();
+        var openAiToolCallRawBuffer = new StringBuilder();
         int tokenCount = 0;
         int reasoningTokens = 0;
+        int openAiStreamedToolTokens = 0;
+        int? preOpenAiToolTextBufferLength = null;
+        bool sawOpenAiToolCallUpdates = false;
+        bool rewoundOpenAiToolPreview = false;
         int? streamingInputTokens = null;
         bool inThinkTag = false;
         bool completionRecorded = false;
@@ -369,9 +376,50 @@ public class TelemetryChatClient : DelegatingChatClient
                         {
                             ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                         }
-                        else if (content is FunctionCallContent fcc)
+                    }
+                }
+                else if (!string.IsNullOrEmpty(update.Text))
+                {
+                    ProcessTextChunk(update.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
+                }
+
+                if (update.RawRepresentation is StreamingChatCompletionUpdate openAiUpdate
+                    && openAiUpdate.ToolCallUpdates is { Count: > 0 })
+                {
+                    if (ProcessOpenAiToolCallUpdates(
+                        openAiUpdate.ToolCallUpdates,
+                        openAiToolCallRawBuffer,
+                        ref openAiStreamedToolTokens,
+                        ref preOpenAiToolTextBufferLength,
+                        ref tokenCount,
+                        textBuffer,
+                        estimator))
+                    {
+                        sawOpenAiToolCallUpdates = true;
+                    }
+                }
+
+                if (update.Contents != null)
+                {
+                    foreach (var content in update.Contents)
+                    {
+                        if (content is FunctionCallContent fcc)
                         {
-                            ProcessFunctionCallChunk(fcc, ref tokenCount, textBuffer, estimator);
+                            if (sawOpenAiToolCallUpdates)
+                            {
+                                // Tokens were already accumulated live from StreamingChatCompletionUpdate.ToolCallUpdates;
+                                // replace the raw JSON delta preview with the canonical FunctionCallContent preview.
+                                if (!rewoundOpenAiToolPreview && preOpenAiToolTextBufferLength.HasValue)
+                                {
+                                    textBuffer.Length = preOpenAiToolTextBufferLength.Value;
+                                    rewoundOpenAiToolPreview = true;
+                                }
+                                AppendFunctionCallPreview(fcc, textBuffer);
+                            }
+                            else
+                            {
+                                ProcessFunctionCallChunk(fcc, ref tokenCount, textBuffer, estimator);
+                            }
                         }
                         else if (content is UsageContent uc && uc.Details != null)
                         {
@@ -399,10 +447,6 @@ public class TelemetryChatClient : DelegatingChatClient
                             }
                         }
                     }
-                }
-                else if (!string.IsNullOrEmpty(update.Text))
-                {
-                    ProcessTextChunk(update.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                 }
 
                 var elapsed = _timeProvider.GetElapsedTime(startTimestamp);
@@ -487,24 +531,38 @@ public class TelemetryChatClient : DelegatingChatClient
             return true;
         }
 
-        if (update.Contents == null || update.Contents.Count == 0)
+        if (update.Contents != null && update.Contents.Count > 0)
         {
-            return false;
+            foreach (var content in update.Contents)
+            {
+                if (content is TextContent tc && !string.IsNullOrEmpty(tc.Text))
+                {
+                    return true;
+                }
+                if (content is TextReasoningContent trc && !string.IsNullOrEmpty(trc.Text))
+                {
+                    return true;
+                }
+                if (content is FunctionCallContent)
+                {
+                    return true;
+                }
+            }
         }
 
-        foreach (var content in update.Contents)
+        if (update.RawRepresentation is StreamingChatCompletionUpdate openAiUpdate
+            && openAiUpdate.ToolCallUpdates is { Count: > 0 })
         {
-            if (content is TextContent tc && !string.IsNullOrEmpty(tc.Text))
+            foreach (var toolUpdate in openAiUpdate.ToolCallUpdates)
             {
-                return true;
-            }
-            if (content is TextReasoningContent trc && !string.IsNullOrEmpty(trc.Text))
-            {
-                return true;
-            }
-            if (content is FunctionCallContent)
-            {
-                return true;
+                if (!string.IsNullOrEmpty(toolUpdate.FunctionName))
+                {
+                    return true;
+                }
+                if (toolUpdate.FunctionArgumentsUpdate != null && !toolUpdate.FunctionArgumentsUpdate.ToMemory().IsEmpty)
+                {
+                    return true;
+                }
             }
         }
 
@@ -691,6 +749,77 @@ public class TelemetryChatClient : DelegatingChatClient
         return (preview, reasoningTokens, textTokens);
     }
 
+    private static bool ProcessOpenAiToolCallUpdates(
+        IReadOnlyList<StreamingChatToolCallUpdate> toolCallUpdates,
+        StringBuilder openAiToolCallRawBuffer,
+        ref int openAiStreamedToolTokens,
+        ref int? preOpenAiToolTextBufferLength,
+        ref int tokenCount,
+        StringBuilder textBuffer,
+        HeuristicTokenEstimator estimator)
+    {
+        bool bufferGrew = false;
+
+        foreach (var toolUpdate in toolCallUpdates)
+        {
+            var funcName = toolUpdate.FunctionName;
+            var argsData = toolUpdate.FunctionArgumentsUpdate;
+            var argsDelta = (argsData != null && !argsData.ToMemory().IsEmpty)
+                ? argsData.ToString()
+                : null;
+
+            if (string.IsNullOrEmpty(funcName) && string.IsNullOrEmpty(argsDelta))
+            {
+                continue;
+            }
+
+            preOpenAiToolTextBufferLength ??= textBuffer.Length;
+
+            if (!string.IsNullOrEmpty(funcName))
+            {
+                if (openAiToolCallRawBuffer.Length > 0)
+                {
+                    openAiToolCallRawBuffer.Append(' ');
+                }
+                openAiToolCallRawBuffer.Append(funcName);
+                bufferGrew = true;
+
+                if (textBuffer.Length < 1000)
+                {
+                    if (textBuffer.Length > 0 && !char.IsWhiteSpace(textBuffer[^1]))
+                    {
+                        textBuffer.Append(' ');
+                    }
+                    textBuffer.Append($"[Tool Call: {funcName}] ");
+                }
+            }
+
+            if (!string.IsNullOrEmpty(argsDelta))
+            {
+                openAiToolCallRawBuffer.Append(argsDelta);
+                bufferGrew = true;
+
+                if (textBuffer.Length < 1000)
+                {
+                    textBuffer.Append(argsDelta);
+                }
+            }
+        }
+
+        if (bufferGrew)
+        {
+            var estimatedTotalToolTokens = EstimateTokens(openAiToolCallRawBuffer.ToString(), estimator);
+            if (estimatedTotalToolTokens > openAiStreamedToolTokens)
+            {
+                var delta = estimatedTotalToolTokens - openAiStreamedToolTokens;
+                tokenCount += delta;
+                openAiStreamedToolTokens = estimatedTotalToolTokens;
+            }
+        }
+
+        return bufferGrew;
+    }
+
     private static void ProcessFunctionCallChunk(
         FunctionCallContent fcc,
         ref int tokenCount,
@@ -699,7 +828,11 @@ public class TelemetryChatClient : DelegatingChatClient
     {
         var tokens = ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(fcc, estimator);
         tokenCount += tokens;
+        AppendFunctionCallPreview(fcc, textBuffer);
+    }
 
+    private static void AppendFunctionCallPreview(FunctionCallContent fcc, StringBuilder textBuffer)
+    {
         if (textBuffer.Length < 1000)
         {
             var argsStr = FormatFunctionCallArguments(fcc.Arguments);

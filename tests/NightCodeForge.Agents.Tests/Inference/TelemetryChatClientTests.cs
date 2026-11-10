@@ -5,6 +5,8 @@ using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using Xunit;
+using ChatToolCallKind = OpenAI.Chat.ChatToolCallKind;
+using OpenAIChatModelFactory = OpenAI.Chat.OpenAIChatModelFactory;
 
 namespace NightCodeForge.Agents.Tests.Inference;
 
@@ -812,5 +814,239 @@ public class TelemetryChatClientTests
         Assert.Contains("""tags=["lint","security"]""", completedRecord.CompletionPreview);
         Assert.Contains("line=42", completedRecord.CompletionPreview);
         Assert.DoesNotContain("System.String[]", completedRecord.CompletionPreview);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WithOpenAiStreamingToolCallUpdates_IncrementsTokensLiveWithoutDoubleCountingFinalFunctionCallContent()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Write Service.cs") };
+
+#pragma warning disable OPENAI001
+        var rawChunk1 = OpenAIChatModelFactory.StreamingChatCompletionUpdate(
+            completionId: "chatcmpl-1",
+            toolCallUpdates:
+            [
+                OpenAIChatModelFactory.StreamingChatToolCallUpdate(
+                    index: 0,
+                    toolCallId: "call_1",
+                    kind: ChatToolCallKind.Function,
+                    functionName: "write_file",
+                    functionArgumentsUpdate: BinaryData.FromString("""{"path":"src/Service.cs","""))
+            ]);
+
+        var rawChunk2 = OpenAIChatModelFactory.StreamingChatCompletionUpdate(
+            completionId: "chatcmpl-1",
+            toolCallUpdates:
+            [
+                OpenAIChatModelFactory.StreamingChatToolCallUpdate(
+                    index: 0,
+                    kind: ChatToolCallKind.Function,
+                    functionArgumentsUpdate: BinaryData.FromString("\"content\":\"public class Service { public void Execute() { } }\"}"))
+            ]);
+#pragma warning restore OPENAI001
+
+        async IAsyncEnumerable<ChatResponseUpdate> FakeOpenAiToolStream()
+        {
+            // 1. Reasoning chunk
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextReasoningContent("Planning file update. ")]
+            };
+            await Task.Yield();
+
+            // 2. OpenAI streaming tool call delta chunk 1 (Contents is empty, RawRepresentation has ToolCallUpdates)
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                RawRepresentation = rawChunk1,
+                Contents = []
+            };
+            await Task.Yield();
+
+            // 3. OpenAI streaming tool call delta chunk 2 (Contents is empty, RawRepresentation has ToolCallUpdates)
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                RawRepresentation = rawChunk2,
+                Contents = []
+            };
+            await Task.Yield();
+
+            // 4. Final synthesized FunctionCallContent emitted by OpenAIChatClient after the SSE stream finishes
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new FunctionCallContent(
+                        "call_1",
+                        "write_file",
+                        new Dictionary<string, object?>
+                        {
+                            ["path"] = "src/Service.cs",
+                            ["content"] = "public class Service { public void Execute() { } }"
+                        })
+                ]
+            };
+        }
+
+        _innerClient
+            .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Returns(FakeOpenAiToolStream());
+
+        LlmCallRecord? completedRecord = null;
+        var progressUpdates = new List<(int Tokens, double Duration, double Tps, int Reasoning)>();
+
+        _telemetryService
+            .Setup(t => t.UpdateLlmCallProgress(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<int>()))
+            .Callback<string, int, double, double, int>((id, tokens, dur, tps, reasoning) =>
+            {
+                progressUpdates.Add((tokens, dur, tps, reasoning));
+            });
+
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await foreach (var _ in _client.GetStreamingResponseAsync(messages)) { }
+
+        Assert.Equal(4, progressUpdates.Count);
+        // Live token count must increase on each OpenAI tool call delta chunk while Contents is empty
+        Assert.True(progressUpdates[1].Tokens > progressUpdates[0].Tokens, "First OpenAI tool call delta must increment live token count");
+        Assert.True(progressUpdates[2].Tokens > progressUpdates[1].Tokens, "Second OpenAI tool call delta must increment live token count");
+        // Final synthesized FunctionCallContent update must NOT double-count the already-streamed tool tokens
+        Assert.Equal(progressUpdates[2].Tokens, progressUpdates[3].Tokens);
+
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Completed, completedRecord.Status);
+        Assert.Equal(progressUpdates[2].Tokens, completedRecord.CompletionTokens);
+        Assert.NotNull(completedRecord.CompletionPreview);
+        Assert.Contains("[Tool Call: write_file] path=src/Service.cs, content=public class Service { public void Execute() { } }", completedRecord.CompletionPreview);
+        Assert.DoesNotContain("""{"path":"src/Service.cs",""", completedRecord.CompletionPreview);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WhenChunkContainsBothTextContentAndOpenAiToolCallUpdates_PreservesTextPrefixWhenRewindingToolCallPreview()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Update App.cs") };
+
+#pragma warning disable OPENAI001
+        var rawChunk = OpenAIChatModelFactory.StreamingChatCompletionUpdate(
+            completionId: "chatcmpl-mixed",
+            toolCallUpdates:
+            [
+                OpenAIChatModelFactory.StreamingChatToolCallUpdate(
+                    index: 0,
+                    toolCallId: "call_mixed",
+                    kind: ChatToolCallKind.Function,
+                    functionName: "write_file",
+                    functionArgumentsUpdate: BinaryData.FromString("""{"path":"src/App.cs"}"""))
+            ]);
+#pragma warning restore OPENAI001
+
+        async IAsyncEnumerable<ChatResponseUpdate> FakeMixedStream()
+        {
+            // Single chunk containing both TextContent and OpenAI ToolCallUpdates
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                RawRepresentation = rawChunk,
+                Contents = [new TextContent("I will write the file now.")]
+            };
+            await Task.Yield();
+
+            // Final synthesized FunctionCallContent chunk
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new FunctionCallContent(
+                        "call_mixed",
+                        "write_file",
+                        new Dictionary<string, object?>
+                        {
+                            ["path"] = "src/App.cs"
+                        })
+                ]
+            };
+        }
+
+        _innerClient
+            .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Returns(FakeMixedStream());
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await foreach (var _ in _client.GetStreamingResponseAsync(messages)) { }
+
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Completed, completedRecord.Status);
+        Assert.NotNull(completedRecord.CompletionPreview);
+        Assert.Contains("I will write the file now.", completedRecord.CompletionPreview);
+        Assert.Contains("[Tool Call: write_file] path=src/App.cs", completedRecord.CompletionPreview);
+        Assert.DoesNotContain("""{"path":"src/App.cs"}""", completedRecord.CompletionPreview);
+    }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WhenStreamAbortsDuringOpenAiToolCallUpdates_PreservesPartialToolCallPreviewAndTokenCount()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Generate Broken.cs") };
+
+#pragma warning disable OPENAI001
+        var rawChunk = OpenAIChatModelFactory.StreamingChatCompletionUpdate(
+            completionId: "chatcmpl-abort",
+            toolCallUpdates:
+            [
+                OpenAIChatModelFactory.StreamingChatToolCallUpdate(
+                    index: 0,
+                    toolCallId: "call_abort",
+                    kind: ChatToolCallKind.Function,
+                    functionName: "write_file",
+                    functionArgumentsUpdate: BinaryData.FromString("""{"path":"src/Broken.cs","content":"public class Broken {"""))
+            ]);
+#pragma warning restore OPENAI001
+
+        async IAsyncEnumerable<ChatResponseUpdate> AbortingToolStream()
+        {
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                RawRepresentation = rawChunk,
+                Contents = []
+            };
+            await Task.Yield();
+            throw new IOException("Connection reset by peer during tool argument streaming");
+        }
+
+        _innerClient
+            .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Returns(AbortingToolStream());
+
+        LlmCallRecord? failedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => failedRecord = r);
+
+        var ex = await Assert.ThrowsAsync<IOException>(async () =>
+        {
+            await foreach (var _ in _client.GetStreamingResponseAsync(messages)) { }
+        });
+
+        Assert.NotNull(failedRecord);
+        Assert.Equal(LlmCallStatus.Failed, failedRecord.Status);
+        Assert.True(failedRecord.CompletionTokens > 0);
+        Assert.NotNull(failedRecord.CompletionPreview);
+        Assert.Contains("[Tool Call: write_file]", failedRecord.CompletionPreview);
+        Assert.Contains("""{"path":"src/Broken.cs",""", failedRecord.CompletionPreview);
+
+        var diag = Assert.IsType<NightCodeForge.Core.Resilience.StreamTimeoutDiagnostics>(
+            ex.Data[NightCodeForge.Core.Resilience.StreamTimeoutDiagnostics.DataKey]);
+        Assert.Equal(NightCodeForge.Core.Resilience.StreamTimeoutPhase.MidStreamConnectionClosed, diag.Phase);
+        Assert.Equal(failedRecord.CompletionTokens, diag.GeneratedTokens);
     }
 }

@@ -154,9 +154,7 @@
                             }
                             @if (!string.IsNullOrWhiteSpace(call.PromptPreview))
                             {
-                                <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.78rem; color: var(--text-muted); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.4;">
-                                    "@call.PromptPreview"
-                                </div>
+                                <div class="font-mono" style="padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); background: var(--bg-input); font-size: 0.78rem; color: var(--text-muted); max-height: 58px; overflow: hidden; text-overflow: ellipsis; white-space: pre-wrap; line-height: 1.4;">"@call.PromptPreview"</div>
                             }
                         </div>
                     }

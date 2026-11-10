@@ -81,6 +81,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
     public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
     {
+        return GenerateMarkdownWithFrontmatter(task, dependencies, agentProfileId).Markdown;
+    }
+
+    internal (string Markdown, TaskFrontmatter Frontmatter) GenerateMarkdownWithFrontmatter(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
+    {
         var depList = dependencies != null
             ? dependencies.ToList()
             : task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
@@ -99,7 +104,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             Version = task.Version > 0 ? task.Version : 1,
             BaseBranch = task.BaseBranch,
             FeatureBranch = string.IsNullOrWhiteSpace(task.FeatureBranch) ? null : task.FeatureBranch,
-            DependsOn = depList,
+            DependsOn = new TaskDependencyReferenceList(depList),
             AgentProfile = agentProfileId,
             CreatedAt = task.CreatedAt,
             UpdatedAt = task.UpdatedAt
@@ -137,7 +142,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         sb.Append("---\n\n");
         sb.Append(bodyText);
 
-        return sb.ToString().Replace("\r\n", "\n");
+        var markdown = sb.ToString().Replace("\r\n", "\n");
+        return (markdown, frontmatter);
     }
 
     public static string ComputeTaskContentHash(TaskFrontmatter frontmatter, string? description)
@@ -392,17 +398,6 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return null;
     }
 
-    private async Task<string> ResolveCloneTargetFilePathAsync(string cloneTasksDir, string hostTargetFile, ForgeTask task, CancellationToken cancellationToken)
-    {
-        var hostFileName = Path.GetFileName(hostTargetFile);
-        if (!string.IsNullOrWhiteSpace(hostFileName))
-        {
-            return Path.Combine(cloneTasksDir, hostFileName);
-        }
-
-        return await ResolveTargetFilePathAsync(cloneTasksDir, task, cancellationToken);
-    }
-
     public Task<string> SyncTaskToDiskAsync(
         ForgeTask task,
         string workspacePath,
@@ -429,14 +424,22 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
         Directory.CreateDirectory(effectiveTasksDir);
 
-        var targetFile = await ResolveTargetFilePathAsync(effectiveTasksDir, task, cancellationToken, oppositeTasksDir);
-        await CleanupOtherFilesForTaskIdAsync(effectiveTasksDir, oppositeTasksDir, task.Id, targetFile, cancellationToken);
+        var effectiveTargetIndexTask = DirectoryTaskIndex.CreateAsync(effectiveTasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: true, cancellationToken);
+        var oppositeTargetIndexTask = DirectoryTaskIndex.CreateAsync(oppositeTasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+
+        await Task.WhenAll(effectiveTargetIndexTask, oppositeTargetIndexTask);
+        var effectiveTargetIndex = await effectiveTargetIndexTask;
+        var oppositeTargetIndex = await oppositeTargetIndexTask;
+
+        var targetFile = ResolveTargetFilePathFromIndex(effectiveTargetIndex, task, oppositeTargetIndex);
+        CleanupOtherFilesForTaskId(effectiveTargetIndex, oppositeTargetIndex, task.Id, targetFile);
 
         var markdown = GenerateMarkdown(task, dependencies, agentProfileId);
-        var hash = ComputeContentHash(markdown);
+        var normalizedMarkdown = markdown.Replace("\r\n", "\n");
+        var hash = ComputeContentHash(normalizedMarkdown);
         _suppressedHashes[hash] = 1;
 
-        await File.WriteAllTextAsync(targetFile, markdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+        await File.WriteAllTextAsync(targetFile, normalizedMarkdown, Utf8NoBom, cancellationToken);
 
         // Keep issues in sync into clone/docs/tasks (or clone/docs/tasks/archive for terminal tasks)
         var cloneTasksDir = !string.IsNullOrWhiteSpace(cloneDirectory)
@@ -456,10 +459,28 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     var oppositeCloneDir = isArchived ? cloneTasksDir : cloneArchiveDir;
 
                     Directory.CreateDirectory(effectiveCloneDir);
-                    var cloneTargetFile = await ResolveCloneTargetFilePathAsync(effectiveCloneDir, targetFile, task, cancellationToken);
-                    await CleanupOtherFilesForTaskIdAsync(effectiveCloneDir, oppositeCloneDir, task.Id, cloneTargetFile, cancellationToken);
-                    _suppressedHashes[hash] = 1;
-                    await File.WriteAllTextAsync(cloneTargetFile, markdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                    var effectiveCloneIndexTask = DirectoryTaskIndex.CreateAsync(effectiveCloneDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: true, failFast: false, cancellationToken);
+                    var oppositeCloneIndexTask = DirectoryTaskIndex.CreateAsync(oppositeCloneDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: true, failFast: false, cancellationToken);
+
+                    await Task.WhenAll(effectiveCloneIndexTask, oppositeCloneIndexTask);
+                    var effectiveCloneIndex = await effectiveCloneIndexTask;
+                    var oppositeCloneIndex = await oppositeCloneIndexTask;
+
+                    var hostFileName = Path.GetFileName(targetFile);
+                    var cloneTargetFile = !string.IsNullOrWhiteSpace(hostFileName)
+                        ? Path.Combine(effectiveCloneDir, hostFileName)
+                        : ResolveTargetFilePathFromIndex(effectiveCloneIndex, task, oppositeCloneIndex);
+
+                    CleanupOtherFilesForTaskId(effectiveCloneIndex, oppositeCloneIndex, task.Id, cloneTargetFile);
+
+                    bool cloneMatches = effectiveCloneIndex.TryGetEntryByPath(cloneTargetFile, out var existingCloneEntry) &&
+                        string.Equals(existingCloneEntry.ContentHash, hash, StringComparison.Ordinal);
+
+                    if (!cloneMatches)
+                    {
+                        _suppressedHashes[hash] = 1;
+                        await File.WriteAllTextAsync(cloneTargetFile, normalizedMarkdown, Utf8NoBom, cancellationToken);
+                    }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -498,6 +519,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             var tasksDir = Path.Combine(targetDirectory, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
             var archiveDir = Path.Combine(tasksDir, TaskSyncConstants.ArchiveSegment);
             Directory.CreateDirectory(tasksDir);
+            Directory.CreateDirectory(archiveDir);
 
             string? hostTasksDir = null;
             string? hostArchiveDir = null;
@@ -508,6 +530,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 hostTasksDir = Path.Combine(hostRepositoryPath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
                 hostArchiveDir = Path.Combine(hostTasksDir, TaskSyncConstants.ArchiveSegment);
                 Directory.CreateDirectory(hostTasksDir);
+                Directory.CreateDirectory(hostArchiveDir);
             }
 
             var cloneTasksDir = !string.IsNullOrWhiteSpace(cloneDirectory)
@@ -533,6 +556,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     {
                         Directory.CreateDirectory(cloneTasksDir);
                         cloneArchiveDir = Path.Combine(cloneTasksDir, TaskSyncConstants.ArchiveSegment);
+                        Directory.CreateDirectory(cloneArchiveDir);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -541,6 +565,42 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     mirrorToClone = false;
                 }
             }
+
+            // Upfront single-pass directory indexing
+            var tasksIndexTask = DirectoryTaskIndex.CreateAsync(tasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: true, cancellationToken);
+            var archiveIndexTask = DirectoryTaskIndex.CreateAsync(archiveDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: true, cancellationToken);
+
+            Task<DirectoryTaskIndex>? hostTasksIndexTask = null;
+            Task<DirectoryTaskIndex>? hostArchiveIndexTask = null;
+            if (hostTasksDir != null && hostArchiveDir != null)
+            {
+                hostTasksIndexTask = DirectoryTaskIndex.CreateAsync(hostTasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+                hostArchiveIndexTask = DirectoryTaskIndex.CreateAsync(hostArchiveDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+            }
+
+            Task<DirectoryTaskIndex>? cloneTasksIndexTask = null;
+            Task<DirectoryTaskIndex>? cloneArchiveIndexTask = null;
+            if (mirrorToClone && normalizedCloneTasksDir != null && cloneArchiveDir != null)
+            {
+                cloneTasksIndexTask = DirectoryTaskIndex.CreateAsync(normalizedCloneTasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: true, failFast: false, cancellationToken);
+                cloneArchiveIndexTask = DirectoryTaskIndex.CreateAsync(cloneArchiveDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: true, failFast: false, cancellationToken);
+            }
+
+            await Task.WhenAll(
+                tasksIndexTask,
+                archiveIndexTask,
+                hostTasksIndexTask ?? Task.FromResult<DirectoryTaskIndex?>(null)!,
+                hostArchiveIndexTask ?? Task.FromResult<DirectoryTaskIndex?>(null)!,
+                cloneTasksIndexTask ?? Task.FromResult<DirectoryTaskIndex?>(null)!,
+                cloneArchiveIndexTask ?? Task.FromResult<DirectoryTaskIndex?>(null)!
+            );
+
+            var tasksIndex = await tasksIndexTask;
+            var archiveIndex = await archiveIndexTask;
+            var hostTasksIndex = hostTasksIndexTask != null ? await hostTasksIndexTask : null;
+            var hostArchiveIndex = hostArchiveIndexTask != null ? await hostArchiveIndexTask : null;
+            var cloneTasksIndex = cloneTasksIndexTask != null ? await cloneTasksIndexTask : null;
+            var cloneArchiveIndex = cloneArchiveIndexTask != null ? await cloneArchiveIndexTask : null;
 
             var allTasks = await taskRepo.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
             var workspaceDeps = await taskRepo.GetWorkspaceDependenciesAsync(workspace.Id, cancellationToken);
@@ -565,63 +625,117 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 }
 
                 var isArchived = IsArchivedStatus(task.Status);
-                var effectiveTasksDir = isArchived ? archiveDir : tasksDir;
-                var oppositeTasksDir = isArchived ? tasksDir : archiveDir;
-                var effectiveHostDir = hostTasksDir != null ? (isArchived ? hostArchiveDir! : hostTasksDir) : null;
-                var oppositeHostDir = hostTasksDir != null ? (isArchived ? hostTasksDir : hostArchiveDir!) : null;
+                var effectiveTargetIndex = isArchived ? archiveIndex : tasksIndex;
+                var oppositeTargetIndex = isArchived ? tasksIndex : archiveIndex;
+                var effectiveHostIndex = hostTasksDir != null ? (isArchived ? hostArchiveIndex : hostTasksIndex) : null;
+                var oppositeHostIndex = hostTasksDir != null ? (isArchived ? hostTasksIndex : hostArchiveIndex) : null;
+                var effectiveCloneIndex = mirrorToClone ? (isArchived ? cloneArchiveIndex : cloneTasksIndex) : null;
+                var oppositeCloneIndex = mirrorToClone ? (isArchived ? cloneTasksIndex : cloneArchiveIndex) : null;
 
-                Directory.CreateDirectory(effectiveTasksDir);
-
-                var targetFile = await ResolveTargetFilePathAsync(
-                    effectiveTasksDir,
+                var targetFile = ResolveTargetFilePathFromIndex(
+                    effectiveTargetIndex,
                     task,
-                    cancellationToken,
-                    oppositeTasksDir,
-                    effectiveHostDir,
-                    oppositeHostDir);
+                    oppositeTargetIndex,
+                    effectiveHostIndex,
+                    oppositeHostIndex);
 
-                await CleanupOtherFilesForTaskIdAsync(effectiveTasksDir, oppositeTasksDir, task.Id, targetFile, cancellationToken);
+                CleanupOtherFilesForTaskId(effectiveTargetIndex, oppositeTargetIndex, task.Id, targetFile);
 
-                var markdown = GenerateMarkdown(task, depIds);
-                var hash = ComputeContentHash(markdown);
-                _suppressedHashes[hash] = 1;
+                var (markdown, frontmatter) = GenerateMarkdownWithFrontmatter(task, depIds);
+                var normalizedMarkdown = markdown.Replace("\r\n", "\n");
+                var hash = ComputeContentHash(normalizedMarkdown);
 
-                await File.WriteAllTextAsync(targetFile, markdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
-                writtenPaths[task.Id] = targetFile;
+                bool matchesExisting = effectiveTargetIndex.TryGetEntryByPath(targetFile, out var existingTargetEntry) &&
+                    string.Equals(existingTargetEntry.ContentHash, hash, StringComparison.Ordinal);
 
-                var (parsedFm, parsedBody) = ParseMarkdown(markdown, targetFile);
-                var baselineEntry = new TaskBaselineEntry(
-                    task.Id,
-                    task.Version,
-                    task.UpdatedAt,
-                    hash,
-                    targetFile,
-                    parsedFm,
-                    task.Description);
-                baseline[task.Id] = baselineEntry;
-
-                if (effectiveHostDir != null && oppositeHostDir != null)
+                if (matchesExisting)
                 {
-                    Directory.CreateDirectory(effectiveHostDir);
-                    var hostFile = Path.Combine(effectiveHostDir, Path.GetFileName(targetFile));
-                    await CleanupOtherFilesForTaskIdAsync(effectiveHostDir, oppositeHostDir, task.Id, hostFile, cancellationToken);
+                    writtenPaths[task.Id] = targetFile;
+                    baseline[task.Id] = new TaskBaselineEntry(
+                        task.Id,
+                        task.Version,
+                        task.UpdatedAt,
+                        hash,
+                        targetFile,
+                        frontmatter,
+                        task.Description);
+                }
+                else
+                {
                     _suppressedHashes[hash] = 1;
-                    await File.WriteAllTextAsync(hostFile, markdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                    await File.WriteAllTextAsync(targetFile, normalizedMarkdown, Utf8NoBom, cancellationToken);
+                    writtenPaths[task.Id] = targetFile;
+                    baseline[task.Id] = new TaskBaselineEntry(
+                        task.Id,
+                        task.Version,
+                        task.UpdatedAt,
+                        hash,
+                        targetFile,
+                        frontmatter,
+                        task.Description);
+
+                    effectiveTargetIndex.UpsertEntry(new DirectoryTaskEntry
+                    {
+                        FilePath = targetFile,
+                        FileName = Path.GetFileName(targetFile),
+                        TaskId = task.Id,
+                        Version = task.Version,
+                        ContentHash = hash,
+                        Frontmatter = frontmatter,
+                        PreferredSlug = GenerateSlug(task.Title)
+                    });
                 }
 
-                if (mirrorToClone && normalizedCloneTasksDir != null)
+                if (effectiveHostIndex != null && oppositeHostIndex != null)
+                {
+                    var hostFile = Path.Combine(effectiveHostIndex.DirectoryPath, Path.GetFileName(targetFile));
+                    CleanupOtherFilesForTaskId(effectiveHostIndex, oppositeHostIndex, task.Id, hostFile);
+
+                    bool hostMatches = effectiveHostIndex.TryGetEntryByPath(hostFile, out var existingHostEntry) &&
+                        string.Equals(existingHostEntry.ContentHash, hash, StringComparison.Ordinal);
+
+                    if (!hostMatches)
+                    {
+                        _suppressedHashes[hash] = 1;
+                        await File.WriteAllTextAsync(hostFile, normalizedMarkdown, Utf8NoBom, cancellationToken);
+                        effectiveHostIndex.UpsertEntry(new DirectoryTaskEntry
+                        {
+                            FilePath = hostFile,
+                            FileName = Path.GetFileName(hostFile),
+                            TaskId = task.Id,
+                            Version = task.Version,
+                            ContentHash = hash,
+                            Frontmatter = frontmatter,
+                            PreferredSlug = GenerateSlug(task.Title)
+                        });
+                    }
+                }
+
+                if (mirrorToClone && effectiveCloneIndex != null && oppositeCloneIndex != null)
                 {
                     try
                     {
-                        var effectiveCloneDir = isArchived ? cloneArchiveDir! : cloneTasksDir!;
-                        var oppositeCloneDir = isArchived ? cloneTasksDir! : cloneArchiveDir!;
-                        Directory.CreateDirectory(effectiveCloneDir);
+                        var cloneFile = Path.Combine(effectiveCloneIndex.DirectoryPath, Path.GetFileName(targetFile));
+                        CleanupOtherFilesForTaskId(effectiveCloneIndex, oppositeCloneIndex, task.Id, cloneFile);
 
-                        var cloneFile = Path.Combine(effectiveCloneDir, Path.GetFileName(targetFile));
-                        await CleanupOtherFilesForTaskIdAsync(effectiveCloneDir, oppositeCloneDir, task.Id, cloneFile, cancellationToken);
+                        bool cloneMatches = effectiveCloneIndex.TryGetEntryByPath(cloneFile, out var existingCloneEntry) &&
+                            string.Equals(existingCloneEntry.ContentHash, hash, StringComparison.Ordinal);
 
-                        _suppressedHashes[hash] = 1;
-                        await File.WriteAllTextAsync(cloneFile, markdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                        if (!cloneMatches)
+                        {
+                            _suppressedHashes[hash] = 1;
+                            await File.WriteAllTextAsync(cloneFile, normalizedMarkdown, Utf8NoBom, cancellationToken);
+                            effectiveCloneIndex.UpsertEntry(new DirectoryTaskEntry
+                            {
+                                FilePath = cloneFile,
+                                FileName = Path.GetFileName(cloneFile),
+                                TaskId = task.Id,
+                                Version = task.Version,
+                                ContentHash = hash,
+                                Frontmatter = frontmatter,
+                                PreferredSlug = GenerateSlug(task.Title)
+                            });
+                        }
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -638,162 +752,143 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         }
     }
 
-    /// <summary>
-    /// Finds the file name to use for a task: the existing file already holding its ID, or the first free slot.
-    /// An unreadable or corrupt candidate file fails fast instead of being silently skipped.
-    /// </summary>
-    private async Task<string> ResolveTargetFilePathAsync(
-        string tasksDir,
+    private static string ResolveTargetFilePathFromIndex(
+        DirectoryTaskIndex targetIndex,
         ForgeTask task,
-        CancellationToken cancellationToken,
-        params string?[] fallbackDirs)
+        params DirectoryTaskIndex?[] fallbackIndices)
     {
         var datePrefix = (task.CreatedAt != default ? task.CreatedAt : DateTime.UtcNow).ToString("yyyy-MM-dd");
         var slug = GenerateSlug(task.Title);
         var preferredFileName = $"{datePrefix}-{slug}{TaskSyncConstants.MarkdownExtension}";
 
-        var candidates = new List<(string FilePath, int Version, bool MatchesPreferredName, bool IsInTargetDir)>();
+        var candidates = new List<(string FilePath, int Version, bool MatchesPreferredName, bool IsInTargetDir, TaskFrontmatter? Frontmatter)>();
 
         // 1. Check if an existing file already holds this task's ID in the primary target directory
-        if (task.Id > 0 && Directory.Exists(tasksDir))
+        if (task.Id > 0)
         {
-            var files = Directory.GetFiles(tasksDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
-            foreach (var file in files)
+            var existingInTarget = targetIndex.GetFilesByTaskId(task.Id);
+            foreach (var entry in existingInTarget)
             {
-                string existingContent;
-                try
-                {
-                    existingContent = await File.ReadAllTextAsync(file, cancellationToken);
-                }
-                catch (IOException ex)
-                {
-                    throw new TaskMarkdownSyncException($"Failed to read task markdown file '{file}': {ex.Message}", ex, file);
-                }
-
-                var (existingFm, _) = ParseMarkdown(existingContent, file);
-                if (existingFm.Id == task.Id)
-                {
-                    var isPreferred = string.Equals(Path.GetFileName(file), preferredFileName, StringComparison.OrdinalIgnoreCase);
-                    candidates.Add((file, existingFm.Version ?? 0, isPreferred, true));
-                }
+                var isPreferred = string.Equals(entry.FileName, preferredFileName, StringComparison.OrdinalIgnoreCase);
+                candidates.Add((entry.FilePath, entry.Version ?? 0, isPreferred, true, entry.Frontmatter));
             }
-        }
 
-        // 2. Check fallback directories (e.g. opposite active/archive directory or host directory) to preserve existing filename
-        if (fallbackDirs != null && task.Id > 0)
-        {
-            foreach (var fallbackDir in fallbackDirs)
+            // 2. Check fallback directories (e.g. opposite active/archive directory or host directory)
+            if (fallbackIndices != null)
             {
-                if (string.IsNullOrWhiteSpace(fallbackDir) || !Directory.Exists(fallbackDir))
+                foreach (var fallbackIndex in fallbackIndices)
                 {
-                    continue;
-                }
-
-                try
-                {
-                    var files = Directory.GetFiles(fallbackDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
-                    foreach (var file in files)
+                    if (fallbackIndex == null) continue;
+                    var fallbackEntries = fallbackIndex.GetFilesByTaskId(task.Id);
+                    foreach (var entry in fallbackEntries)
                     {
-                        var existingContent = await File.ReadAllTextAsync(file, cancellationToken);
-                        var (existingFm, _) = ParseMarkdown(existingContent, file);
-                        if (existingFm.Id == task.Id)
+                        if (!targetIndex.TryGetEntryByFileName(entry.FileName, out var existingInTargetEntry) ||
+                            existingInTargetEntry.TaskId == task.Id)
                         {
-                            var candidateInTarget = Path.Combine(tasksDir, Path.GetFileName(file));
-                            if (!File.Exists(candidateInTarget))
-                            {
-                                var isPreferred = string.Equals(Path.GetFileName(file), preferredFileName, StringComparison.OrdinalIgnoreCase);
-                                candidates.Add((candidateInTarget, existingFm.Version ?? 0, isPreferred, false));
-                            }
+                            var candidateInTarget = Path.Combine(targetIndex.DirectoryPath, entry.FileName);
+                            var isPreferred = string.Equals(entry.FileName, preferredFileName, StringComparison.OrdinalIgnoreCase);
+                            candidates.Add((candidateInTarget, entry.Version ?? 0, isPreferred, false, entry.Frontmatter));
                         }
                     }
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogDebug(ex, "Ignored fallback directory scan error in '{FallbackDir}' while resolving path for task #{TaskId}", fallbackDir, task.Id);
                 }
             }
         }
 
         if (candidates.Count > 0)
         {
-            return candidates
+            var chosen = candidates
                 .OrderByDescending(c => c.Version)
                 .ThenByDescending(c => c.MatchesPreferredName)
                 .ThenByDescending(c => c.IsInTargetDir)
-                .First()
-                .FilePath;
+                .ThenBy(c => c.FilePath, StringComparer.OrdinalIgnoreCase)
+                .First();
+
+            if (!targetIndex.TryGetEntryByPath(chosen.FilePath, out _))
+            {
+                targetIndex.UpsertEntry(new DirectoryTaskEntry
+                {
+                    FilePath = chosen.FilePath,
+                    FileName = Path.GetFileName(chosen.FilePath),
+                    TaskId = task.Id > 0 ? task.Id : null,
+                    Version = chosen.Version,
+                    ContentHash = string.Empty,
+                    Frontmatter = chosen.Frontmatter ?? new TaskFrontmatter { Id = task.Id > 0 ? task.Id : null, Version = task.Version, Title = task.Title },
+                    PreferredSlug = slug
+                });
+            }
+
+            return chosen.FilePath;
         }
 
-        var targetFile = Path.Combine(tasksDir, preferredFileName);
+        var targetFile = Path.Combine(targetIndex.DirectoryPath, preferredFileName);
         int suffix = 2;
 
-        while (File.Exists(targetFile))
+        while (targetIndex.TryGetEntryByFileName(Path.GetFileName(targetFile), out var existingEntry))
         {
-            string existingContent;
-            try
-            {
-                existingContent = await File.ReadAllTextAsync(targetFile, cancellationToken);
-            }
-            catch (IOException ex)
-            {
-                throw new TaskMarkdownSyncException($"Failed to read task markdown file '{targetFile}': {ex.Message}", ex, targetFile);
-            }
-
-            var (existingFm, _) = ParseMarkdown(existingContent, targetFile);
-            if (task.Id > 0 && existingFm.Id == task.Id)
+            if (task.Id > 0 && existingEntry.TaskId == task.Id)
             {
                 break;
             }
+            targetFile = Path.Combine(targetIndex.DirectoryPath, $"{datePrefix}-{slug}-{suffix++}{TaskSyncConstants.MarkdownExtension}");
+        }
 
-            targetFile = Path.Combine(tasksDir, $"{datePrefix}-{slug}-{suffix++}{TaskSyncConstants.MarkdownExtension}");
+        if (!targetIndex.TryGetEntryByPath(targetFile, out _))
+        {
+            targetIndex.UpsertEntry(new DirectoryTaskEntry
+            {
+                FilePath = targetFile,
+                FileName = Path.GetFileName(targetFile),
+                TaskId = task.Id > 0 ? task.Id : null,
+                Version = task.Version,
+                ContentHash = string.Empty,
+                Frontmatter = new TaskFrontmatter { Id = task.Id > 0 ? task.Id : null, Version = task.Version, Title = task.Title },
+                PreferredSlug = slug
+            });
         }
 
         return targetFile;
     }
 
-    private async Task CleanupOtherFilesForTaskIdAsync(
-        string targetDir,
-        string? oppositeDir,
+    private void CleanupOtherFilesForTaskId(
+        DirectoryTaskIndex targetIndex,
+        DirectoryTaskIndex? oppositeIndex,
         int taskId,
-        string keepFilePath,
-        CancellationToken cancellationToken)
+        string keepFilePath)
     {
         if (taskId <= 0) return;
 
         var normalizedKeepPath = Path.GetFullPath(keepFilePath);
-        string?[] dirsToScan = [targetDir, oppositeDir];
 
-        foreach (var dir in dirsToScan)
+        void CleanupInIndex(DirectoryTaskIndex? index)
         {
-            if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+            if (index == null) return;
+            var entries = index.GetFilesByTaskId(taskId).ToList();
+            foreach (var entry in entries)
             {
-                continue;
-            }
-
-            foreach (var file in Directory.GetFiles(dir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly))
-            {
-                if (string.Equals(Path.GetFullPath(file), normalizedKeepPath, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Path.GetFullPath(entry.FilePath), normalizedKeepPath, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
                 try
                 {
-                    var content = await File.ReadAllTextAsync(file, cancellationToken);
-                    var (fm, _) = ParseMarkdown(content, file);
-                    if (fm.Id == taskId)
+                    if (File.Exists(entry.FilePath))
                     {
-                        File.Delete(file);
+                        File.Delete(entry.FilePath);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogDebug(ex, "Ignored unreadable or locked candidate file '{FilePath}' while cleaning up duplicate files for task #{TaskId}", file, taskId);
+                    _logger.LogDebug(ex, "Ignored error deleting duplicate file '{FilePath}' for task #{TaskId}", entry.FilePath, taskId);
                 }
+
+                index.RemoveEntry(entry.FilePath);
             }
         }
-    }
 
+        CleanupInIndex(targetIndex);
+        CleanupInIndex(oppositeIndex);
+    }
 
     public async Task<IReadOnlyList<ForgeTask>> SyncAllTasksFromDiskAsync(
         Workspace workspace,
@@ -818,7 +913,41 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         }
 
         var archiveDir = Path.Combine(tasksDir, TaskSyncConstants.ArchiveSegment);
-        var files = Directory.GetFiles(tasksDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
+
+        string? hostTasksDir = null;
+        string? hostArchiveDir = null;
+        if (!string.IsNullOrWhiteSpace(hostRepositoryPath) &&
+            !string.Equals(hostRepositoryPath, targetDirectory, StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(hostRepositoryPath))
+        {
+            hostTasksDir = Path.Combine(hostRepositoryPath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
+            hostArchiveDir = Path.Combine(hostTasksDir, TaskSyncConstants.ArchiveSegment);
+            Directory.CreateDirectory(hostTasksDir);
+            Directory.CreateDirectory(hostArchiveDir);
+        }
+
+        var tasksIndexTask = DirectoryTaskIndex.CreateAsync(tasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: true, cancellationToken);
+        var archiveIndexTask = DirectoryTaskIndex.CreateAsync(archiveDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+
+        Task<DirectoryTaskIndex>? hostTasksIndexTask = null;
+        Task<DirectoryTaskIndex>? hostArchiveIndexTask = null;
+        if (hostTasksDir != null && hostArchiveDir != null)
+        {
+            hostTasksIndexTask = DirectoryTaskIndex.CreateAsync(hostTasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+            hostArchiveIndexTask = DirectoryTaskIndex.CreateAsync(hostArchiveDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+        }
+
+        await Task.WhenAll(
+            tasksIndexTask,
+            archiveIndexTask,
+            hostTasksIndexTask ?? Task.FromResult<DirectoryTaskIndex?>(null)!,
+            hostArchiveIndexTask ?? Task.FromResult<DirectoryTaskIndex?>(null)!
+        );
+
+        var tasksIndex = await tasksIndexTask;
+        var archiveIndex = await archiveIndexTask;
+        var hostTasksIndex = hostTasksIndexTask != null ? await hostTasksIndexTask : null;
+        var hostArchiveIndex = hostArchiveIndexTask != null ? await hostArchiveIndexTask : null;
 
         var (taskRepo, depEngine, scope) = ResolveDependencies();
         try
@@ -826,38 +955,18 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             var dbTasksList = await taskRepo.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
             var dbTasks = dbTasksList.ToDictionary(t => t.Id);
 
-            string? hostTasksDir = null;
-            string? hostArchiveDir = null;
-            if (!string.IsNullOrWhiteSpace(hostRepositoryPath) &&
-                !string.Equals(hostRepositoryPath, targetDirectory, StringComparison.OrdinalIgnoreCase) &&
-                Directory.Exists(hostRepositoryPath))
-            {
-                hostTasksDir = Path.Combine(hostRepositoryPath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
-                hostArchiveDir = Path.Combine(hostTasksDir, TaskSyncConstants.ArchiveSegment);
-                Directory.CreateDirectory(hostTasksDir);
-            }
-
-            var parsedFiles = new List<(string FilePath, string TaskContentHash, string Content, string Hash, TaskFrontmatter Frontmatter, string Body, string Description)>();
-
-            foreach (var file in files)
-            {
-                string content;
-                try
-                {
-                    content = await File.ReadAllTextAsync(file, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    throw new TaskMarkdownSyncException($"Failed to read task markdown file '{file}': {ex.Message}", ex, file);
-                }
-
-                var (frontmatter, body) = ParseMarkdown(content, file);
-                var hash = ComputeContentHash(content);
-                var description = ExtractDescriptionFromBody(body);
-                var taskContentHash = ComputeTaskContentHash(frontmatter, description);
-
-                parsedFiles.Add((file, taskContentHash, content, hash, frontmatter, body, description));
-            }
+            var parsedFiles = tasksIndex.AllEntries
+                .OrderBy(e => e.FilePath, StringComparer.OrdinalIgnoreCase)
+                .Select(e => (
+                    e.FilePath,
+                    e.TaskContentHash,
+                    e.Content,
+                    Hash: e.ContentHash,
+                    e.Frontmatter,
+                    e.Body,
+                    e.Description
+                ))
+                .ToList();
 
             // 1. Validate Existing and New Tasks (auto-cleaning stale untouched snapshots first)
             static bool IsUntouchedSnapshot((string FilePath, string TaskContentHash, string Content, string Hash, TaskFrontmatter Frontmatter, string Body, string Description) p) =>
@@ -924,6 +1033,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                                 {
                                     File.Delete(stale.FilePath);
                                 }
+                                tasksIndex.RemoveEntry(stale.FilePath);
+
                                 if (hostTasksDir != null)
                                 {
                                     var staleHostFile = Path.Combine(hostTasksDir, Path.GetFileName(stale.FilePath));
@@ -931,6 +1042,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                                     {
                                         File.Delete(staleHostFile);
                                     }
+                                    hostTasksIndex?.RemoveEntry(staleHostFile);
                                 }
                             }
                             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1137,30 +1249,18 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             }
 
             // Also index archived task files in docs/tasks/archive so filename references to closed/archived tasks resolve
-            if (Directory.Exists(archiveDir))
+            foreach (var archivedEntry in archiveIndex.AllEntries)
             {
-                foreach (var archivedFile in Directory.GetFiles(archiveDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly))
+                if (archivedEntry.TaskId.HasValue && archivedEntry.TaskId.Value > 0 && dbTasks.ContainsKey(archivedEntry.TaskId.Value))
                 {
-                    try
+                    var id = archivedEntry.TaskId.Value;
+                    var fileName = archivedEntry.FileName;
+                    existingTaskLookup.TryAdd(fileName, id);
+                    existingTaskLookup.TryAdd(Path.GetFileNameWithoutExtension(fileName), id);
+                    var fileSlug = NormalizeDependencyKey(fileName);
+                    if (!string.IsNullOrEmpty(fileSlug))
                     {
-                        var archivedContent = await File.ReadAllTextAsync(archivedFile, cancellationToken);
-                        var (archivedFm, _) = ParseMarkdown(archivedContent, archivedFile);
-                        if (archivedFm.Id.HasValue && archivedFm.Id.Value > 0 && dbTasks.ContainsKey(archivedFm.Id.Value))
-                        {
-                            var id = archivedFm.Id.Value;
-                            var fileName = Path.GetFileName(archivedFile);
-                            existingTaskLookup.TryAdd(fileName, id);
-                            existingTaskLookup.TryAdd(Path.GetFileNameWithoutExtension(archivedFile), id);
-                            var fileSlug = NormalizeDependencyKey(fileName);
-                            if (!string.IsNullOrEmpty(fileSlug))
-                            {
-                                existingTaskLookup.TryAdd(fileSlug, id);
-                            }
-                        }
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.LogDebug(ex, "Ignored unreadable archived file '{FilePath}' during dependency lookup indexing", archivedFile);
+                        existingTaskLookup.TryAdd(fileSlug, id);
                     }
                 }
             }
@@ -1446,7 +1546,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var newFilePath = Path.Combine(tasksDir, newFileName);
 
                 int suffix = 2;
-                while (File.Exists(newFilePath) && !string.Equals(newFilePath, nt.Item.FilePath, StringComparison.OrdinalIgnoreCase))
+                while (tasksIndex.TryGetEntryByFileName(Path.GetFileName(newFilePath), out _) &&
+                       !string.Equals(newFilePath, nt.Item.FilePath, StringComparison.OrdinalIgnoreCase))
                 {
                     newFilePath = Path.Combine(tasksDir, $"{datePrefix}-{slug}-{suffix++}{TaskSyncConstants.MarkdownExtension}");
                 }
@@ -1457,21 +1558,43 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     {
                         File.Delete(nt.Item.FilePath);
                     }
+                    tasksIndex.RemoveEntry(nt.Item.FilePath);
                 }
 
                 await File.WriteAllTextAsync(newFilePath, rewrittenMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                tasksIndex.UpsertEntry(new DirectoryTaskEntry
+                {
+                    FilePath = newFilePath,
+                    FileName = Path.GetFileName(newFilePath),
+                    TaskId = created.Id,
+                    Version = created.Version,
+                    ContentHash = rewrittenHash,
+                    Frontmatter = nt.Item.Frontmatter,
+                    PreferredSlug = slug
+                });
 
-                if (hostTasksDir != null)
+                if (hostTasksDir != null && hostTasksIndex != null)
                 {
                     var oldHostFile = Path.Combine(hostTasksDir, Path.GetFileName(nt.Item.FilePath));
                     if (File.Exists(oldHostFile) && !string.Equals(oldHostFile, Path.Combine(hostTasksDir, Path.GetFileName(newFilePath)), StringComparison.OrdinalIgnoreCase))
                     {
                         File.Delete(oldHostFile);
+                        hostTasksIndex.RemoveEntry(oldHostFile);
                     }
 
                     var newHostFile = Path.Combine(hostTasksDir, Path.GetFileName(newFilePath));
                     _suppressedHashes[rewrittenHash] = 1;
                     await File.WriteAllTextAsync(newHostFile, rewrittenMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                    hostTasksIndex.UpsertEntry(new DirectoryTaskEntry
+                    {
+                        FilePath = newHostFile,
+                        FileName = Path.GetFileName(newHostFile),
+                        TaskId = created.Id,
+                        Version = created.Version,
+                        ContentHash = rewrittenHash,
+                        Frontmatter = nt.Item.Frontmatter,
+                        PreferredSlug = slug
+                    });
                 }
 
                 refreshedTasks.Add(created);
@@ -1490,27 +1613,60 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     {
                         Directory.CreateDirectory(archiveDir);
                         var archivedDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
-                        var archivedTargetFile = await ResolveTargetFilePathAsync(
-                            archiveDir,
+                        var archivedTargetFile = ResolveTargetFilePathFromIndex(
+                            archiveIndex,
                             task,
-                            cancellationToken,
-                            tasksDir,
-                            hostArchiveDir,
-                            hostTasksDir);
-                        await CleanupOtherFilesForTaskIdAsync(archiveDir, tasksDir, task.Id, archivedTargetFile, cancellationToken);
+                            tasksIndex,
+                            hostArchiveIndex,
+                            hostTasksIndex);
+                        CleanupOtherFilesForTaskId(archiveIndex, tasksIndex, task.Id, archivedTargetFile);
 
                         var authoritativeMarkdown = GenerateMarkdown(task, archivedDeps, item.Frontmatter.AgentProfile);
                         var authHash = ComputeContentHash(authoritativeMarkdown);
-                        _suppressedHashes[authHash] = 1;
-                        await File.WriteAllTextAsync(archivedTargetFile, authoritativeMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
 
-                        if (hostTasksDir != null && hostArchiveDir != null)
+                        bool archMatches = archiveIndex.TryGetEntryByPath(archivedTargetFile, out var exArch) &&
+                            string.Equals(exArch.ContentHash, authHash, StringComparison.Ordinal);
+
+                        if (!archMatches)
+                        {
+                            _suppressedHashes[authHash] = 1;
+                            await File.WriteAllTextAsync(archivedTargetFile, authoritativeMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                            archiveIndex.UpsertEntry(new DirectoryTaskEntry
+                            {
+                                FilePath = archivedTargetFile,
+                                FileName = Path.GetFileName(archivedTargetFile),
+                                TaskId = task.Id,
+                                Version = task.Version,
+                                ContentHash = authHash,
+                                Frontmatter = item.Frontmatter,
+                                PreferredSlug = GenerateSlug(task.Title)
+                            });
+                        }
+
+                        if (hostTasksDir != null && hostArchiveDir != null && hostArchiveIndex != null && hostTasksIndex != null)
                         {
                             Directory.CreateDirectory(hostArchiveDir);
                             var hostArchivedFile = Path.Combine(hostArchiveDir, Path.GetFileName(archivedTargetFile));
-                            await CleanupOtherFilesForTaskIdAsync(hostArchiveDir, hostTasksDir, task.Id, hostArchivedFile, cancellationToken);
-                            _suppressedHashes[authHash] = 1;
-                            await File.WriteAllTextAsync(hostArchivedFile, authoritativeMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                            CleanupOtherFilesForTaskId(hostArchiveIndex, hostTasksIndex, task.Id, hostArchivedFile);
+
+                            bool hostArchMatches = hostArchiveIndex.TryGetEntryByPath(hostArchivedFile, out var exHostArch) &&
+                                string.Equals(exHostArch.ContentHash, authHash, StringComparison.Ordinal);
+
+                            if (!hostArchMatches)
+                            {
+                                _suppressedHashes[authHash] = 1;
+                                await File.WriteAllTextAsync(hostArchivedFile, authoritativeMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                                hostArchiveIndex.UpsertEntry(new DirectoryTaskEntry
+                                {
+                                    FilePath = hostArchivedFile,
+                                    FileName = Path.GetFileName(hostArchivedFile),
+                                    TaskId = task.Id,
+                                    Version = task.Version,
+                                    ContentHash = authHash,
+                                    Frontmatter = item.Frontmatter,
+                                    PreferredSlug = GenerateSlug(task.Title)
+                                });
+                            }
                         }
                     }
 
@@ -1684,40 +1840,87 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                                                depsDifferFromDisk);
 
                 var isArchived = IsArchivedStatus(task.Status);
-                var effectiveTargetDir = isArchived ? archiveDir : tasksDir;
-                var oppositeTargetDir = isArchived ? tasksDir : archiveDir;
-                var effectiveHostDir = hostTasksDir != null ? (isArchived ? hostArchiveDir! : hostTasksDir) : null;
-                var oppositeHostDir = hostTasksDir != null ? (isArchived ? hostTasksDir : hostArchiveDir!) : null;
+                var effectiveTargetIndex = isArchived ? archiveIndex : tasksIndex;
+                var oppositeTargetIndex = isArchived ? tasksIndex : archiveIndex;
+                var effectiveHostIndex = hostTasksDir != null ? (isArchived ? hostArchiveIndex : hostTasksIndex) : null;
+                var oppositeHostIndex = hostTasksDir != null ? (isArchived ? hostTasksIndex : hostArchiveIndex) : null;
                 var targetWritePath = isArchived
                     ? Path.Combine(archiveDir, Path.GetFileName(item.FilePath))
                     : item.FilePath;
 
                 if (anyFieldChanged || finalDepIds != null || statusTampered || maintainerFieldsSynced || isArchived)
                 {
-                    Directory.CreateDirectory(effectiveTargetDir);
+                    Directory.CreateDirectory(effectiveTargetIndex.DirectoryPath);
                     var effectiveDeps = finalDepIds ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
                     var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, item.Frontmatter.AgentProfile);
                     var normHash = ComputeContentHash(normalizedMarkdown);
-                    await CleanupOtherFilesForTaskIdAsync(effectiveTargetDir, oppositeTargetDir, task.Id, targetWritePath, cancellationToken);
+                    CleanupOtherFilesForTaskId(effectiveTargetIndex, oppositeTargetIndex, task.Id, targetWritePath);
                     _suppressedHashes[normHash] = 1;
                     await File.WriteAllTextAsync(targetWritePath, normalizedMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
 
-                    if (effectiveHostDir != null && oppositeHostDir != null)
+                    effectiveTargetIndex.UpsertEntry(new DirectoryTaskEntry
                     {
-                        Directory.CreateDirectory(effectiveHostDir);
-                        var hostFile = Path.Combine(effectiveHostDir, Path.GetFileName(targetWritePath));
-                        await CleanupOtherFilesForTaskIdAsync(effectiveHostDir, oppositeHostDir, task.Id, hostFile, cancellationToken);
-                        _suppressedHashes[normHash] = 1;
-                        await File.WriteAllTextAsync(hostFile, normalizedMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                        FilePath = targetWritePath,
+                        FileName = Path.GetFileName(targetWritePath),
+                        TaskId = task.Id,
+                        Version = task.Version,
+                        ContentHash = normHash,
+                        Frontmatter = item.Frontmatter,
+                        PreferredSlug = GenerateSlug(task.Title ?? string.Empty)
+                    });
+
+                    if (effectiveHostIndex != null && oppositeHostIndex != null)
+                    {
+                        Directory.CreateDirectory(effectiveHostIndex.DirectoryPath);
+                        var hostFile = Path.Combine(effectiveHostIndex.DirectoryPath, Path.GetFileName(targetWritePath));
+                        CleanupOtherFilesForTaskId(effectiveHostIndex, oppositeHostIndex, task.Id, hostFile);
+
+                        bool hostMatches = effectiveHostIndex.TryGetEntryByPath(hostFile, out var existingHost) &&
+                            string.Equals(existingHost.ContentHash, normHash, StringComparison.Ordinal);
+
+                        if (!hostMatches)
+                        {
+                            _suppressedHashes[normHash] = 1;
+                            await File.WriteAllTextAsync(hostFile, normalizedMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+
+                            effectiveHostIndex.UpsertEntry(new DirectoryTaskEntry
+                            {
+                                FilePath = hostFile,
+                                FileName = Path.GetFileName(hostFile),
+                                TaskId = task.Id,
+                                Version = task.Version,
+                                ContentHash = normHash,
+                                Frontmatter = item.Frontmatter,
+                                PreferredSlug = GenerateSlug(task.Title ?? string.Empty)
+                            });
+                        }
                     }
                 }
-                else if (effectiveHostDir != null && oppositeHostDir != null)
+                else if (effectiveHostIndex != null && oppositeHostIndex != null)
                 {
-                    Directory.CreateDirectory(effectiveHostDir);
-                    var hostFile = Path.Combine(effectiveHostDir, Path.GetFileName(targetWritePath));
-                    await CleanupOtherFilesForTaskIdAsync(effectiveHostDir, oppositeHostDir, task.Id, hostFile, cancellationToken);
-                    _suppressedHashes[item.Hash] = 1;
-                    await File.WriteAllTextAsync(hostFile, item.Content.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+                    Directory.CreateDirectory(effectiveHostIndex.DirectoryPath);
+                    var hostFile = Path.Combine(effectiveHostIndex.DirectoryPath, Path.GetFileName(targetWritePath));
+                    CleanupOtherFilesForTaskId(effectiveHostIndex, oppositeHostIndex, task.Id, hostFile);
+
+                    bool hostMatches = effectiveHostIndex.TryGetEntryByPath(hostFile, out var existingHost) &&
+                        string.Equals(existingHost.ContentHash, item.Hash, StringComparison.Ordinal);
+
+                    if (!hostMatches)
+                    {
+                        _suppressedHashes[item.Hash] = 1;
+                        await File.WriteAllTextAsync(hostFile, item.Content.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
+
+                        effectiveHostIndex.UpsertEntry(new DirectoryTaskEntry
+                        {
+                            FilePath = hostFile,
+                            FileName = Path.GetFileName(hostFile),
+                            TaskId = task.Id,
+                            Version = task.Version,
+                            ContentHash = item.Hash,
+                            Frontmatter = item.Frontmatter,
+                            PreferredSlug = GenerateSlug(task.Title ?? string.Empty)
+                        });
+                    }
                 }
 
                 refreshedTasks.Add(task);
@@ -1822,34 +2025,31 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             var dir = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
             {
-                string[] dirsToIndex = [dir, Path.Combine(dir, TaskSyncConstants.ArchiveSegment)];
-                foreach (var indexDir in dirsToIndex)
+                var archiveSubDir = Path.Combine(dir, TaskSyncConstants.ArchiveSegment);
+                var activeIndexTask = DirectoryTaskIndex.CreateAsync(dir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+                var archiveIndexTask = DirectoryTaskIndex.CreateAsync(archiveSubDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+
+                await Task.WhenAll(activeIndexTask, archiveIndexTask);
+                DirectoryTaskIndex[] indices = [await activeIndexTask, await archiveIndexTask];
+
+                var normalizedCurrentFilePath = Path.GetFullPath(filePath).TrimEnd('/', '\\');
+                foreach (var idx in indices)
                 {
-                    if (!Directory.Exists(indexDir)) continue;
-                    var files = Directory.GetFiles(indexDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
-                    foreach (var file in files)
+                    if (idx == null) continue;
+                    foreach (var entry in idx.AllEntries)
                     {
-                        if (string.Equals(file, filePath, StringComparison.OrdinalIgnoreCase)) continue;
-                        try
+                        if (string.Equals(entry.FilePath, normalizedCurrentFilePath, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (entry.TaskId.HasValue && entry.TaskId.Value > 0 && dbTasks.ContainsKey(entry.TaskId.Value))
                         {
-                            var content = await File.ReadAllTextAsync(file, cancellationToken);
-                            var (fm, _) = ParseMarkdown(content, file);
-                            if (fm.Id.HasValue && fm.Id.Value > 0 && dbTasks.ContainsKey(fm.Id.Value))
+                            var id = entry.TaskId.Value;
+                            var fileName = entry.FileName;
+                            lookup.TryAdd(fileName, id);
+                            lookup.TryAdd(Path.GetFileNameWithoutExtension(fileName), id);
+                            var fileSlug = NormalizeDependencyKey(fileName);
+                            if (!string.IsNullOrEmpty(fileSlug))
                             {
-                                var id = fm.Id.Value;
-                                var fileName = Path.GetFileName(file);
-                                lookup.TryAdd(fileName, id);
-                                lookup.TryAdd(Path.GetFileNameWithoutExtension(file), id);
-                                var fileSlug = NormalizeDependencyKey(fileName);
-                                if (!string.IsNullOrEmpty(fileSlug))
-                                {
-                                    lookup.TryAdd(fileSlug, id);
-                                }
+                                lookup.TryAdd(fileSlug, id);
                             }
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
-                        {
-                            _logger.LogDebug(ex, "Ignored unreadable sibling file '{FilePath}' during dependency resolution", file);
                         }
                     }
                 }
@@ -2245,55 +2445,67 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
         var archiveDir = Path.Combine(tasksDir, TaskSyncConstants.ArchiveSegment);
 
-        if (Directory.Exists(tasksDir))
+        var tasksIndexTask = DirectoryTaskIndex.CreateAsync(tasksDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+        var archiveIndexTask = DirectoryTaskIndex.CreateAsync(archiveDir, ParseMarkdown, ComputeContentHash, _logger, isRemoteOrParallel: false, failFast: false, cancellationToken);
+
+        await Task.WhenAll(tasksIndexTask, archiveIndexTask);
+        var tasksIndex = await tasksIndexTask;
+        var archiveIndex = await archiveIndexTask;
+
+        if (tasksIndex != null)
         {
-            var files = Directory.GetFiles(tasksDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
-            foreach (var file in files)
+            var matchingEntries = tasksIndex.GetFilesByTaskId(taskId).ToList();
+            foreach (var entry in matchingEntries)
             {
                 try
                 {
-                    var content = await File.ReadAllTextAsync(file, cancellationToken);
-                    var (fm, _) = ParseMarkdown(content, file);
-                    if (fm.Id == taskId)
+                    if (archive)
                     {
-                        if (archive)
+                        Directory.CreateDirectory(archiveDir);
+                        var target = Path.Combine(archiveDir, entry.FileName);
+                        if (File.Exists(target)) File.Delete(target);
+                        if (File.Exists(entry.FilePath)) File.Move(entry.FilePath, target);
+                        tasksIndex.RemoveEntry(entry.FilePath);
+
+                        archiveIndex ??= new DirectoryTaskIndex(archiveDir);
+                        archiveIndex.UpsertEntry(new DirectoryTaskEntry
                         {
-                            Directory.CreateDirectory(archiveDir);
-                            var target = Path.Combine(archiveDir, Path.GetFileName(file));
-                            if (File.Exists(target)) File.Delete(target);
-                            File.Move(file, target);
-                            await CleanupOtherFilesForTaskIdAsync(archiveDir, oppositeDir: null, taskId, target, cancellationToken);
-                        }
-                        else
-                        {
-                            File.Delete(file);
-                        }
+                            FilePath = target,
+                            FileName = entry.FileName,
+                            TaskId = taskId,
+                            Version = entry.Version,
+                            ContentHash = entry.ContentHash,
+                            Frontmatter = entry.Frontmatter,
+                            PreferredSlug = entry.PreferredSlug
+                        });
+                        CleanupOtherFilesForTaskId(archiveIndex, oppositeIndex: null, taskId, target);
+                    }
+                    else
+                    {
+                        if (File.Exists(entry.FilePath)) File.Delete(entry.FilePath);
+                        tasksIndex.RemoveEntry(entry.FilePath);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogDebug(ex, "Ignored unreadable or locked candidate file '{FilePath}' during archive/cleanup for task #{TaskId}", file, taskId);
+                    _logger.LogDebug(ex, "Ignored unreadable or locked candidate file '{FilePath}' during archive/cleanup for task #{TaskId}", entry.FilePath, taskId);
                 }
             }
         }
 
-        if (!archive && Directory.Exists(archiveDir))
+        if (!archive && archiveIndex != null)
         {
-            var archivedFiles = Directory.GetFiles(archiveDir, TaskSyncConstants.MarkdownPattern, SearchOption.TopDirectoryOnly);
-            foreach (var file in archivedFiles)
+            var archivedEntries = archiveIndex.GetFilesByTaskId(taskId).ToList();
+            foreach (var entry in archivedEntries)
             {
                 try
                 {
-                    var content = await File.ReadAllTextAsync(file, cancellationToken);
-                    var (fm, _) = ParseMarkdown(content, file);
-                    if (fm.Id == taskId)
-                    {
-                        File.Delete(file);
-                    }
+                    if (File.Exists(entry.FilePath)) File.Delete(entry.FilePath);
+                    archiveIndex.RemoveEntry(entry.FilePath);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogDebug(ex, "Ignored unreadable or locked archived file '{FilePath}' during cleanup for task #{TaskId}", file, taskId);
+                    _logger.LogDebug(ex, "Ignored unreadable or locked archived file '{FilePath}' during cleanup for task #{TaskId}", entry.FilePath, taskId);
                 }
             }
         }
@@ -2346,9 +2558,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             {
                 await ProcessFileChangedAsync(fullPath, workspaceId);
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore transient I/O conflicts during watcher dispatch
+                _logger.LogDebug(ex, "Ignored transient I/O conflict during watcher dispatch for '{FilePath}'", fullPath);
             }
         }, TaskScheduler.Default);
     }
