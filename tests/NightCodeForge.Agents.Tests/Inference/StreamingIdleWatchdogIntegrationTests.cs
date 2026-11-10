@@ -555,7 +555,7 @@ public class StreamingIdleWatchdogIntegrationTests
     }
 
     [Fact]
-    public async Task LlmChatClientFactoryBase_HonorsProviderStreamIdleTimeoutSeconds_WhenRetryOptionsUseDefault()
+    public async Task LlmChatClientFactoryBase_HonorsProviderStreamIdleTimeoutMinutes_WhenRetryOptionsUseDefault()
     {
         var timeProvider = new ManualControllableTimeProvider();
         var providerOptions = Options.Create(new LlmProviderOptions
@@ -563,7 +563,7 @@ public class StreamingIdleWatchdogIntegrationTests
             Endpoint = "http://localhost:11434",
             DefaultModelId = "test-model",
             RequestTimeoutMinutes = 10,
-            StreamIdleTimeoutSeconds = 120 // Custom 2-minute idle timeout on LlmProviderOptions
+            StreamIdleTimeoutMinutes = 2 // Custom 2-minute idle timeout on LlmProviderOptions
         });
         // Default LlmRetryPolicyOptions (StreamIdleTimeout not explicitly overridden)
         var retryOptions = Options.Create(new LlmRetryPolicyOptions());
@@ -609,7 +609,7 @@ public class StreamingIdleWatchdogIntegrationTests
         await firstTokenTcs.Task;
         await Task.Delay(50);
 
-        // Advance by 125 seconds (> 120s configured on LlmProviderOptions, < 300s default on LlmRetryPolicyOptions)
+        // Advance by 125 seconds (> 2m / 120s configured on LlmProviderOptions, < 5m / 300s default on LlmRetryPolicyOptions)
         timeProvider.Advance(TimeSpan.FromSeconds(125));
 
         var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(() => enumTask);

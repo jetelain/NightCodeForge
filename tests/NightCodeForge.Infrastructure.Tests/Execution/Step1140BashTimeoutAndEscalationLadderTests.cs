@@ -477,11 +477,13 @@ public class Step1140BashTimeoutAndEscalationLadderTests
             factoryMock.Object,
             NullLogger<ExecutionEnvironmentProvider>.Instance);
 
-        // Cache Standard tier first
+        // Cache Standard tier first and backdate its LastExecutionTimestampUtc by 10 minutes
         _ = provider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: null);
-        await Task.Delay(60);
+        typeof(NightCodeForgeContainerExecutor)
+            .GetProperty(nameof(NightCodeForgeContainerExecutor.LastExecutionTimestampUtc))!
+            .SetValue(standardExecutor, DateTime.UtcNow.AddMinutes(-10));
 
-        // Create and cache RestrictedReadOnly tier much later so it has a fresh timestamp
+        // Create and cache RestrictedReadOnly tier with a fresh timestamp (now)
         var restrictedExecutor = new NightCodeForgeContainerExecutor(
             new ContainerExecutorOptions { ContainerNameOrId = "ncf-sandbox-77", IsRestrictedReadOnly = true, AutoStartContainer = false },
             runnerMock.Object,
@@ -492,8 +494,8 @@ public class Step1140BashTimeoutAndEscalationLadderTests
             .Returns(restrictedExecutor);
         _ = provider.GetEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly, taskId: null);
 
-        // Standard tier is older than 40ms, but RestrictedReadOnly tier was just created (< 40ms) -> must NOT evict shared base container
-        var evictedPartial = await provider.EvictIdleWorkspaceContainersAsync(workspace, TimeSpan.FromMilliseconds(40));
+        // Standard tier is idle for 10 minutes (> 5m threshold), but RestrictedReadOnly tier was just created (< 5m) -> must NOT evict shared base container
+        var evictedPartial = await provider.EvictIdleWorkspaceContainersAsync(workspace, TimeSpan.FromMinutes(5));
         Assert.Equal(0, evictedPartial);
         factoryMock.Verify(f => f.RemoveBaseContainerAsync(workspace, It.IsAny<CancellationToken>()), Times.Never);
 

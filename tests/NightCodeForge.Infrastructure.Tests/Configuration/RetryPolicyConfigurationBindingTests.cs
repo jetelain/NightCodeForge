@@ -78,7 +78,8 @@ public class RetryPolicyConfigurationBindingTests : IDisposable
             "BaseDelaySeconds": 2.0,
             "MaxDelaySeconds": 60.0,
             "MaxRetryDurationSeconds": 3600.0,
-            "MaxTimeoutRetries": 5
+            "MaxTimeoutRetries": 5,
+            "StreamIdleTimeoutMinutes": 7.5
           }
         }
         """;
@@ -95,6 +96,9 @@ public class RetryPolicyConfigurationBindingTests : IDisposable
         Assert.Equal(TimeSpan.FromSeconds(60.0), options.MaxDelay);
         Assert.Equal(TimeSpan.FromSeconds(3600.0), options.MaxRetryDuration);
         Assert.Equal(5, options.MaxTimeoutRetries);
+        Assert.True(options.IsStreamIdleTimeoutExplicitlySet);
+        Assert.Equal(TimeSpan.FromMinutes(7.5), options.StreamIdleTimeout);
+        Assert.Equal(7.5, options.StreamIdleTimeoutMinutes);
     }
 
     [Fact]

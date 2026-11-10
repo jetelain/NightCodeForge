@@ -35,6 +35,30 @@ public class RetryPolicyOptionsTests
         Assert.Equal(TimeSpan.FromSeconds(1800.0), options.MaxRetryDuration);
         Assert.Equal(1800.0, options.MaxRetryDurationSeconds);
         Assert.Equal(3, options.MaxTimeoutRetries);
+        Assert.False(options.IsStreamIdleTimeoutExplicitlySet);
+        Assert.Equal(TimeSpan.FromMinutes(LlmRetryPolicyOptions.DefaultStreamIdleTimeoutMinutes), options.StreamIdleTimeout);
+        Assert.Equal(LlmRetryPolicyOptions.DefaultStreamIdleTimeoutMinutes, options.StreamIdleTimeoutMinutes);
+    }
+
+    [Fact]
+    public void LlmRetryPolicyOptions_StreamIdleTimeoutMinutes_UpdatesStreamIdleTimeoutAndIgnoresInvalidValues()
+    {
+        var options = new LlmRetryPolicyOptions();
+        Assert.False(options.IsStreamIdleTimeoutExplicitlySet);
+
+        options.StreamIdleTimeoutMinutes = 2.5;
+        Assert.True(options.IsStreamIdleTimeoutExplicitlySet);
+        Assert.Equal(TimeSpan.FromMinutes(2.5), options.StreamIdleTimeout);
+        Assert.Equal(2.5, options.StreamIdleTimeoutMinutes);
+
+        // Non-positive or non-finite values are ignored
+        options.StreamIdleTimeoutMinutes = 0;
+        options.StreamIdleTimeoutMinutes = -3;
+        options.StreamIdleTimeoutMinutes = double.NaN;
+        options.StreamIdleTimeoutMinutes = double.PositiveInfinity;
+        options.StreamIdleTimeoutMinutes = null;
+
+        Assert.Equal(TimeSpan.FromMinutes(2.5), options.StreamIdleTimeout);
     }
 
     [Fact]

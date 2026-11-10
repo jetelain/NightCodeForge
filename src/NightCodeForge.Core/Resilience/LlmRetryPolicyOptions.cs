@@ -12,7 +12,7 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
     public const double DefaultLlmMaxDelaySeconds = 30.0;
     public const double DefaultLlmMaxRetryDurationSeconds = 1800.0; // 30 minutes
     public const int DefaultLlmMaxTimeoutRetries = 3;
-    public const double DefaultStreamIdleTimeoutSeconds = 300.0; // 5 minutes
+    public const double DefaultStreamIdleTimeoutMinutes = 5.0; // 5 minutes
 
     private TimeSpan? _streamIdleTimeout;
 
@@ -23,25 +23,25 @@ public class LlmRetryPolicyOptions : RetryPolicyOptions
 
     /// <summary>
     /// Maximum silence interval between consecutive streamed chunks once generation has started.
-    /// Defaults to 5 minutes (300 seconds).
+    /// Defaults to 5 minutes.
     /// </summary>
     public TimeSpan StreamIdleTimeout
     {
-        get => _streamIdleTimeout ?? TimeSpan.FromSeconds(DefaultStreamIdleTimeoutSeconds);
+        get => _streamIdleTimeout ?? TimeSpan.FromMinutes(DefaultStreamIdleTimeoutMinutes);
         set => _streamIdleTimeout = value;
     }
 
     /// <summary>
-    /// Helper for configuration binding in seconds.
+    /// Helper for configuration binding in minutes.
     /// </summary>
-    public double? StreamIdleTimeoutSeconds
+    public double? StreamIdleTimeoutMinutes
     {
-        get => StreamIdleTimeout.TotalSeconds;
+        get => StreamIdleTimeout.TotalMinutes;
         set
         {
             if (value is > 0 && double.IsFinite(value.Value))
             {
-                StreamIdleTimeout = TimeSpan.FromSeconds(value.Value);
+                StreamIdleTimeout = TimeSpan.FromMinutes(value.Value);
             }
         }
     }

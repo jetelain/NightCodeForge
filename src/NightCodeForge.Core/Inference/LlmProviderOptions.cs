@@ -42,7 +42,7 @@ public class LlmProviderOptions : ILlmProviderOptions
 
     public const int DefaultContextWindowTokens = 131072;
     public const int DefaultMaxOutputTokens = 16384;
-    public const int DefaultStreamIdleTimeoutSeconds = 300;
+    public const double DefaultStreamIdleTimeoutMinutes = 5;
 
     /// <summary>
     /// Baseline context window in tokens (used as fallback when provider discovery is unavailable).
@@ -55,9 +55,9 @@ public class LlmProviderOptions : ILlmProviderOptions
     public int MaxOutputTokens { get; set; } = DefaultMaxOutputTokens;
 
     /// <summary>
-    /// Maximum silence interval in seconds between consecutive streamed chunks once generation has started (default: 300s / 5 minutes).
+    /// Maximum silence interval in minutes between consecutive streamed chunks once generation has started (default: 5 minutes).
     /// </summary>
-    public int StreamIdleTimeoutSeconds { get; set; } = DefaultStreamIdleTimeoutSeconds;
+    public double StreamIdleTimeoutMinutes { get; set; } = DefaultStreamIdleTimeoutMinutes;
 
     /// <summary>
     /// Resolves the effective base endpoint URI based on the active provider.

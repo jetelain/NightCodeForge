@@ -66,6 +66,45 @@ public static class ModelCalibratedTokenEstimator
     }
 
     /// <summary>
+    /// Estimates the token count of a <see cref="FunctionCallContent"/> item (function name and argument keys/values).
+    /// </summary>
+    public static int EstimateFunctionCallTokens(FunctionCallContent? fcc, string? modelId = null) =>
+        EstimateFunctionCallTokens(fcc, Resolve(modelId));
+
+    /// <summary>
+    /// Estimates the token count of a <see cref="FunctionCallContent"/> item (function name and argument keys/values) using the provided <see cref="HeuristicTokenEstimator"/>.
+    /// </summary>
+    public static int EstimateFunctionCallTokens(FunctionCallContent? fcc, HeuristicTokenEstimator estimator)
+    {
+        ArgumentNullException.ThrowIfNull(estimator);
+        if (fcc == null)
+        {
+            return 0;
+        }
+
+        int totalTokens = 0;
+        if (!string.IsNullOrEmpty(fcc.Name))
+        {
+            totalTokens += EstimateTextTokens(fcc.Name, estimator);
+        }
+
+        if (fcc.Arguments != null && fcc.Arguments.Count > 0)
+        {
+            foreach (var (k, v) in fcc.Arguments)
+            {
+                totalTokens += EstimateTextTokens(k, estimator);
+                if (v != null)
+                {
+                    var valStr = FormatContentPayloadForEstimation(v);
+                    totalTokens += EstimateTextTokens(valStr, estimator);
+                }
+            }
+        }
+
+        return totalTokens;
+    }
+
+    /// <summary>
     /// Estimates the token count of a single <see cref="ChatMessage"/> including framing, text, reasoning, tool calls, and tool results.
     /// </summary>
     public static int EstimateMessageTokens(ChatMessage? message, string? modelId = null) =>
@@ -97,22 +136,7 @@ public static class ModelCalibratedTokenEstimator
                         totalTokens += EstimateTextTokens(trc.Text, estimator);
                         break;
                     case FunctionCallContent fcc:
-                        if (!string.IsNullOrEmpty(fcc.Name))
-                        {
-                            totalTokens += EstimateTextTokens(fcc.Name, estimator);
-                        }
-                        if (fcc.Arguments != null && fcc.Arguments.Count > 0)
-                        {
-                            foreach (var (k, v) in fcc.Arguments)
-                            {
-                                totalTokens += EstimateTextTokens(k, estimator);
-                                if (v != null)
-                                {
-                                    var valStr = v is string s ? s : SafeSerialize(v);
-                                    totalTokens += EstimateTextTokens(valStr, estimator);
-                                }
-                            }
-                        }
+                        totalTokens += EstimateFunctionCallTokens(fcc, estimator);
                         break;
                     case FunctionResultContent frc:
                         if (!string.IsNullOrEmpty(frc.CallId))
@@ -121,7 +145,7 @@ public static class ModelCalibratedTokenEstimator
                         }
                         if (frc.Result != null)
                         {
-                            var resStr = frc.Result is string s ? s : SafeSerialize(frc.Result);
+                            var resStr = FormatContentPayloadForEstimation(frc.Result);
                             totalTokens += EstimateTextTokens(resStr, estimator);
                         }
                         break;
@@ -274,6 +298,21 @@ public static class ModelCalibratedTokenEstimator
         return bytes;
     }
 
+    private static string FormatContentPayloadForEstimation(object value)
+    {
+        if (value is string s)
+        {
+            return s;
+        }
+
+        if (value is JsonElement je)
+        {
+            return je.ValueKind == JsonValueKind.String ? (je.GetString() ?? string.Empty) : je.GetRawText();
+        }
+
+        return SafeSerialize(value);
+    }
+
     private static string SafeSerialize(object value)
     {
         try
@@ -282,6 +321,7 @@ public static class ModelCalibratedTokenEstimator
         }
         catch (Exception)
         {
+            // Justification: Fallback to ToString() when diagnostic or tool payload cannot be serialized as JSON.
             return value.ToString() ?? string.Empty;
         }
     }

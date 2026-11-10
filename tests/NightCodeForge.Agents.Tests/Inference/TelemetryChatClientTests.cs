@@ -660,4 +660,157 @@ public class TelemetryChatClientTests
 
         Assert.Equal(effort, TelemetryChatClient.ResolveThinkingEffort(options));
     }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WithFunctionCallContent_IncrementsTokensAndPopulatesPreview()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Write file") };
+
+        async IAsyncEnumerable<ChatResponseUpdate> FakeToolStream()
+        {
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextReasoningContent("Planning file update. ")]
+            };
+            await Task.Yield();
+
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new FunctionCallContent(
+                        "call_1",
+                        "write_file",
+                        new Dictionary<string, object?>
+                        {
+                            ["path"] = "src/Service.cs",
+                            ["content"] = "public class Service { public void Execute() { } }"
+                        })
+                ]
+            };
+        }
+
+        _innerClient
+            .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Returns(FakeToolStream());
+
+        LlmCallRecord? completedRecord = null;
+        var progressUpdates = new List<(int Tokens, double Duration, double Tps, int Reasoning)>();
+
+        _telemetryService
+            .Setup(t => t.UpdateLlmCallProgress(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<double>(), It.IsAny<double>(), It.IsAny<int>()))
+            .Callback<string, int, double, double, int>((id, tokens, dur, tps, reasoning) =>
+            {
+                progressUpdates.Add((tokens, dur, tps, reasoning));
+            });
+
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await foreach (var _ in _client.GetStreamingResponseAsync(messages)) { }
+
+        Assert.Equal(2, progressUpdates.Count);
+        Assert.True(progressUpdates[1].Tokens > progressUpdates[0].Tokens, "Tool call chunk must increment live token count beyond reasoning tokens");
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Completed, completedRecord.Status);
+        Assert.True(completedRecord.CompletionTokens > completedRecord.ReasoningTokens);
+        Assert.Contains("[Tool Call: write_file]", completedRecord.CompletionPreview);
+        Assert.Contains("path=src/Service.cs", completedRecord.CompletionPreview);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WithFunctionCallContent_IncludesToolTokensAndPreview()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Run tests") };
+        var assistantMsg = new ChatMessage(ChatRole.Assistant, new List<AIContent>
+        {
+            new TextReasoningContent("Running unit test suite."),
+            new FunctionCallContent(
+                "call_1",
+                "run_command",
+                new Dictionary<string, object?>
+                {
+                    ["command"] = "dotnet test --no-build"
+                })
+        });
+
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ChatResponse(assistantMsg));
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await _client.GetResponseAsync(messages);
+
+        Assert.NotNull(completedRecord);
+        Assert.True(completedRecord.ReasoningTokens > 0);
+        Assert.True(completedRecord.CompletionTokens > completedRecord.ReasoningTokens, "CompletionTokens must include FunctionCallContent tokens");
+        Assert.Contains("[Reasoning]", completedRecord.CompletionPreview);
+        Assert.Contains("[Tool Call: run_command]", completedRecord.CompletionPreview);
+        Assert.Contains("command=dotnet test --no-build", completedRecord.CompletionPreview);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_WithComplexFunctionCallArguments_FormatsJsonElementsAndCollectionsCleanly()
+    {
+        using var jsonDoc = System.Text.Json.JsonDocument.Parse("""{"target":"src/App.cs","flags":["--fast","--strict"]}""");
+        var targetElem = jsonDoc.RootElement.GetProperty("target");
+        var flagsElem = jsonDoc.RootElement.GetProperty("flags");
+
+        var assistantCallMsg = new ChatMessage(ChatRole.Assistant, new List<AIContent>
+        {
+            new FunctionCallContent(
+                "call_complex",
+                "analyze_code",
+                new Dictionary<string, object?>
+                {
+                    ["target"] = targetElem,
+                    ["flags"] = flagsElem,
+                    ["tags"] = new[] { "lint", "security" },
+                    ["line"] = 42
+                })
+        });
+
+        var promptMessages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Analyze App.cs"),
+            assistantCallMsg
+        };
+
+        // 1. Verify ExtractPromptPreview formats complex tool call arguments cleanly without Type names
+        var promptPreview = TelemetryChatClient.ExtractPromptPreview(promptMessages);
+        Assert.Contains("[Tool Call: analyze_code]", promptPreview);
+        Assert.Contains("target=src/App.cs", promptPreview);
+        Assert.Contains("""flags=["--fast","--strict"]""", promptPreview);
+        Assert.Contains("""tags=["lint","security"]""", promptPreview);
+        Assert.Contains("line=42", promptPreview);
+        Assert.DoesNotContain("System.String[]", promptPreview);
+
+        // 2. Verify CompletionPreview in GetResponseAsync formats complex tool call arguments cleanly
+        _innerClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ChatResponse(assistantCallMsg));
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        await _client.GetResponseAsync([new(ChatRole.User, "Analyze App.cs")]);
+
+        Assert.NotNull(completedRecord);
+        Assert.NotNull(completedRecord.CompletionPreview);
+        Assert.Contains("[Tool Call: analyze_code]", completedRecord.CompletionPreview);
+        Assert.Contains("target=src/App.cs", completedRecord.CompletionPreview);
+        Assert.Contains("""flags=["--fast","--strict"]""", completedRecord.CompletionPreview);
+        Assert.Contains("""tags=["lint","security"]""", completedRecord.CompletionPreview);
+        Assert.Contains("line=42", completedRecord.CompletionPreview);
+        Assert.DoesNotContain("System.String[]", completedRecord.CompletionPreview);
+    }
 }

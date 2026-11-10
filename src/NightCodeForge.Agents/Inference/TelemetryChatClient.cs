@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Compaction;
@@ -60,7 +61,7 @@ public class TelemetryChatClient : DelegatingChatClient
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _firstTokenTimeout = firstTokenTimeout > TimeSpan.Zero ? firstTokenTimeout : TimeSpan.FromMinutes(10);
-        _streamIdleTimeout = streamIdleTimeout > TimeSpan.Zero ? streamIdleTimeout : TimeSpan.FromSeconds(300);
+        _streamIdleTimeout = streamIdleTimeout > TimeSpan.Zero ? streamIdleTimeout : TimeSpan.FromMinutes(LlmProviderOptions.DefaultStreamIdleTimeoutMinutes);
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -368,6 +369,10 @@ public class TelemetryChatClient : DelegatingChatClient
                         {
                             ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                         }
+                        else if (content is FunctionCallContent fcc)
+                        {
+                            ProcessFunctionCallChunk(fcc, ref tokenCount, textBuffer, estimator);
+                        }
                         else if (content is UsageContent uc && uc.Details != null)
                         {
                             if (uc.Details.InputTokenCount.HasValue && uc.Details.InputTokenCount.Value > 0)
@@ -616,9 +621,7 @@ public class TelemetryChatClient : DelegatingChatClient
             var toolCall = message.Contents.OfType<FunctionCallContent>().LastOrDefault();
             if (toolCall != null)
             {
-                var argsStr = toolCall.Arguments != null && toolCall.Arguments.Count > 0
-                    ? string.Join(", ", toolCall.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
-                    : string.Empty;
+                var argsStr = FormatFunctionCallArguments(toolCall.Arguments);
                 var textPart = !string.IsNullOrWhiteSpace(message.Text) ? $"{message.Text.Trim()} " : string.Empty;
                 return string.IsNullOrWhiteSpace(argsStr)
                     ? $"{textPart}[Tool Call: {toolCall.Name}]".Trim()
@@ -666,6 +669,10 @@ public class TelemetryChatClient : DelegatingChatClient
                         {
                             ProcessTextChunk(text.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                         }
+                        else if (content is FunctionCallContent fcc)
+                        {
+                            ProcessFunctionCallChunk(fcc, ref tokenCount, textBuffer, estimator);
+                        }
                     }
                 }
                 else if (!string.IsNullOrEmpty(message.Text))
@@ -682,6 +689,76 @@ public class TelemetryChatClient : DelegatingChatClient
         var preview = BuildCombinedPreview(reasoningBuffer, textBuffer);
         var textTokens = Math.Max(0, tokenCount - reasoningTokens);
         return (preview, reasoningTokens, textTokens);
+    }
+
+    private static void ProcessFunctionCallChunk(
+        FunctionCallContent fcc,
+        ref int tokenCount,
+        StringBuilder textBuffer,
+        HeuristicTokenEstimator estimator)
+    {
+        var tokens = ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(fcc, estimator);
+        tokenCount += tokens;
+
+        if (textBuffer.Length < 1000)
+        {
+            var argsStr = FormatFunctionCallArguments(fcc.Arguments);
+            var formatted = !string.IsNullOrEmpty(fcc.Name)
+                ? (string.IsNullOrWhiteSpace(argsStr) ? $"[Tool Call: {fcc.Name}]" : $"[Tool Call: {fcc.Name}] {argsStr}")
+                : argsStr;
+
+            if (!string.IsNullOrEmpty(formatted))
+            {
+                if (textBuffer.Length > 0 && !char.IsWhiteSpace(textBuffer[^1]))
+                {
+                    textBuffer.Append(' ');
+                }
+                textBuffer.Append(formatted);
+            }
+        }
+    }
+
+    private static string FormatFunctionCallArguments(IDictionary<string, object?>? arguments)
+    {
+        if (arguments == null || arguments.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(", ", arguments.Select(kv => $"{kv.Key}={FormatFunctionCallArgumentValue(kv.Value)}"));
+    }
+
+    private static string FormatFunctionCallArgumentValue(object? value)
+    {
+        if (value == null)
+        {
+            return string.Empty;
+        }
+
+        if (value is string s)
+        {
+            return s;
+        }
+
+        if (value is JsonElement je)
+        {
+            return je.ValueKind == JsonValueKind.String ? (je.GetString() ?? string.Empty) : je.GetRawText();
+        }
+
+        if (value.GetType().IsPrimitive || value is decimal)
+        {
+            return value.ToString() ?? string.Empty;
+        }
+
+        try
+        {
+            return JsonSerializer.Serialize(value);
+        }
+        catch (Exception)
+        {
+            // Justification: Fallback to ToString() when diagnostic preview argument contains a non-JSON-serializable value.
+            return value.ToString() ?? string.Empty;
+        }
     }
 
     private static void ProcessTextChunk(

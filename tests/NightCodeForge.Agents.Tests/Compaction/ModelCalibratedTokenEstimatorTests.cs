@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Compaction;
@@ -91,6 +92,41 @@ public class ModelCalibratedTokenEstimatorTests
         var emptyMsg = new ChatMessage(ChatRole.Assistant, Array.Empty<AIContent>());
         Assert.Equal(ModelCalibratedTokenEstimator.PerMessageFramingTokens,
             ModelCalibratedTokenEstimator.EstimateMessageTokens(emptyMsg, HeuristicTokenEstimator.Default));
+    }
+
+    [Fact]
+    public void EstimateFunctionCallTokens_HandlesNullEmptyAndJsonElementArguments()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(null, (HeuristicTokenEstimator)null!));
+
+        Assert.Equal(0, ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(null, HeuristicTokenEstimator.Qwen));
+        Assert.Equal(0, ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(null, "Qwen3.8-27B"));
+
+        var nameOnly = new FunctionCallContent("call_1", "get_status", null);
+        int nameTokens = ModelCalibratedTokenEstimator.EstimateTextTokens("get_status", HeuristicTokenEstimator.Qwen);
+        Assert.Equal(nameTokens, ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(nameOnly, HeuristicTokenEstimator.Qwen));
+        Assert.Equal(nameTokens, ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(nameOnly, "Qwen3.8-27B"));
+
+        using var jsonDoc = JsonDocument.Parse("""{"path":"src/Program.cs","nested":{"line":42}}""");
+        var pathElement = jsonDoc.RootElement.GetProperty("path");
+        var nestedElement = jsonDoc.RootElement.GetProperty("nested");
+
+        var callWithJsonElements = new FunctionCallContent("call_2", "edit_file", new Dictionary<string, object?>
+        {
+            ["path"] = pathElement,
+            ["nested"] = nestedElement,
+            ["nullVal"] = null
+        });
+
+        int expectedJsonTokens = ModelCalibratedTokenEstimator.EstimateTextTokens("edit_file", HeuristicTokenEstimator.Qwen)
+            + ModelCalibratedTokenEstimator.EstimateTextTokens("path", HeuristicTokenEstimator.Qwen)
+            + ModelCalibratedTokenEstimator.EstimateTextTokens("src/Program.cs", HeuristicTokenEstimator.Qwen)
+            + ModelCalibratedTokenEstimator.EstimateTextTokens("nested", HeuristicTokenEstimator.Qwen)
+            + ModelCalibratedTokenEstimator.EstimateTextTokens("""{"line":42}""", HeuristicTokenEstimator.Qwen)
+            + ModelCalibratedTokenEstimator.EstimateTextTokens("nullVal", HeuristicTokenEstimator.Qwen);
+
+        Assert.Equal(expectedJsonTokens, ModelCalibratedTokenEstimator.EstimateFunctionCallTokens(callWithJsonElements, HeuristicTokenEstimator.Qwen));
     }
 
     [Fact]

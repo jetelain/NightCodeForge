@@ -103,7 +103,7 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
         var firstTokenTimeout = _retryOptions.Value.PerAttemptTimeout ?? TimeSpan.FromMinutes(timeoutMinutes);
         var streamIdleTimeout = _retryOptions.Value.IsStreamIdleTimeoutExplicitlySet && _retryOptions.Value.StreamIdleTimeout > TimeSpan.Zero
             ? _retryOptions.Value.StreamIdleTimeout
-            : TimeSpan.FromSeconds(options.StreamIdleTimeoutSeconds > 0 ? options.StreamIdleTimeoutSeconds : LlmProviderOptions.DefaultStreamIdleTimeoutSeconds);
+            : TimeSpan.FromMinutes(options.StreamIdleTimeoutMinutes > 0 ? options.StreamIdleTimeoutMinutes : LlmProviderOptions.DefaultStreamIdleTimeoutMinutes);
 
         var telemetryClient = new TelemetryChatClient(
             rawClient,
