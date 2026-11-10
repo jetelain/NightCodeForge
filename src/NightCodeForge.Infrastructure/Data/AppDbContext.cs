@@ -435,6 +435,11 @@ public class AppDbContext : DbContext
     public const string AddWorkspaceEmojiAndColorCodeMigrationId = "20261102181531_AddWorkspaceEmojiAndColorCode";
 
     /// <summary>
+    /// Migration identifier for agent profile max output tokens.
+    /// </summary>
+    public const string AddAgentProfileMaxOutputTokensMigrationId = "20261110074050_AddAgentProfileMaxOutputTokens";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -573,6 +578,17 @@ VALUES ('" + AddWorkspaceGlobalSkillsSettingsMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddWorkspaceEmojiAndColorCodeMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('AgentProfiles') WHERE name = 'MaxOutputTokens';";
+                var hasMaxOutputTokensColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasMaxOutputTokensColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddAgentProfileMaxOutputTokensMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

@@ -174,5 +174,43 @@ public class OpenAiCapabilityResolverTests
 
         Assert.Equal("low", effort);
     }
+
+    [Fact]
+    public void CreateChatOptions_ResolvesMaxOutputTokens_PrecedenceChain()
+    {
+        var options = new LlmProviderOptions
+        {
+            MaxOutputTokens = 16384,
+            OpenAiCompatible = new()
+            {
+                AllowedModels =
+                [
+                    new OpenAiAllowedModel { ModelId = "allowed-model", MaxOutputTokens = 8192 }
+                ]
+            },
+            ModelProfiles = new Dictionary<string, ModelCapabilityProfile>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["profile-model"] = new() { MaxOutputTokens = 4096 }
+            }
+        };
+
+        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+
+        // 1. Fallback to LlmProviderOptions
+        var chatOptsFallback = resolver.CreateChatOptions(new AgentProfile { ModelName = "unknown-model" });
+        Assert.Equal(16384, chatOptsFallback.MaxOutputTokens);
+
+        // 2. OpenAiAllowedModel
+        var chatOptsAllowed = resolver.CreateChatOptions(new AgentProfile { ModelName = "allowed-model" });
+        Assert.Equal(8192, chatOptsAllowed.MaxOutputTokens);
+
+        // 3. ModelCapabilityProfile
+        var chatOptsProfile = resolver.CreateChatOptions(new AgentProfile { ModelName = "profile-model" });
+        Assert.Equal(4096, chatOptsProfile.MaxOutputTokens);
+
+        // 4. Override by AgentProfile.MaxOutputTokens
+        var chatOptsOverride = resolver.CreateChatOptions(new AgentProfile { ModelName = "allowed-model", MaxOutputTokens = 2048 });
+        Assert.Equal(2048, chatOptsOverride.MaxOutputTokens);
+    }
 }
 

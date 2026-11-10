@@ -87,6 +87,11 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        bool hasPerAttemptTimeout = _options.PerAttemptTimeout.HasValue &&
+                                    _options.PerAttemptTimeout.Value > TimeSpan.Zero &&
+                                    _options.PerAttemptTimeout.Value != Timeout.InfiniteTimeSpan;
+        StreamingCancellationScope.CurrentState?.RecordHandlerEntered(hasPerAttemptTimeout);
+
         byte[]? contentBytes = null;
         if (request.Content != null)
         {
@@ -115,10 +120,6 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
             CancellationTokenSource? linkedCts = null;
             CancellationToken attemptToken;
 
-            bool hasPerAttemptTimeout = _options.PerAttemptTimeout.HasValue &&
-                                        _options.PerAttemptTimeout.Value > TimeSpan.Zero &&
-                                        _options.PerAttemptTimeout.Value != Timeout.InfiniteTimeSpan;
-
             if (hasPerAttemptTimeout)
             {
                 attemptTimeoutCts = new CancellationTokenSource(_options.PerAttemptTimeout!.Value, _timeProvider);
@@ -139,7 +140,8 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
             try
             {
-                var response = await base.SendAsync(currentRequest, attemptToken);
+                StreamingCancellationScope.CurrentState?.RecordAttemptStarted(_timeProvider.GetTimestamp(), hasPerAttemptTimeout);
+                var response = await base.SendAsync(currentRequest, attemptToken).WaitAsync(attemptToken);
                 linkedCts?.Dispose();
                 attemptTimeoutCts?.Dispose();
 
@@ -203,6 +205,7 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                         response.Dispose();
                         currentRequest.Dispose();
 
+                        StreamingCancellationScope.CurrentState?.RecordRetryBackoffStarted();
                         await NotifyRetryAsync(request, notifyContext, cancellationToken);
                         await WaitBackoffAsync(delay, cancellationToken);
                         continue;
@@ -218,6 +221,16 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
 
                     TryEnrichReasonPhrase(response, responseBody);
                     return response;
+                }
+
+                StreamingCancellationScope.CurrentState?.RecordHeadersReceived();
+
+                if (response.Content is not null and not CancellationAwareHttpContent)
+                {
+                    var streamToken = StreamingCancellationScope.Current.CanBeCanceled
+                        ? StreamingCancellationScope.Current
+                        : cancellationToken;
+                    response.Content = new CancellationAwareHttpContent(response.Content, streamToken);
                 }
 
                 return response;
@@ -281,6 +294,7 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                             errorMsg,
                             null);
 
+                        StreamingCancellationScope.CurrentState?.RecordRetryBackoffStarted();
                         await NotifyRetryAsync(request, notifyContext, cancellationToken);
                         await WaitBackoffAsync(delay, cancellationToken);
                         continue;
@@ -332,6 +346,7 @@ public class TransientHttpErrorRetryHandler : DelegatingHandler
                             errorMsg,
                             null);
 
+                        StreamingCancellationScope.CurrentState?.RecordRetryBackoffStarted();
                         await NotifyRetryAsync(request, notifyContext, cancellationToken);
                         await WaitBackoffAsync(delay, cancellationToken);
                         continue;

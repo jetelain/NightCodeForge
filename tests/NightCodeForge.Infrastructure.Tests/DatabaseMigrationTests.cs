@@ -83,7 +83,7 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(7, historyRows.Count);
+        Assert.Equal(8, historyRows.Count);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.InitialCreateMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileContextWindowTokensMigrationId);
@@ -91,6 +91,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddIsDeferredByPauseToForgeTaskMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddWorkspaceGlobalSkillsSettingsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddWorkspaceEmojiAndColorCodeMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileMaxOutputTokensMigrationId);
     }
 
     [Fact]
@@ -252,7 +253,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Equal(7, appliedMigrations.Count);
+        Assert.Equal(8, appliedMigrations.Count);
         Assert.Contains(AppDbContext.InitialCreateMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddAgentProfileContextWindowTokensMigrationId, appliedMigrations);
@@ -260,6 +261,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Contains(AppDbContext.AddIsDeferredByPauseToForgeTaskMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddWorkspaceGlobalSkillsSettingsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddWorkspaceEmojiAndColorCodeMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddAgentProfileMaxOutputTokensMigrationId, appliedMigrations);
     }
 
     [Fact]

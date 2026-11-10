@@ -1004,7 +1004,12 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         var options = new ChatOptions
         {
             ModelId = _options.SummarizerModelId,
-            MaxOutputTokens = Math.Min(8192, Math.Max(1024, (int)(_options.ReserveTokens * 0.8)))
+            MaxOutputTokens = Math.Min(8192, Math.Max(1024, (int)(_options.ReserveTokens * 0.8))),
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["think"] = false,
+                ["reasoning_effort"] = "low"
+            }
         };
 
         var response = await _summarizerClient!.GetResponseAsync(messages, options, cancellationToken);

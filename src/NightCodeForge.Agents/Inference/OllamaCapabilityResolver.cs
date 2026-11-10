@@ -163,7 +163,8 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
         var chatOptions = new ChatOptions
         {
             ModelId = effectiveModel,
-            Temperature = (float?)profile?.Temperature
+            Temperature = (float?)profile?.Temperature,
+            MaxOutputTokens = ResolveMaxOutputTokens(profile, effectiveModel)
         };
 
         if (!string.IsNullOrWhiteSpace(effectiveModel)
@@ -225,4 +226,25 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
         ThinkingEffort.CustomBudget => "high",
         _ => null
     };
+
+    private int? ResolveMaxOutputTokens(AgentProfile? profile, string? effectiveModel)
+    {
+        if (profile?.MaxOutputTokens is { } profileTokens && profileTokens > 0)
+        {
+            return profileTokens;
+        }
+
+        var staticProfile = ModelCapabilityResolver.FindProfile(_options.Value, effectiveModel);
+        if (staticProfile?.MaxOutputTokens is { } modelTokens && modelTokens > 0)
+        {
+            return modelTokens;
+        }
+
+        if (_options.Value.MaxOutputTokens > 0)
+        {
+            return _options.Value.MaxOutputTokens;
+        }
+
+        return LlmProviderOptions.DefaultMaxOutputTokens;
+    }
 }

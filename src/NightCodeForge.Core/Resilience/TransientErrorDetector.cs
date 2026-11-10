@@ -29,6 +29,12 @@ public static class TransientErrorDetector
             return true;
         }
 
+        if (HttpErrorDetailHelper.TryGetStreamTimeoutDiagnostics(ex, out var streamDiag) &&
+            streamDiag is { Phase: StreamTimeoutPhase.MidStreamConnectionClosed })
+        {
+            return true;
+        }
+
         // Unpack aggregate exceptions
         if (ex is AggregateException agg)
         {
@@ -198,6 +204,21 @@ public static class TransientErrorDetector
             {
                 hasTimeout = true;
             }
+            else if (current is LlmStreamTimeoutException streamTimeoutEx &&
+                     streamTimeoutEx.Diagnostics.Phase is StreamTimeoutPhase.PreHeaderPrefill
+                         or StreamTimeoutPhase.FirstTokenPrefill
+                         or StreamTimeoutPhase.MidStreamIdleStall)
+            {
+                hasTimeout = true;
+            }
+            else if (current.Data.Contains(StreamTimeoutDiagnostics.DataKey) &&
+                     current.Data[StreamTimeoutDiagnostics.DataKey] is StreamTimeoutDiagnostics diag &&
+                     diag.Phase is StreamTimeoutPhase.PreHeaderPrefill
+                         or StreamTimeoutPhase.FirstTokenPrefill
+                         or StreamTimeoutPhase.MidStreamIdleStall)
+            {
+                hasTimeout = true;
+            }
 
             if (current is AggregateException agg)
             {
@@ -231,7 +252,7 @@ public static class TransientErrorDetector
 
             if (current is OperationCanceledException or TaskCanceledException)
             {
-                if (!IsHttpTimeout(current))
+                if (!IsHttpTimeout(ex) && !HttpErrorDetailHelper.TryGetStreamTimeoutDiagnostics(ex, out _))
                 {
                     return true;
                 }

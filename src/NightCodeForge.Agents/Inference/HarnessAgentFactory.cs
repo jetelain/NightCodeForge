@@ -115,6 +115,10 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
         }
 
         var chatOptions = _capabilityResolver.CreateChatOptions(profile, effectiveModel);
+        if (profile.MaxOutputTokens is { } profileMax && profileMax > 0)
+        {
+            chatOptions.MaxOutputTokens = profileMax;
+        }
         chatOptions.Tools = request.Tools;
 
         if (request.GrammarFlags is { GuidedGrammarDecoding: true } grammarFlags)
@@ -158,6 +162,7 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             Name = request.AgentName,
             HarnessInstructions = request.Instructions,
             ChatOptions = chatOptions,
+            MaxOutputTokens = chatOptions.MaxOutputTokens > 0 ? chatOptions.MaxOutputTokens : null,
             MaximumIterationsPerRequest = request.MaxTurns,
             CompactionStrategy = compactionStrategy,
             DisableTodoProvider = true,

@@ -1,5 +1,6 @@
 namespace NightCodeForge.Core.Resilience;
 
+using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -119,6 +120,11 @@ public static class HttpErrorDetailHelper
 
         try
         {
+            if (TryGetStreamTimeoutDiagnostics(ex, out var diagnostics) && diagnostics != null)
+            {
+                return FormatStreamTimeoutError(diagnostics);
+            }
+
             if (TransientErrorDetector.IsHttpTimeout(ex))
             {
                 return FormatTimeoutError(ex);
@@ -186,6 +192,64 @@ public static class HttpErrorDetailHelper
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Attempts to extract structured stream timeout diagnostics from the exception chain.
+    /// </summary>
+    public static bool TryGetStreamTimeoutDiagnostics(Exception? ex, out StreamTimeoutDiagnostics? diagnostics)
+    {
+        diagnostics = null;
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            if (current is LlmStreamTimeoutException streamEx)
+            {
+                diagnostics = streamEx.Diagnostics;
+                return true;
+            }
+
+            if (current.Data.Contains(StreamTimeoutDiagnostics.DataKey) &&
+                current.Data[StreamTimeoutDiagnostics.DataKey] is StreamTimeoutDiagnostics diag)
+            {
+                diagnostics = diag;
+                return true;
+            }
+
+            if (current is AggregateException agg)
+            {
+                foreach (var inner in agg.InnerExceptions)
+                {
+                    if (TryGetStreamTimeoutDiagnostics(inner, out diagnostics))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public static string FormatStreamTimeoutError(StreamTimeoutDiagnostics diagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        if (diagnostics.Phase == StreamTimeoutPhase.MidStreamConnectionClosed && diagnostics.GeneratedTokens > 0)
+        {
+            return string.Create(CultureInfo.InvariantCulture,
+                $"[STREAM ABORTED] LLM stream closed prematurely by upstream server/proxy after {diagnostics.ElapsedSeconds:F1}s while actively generating ({diagnostics.GeneratedTokens:N0} tokens generated at {diagnostics.TokensPerSecond:F1} tok/s). Check upstream reverse-proxy timeout settings (e.g., OllamaRouter / Nginx proxy_read_timeout).");
+        }
+
+        if (diagnostics.Phase == StreamTimeoutPhase.MidStreamIdleStall && diagnostics.GeneratedTokens > 0)
+        {
+            var idleTimeout = diagnostics.ConfiguredTimeoutSeconds ?? 0;
+            return string.Create(CultureInfo.InvariantCulture,
+                $"[TIMEOUT] LLM stream stalled after {diagnostics.ElapsedSeconds:F1}s ({diagnostics.GeneratedTokens:N0} tokens generated at {diagnostics.TokensPerSecond:F1} tok/s): no tokens received for {idleTimeout:F0}s.");
+        }
+
+        var prefillTimeout = diagnostics.ConfiguredTimeoutSeconds ?? 0;
+        return string.Create(CultureInfo.InvariantCulture,
+            $"[TIMEOUT] LLM request aborted by client after {diagnostics.ElapsedSeconds:F1}s prefill timeout (0 tokens received; configured prefill timeout: {prefillTimeout:F0}s). The prompt context may be too large (cold KV cache) or the inference server queue is saturated.");
     }
 
     private static string FormatTimeoutError(Exception ex)

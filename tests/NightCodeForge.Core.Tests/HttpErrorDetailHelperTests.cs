@@ -213,4 +213,79 @@ public class HttpErrorDetailHelperTests
         Assert.Equal("LLM inference request timed out after 30 seconds. The prompt context may be too large or the inference server is overloaded.", formatted);
         Assert.DoesNotContain("retried once", formatted);
     }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenFirstTokenPrefillTimeout_FormatsPrefillTimeoutMessage()
+    {
+        var ex = new LlmStreamTimeoutException(
+            "timeout",
+            new TimeoutException(),
+            StreamTimeoutPhase.FirstTokenPrefill,
+            elapsedSeconds: 600.0,
+            configuredTimeoutSeconds: 600.0,
+            generatedTokens: 0,
+            tokensPerSecond: 0.0);
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+
+        Assert.Equal("[TIMEOUT] LLM request aborted by client after 600.0s prefill timeout (0 tokens received; configured prefill timeout: 600s). The prompt context may be too large (cold KV cache) or the inference server queue is saturated.", formatted);
+    }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenMidStreamIdleStall_FormatsIdleStallMessage()
+    {
+        var ex = new LlmStreamTimeoutException(
+            "timeout",
+            new TimeoutException(),
+            StreamTimeoutPhase.MidStreamIdleStall,
+            elapsedSeconds: 857.1,
+            configuredTimeoutSeconds: 300.0,
+            generatedTokens: 15000,
+            tokensPerSecond: 17.5);
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+
+        Assert.Equal("[TIMEOUT] LLM stream stalled after 857.1s (15,000 tokens generated at 17.5 tok/s): no tokens received for 300s.", formatted);
+    }
+
+    [Fact]
+    public void FormatLlmInvocationError_WhenMidStreamConnectionClosed_FormatsStreamAbortedMessage()
+    {
+        var inner = new HttpRequestException("The connection was closed prematurely.");
+        inner.Data[StreamTimeoutDiagnostics.DataKey] = new StreamTimeoutDiagnostics
+        {
+            Phase = StreamTimeoutPhase.MidStreamConnectionClosed,
+            ElapsedSeconds = 666.7,
+            ConfiguredTimeoutSeconds = 300.0,
+            GeneratedTokens = 12000,
+            TokensPerSecond = 18.0
+        };
+
+        var formatted = HttpErrorDetailHelper.FormatLlmInvocationError(inner);
+
+        Assert.Equal("[STREAM ABORTED] LLM stream closed prematurely by upstream server/proxy after 666.7s while actively generating (12,000 tokens generated at 18.0 tok/s). Check upstream reverse-proxy timeout settings (e.g., OllamaRouter / Nginx proxy_read_timeout).", formatted);
+    }
+
+    [Theory]
+    [InlineData(StreamTimeoutPhase.PreHeaderPrefill, true, true)]
+    [InlineData(StreamTimeoutPhase.FirstTokenPrefill, true, true)]
+    [InlineData(StreamTimeoutPhase.MidStreamIdleStall, true, true)]
+    [InlineData(StreamTimeoutPhase.MidStreamConnectionClosed, false, true)]
+    public void TransientErrorDetector_RecognizesAllStreamTimeoutPhases_WithoutRequiringInnerTimeoutException(
+        StreamTimeoutPhase phase,
+        bool expectedIsHttpTimeout,
+        bool expectedIsTransient)
+    {
+        var ex = new LlmStreamTimeoutException(
+            "stream failure",
+            innerException: new OperationCanceledException("aborted"),
+            phase: phase,
+            elapsedSeconds: 120.0,
+            configuredTimeoutSeconds: 120.0,
+            generatedTokens: phase is StreamTimeoutPhase.PreHeaderPrefill or StreamTimeoutPhase.FirstTokenPrefill ? 0 : 500,
+            tokensPerSecond: 15.0);
+
+        Assert.Equal(expectedIsHttpTimeout, TransientErrorDetector.IsHttpTimeout(ex));
+        Assert.Equal(expectedIsTransient, TransientErrorDetector.IsTransient(ex));
+    }
 }

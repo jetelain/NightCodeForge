@@ -67,7 +67,8 @@ public sealed class OpenAiCapabilityResolver : ILlmCapabilityResolver
         var chatOptions = new ChatOptions
         {
             ModelId = effectiveModel,
-            Temperature = (float?)profile?.Temperature
+            Temperature = (float?)profile?.Temperature,
+            MaxOutputTokens = ResolveMaxOutputTokens(profile, effectiveModel)
         };
 
         // If profile explicitly requests ThinkingEffort.None, do not emit reasoning properties
@@ -92,4 +93,34 @@ public sealed class OpenAiCapabilityResolver : ILlmCapabilityResolver
         ThinkingEffort.CustomBudget => "high",
         _ => null
     };
+
+    private int? ResolveMaxOutputTokens(AgentProfile? profile, string? effectiveModel)
+    {
+        if (profile?.MaxOutputTokens is { } profileTokens && profileTokens > 0)
+        {
+            return profileTokens;
+        }
+
+        if (!string.IsNullOrWhiteSpace(effectiveModel) && _options.Value.OpenAiCompatible?.AllowedModels is { Count: > 0 } allowed)
+        {
+            var match = allowed.FirstOrDefault(m => string.Equals(m.ModelId, effectiveModel, StringComparison.OrdinalIgnoreCase));
+            if (match?.MaxOutputTokens is { } allowedTokens && allowedTokens > 0)
+            {
+                return allowedTokens;
+            }
+        }
+
+        var staticProfile = ModelCapabilityResolver.FindProfile(_options.Value, effectiveModel);
+        if (staticProfile?.MaxOutputTokens is { } modelTokens && modelTokens > 0)
+        {
+            return modelTokens;
+        }
+
+        if (_options.Value.MaxOutputTokens > 0)
+        {
+            return _options.Value.MaxOutputTokens;
+        }
+
+        return LlmProviderOptions.DefaultMaxOutputTokens;
+    }
 }

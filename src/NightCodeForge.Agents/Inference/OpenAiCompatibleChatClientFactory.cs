@@ -102,21 +102,22 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
             ? options.OpenAiCompatible.ApiKey.Trim()
             : KnownDefaultModels.LocalAuthBypassKey;
 
+        // 3. Pipeline transport using shared SocketsHttpHandler and TransientHttpErrorRetryHandler
+        var effectiveRetryOptions = CreateEffectiveRetryOptions(sessionId);
+        var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
+        effectiveRetryOptions.PerAttemptTimeout ??= TimeSpan.FromMinutes(timeoutMinutes);
+
         var clientOptions = new OpenAIClientOptions
         {
             Endpoint = new Uri(options.EffectiveEndpoint.TrimEnd('/') + "/"),
-            RetryPolicy = new ClientRetryPolicy(maxRetries: 0)
+            RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+            NetworkTimeout = effectiveRetryOptions.PerAttemptTimeout.HasValue ? Timeout.InfiniteTimeSpan : TimeSpan.FromMinutes(timeoutMinutes)
         };
 
         if (!string.IsNullOrWhiteSpace(options.OpenAiCompatible?.OrganizationId))
         {
             clientOptions.OrganizationId = options.OpenAiCompatible.OrganizationId.Trim();
         }
-
-        // 3. Pipeline transport using shared SocketsHttpHandler and TransientHttpErrorRetryHandler
-        var effectiveRetryOptions = CreateEffectiveRetryOptions(sessionId);
-        var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
-        effectiveRetryOptions.PerAttemptTimeout ??= TimeSpan.FromMinutes(timeoutMinutes);
 
         var retryHandler = new TransientHttpErrorRetryHandler(
             socketsHandler,

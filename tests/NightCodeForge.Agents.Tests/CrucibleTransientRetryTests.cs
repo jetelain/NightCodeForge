@@ -531,6 +531,98 @@ public class CrucibleTransientRetryTests : IDisposable
         Assert.Equal("Implementation", capturedEvent.StageId);
     }
 
+    [Fact]
+    public async Task CrucibleAgent_WhenMidStreamTimeoutOccursAfterDanglingToolCall_SanitizesHistoryBeforeRetry()
+    {
+        int invocationCount = 0;
+        var streamer = new RecordingStreamer();
+        List<ChatMessage>? secondCallMessages = null;
+        List<ChatMessage>? retryReceivedMessages = null;
+
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            var callIndex = Interlocked.Increment(ref invocationCount);
+            if (callIndex == 1)
+            {
+                // Call 1 completes normally with a tool call so PerServiceCallChatHistoryPersistingChatClient
+                // persists the Assistant(FunctionCallContent) turn into chatHistory.
+                return EmitCompletedToolCallTurnAsync(ct);
+            }
+
+            if (callIndex == 2)
+            {
+                // Call 2 is the follow-up model call after tool execution, which aborts mid-stream before completion,
+                // leaving chatHistory with the dangling Assistant(FunctionCallContent) from Call 1.
+                secondCallMessages = messages.ToList();
+                return EmitPartialThenTimeoutAsync(ct);
+            }
+
+            retryReceivedMessages = messages.ToList();
+            return SuccessStream(ct);
+        });
+
+        static async IAsyncEnumerable<ChatResponseUpdate> EmitCompletedToolCallTurnAsync([EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            yield return new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call_dangling", "read", new Dictionary<string, object?> { ["path"] = "foo.txt" })]
+            };
+        }
+
+        static async IAsyncEnumerable<ChatResponseUpdate> EmitPartialThenTimeoutAsync([EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            yield return new ChatResponseUpdate { Contents = [new TextContent("Partial response before stall")] };
+            throw new LlmStreamTimeoutException(
+                "LLM stream timeout",
+                new TimeoutException(),
+                StreamTimeoutPhase.MidStreamIdleStall,
+                elapsedSeconds: 305.0,
+                configuredTimeoutSeconds: 300.0,
+                generatedTokens: 42,
+                tokensPerSecond: 12.5);
+        }
+
+        static async IAsyncEnumerable<ChatResponseUpdate> SuccessStream([EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            yield return new ChatResponseUpdate { Contents = [new TextContent("Done")] };
+        }
+
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            ActivityStreamer = streamer,
+            TaskRepository = new InMemoryTaskRepository()
+        }.Build();
+
+        var context = NewContext();
+        var result = await harness.RunStageAsync(context, CancellationToken.None);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(3, invocationCount);
+
+        // Verify Call 2 saw the tool call in flight
+        Assert.NotNull(secondCallMessages);
+        Assert.Contains(
+            secondCallMessages.SelectMany(m => m.Contents).OfType<FunctionCallContent>(),
+            fc => fc.CallId == "call_dangling");
+
+        // Verify Call 3 (the retry after Call 2 failed mid-stream) had the dangling tool call stripped by SanitizeInFlightTurns
+        Assert.NotNull(retryReceivedMessages);
+        var hasDanglingToolCall = retryReceivedMessages
+            .SelectMany(m => m.Contents)
+            .OfType<FunctionCallContent>()
+            .Any(fc => fc.CallId == "call_dangling");
+        Assert.False(hasDanglingToolCall, "Dangling in-flight tool call should have been stripped by SanitizeInFlightTurns before retry.");
+
+        var notice = streamer.Events.FirstOrDefault(e => e.Kind == AgentActivityKind.Notice && e.Content.Contains("Transient network error"));
+        Assert.NotNull(notice);
+        Assert.Contains("42 tokens generated in 305.0s before failure", notice.Content);
+    }
+
     private sealed class CallbackStreamer(Action<AgentActivityEvent> onEvent) : IAgentActivityStreamer
     {
         public Task BroadcastAsync(AgentActivityEvent activityEvent, CancellationToken cancellationToken = default)

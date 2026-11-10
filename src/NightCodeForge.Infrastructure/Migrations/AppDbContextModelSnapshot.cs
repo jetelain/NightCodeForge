@@ -37,6 +37,9 @@ namespace NightCodeForge.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("MaxOutputTokens")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("MaxTurns")
                         .HasColumnType("INTEGER");
 

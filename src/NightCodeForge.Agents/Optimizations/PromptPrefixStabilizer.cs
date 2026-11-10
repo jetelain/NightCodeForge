@@ -17,8 +17,9 @@ public class PromptPrefixStabilizer
     public const string CanonicalRulesPrompt = @"<rules>
 - Use bash for file discovery commands like ls, rg, find, git log.
 - Use read to examine files instead of cat or sed.
-- Use edit for precise changes; edits[].oldText must match target content.
+- Use edit for precise, incremental changes; edits[].oldText must match target content.
 - When changing multiple separate locations in one file, use a single edit call with multiple entries in edits[].
+- Prefer incremental, targeted edit tool calls over dumping entire multi-thousand-line files in a single turn.
 - Use write only for brand new files or complete rewrites.
 - Always execute within your assigned working directory; do not modify files in sibling directories or the canonical clone.
 - Be concise and focused in your responses.

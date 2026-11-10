@@ -347,4 +347,31 @@ public class OllamaCapabilityResolverTests
         var propsNone = resolver.BuildReasoningProperties(dynamicModel, "none");
         Assert.Equal(false, propsNone["think"]);
     }
+
+    [Fact]
+    public void CreateChatOptions_ResolvesMaxOutputTokens_PrecedenceChain()
+    {
+        var options = new LlmProviderOptions
+        {
+            MaxOutputTokens = 16384,
+            ModelProfiles = new Dictionary<string, ModelCapabilityProfile>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["profile-model"] = new() { MaxOutputTokens = 4096 }
+            }
+        };
+
+        var resolver = CreateResolver(options);
+
+        // 1. Fallback to LlmProviderOptions
+        var chatOptsFallback = resolver.CreateChatOptions(new AgentProfile { ModelName = "unknown-model" });
+        Assert.Equal(16384, chatOptsFallback.MaxOutputTokens);
+
+        // 2. Fallback to ModelCapabilityProfile
+        var chatOptsProfile = resolver.CreateChatOptions(new AgentProfile { ModelName = "profile-model" });
+        Assert.Equal(4096, chatOptsProfile.MaxOutputTokens);
+
+        // 3. Override by AgentProfile.MaxOutputTokens
+        var chatOptsOverride = resolver.CreateChatOptions(new AgentProfile { ModelName = "profile-model", MaxOutputTokens = 2048 });
+        Assert.Equal(2048, chatOptsOverride.MaxOutputTokens);
+    }
 }

@@ -62,6 +62,12 @@ public class AgentProfile
     public int? ContextWindowTokens { get; set; }
 
     /// <summary>
+    /// Model output token ceiling per turn (mapped to num_predict in Ollama or max_tokens in OpenAI).
+    /// If null, falls back to model capability profile or global settings.
+    /// </summary>
+    public int? MaxOutputTokens { get; set; }
+
+    /// <summary>
     /// OllamaRouter target pinning policy (propagated as X-OllamaRouter-Target header).
     /// </summary>
     public OllamaRoutingTarget RoutingTarget { get; set; } = OllamaRoutingTarget.Auto;

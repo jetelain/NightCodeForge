@@ -253,4 +253,26 @@ public class HarnessAgentFactoryTests
         Assert.NotNull(setup.Options.ChatOptions?.AdditionalProperties);
         Assert.Equal("xhigh", setup.Options.ChatOptions!.AdditionalProperties!["think"]);
     }
+
+    [Fact]
+    public async Task Create_SetsMaxOutputTokens_FromProfileOverrideOrProviderDefault()
+    {
+        var factory = CreateAgentFactory(new Mock<IChatClient>().Object);
+
+        // Default from LlmProviderOptions
+        var defaultSetup = await factory.CreateAsync(
+            AgentRequest(new AgentProfile { Id = "p1", ModelName = "configured-model" }),
+            CancellationToken.None);
+
+        Assert.Equal(16384, defaultSetup.Options.MaxOutputTokens);
+        Assert.Equal(16384, defaultSetup.Options.ChatOptions?.MaxOutputTokens);
+
+        // Explicit override on AgentProfile
+        var overrideSetup = await factory.CreateAsync(
+            AgentRequest(new AgentProfile { Id = "p2", ModelName = "configured-model", MaxOutputTokens = 2048 }),
+            CancellationToken.None);
+
+        Assert.Equal(2048, overrideSetup.Options.MaxOutputTokens);
+        Assert.Equal(2048, overrideSetup.Options.ChatOptions?.MaxOutputTokens);
+    }
 }

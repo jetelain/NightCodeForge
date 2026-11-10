@@ -98,7 +98,23 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     {
         var rawClient = CreateRawChatClient(options, effectiveModel, routingTarget, sessionId, _sharedSocketsHandler);
         var targetLabel = options.ProviderType == LlmProviderType.OpenAiCompatible ? "OpenAI Compatible" : routingTarget.ToString();
-        var telemetryClient = new TelemetryChatClient(rawClient, _telemetryService, effectiveModel, targetLabel, _loggerFactory.CreateLogger<TelemetryChatClient>(), options.EffectiveEndpoint, sessionId);
+        var timeoutMinutes = Math.Max(1, options.RequestTimeoutMinutes);
+        var firstTokenTimeout = _retryOptions.Value.PerAttemptTimeout ?? TimeSpan.FromMinutes(timeoutMinutes);
+        var streamIdleTimeout = _retryOptions.Value.IsStreamIdleTimeoutExplicitlySet && _retryOptions.Value.StreamIdleTimeout > TimeSpan.Zero
+            ? _retryOptions.Value.StreamIdleTimeout
+            : TimeSpan.FromSeconds(options.StreamIdleTimeoutSeconds > 0 ? options.StreamIdleTimeoutSeconds : LlmProviderOptions.DefaultStreamIdleTimeoutSeconds);
+
+        var telemetryClient = new TelemetryChatClient(
+            rawClient,
+            _telemetryService,
+            effectiveModel,
+            targetLabel,
+            _loggerFactory.CreateLogger<TelemetryChatClient>(),
+            options.EffectiveEndpoint,
+            sessionId,
+            _timeProvider,
+            firstTokenTimeout,
+            streamIdleTimeout);
         return new OperationsPauseGatingChatClient(telemetryClient, _operationsControlService);
     }
 
@@ -108,7 +124,7 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     protected LlmRetryPolicyOptions CreateEffectiveRetryOptions(string? sessionId)
     {
         var baseOptions = _retryOptions.Value;
-        return new LlmRetryPolicyOptions
+        var effective = new LlmRetryPolicyOptions
         {
             MaxRetries = baseOptions.MaxRetries,
             BaseDelay = baseOptions.BaseDelay,
@@ -126,6 +142,13 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
                 await BroadcastRetryNoticeAsync(retryCtx, sessionId, ct);
             }
         };
+
+        if (baseOptions.IsStreamIdleTimeoutExplicitlySet)
+        {
+            effective.StreamIdleTimeout = baseOptions.StreamIdleTimeout;
+        }
+
+        return effective;
     }
 
     /// <summary>

@@ -836,17 +836,32 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         }
                         var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
 
+                        var partialChars = accumulatedText.Length + accumulatedReasoning.Length;
+                        string progressDetail;
+                        if (HttpErrorDetailHelper.TryGetStreamTimeoutDiagnostics(ex, out var streamDiag) && streamDiag != null)
+                        {
+                            progressDetail = streamDiag.GeneratedTokens > 0
+                                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" ({streamDiag.GeneratedTokens:N0} tokens generated in {streamDiag.ElapsedSeconds:F1}s before failure)")
+                                : string.Create(System.Globalization.CultureInfo.InvariantCulture, $" (0 tokens generated in {streamDiag.ElapsedSeconds:F1}s prefill before failure)");
+                        }
+                        else
+                        {
+                            progressDetail = partialChars > 0
+                                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" (~{partialChars:N0} chars accumulated before failure)")
+                                : string.Empty;
+                        }
+
                         _logger.LogWarning(
                             ex,
-                            "Crucible streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}. Retrying after {DelayMs}ms delay...",
-                            streamRetryCount, maxTransientRetries, errorMsg, delay.TotalMilliseconds);
+                            "Crucible streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}{ProgressDetail}. Retrying after {DelayMs}ms delay...",
+                            streamRetryCount, maxTransientRetries, errorMsg, progressDetail, delay.TotalMilliseconds);
 
                         await BroadcastAsync(
                             sessionId,
                             context.ForgeTask.Id,
                             context.StageId,
                             AgentActivityKind.Notice,
-                            $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
+                            $"Transient network error: {errorMsg}{progressDetail}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
                             cancellationToken);
 
                         accumulatedText.Clear();
@@ -855,6 +870,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         await enumerator.DisposeAsync();
                         enumerator = null;
                         await WaitRetryBackoffAsync(delay);
+
+                        SanitizeInFlightTurns(chatHistory);
 
                         session = await agent.CreateSessionAsync(cancellationToken);
                         enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
@@ -1018,6 +1035,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         accumulatedReasoning.Clear();
 
                         await WaitRetryBackoffAsync(delay);
+
+                        SanitizeInFlightTurns(chatHistory);
 
                         session = await agent.CreateSessionAsync(cancellationToken);
                         continue;

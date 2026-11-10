@@ -18,7 +18,7 @@ public class TelemetryChatClientTests
     {
         _innerClient = new Mock<IChatClient>();
         _telemetryService = new Mock<IOperationsTelemetryService>();
-        _client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "qwen2.5-coder:32b", "Remote", NullLogger<TelemetryChatClient>.Instance, null, null);
+        _client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "qwen2.5-coder:32b", "Remote", NullLogger<TelemetryChatClient>.Instance, null, null, TimeProvider.System, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(5));
     }
 
     [Fact]
@@ -412,7 +412,7 @@ public class TelemetryChatClientTests
     [Fact]
     public async Task GetResponseAsync_PopulatesEndpointAndThinkingEffort()
     {
-        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "custom-model", "Auto", NullLogger<TelemetryChatClient>.Instance, "http://my-ollama:11434", null);
+        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "custom-model", "Auto", NullLogger<TelemetryChatClient>.Instance, "http://my-ollama:11434", null, TimeProvider.System, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(5));
         var messages = new List<ChatMessage> { new(ChatRole.User, "test") };
         var options = new ChatOptions
         {
@@ -607,7 +607,7 @@ public class TelemetryChatClientTests
     [InlineData(true, "medium", "medium")]
     public async Task GetResponseAsync_PopulatesExpectedThinkingEffort(bool? think, string? effort, string expectedEffort)
     {
-        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "model", "Auto", NullLogger<TelemetryChatClient>.Instance, null, null);
+        var client = new TelemetryChatClient(_innerClient.Object, _telemetryService.Object, "model", "Auto", NullLogger<TelemetryChatClient>.Instance, null, null, TimeProvider.System, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(5));
         var props = new AdditionalPropertiesDictionary();
 
         if (think == true)

@@ -1,9 +1,13 @@
 using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Compaction;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Workflow;
@@ -25,6 +29,9 @@ public class TelemetryChatClient : DelegatingChatClient
     private readonly int? _taskId;
     private readonly string? _stageId;
     private readonly ILogger<TelemetryChatClient> _logger;
+    private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _firstTokenTimeout;
+    private readonly TimeSpan _streamIdleTimeout;
 
     public TelemetryChatClient(
         IChatClient innerClient,
@@ -33,7 +40,10 @@ public class TelemetryChatClient : DelegatingChatClient
         string defaultTarget,
         ILogger<TelemetryChatClient> logger,
         string? endpoint,
-        string? sessionId)
+        string? sessionId,
+        TimeProvider timeProvider,
+        TimeSpan firstTokenTimeout,
+        TimeSpan streamIdleTimeout)
         : base(innerClient ?? throw new ArgumentNullException(nameof(innerClient)))
     {
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
@@ -48,6 +58,9 @@ public class TelemetryChatClient : DelegatingChatClient
             _stageId = parsedStageId;
         }
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        _firstTokenTimeout = firstTokenTimeout > TimeSpan.Zero ? firstTokenTimeout : TimeSpan.FromMinutes(10);
+        _streamIdleTimeout = streamIdleTimeout > TimeSpan.Zero ? streamIdleTimeout : TimeSpan.FromSeconds(300);
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -63,7 +76,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var promptPreview = ExtractPromptPreview(messagesList);
         var estimator = ModelCalibratedTokenEstimator.Resolve(model);
         var promptTokens = EstimateTotalContextTokens(messagesList, model);
-        var startTime = DateTime.UtcNow;
+        var startTime = _timeProvider.GetUtcNow().UtcDateTime;
 
         var runningRecord = new LlmCallRecord(
             CallId: callId,
@@ -86,14 +99,14 @@ public class TelemetryChatClient : DelegatingChatClient
             StageId: _stageId);
 
         _telemetryService.RecordLlmCallStarted(runningRecord);
-        var sw = Stopwatch.StartNew();
+        var startTimestamp = _timeProvider.GetTimestamp();
 
         try
         {
             var response = await base.GetResponseAsync(messagesList, options, cancellationToken);
-            sw.Stop();
+            var elapsed = _timeProvider.GetElapsedTime(startTimestamp);
 
-            var durationMs = sw.Elapsed.TotalMilliseconds;
+            var durationMs = elapsed.TotalMilliseconds;
             var (completionPreview, extractedReasoningTokens, extractedTextTokens) = ExtractResponseDetails(response, estimator);
 
             var reasoningTokens = extractedReasoningTokens;
@@ -151,8 +164,8 @@ public class TelemetryChatClient : DelegatingChatClient
         }
         catch (Exception ex)
         {
-            sw.Stop();
-            var durationMs = sw.Elapsed.TotalMilliseconds;
+            var elapsed = _timeProvider.GetElapsedTime(startTimestamp);
+            var durationMs = elapsed.TotalMilliseconds;
             var detailedError = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
             var failedRecord = runningRecord with
             {
@@ -180,7 +193,7 @@ public class TelemetryChatClient : DelegatingChatClient
         var promptPreview = ExtractPromptPreview(messagesList);
         var estimator = ModelCalibratedTokenEstimator.Resolve(model);
         var promptTokens = EstimateTotalContextTokens(messagesList, model);
-        var startTime = DateTime.UtcNow;
+        var startTime = _timeProvider.GetUtcNow().UtcDateTime;
 
         var runningRecord = new LlmCallRecord(
             CallId: callId,
@@ -203,7 +216,7 @@ public class TelemetryChatClient : DelegatingChatClient
             StageId: _stageId);
 
         _telemetryService.RecordLlmCallStarted(runningRecord);
-        var sw = Stopwatch.StartNew();
+        var startTimestamp = _timeProvider.GetTimestamp();
         var reasoningBuffer = new StringBuilder();
         var textBuffer = new StringBuilder();
         int tokenCount = 0;
@@ -213,18 +226,76 @@ public class TelemetryChatClient : DelegatingChatClient
         bool completionRecorded = false;
         bool completedNaturally = false;
 
-        await using var enumerator = base.GetStreamingResponseAsync(messagesList, options, cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
+        using var streamCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var streamToken = streamCts.Token;
+        using var streamScope = StreamingCancellationScope.Enter(streamToken, startTimestamp, out var streamState);
 
+        await using var enumerator = base.GetStreamingResponseAsync(messagesList, options, streamToken)
+            .GetAsyncEnumerator(streamToken);
+
+        bool isFirstChunk = true;
         try
         {
             while (true)
             {
                 ChatResponseUpdate? update = null;
                 bool hasMore = false;
+                var currentTimeout = isFirstChunk ? _firstTokenTimeout : _streamIdleTimeout;
+
                 try
                 {
-                    hasMore = await enumerator.MoveNextAsync();
+                    var moveNextTask = enumerator.MoveNextAsync().AsTask();
+                    try
+                    {
+                        hasMore = await AwaitMoveNextWithWatchdogAsync(moveNextTask, isFirstChunk, streamState, cancellationToken);
+                    }
+                    catch (TimeoutException timeoutEx)
+                    {
+                        // Watchdog fired!
+                        // 1. Cancel linked CTS immediately to abort underlying stream read and unblock ReadLineAsync
+                        streamCts.Cancel();
+
+                        // 2. Await moveNextTask to let async iterator state machine complete cleanly and run using blocks
+                        try
+                        {
+                            await moveNextTask;
+                        }
+                        catch (Exception)
+                        {
+                            // Justification: Suppress expected cancellation or IO faults from the aborted stream read so the enriched timeout exception is thrown.
+                        }
+
+                        // 3. Build structured diagnostics and throw enriched LlmStreamTimeoutException
+                        var phase = isFirstChunk
+                            ? (streamState.AttemptNumber > 0 && !streamState.ResponseHeadersReceived
+                                ? StreamTimeoutPhase.PreHeaderPrefill
+                                : StreamTimeoutPhase.FirstTokenPrefill)
+                            : StreamTimeoutPhase.MidStreamIdleStall;
+                        var timeoutElapsedSec = _timeProvider.GetElapsedTime(startTimestamp).TotalSeconds;
+                        var timeoutTps = timeoutElapsedSec > 0.05 ? Math.Round(tokenCount / timeoutElapsedSec, 1) : 0.0;
+
+                        var diagnostics = new StreamTimeoutDiagnostics
+                        {
+                            Phase = phase,
+                            ElapsedSeconds = timeoutElapsedSec,
+                            ConfiguredTimeoutSeconds = currentTimeout.TotalSeconds,
+                            GeneratedTokens = tokenCount,
+                            TokensPerSecond = timeoutTps
+                        };
+
+                        var enrichedEx = new LlmStreamTimeoutException(
+                            HttpErrorDetailHelper.FormatStreamTimeoutError(diagnostics),
+                            timeoutEx,
+                            diagnostics);
+
+                        if (timeoutEx.Data.Contains(ResilienceConstants.RetriedKey))
+                        {
+                            enrichedEx.Data[ResilienceConstants.RetriedKey] = true;
+                        }
+
+                        throw enrichedEx;
+                    }
+
                     if (hasMore)
                     {
                         update = enumerator.Current;
@@ -232,17 +303,33 @@ public class TelemetryChatClient : DelegatingChatClient
                 }
                 catch (Exception ex)
                 {
-                    sw.Stop();
+                    var failElapsed = _timeProvider.GetElapsedTime(startTimestamp);
+                    var failElapsedSec = failElapsed.TotalSeconds;
+                    var failTps = failElapsedSec > 0.05 ? Math.Round(tokenCount / failElapsedSec, 1) : 0.0;
+
+                    if (ex is not LlmStreamTimeoutException && tokenCount > 0 && IsMidStreamConnectionAbort(ex, cancellationToken))
+                    {
+                        ex.Data[StreamTimeoutDiagnostics.DataKey] = new StreamTimeoutDiagnostics
+                        {
+                            Phase = StreamTimeoutPhase.MidStreamConnectionClosed,
+                            ElapsedSeconds = failElapsedSec,
+                            ConfiguredTimeoutSeconds = currentTimeout.TotalSeconds,
+                            GeneratedTokens = tokenCount,
+                            TokensPerSecond = failTps
+                        };
+                    }
+
                     var finalPromptTokens = streamingInputTokens.HasValue && streamingInputTokens.Value > 0
                         ? streamingInputTokens.Value
                         : promptTokens;
                     var detailedError = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                     var failedRecord = runningRecord with
                     {
-                        DurationMs = sw.Elapsed.TotalMilliseconds,
+                        DurationMs = failElapsed.TotalMilliseconds,
                         PromptTokens = finalPromptTokens,
                         CompletionTokens = tokenCount,
                         ReasoningTokens = reasoningTokens,
+                        TokensPerSecond = failTps,
                         CompletionPreview = BuildCombinedPreview(reasoningBuffer, textBuffer),
                         Status = (ex is OperationCanceledException && !TransientErrorDetector.IsHttpTimeout(ex) && cancellationToken.IsCancellationRequested) ? LlmCallStatus.Cancelled : LlmCallStatus.Failed,
                         ErrorMessage = detailedError
@@ -256,6 +343,11 @@ public class TelemetryChatClient : DelegatingChatClient
                 if (!hasMore || update == null)
                 {
                     break;
+                }
+
+                if (isFirstChunk && HasNonEmptyStreamContent(update))
+                {
+                    isFirstChunk = false;
                 }
 
                 if (update.Contents != null)
@@ -308,9 +400,10 @@ public class TelemetryChatClient : DelegatingChatClient
                     ProcessTextChunk(update.Text, ref inThinkTag, ref reasoningTokens, ref tokenCount, reasoningBuffer, textBuffer, estimator);
                 }
 
-                var elapsedSec = sw.Elapsed.TotalSeconds;
+                var elapsed = _timeProvider.GetElapsedTime(startTimestamp);
+                var elapsedSec = elapsed.TotalSeconds;
                 var tps = elapsedSec > 0.05 ? Math.Round(tokenCount / elapsedSec, 1) : 0.0;
-                _telemetryService.UpdateLlmCallProgress(callId, tokenCount, sw.Elapsed.TotalMilliseconds, tps, reasoningTokens);
+                _telemetryService.UpdateLlmCallProgress(callId, tokenCount, elapsed.TotalMilliseconds, tps, reasoningTokens);
 
                 yield return update;
             }
@@ -321,9 +414,9 @@ public class TelemetryChatClient : DelegatingChatClient
         {
             if (!completionRecorded)
             {
-                sw.Stop();
-                var durationMs = sw.Elapsed.TotalMilliseconds;
-                var elapsedSecFinal = sw.Elapsed.TotalSeconds;
+                var elapsedFinal = _timeProvider.GetElapsedTime(startTimestamp);
+                var durationMs = elapsedFinal.TotalMilliseconds;
+                var elapsedSecFinal = elapsedFinal.TotalSeconds;
                 var finalTps = elapsedSecFinal > 0.05 ? Math.Round(tokenCount / elapsedSecFinal, 1) : 0.0;
 
                 var status = completedNaturally
@@ -348,6 +441,85 @@ public class TelemetryChatClient : DelegatingChatClient
                 _telemetryService.RecordLlmCallCompleted(completedRecord);
             }
         }
+    }
+
+    private async Task<bool> AwaitMoveNextWithWatchdogAsync(
+        Task<bool> moveNextTask,
+        bool isFirstChunk,
+        StreamingCallState streamState,
+        CancellationToken cancellationToken)
+    {
+        if (!isFirstChunk)
+        {
+            return await moveNextTask.WaitAsync(_streamIdleTimeout, _timeProvider, cancellationToken);
+        }
+
+        // Phase 1: When TransientHttpErrorRetryHandler is enforcing its own per-attempt timeout before HTTP headers arrive,
+        // wait for either HTTP response headers or handler completion (including any handler-level retries and backoffs)
+        // so the stream watchdog does not prematurely cancel an in-flight pre-header retry attempt.
+        if (streamState.HasHandlerAttemptTimeout && !streamState.ResponseHeadersReceived)
+        {
+            await Task.WhenAny(moveNextTask, streamState.WaitForHeadersAsync(cancellationToken));
+            if (moveNextTask.IsCompleted)
+            {
+                return await moveNextTask;
+            }
+        }
+
+        // Phase 2A: HTTP headers have been received (or no handler per-attempt timeout is active).
+        // Enforce the remaining FirstTokenTimeout budget for the current attempt until the first non-empty chunk arrives.
+        var attemptElapsed = _timeProvider.GetElapsedTime(streamState.CurrentAttemptStartTimestamp);
+        var remaining = _firstTokenTimeout - attemptElapsed;
+        var waitBudget = remaining > TimeSpan.FromMilliseconds(1) ? remaining : TimeSpan.FromMilliseconds(1);
+
+        return await moveNextTask.WaitAsync(waitBudget, _timeProvider, cancellationToken);
+    }
+
+    private static bool HasNonEmptyStreamContent(ChatResponseUpdate update)
+    {
+        if (!string.IsNullOrEmpty(update.Text))
+        {
+            return true;
+        }
+
+        if (update.Contents == null || update.Contents.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var content in update.Contents)
+        {
+            if (content is TextContent tc && !string.IsNullOrEmpty(tc.Text))
+            {
+                return true;
+            }
+            if (content is TextReasoningContent trc && !string.IsNullOrEmpty(trc.Text))
+            {
+                return true;
+            }
+            if (content is FunctionCallContent)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsMidStreamConnectionAbort(Exception ex, CancellationToken callerToken)
+    {
+        if (callerToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        if (HttpErrorDetailHelper.FindException<OperationsPausedException>(ex) != null)
+        {
+            return false;
+        }
+
+        return ex is HttpRequestException or IOException or SocketException or OperationCanceledException
+            || TransientErrorDetector.IsTransient(ex);
     }
 
     private string ResolveTarget(ChatOptions? options)
