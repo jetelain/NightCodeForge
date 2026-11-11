@@ -300,5 +300,49 @@ public class KanbanBoardAndCardTests : BunitContext
         Assert.Equal(88, inspectedTask.Id);
         Assert.False(cardSelected, "Clicking the running badge on the Kanban board must not trigger OnTaskSelected");
     }
+
+    [Fact]
+    public void KanbanBoard_WhenMultipleTasksRunning_RendersAllRunningCardsWithRunningBadgeAndInFlightColumn()
+    {
+        var task1 = new ForgeTask { Id = 101, Title = "Concurrent Task 101", Status = TaskOverallStatus.Open };
+        var task2 = new ForgeTask { Id = 102, Title = "Concurrent Task 102", Status = TaskOverallStatus.Open };
+        var task3 = new ForgeTask { Id = 103, Title = "Backlog Task 103", Status = TaskOverallStatus.Open };
+
+        var cut = Render<KanbanBoard>(p => p
+            .Add(b => b.Tasks, new[] { task1, task2, task3 })
+            .Add(b => b.RunningTaskIds, new[] { 101, 102 }));
+
+        // Both running tasks should be in the In-Flight column
+        var inFlightCol = cut.Find(".column-inflight");
+        Assert.Contains("#101", inFlightCol.InnerHtml);
+        Assert.Contains("#102", inFlightCol.InnerHtml);
+        Assert.DoesNotContain("#103", inFlightCol.InnerHtml);
+
+        // Task 103 is in Open column
+        var openCol = cut.Find(".column-open");
+        Assert.Contains("#103", openCol.InnerHtml);
+
+        // Both running cards have the running badge
+        Assert.NotNull(cut.Find("#badge-running-101"));
+        Assert.NotNull(cut.Find("#badge-running-102"));
+        Assert.Null(cut.FindAll("#badge-running-103").FirstOrDefault());
+    }
+
+    [Fact]
+    public void KanbanBoard_WhenStaleRunningTaskIdMatchesClosedOrReadyTask_DoesNotRenderRunningBadge()
+    {
+        var closedTask = new ForgeTask { Id = 201, Title = "Recently Closed Task", Status = TaskOverallStatus.Closed };
+        var readyTask = new ForgeTask { Id = 202, Title = "Ready Task", Status = TaskOverallStatus.Ready };
+
+        var cut = Render<KanbanBoard>(p => p
+            .Add(b => b.Tasks, new[] { closedTask, readyTask })
+            .Add(b => b.ActiveTaskId, 201)
+            .Add(b => b.RunningTaskIds, new[] { 201, 202 }));
+
+        Assert.Empty(cut.FindAll("#badge-running-201"));
+        Assert.Empty(cut.FindAll("#badge-running-202"));
+        Assert.DoesNotContain("card-running", cut.Find("#kanban-card-201").ClassName);
+        Assert.DoesNotContain("card-running", cut.Find("#kanban-card-202").ClassName);
+    }
 }
 

@@ -149,6 +149,7 @@
     [Parameter] public IReadOnlyList<ForgeTask>? AllTasks { get; set; }
     [Parameter] public IReadOnlyList<(int TaskId, int DependsOnTaskId)> Dependencies { get; set; } = Array.Empty<(int, int)>();
     [Parameter] public int? ActiveTaskId { get; set; }
+    [Parameter] public IReadOnlyCollection<int>? RunningTaskIds { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
 
@@ -160,7 +161,7 @@
 
     protected override void OnParametersSet()
     {
-        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies, ActiveTaskId, AllTasks ?? Tasks);
+        _graphLayout = LayoutEngine.ComputeLayout(Tasks, Dependencies, ActiveTaskId, AllTasks ?? Tasks, RunningTaskIds);
     }
 
     private void ZoomIn() => _zoomScale = Math.Min(2.0f, _zoomScale + 0.15f);

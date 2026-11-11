@@ -113,11 +113,11 @@
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
                 <span class="stat-chip-label">📂 Open</span>
-                <span class="stat-chip-val text-indigo">@RetainedTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, WorkerState.Current.ActiveTaskId))</span>
+                <span class="stat-chip-val text-indigo">@RetainedTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, runningTaskIds: EffectiveRunningTaskIds))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Reviewed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
                 <span class="stat-chip-label">⚡ In-Flight</span>
-                <span class="stat-chip-val text-purple">@RetainedTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, WorkerState.Current.ActiveTaskId))</span>
+                <span class="stat-chip-val text-purple">@RetainedTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, runningTaskIds: EffectiveRunningTaskIds))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
                 <span class="stat-chip-label">🔍 Ready</span>
@@ -229,7 +229,8 @@
                 <KanbanBoard Tasks="filtered"
                              AllTasks="_allTasks"
                              TaskDependencies="_dependenciesMap"
-                             ActiveTaskId="@WorkerState.Current.ActiveTaskId"
+                             ActiveTaskId="@(WorkerState.IsRunning ? WorkerState.Current.ActiveTaskId : null)"
+                             RunningTaskIds="@EffectiveRunningTaskIds"
                              OnTaskSelected="OpenTask"
                              OnInspectTask="OpenInspector"
                              OnPromoteTask="OpenPromoteModal"
@@ -242,7 +243,8 @@
                 <DagVisualizer Tasks="filtered"
                                AllTasks="_allTasks"
                                Dependencies="_allDependencies"
-                               ActiveTaskId="@WorkerState.Current.ActiveTaskId"
+                               ActiveTaskId="@(WorkerState.IsRunning ? WorkerState.Current.ActiveTaskId : null)"
+                               RunningTaskIds="@EffectiveRunningTaskIds"
                                OnTaskSelected="OpenTask"
                                OnLinkDependencies="OpenDependencyModal" />
             }
@@ -300,6 +302,9 @@
 
     private int ArchivedCutoffCount =>
         _allTasks.Count(t => TaskRecencyAndRetentionHelper.IsExcludedFromBacklog(t));
+
+    private IReadOnlyCollection<int> EffectiveRunningTaskIds =>
+        TaskInspectorGroupingHelper.ResolveRunningTaskIds(WorkerState.Current);
 
     private string _searchQuery = string.Empty;
     private TaskOverallStatus? _statusFilter;
@@ -581,11 +586,11 @@
             if (_statusFilter == TaskOverallStatus.Reviewed || _statusFilter == TaskOverallStatus.Implemented)
             {
                 // Group In-Flight stages
-                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t, WorkerState.Current.ActiveTaskId));
+                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t, runningTaskIds: EffectiveRunningTaskIds));
             }
             else if (_statusFilter == TaskOverallStatus.Open)
             {
-                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, WorkerState.Current.ActiveTaskId));
+                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, runningTaskIds: EffectiveRunningTaskIds));
             }
             else
             {

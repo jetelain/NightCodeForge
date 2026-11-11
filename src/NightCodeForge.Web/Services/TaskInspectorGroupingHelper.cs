@@ -1,4 +1,6 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -20,6 +22,93 @@ public static class TaskInspectorGroupingHelper
     public const string GroupWaitingForSlot = "⏳ In Flight (Waiting for Slot)";
     public const string GroupOpen = "📋 Backlog / Open";
     public const string GroupClosed = "✅ Closed";
+
+    /// <summary>
+    /// Aggregates all currently running autonomous task IDs across worker status snapshots and telemetry records.
+    /// </summary>
+    public static HashSet<int> ResolveRunningTaskIds(
+        WorkerStatusSnapshot? snapshot,
+        IOperationsTelemetryService? telemetryService = null)
+    {
+        var ids = new HashSet<int>();
+        if (snapshot != null)
+        {
+            if (snapshot.Status == WorkerExecutionStatus.Running &&
+                AutonomousTaskClassifier.IsAutonomousTask(snapshot.ActiveTaskId, snapshot.StageId))
+            {
+                ids.Add(snapshot.ActiveTaskId!.Value);
+            }
+            if (snapshot.ActiveTasks != null)
+            {
+                foreach (var t in snapshot.ActiveTasks)
+                {
+                    if (AutonomousTaskClassifier.IsAutonomousTask(t))
+                    {
+                        ids.Add(t.TaskId);
+                    }
+                }
+            }
+        }
+
+        if (telemetryService != null)
+        {
+            var telemetryTasks = telemetryService.GetActiveTasks();
+            if (telemetryTasks != null)
+            {
+                foreach (var t in telemetryTasks)
+                {
+                    if (AutonomousTaskClassifier.IsAutonomousTask(t))
+                    {
+                        ids.Add(t.TaskId);
+                    }
+                }
+            }
+            var singleTelemetry = telemetryService.GetActiveTask();
+            if (AutonomousTaskClassifier.IsAutonomousTask(singleTelemetry))
+            {
+                ids.Add(singleTelemetry.TaskId);
+            }
+        }
+
+        return ids;
+    }
+
+    /// <summary>
+    /// Combines an optional primary active task ID and a collection of running task IDs into a unified set.
+    /// </summary>
+    public static HashSet<int> ResolveRunningTaskIds(int? activeTaskId, IEnumerable<int>? runningTaskIds)
+    {
+        var ids = new HashSet<int>(runningTaskIds ?? Array.Empty<int>());
+        if (activeTaskId.HasValue && activeTaskId.Value > 0)
+        {
+            ids.Add(activeTaskId.Value);
+        }
+        return ids;
+    }
+
+    /// <summary>
+    /// Resolves the primary active running task ID across the worker status snapshot and telemetry service.
+    /// </summary>
+    public static int? ResolveEffectiveActiveTaskId(
+        WorkerStatusSnapshot? snapshot,
+        IOperationsTelemetryService? telemetryService = null)
+    {
+        if (snapshot != null &&
+            snapshot.Status == WorkerExecutionStatus.Running &&
+            AutonomousTaskClassifier.IsAutonomousTask(snapshot.ActiveTaskId, snapshot.StageId))
+        {
+            return snapshot.ActiveTaskId;
+        }
+
+        var singleTelemetry = telemetryService?.GetActiveTask();
+        if (AutonomousTaskClassifier.IsAutonomousTask(singleTelemetry))
+        {
+            return singleTelemetry.TaskId;
+        }
+
+        var runningIds = ResolveRunningTaskIds(snapshot, telemetryService);
+        return runningIds.OrderBy(id => id).Cast<int?>().FirstOrDefault();
+    }
 
     public static IReadOnlyList<TaskInspectorGroup> GroupTasks(
         IEnumerable<ForgeTask>? tasks,

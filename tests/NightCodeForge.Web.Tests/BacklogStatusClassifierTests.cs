@@ -121,4 +121,52 @@ public class BacklogStatusClassifierTests
 
         Assert.Equal(expected, BacklogStatusClassifier.GetColumn(task, activeTaskId: 12));
     }
+
+    [Fact]
+    public void GetColumn_WhenMultipleTasksRunning_ClassifiesEachRunningTaskAsInFlight()
+    {
+        var taskA = new ForgeTask { Id = 10, Status = TaskOverallStatus.Open };
+        var taskB = new ForgeTask { Id = 20, Status = TaskOverallStatus.Open };
+        var taskC = new ForgeTask { Id = 30, Status = TaskOverallStatus.Open };
+
+        var runningIds = new HashSet<int> { 10, 20 };
+
+        Assert.Equal(BacklogKanbanColumn.InFlight, BacklogStatusClassifier.GetColumn(taskA, runningTaskIds: runningIds));
+        Assert.Equal(BacklogKanbanColumn.InFlight, BacklogStatusClassifier.GetColumn(taskB, runningTaskIds: runningIds));
+        Assert.Equal(BacklogKanbanColumn.Open, BacklogStatusClassifier.GetColumn(taskC, runningTaskIds: runningIds));
+
+        Assert.True(BacklogStatusClassifier.IsInFlight(taskA, runningTaskIds: runningIds));
+        Assert.True(BacklogStatusClassifier.IsInFlight(taskB, runningTaskIds: runningIds));
+        Assert.False(BacklogStatusClassifier.IsInFlight(taskC, runningTaskIds: runningIds));
+
+        Assert.False(BacklogStatusClassifier.IsOpenBacklog(taskA, runningTaskIds: runningIds));
+        Assert.False(BacklogStatusClassifier.IsOpenBacklog(taskB, runningTaskIds: runningIds));
+        Assert.True(BacklogStatusClassifier.IsOpenBacklog(taskC, runningTaskIds: runningIds));
+    }
+
+    [Theory]
+    [InlineData(TaskOverallStatus.Closed)]
+    [InlineData(TaskOverallStatus.Failed)]
+    [InlineData(TaskOverallStatus.Rejected)]
+    [InlineData(TaskOverallStatus.Cancelled)]
+    [InlineData(TaskOverallStatus.Ready)]
+    [InlineData(TaskOverallStatus.Suggested)]
+    [InlineData(TaskOverallStatus.Draft)]
+    public void IsRunning_WhenTaskInTerminalReviewOrTriageState_ReturnsFalseEvenWithStaleRunningIds(TaskOverallStatus status)
+    {
+        var task = new ForgeTask { Id = 42, Status = status };
+        var runningIds = new HashSet<int> { 42 };
+
+        Assert.False(BacklogStatusClassifier.IsRunning(task, activeTaskId: 42));
+        Assert.False(BacklogStatusClassifier.IsRunning(task, runningTaskIds: runningIds));
+    }
+
+    [Fact]
+    public void IsRunning_WhenTaskIsWaitingForHuman_ReturnsFalseEvenWithRunningId()
+    {
+        var task = new ForgeTask { Id = 42, Status = TaskOverallStatus.Open, IsWaitingForHuman = true };
+
+        Assert.False(BacklogStatusClassifier.IsRunning(task, activeTaskId: 42));
+        Assert.False(BacklogStatusClassifier.IsRunning(task, runningTaskIds: new[] { 42 }));
+    }
 }

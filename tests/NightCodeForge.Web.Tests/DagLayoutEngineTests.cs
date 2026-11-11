@@ -218,4 +218,64 @@ public class DagLayoutEngineTests
         Assert.Equal("#064e3b", node5.FillColor);
         Assert.Equal("#10b981", node5.StrokeColor);
     }
+
+    [Fact]
+    public void ComputeLayout_WhenMultipleTasksRunning_AllRunningNodesAreHighlightedAndMarkedRunning()
+    {
+        var task5 = new ForgeTask { Id = 5, Title = "Active Task 5", Status = TaskOverallStatus.Open };
+        var task8 = new ForgeTask { Id = 8, Title = "Active Task 8", Status = TaskOverallStatus.Open };
+        var task9 = new ForgeTask { Id = 9, Title = "Idle Task 9", Status = TaskOverallStatus.Open };
+
+        var layout = _engine.ComputeLayout(
+            new[] { task5, task8, task9 },
+            Array.Empty<(int, int)>(),
+            runningTaskIds: new[] { 5, 8 });
+
+        var node5 = layout.Nodes.First(n => n.Task.Id == 5);
+        var node8 = layout.Nodes.First(n => n.Task.Id == 8);
+        var node9 = layout.Nodes.First(n => n.Task.Id == 9);
+
+        Assert.True(node5.IsRunning);
+        Assert.True(node5.IsInFlight);
+        Assert.Equal("🚀 Running", node5.StatusLabel);
+        Assert.Equal("#064e3b", node5.FillColor);
+
+        Assert.True(node8.IsRunning);
+        Assert.True(node8.IsInFlight);
+        Assert.Equal("🚀 Running", node8.StatusLabel);
+        Assert.Equal("#064e3b", node8.FillColor);
+
+        Assert.False(node9.IsRunning);
+        Assert.False(node9.IsInFlight);
+        Assert.NotEqual("🚀 Running", node9.StatusLabel);
+    }
+
+    [Fact]
+    public void ComputeLayout_WhenStaleRunningTaskIdsMatchTerminalOrWaitingTasks_DoesNotMarkThemRunning()
+    {
+        var closedTask = new ForgeTask { Id = 1, Title = "Closed Task", Status = TaskOverallStatus.Closed };
+        var failedTask = new ForgeTask { Id = 2, Title = "Failed Task", Status = TaskOverallStatus.Failed };
+        var waitingTask = new ForgeTask { Id = 3, Title = "Waiting Task", Status = TaskOverallStatus.Open, IsWaitingForHuman = true };
+
+        var layout = _engine.ComputeLayout(
+            new[] { closedTask, failedTask, waitingTask },
+            Array.Empty<(int, int)>(),
+            activeTaskId: 1,
+            runningTaskIds: new[] { 1, 2, 3 });
+
+        var node1 = layout.Nodes.First(n => n.Task.Id == 1);
+        var node2 = layout.Nodes.First(n => n.Task.Id == 2);
+        var node3 = layout.Nodes.First(n => n.Task.Id == 3);
+
+        Assert.False(node1.IsRunning);
+        Assert.False(node1.IsInFlight);
+        Assert.Equal("✅ Closed", node1.StatusLabel);
+
+        Assert.False(node2.IsRunning);
+        Assert.False(node2.IsInFlight);
+        Assert.Equal("❌ Failed", node2.StatusLabel);
+
+        Assert.False(node3.IsRunning);
+        Assert.Equal("⚠️ Waiting Human", node3.StatusLabel);
+    }
 }

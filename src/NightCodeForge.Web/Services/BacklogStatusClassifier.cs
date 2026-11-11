@@ -20,7 +20,7 @@ public enum BacklogKanbanColumn
 /// </summary>
 public static class BacklogStatusClassifier
 {
-    public static BacklogKanbanColumn GetColumn(ForgeTask task, int? activeTaskId = null)
+    public static BacklogKanbanColumn GetColumn(ForgeTask task, int? activeTaskId = null, IEnumerable<int>? runningTaskIds = null)
     {
         ArgumentNullException.ThrowIfNull(task);
 
@@ -34,7 +34,10 @@ public static class BacklogStatusClassifier
             return BacklogKanbanColumn.Closed;
 
         // An actively executing task is In-Flight, unless it already reached a terminal/review state above.
-        if (activeTaskId.HasValue && task.Id == activeTaskId.Value)
+        var isRunning = (activeTaskId.HasValue && task.Id == activeTaskId.Value) ||
+                        (runningTaskIds != null && (runningTaskIds is ISet<int> set ? set.Contains(task.Id) : runningTaskIds.Contains(task.Id)));
+
+        if (isRunning)
             return BacklogKanbanColumn.InFlight;
 
         if (task.Status is TaskOverallStatus.Reviewed or TaskOverallStatus.Implemented)
@@ -54,6 +57,46 @@ public static class BacklogStatusClassifier
         return BacklogKanbanColumn.Open;
     }
 
-    public static bool IsInFlight(ForgeTask task, int? activeTaskId = null) => GetColumn(task, activeTaskId) == BacklogKanbanColumn.InFlight;
-    public static bool IsOpenBacklog(ForgeTask task, int? activeTaskId = null) => GetColumn(task, activeTaskId) == BacklogKanbanColumn.Open;
+    public static BacklogKanbanColumn GetColumn(ForgeTask task, IEnumerable<int>? runningTaskIds) =>
+        GetColumn(task, activeTaskId: null, runningTaskIds: runningTaskIds);
+
+    public static bool IsEligibleToRun(ForgeTask task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        if (task.IsWaitingForHuman)
+            return false;
+
+        return task.Status is not (
+            TaskOverallStatus.Draft or
+            TaskOverallStatus.Suggested or
+            TaskOverallStatus.Ready or
+            TaskOverallStatus.Closed or
+            TaskOverallStatus.Rejected or
+            TaskOverallStatus.Failed or
+            TaskOverallStatus.Cancelled);
+    }
+
+    public static bool IsRunning(ForgeTask task, int? activeTaskId = null, IEnumerable<int>? runningTaskIds = null)
+    {
+        if (!IsEligibleToRun(task))
+            return false;
+
+        return (activeTaskId.HasValue && task.Id == activeTaskId.Value) ||
+               (runningTaskIds != null && (runningTaskIds is ISet<int> set ? set.Contains(task.Id) : runningTaskIds.Contains(task.Id)));
+    }
+
+    public static bool IsRunning(ForgeTask task, IEnumerable<int>? runningTaskIds) =>
+        IsRunning(task, activeTaskId: null, runningTaskIds: runningTaskIds);
+
+    public static bool IsInFlight(ForgeTask task, int? activeTaskId = null, IEnumerable<int>? runningTaskIds = null) =>
+        GetColumn(task, activeTaskId, runningTaskIds) == BacklogKanbanColumn.InFlight;
+
+    public static bool IsInFlight(ForgeTask task, IEnumerable<int>? runningTaskIds) =>
+        GetColumn(task, activeTaskId: null, runningTaskIds: runningTaskIds) == BacklogKanbanColumn.InFlight;
+
+    public static bool IsOpenBacklog(ForgeTask task, int? activeTaskId = null, IEnumerable<int>? runningTaskIds = null) =>
+        GetColumn(task, activeTaskId, runningTaskIds) == BacklogKanbanColumn.Open;
+
+    public static bool IsOpenBacklog(ForgeTask task, IEnumerable<int>? runningTaskIds) =>
+        GetColumn(task, activeTaskId: null, runningTaskIds: runningTaskIds) == BacklogKanbanColumn.Open;
 }

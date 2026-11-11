@@ -154,6 +154,111 @@ public class TaskInspectorPageTests : BunitContext
     }
 
     [Fact]
+    public async Task TaskInspector_WhenMultipleTasksRunning_ShowsAllInRunningOptgroup()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 501,
+            WorkspaceId = 1,
+            Title = "Task Five-Zero-One",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 502,
+            WorkspaceId = 1,
+            Title = "Task Five-Zero-Two",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 503,
+            WorkspaceId = 1,
+            Title = "Task Five-Zero-Three",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true
+        });
+
+        _telemetryMock.Setup(t => t.GetActiveTasks()).Returns(new[]
+        {
+            new ActiveTaskSummary(501, "Task Five-Zero-One", "implementation", 1, "test", DateTime.UtcNow, "GPU"),
+            new ActiveTaskSummary(502, "Task Five-Zero-Two", "review", 2, "test", DateTime.UtcNow, "GPU")
+        });
+
+        _workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 501, "implementation", "Local GPU", "Task Five-Zero-One", "feature/501");
+
+        var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 503));
+
+        cut.WaitForState(() => cut.FindAll("optgroup").Any(g => g.GetAttribute("label") == "🚀 Running"));
+
+        var runningOptGroup = cut.FindAll("optgroup").First(g => g.GetAttribute("label") == "🚀 Running");
+        Assert.Contains("501", runningOptGroup.InnerHtml);
+        Assert.Contains("502", runningOptGroup.InnerHtml);
+        Assert.DoesNotContain("503", runningOptGroup.InnerHtml);
+
+        // Buttons for both running tasks to switch
+        Assert.NotNull(cut.Find("#switch-to-active-task-btn"));
+        Assert.NotNull(cut.Find("#switch-to-active-task-btn-502"));
+    }
+
+    [Fact]
+    public async Task TaskInspector_WhenSecondaryConcurrentTaskInspected_StepperHighlightsRunningStageAndStageTransitionAddsNewTask()
+    {
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 511,
+            WorkspaceId = 1,
+            Title = "Concurrent Task 511",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            CurrentStageId = "implementation"
+        });
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 512,
+            WorkspaceId = 1,
+            Title = "Concurrent Task 512",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            CurrentStageId = "task-review"
+        });
+
+        // Both 511 and 512 are active; 512 is the latest (so ActiveTaskId == 512), while we inspect 511
+        var now = DateTime.UtcNow;
+        _telemetryMock.Setup(t => t.GetActiveTasks()).Returns(new[]
+        {
+            new ActiveTaskSummary(511, "Concurrent Task 511", "implementation", 1, "test", now.AddSeconds(-10), "GPU"),
+            new ActiveTaskSummary(512, "Concurrent Task 512", "task-review", 2, "test", now, "GPU")
+        });
+        _workerState.HandleWorkerStatus(WorkerStatusConstants.Running, 512, "task-review", "Local GPU", "Concurrent Task 512", "feature/512");
+
+        var cut = Render<TaskInspector>(p => p.Add(x => x.TaskId, 511));
+        cut.WaitForState(() => cut.Markup.Contains("Concurrent Task 511"));
+
+        // Stage 3 (implementation) on Task 511 must be marked step-active with running spinner even though WorkerState.ActiveTaskId is 512
+        var implStep = cut.Find("#stage-step-3");
+        Assert.Contains("step-active", implStep.ClassName);
+        Assert.NotNull(implStep.QuerySelector(".spinner-pulse"));
+
+        // Now a newly started task 513 transitions to Running and should be dynamically added to the dropdown
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 513,
+            WorkspaceId = 1,
+            Title = "Newly Started Task 513",
+            Status = TaskOverallStatus.Open,
+            HasExecutionRun = true,
+            CurrentStageId = "task-review"
+        });
+        _hubConnection.TriggerStageTransition(513, "task-review", "Agentic", "Running");
+
+        cut.WaitForState(() => cut.Markup.Contains("Newly Started Task 513"));
+        Assert.Contains("#513 - Newly Started Task 513", cut.Markup);
+    }
+
+    [Fact]
     public async Task TaskInspector_ReusesPipelineStepper_WithStageStatusMapping()
     {
         var task = new ForgeTask

@@ -216,9 +216,14 @@
 
     private bool CheckIsRunning()
     {
+        if (!BacklogStatusClassifier.IsEligibleToRun(Task)) return false;
         if (IsRunning) return true;
         var workerState = ServiceProvider?.GetService<WorkerStateService>();
-        if (workerState?.Current?.ActiveTaskId == Task.Id) return true;
+        if (workerState != null)
+        {
+            var runningIds = TaskInspectorGroupingHelper.ResolveRunningTaskIds(workerState.Current);
+            if (runningIds.Contains(Task.Id)) return true;
+        }
         return false;
     }
 

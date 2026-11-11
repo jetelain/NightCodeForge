@@ -20,12 +20,19 @@ public class DagLayoutEngine : IDagLayoutEngine
         IReadOnlyList<ForgeTask> tasks,
         IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies,
         int? activeTaskId = null,
-        IReadOnlyList<ForgeTask>? allWorkspaceTasks = null)
+        IReadOnlyList<ForgeTask>? allWorkspaceTasks = null,
+        IReadOnlyCollection<int>? runningTaskIds = null)
     {
         var layout = new DagGraphLayout();
         if (tasks == null || tasks.Count == 0)
         {
             return layout;
+        }
+
+        var runningSet = new HashSet<int>(runningTaskIds ?? Array.Empty<int>());
+        if (activeTaskId.HasValue && activeTaskId.Value > 0)
+        {
+            runningSet.Add(activeTaskId.Value);
         }
 
         var taskMap = tasks.ToDictionary(t => t.Id);
@@ -135,7 +142,7 @@ public class DagLayoutEngine : IDagLayoutEngine
                     if (x + NodeWidth > currentMaxX) currentMaxX = x + NodeWidth;
                     if (y + NodeHeight > currentMaxY) currentMaxY = y + NodeHeight;
 
-                    var node = CreateLayoutNode(t, x, y, rank, allPrereqMap[t.Id], taskMap, activeTaskId, fullTaskMap);
+                    var node = CreateLayoutNode(t, x, y, rank, allPrereqMap[t.Id], taskMap, activeTaskId, fullTaskMap, runningSet);
                     layout.Nodes.Add(node);
                 }
             }
@@ -174,7 +181,7 @@ public class DagLayoutEngine : IDagLayoutEngine
                 if (x + NodeWidth > currentMaxX) currentMaxX = x + NodeWidth;
                 if (y + NodeHeight > currentMaxY) currentMaxY = y + NodeHeight;
 
-                var node = CreateLayoutNode(t, x, y, 0, allPrereqMap[t.Id], taskMap, activeTaskId, fullTaskMap);
+                var node = CreateLayoutNode(t, x, y, 0, allPrereqMap[t.Id], taskMap, activeTaskId, fullTaskMap, runningSet);
                 layout.Nodes.Add(node);
             }
         }
@@ -245,7 +252,8 @@ public class DagLayoutEngine : IDagLayoutEngine
         IReadOnlyList<int> prereqIds,
         Dictionary<int, ForgeTask> taskMap,
         int? activeTaskId = null,
-        Dictionary<int, ForgeTask>? fullTaskMap = null)
+        Dictionary<int, ForgeTask>? fullTaskMap = null,
+        HashSet<int>? runningTaskIds = null)
     {
         var lookupMap = fullTaskMap ?? taskMap;
         var blockers = prereqIds.Count(p =>
@@ -257,8 +265,8 @@ public class DagLayoutEngine : IDagLayoutEngine
             // If the prerequisite task is outside the visible set (and not in fullTaskMap), treat it as satisfied
             return false;
         });
-        var isRunning = activeTaskId.HasValue && task.Id == activeTaskId.Value;
-        var isInFlight = isRunning || IsInFlight(task, activeTaskId);
+        var isRunning = BacklogStatusClassifier.IsRunning(task, activeTaskId, runningTaskIds);
+        var isInFlight = isRunning || IsInFlight(task, activeTaskId, runningTaskIds);
         var isBlocked = task.Status == TaskOverallStatus.Open && !isInFlight && blockers > 0;
         var isReadyToExecute = task.Status == TaskOverallStatus.Open && !isInFlight && blockers == 0;
         var isRecentTerminal = TaskRecencyAndRetentionHelper.IsRecentTerminal(task);
@@ -287,7 +295,8 @@ public class DagLayoutEngine : IDagLayoutEngine
         };
     }
 
-    public static bool IsInFlight(ForgeTask task, int? activeTaskId = null) => BacklogStatusClassifier.IsInFlight(task, activeTaskId);
+    public static bool IsInFlight(ForgeTask task, int? activeTaskId = null, IEnumerable<int>? runningTaskIds = null) =>
+        BacklogStatusClassifier.IsInFlight(task, activeTaskId, runningTaskIds);
 
     public static string GetNodeFillColor(ForgeTask task, bool isBlocked, bool isInFlight, bool isRunning = false)
     {

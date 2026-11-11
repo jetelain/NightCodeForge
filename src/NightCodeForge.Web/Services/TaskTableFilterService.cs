@@ -56,7 +56,8 @@ public static class TaskTableFilterService
         TaskSortColumn sortColumn,
         bool sortAscending,
         DateTime? utcNow = null,
-        int? activeTaskId = null)
+        int? activeTaskId = null,
+        IEnumerable<int>? runningTaskIds = null)
     {
         if (tasks == null) return Array.Empty<ForgeTask>();
 
@@ -86,8 +87,8 @@ public static class TaskTableFilterService
         query = statusFilter switch
         {
             TaskStatusFilter.Suggested => query.Where(t => t.Status is TaskOverallStatus.Suggested or TaskOverallStatus.Draft),
-            TaskStatusFilter.Open => query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, activeTaskId)),
-            TaskStatusFilter.InFlight => query.Where(t => BacklogStatusClassifier.IsInFlight(t, activeTaskId)),
+            TaskStatusFilter.Open => query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, activeTaskId, runningTaskIds)),
+            TaskStatusFilter.InFlight => query.Where(t => BacklogStatusClassifier.IsInFlight(t, activeTaskId, runningTaskIds)),
             TaskStatusFilter.Ready => query.Where(t => t.Status == TaskOverallStatus.Ready),
             TaskStatusFilter.Failed => query.Where(t => t.Status == TaskOverallStatus.Failed),
             TaskStatusFilter.Closed => query.Where(t => t.Status == TaskOverallStatus.Closed),

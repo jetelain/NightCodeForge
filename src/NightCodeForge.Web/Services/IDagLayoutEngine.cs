@@ -14,7 +14,8 @@ public interface IDagLayoutEngine
         IReadOnlyList<ForgeTask> tasks,
         IReadOnlyList<(int TaskId, int DependsOnTaskId)> dependencies,
         int? activeTaskId = null,
-        IReadOnlyList<ForgeTask>? allWorkspaceTasks = null);
+        IReadOnlyList<ForgeTask>? allWorkspaceTasks = null,
+        IReadOnlyCollection<int>? runningTaskIds = null);
 }
 
 /// <summary>

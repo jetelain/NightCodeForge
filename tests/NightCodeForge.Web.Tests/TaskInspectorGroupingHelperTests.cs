@@ -112,4 +112,65 @@ public class TaskInspectorGroupingHelperTests
         Assert.Equal(TaskInspectorGroupingHelper.GroupFailed, groups[0].Label);
         Assert.Equal(99, groups[0].Tasks[0].Id);
     }
+
+    [Fact]
+    public void ResolveRunningTaskIds_CombinesSnapshotAndTelemetryActiveTasks()
+    {
+        var snapshot = new WorkerStatusSnapshot(
+            WorkerExecutionStatus.Running,
+            ActiveTaskId: 10,
+            ActiveTaskTitle: "Primary Task",
+            StageId: "stage-1",
+            StageKind: "exec",
+            HardwareTarget: "GPU",
+            PendingQuestionCount: 0,
+            ActiveTasks: new[]
+            {
+                new NightCodeForge.Core.Workflow.ActiveTaskSummary(10, "Task 10", "stage-1", 1, "test", DateTime.UtcNow, "GPU"),
+                new NightCodeForge.Core.Workflow.ActiveTaskSummary(20, "Task 20", "stage-2", 2, "test", DateTime.UtcNow, "GPU")
+            });
+
+        var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        telemetryMock.Setup(t => t.GetActiveTasks()).Returns(new[]
+        {
+            new NightCodeForge.Core.Workflow.ActiveTaskSummary(20, "Task 20", "stage-2", 2, "test", DateTime.UtcNow, "GPU"),
+            new NightCodeForge.Core.Workflow.ActiveTaskSummary(30, "Task 30", "stage-3", 3, "test", DateTime.UtcNow, "GPU")
+        });
+
+        var resolved = TaskInspectorGroupingHelper.ResolveRunningTaskIds(snapshot, telemetryMock.Object);
+
+        Assert.Equal(3, resolved.Count);
+        Assert.Contains(10, resolved);
+        Assert.Contains(20, resolved);
+        Assert.Contains(30, resolved);
+    }
+
+    [Fact]
+    public void ResolveRunningTaskIds_ExcludesNonRunningSnapshotAndIdeationSessions()
+    {
+        var blockedSnapshot = new WorkerStatusSnapshot(
+            WorkerExecutionStatus.Blocked,
+            ActiveTaskId: 44,
+            ActiveTaskTitle: "Blocked Task",
+            StageId: "stage-1",
+            StageKind: "exec",
+            HardwareTarget: "GPU",
+            PendingQuestionCount: 0,
+            ActiveTasks: Array.Empty<NightCodeForge.Core.Workflow.ActiveTaskSummary>());
+
+        var telemetryMock = new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>();
+        telemetryMock.Setup(t => t.GetActiveTasks()).Returns(new[]
+        {
+            new NightCodeForge.Core.Workflow.ActiveTaskSummary(0, "Ideation", StandardStageIds.Ideation, 1, "interactive", DateTime.UtcNow, "GPU"),
+            new NightCodeForge.Core.Workflow.ActiveTaskSummary(55, "Ideation With Id", StandardStageIds.Ideation, 1, "interactive", DateTime.UtcNow, "GPU"),
+            new NightCodeForge.Core.Workflow.ActiveTaskSummary(66, "Genuine Task", "implementation", 1, "test", DateTime.UtcNow, "GPU")
+        });
+
+        var resolved = TaskInspectorGroupingHelper.ResolveRunningTaskIds(blockedSnapshot, telemetryMock.Object);
+
+        Assert.Single(resolved);
+        Assert.Contains(66, resolved);
+        Assert.DoesNotContain(44, resolved);
+        Assert.DoesNotContain(55, resolved);
+    }
 }

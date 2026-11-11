@@ -4,9 +4,12 @@
 
 <div class="kanban-board-container">
     <div class="kanban-columns-grid">
+        @{
+            var runningIds = EffectiveRunningTaskIds;
+        }
         <!-- Column 1: Suggested / Triage -->
         @{
-            var suggestedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, ActiveTaskId) == BacklogKanbanColumn.Suggested).ToList();
+            var suggestedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.Suggested).ToList();
         }
         <div class="kanban-column column-suggested">
             <div class="column-header">
@@ -29,7 +32,7 @@
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
-                                    IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
+                                    IsRunning="IsTaskRunning(task)"
                                     OnClick="OnTaskSelected"
                                     OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
@@ -43,7 +46,7 @@
 
         <!-- Column 2: Open / Backlog -->
         @{
-            var openTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, ActiveTaskId) == BacklogKanbanColumn.Open).ToList();
+            var openTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.Open).ToList();
         }
         <div class="kanban-column column-open">
             <div class="column-header">
@@ -66,7 +69,7 @@
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
-                                    IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
+                                    IsRunning="IsTaskRunning(task)"
                                     OnClick="OnTaskSelected"
                                     OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
@@ -80,7 +83,7 @@
 
         <!-- Column 3: In-Flight -->
         @{
-            var inFlightTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, ActiveTaskId) == BacklogKanbanColumn.InFlight).ToList();
+            var inFlightTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.InFlight).ToList();
         }
         <div class="kanban-column column-inflight">
             <div class="column-header">
@@ -103,7 +106,7 @@
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
-                                    IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
+                                    IsRunning="IsTaskRunning(task)"
                                     OnClick="OnTaskSelected"
                                     OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
@@ -117,7 +120,7 @@
 
         <!-- Column 4: Ready for Review -->
         @{
-            var readyTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, ActiveTaskId) == BacklogKanbanColumn.ReadyForReview).ToList();
+            var readyTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.ReadyForReview).ToList();
         }
         <div class="kanban-column column-ready">
             <div class="column-header">
@@ -140,7 +143,7 @@
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
-                                    IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
+                                    IsRunning="IsTaskRunning(task)"
                                     OnClick="OnTaskSelected"
                                     OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
@@ -154,7 +157,7 @@
 
         <!-- Column 5: Closed & Terminal -->
         @{
-            var closedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, ActiveTaskId) == BacklogKanbanColumn.Closed).ToList();
+            var closedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.Closed).ToList();
             var orderedClosedTasks = TaskRecencyAndRetentionHelper.OrderClosedColumnTasks(closedTasks).ToList();
         }
         <div class="kanban-column column-closed">
@@ -178,7 +181,7 @@
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
-                                    IsRunning="ActiveTaskId.HasValue && task.Id == ActiveTaskId.Value"
+                                    IsRunning="IsTaskRunning(task)"
                                     OnClick="OnTaskSelected"
                                     OnInspect="OnInspectTask"
                                     OnPromote="OnPromoteTask"
@@ -197,10 +200,17 @@
     [Parameter] public IReadOnlyList<ForgeTask>? AllTasks { get; set; }
     [Parameter] public IReadOnlyDictionary<int, IReadOnlyList<int>> TaskDependencies { get; set; } = new Dictionary<int, IReadOnlyList<int>>();
     [Parameter] public int? ActiveTaskId { get; set; }
+    [Parameter] public IReadOnlyCollection<int>? RunningTaskIds { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnTaskSelected { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnInspectTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromoteTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnRejectTask { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
     [Parameter] public EventCallback<(ForgeTask Task, int NewPriority)> OnPriorityChanged { get; set; }
+
+    private HashSet<int> EffectiveRunningTaskIds =>
+        TaskInspectorGroupingHelper.ResolveRunningTaskIds(ActiveTaskId, RunningTaskIds);
+
+    private bool IsTaskRunning(ForgeTask task) =>
+        BacklogStatusClassifier.IsRunning(task, ActiveTaskId, RunningTaskIds);
 }

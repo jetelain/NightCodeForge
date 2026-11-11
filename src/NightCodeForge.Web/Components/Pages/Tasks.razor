@@ -260,7 +260,7 @@
                                                 {
                                                     <span class="badge-waiting-human" style="font-size: 0.75rem;">💬 Human Input</span>
                                                 }
-                                                else if (BacklogStatusClassifier.IsInFlight(task, WorkerState.Current.ActiveTaskId))
+                                                else if (BacklogStatusClassifier.IsInFlight(task, runningTaskIds: EffectiveRunningTaskIds))
                                                 {
                                                     <span class="forge-badge badge-purple" style="font-size: 0.75rem;">⚡ In-Flight</span>
                                                 }
@@ -379,6 +379,9 @@
         _priorityFilter.HasValue ||
         _recencyFilter != TaskRecencyFilter.AllTime;
 
+    private HashSet<int> EffectiveRunningTaskIds =>
+        TaskInspectorGroupingHelper.ResolveRunningTaskIds(WorkerState.Current);
+
     private IReadOnlyList<ForgeTask> FilteredTasks =>
         TaskTableFilterService.FilterAndSort(
             _rawTasks,
@@ -388,7 +391,7 @@
             _recencyFilter,
             _sortColumn,
             _sortAscending,
-            activeTaskId: WorkerState.Current.ActiveTaskId);
+            runningTaskIds: EffectiveRunningTaskIds);
 
     protected override async Task OnInitializedAsync()
     {

@@ -424,7 +424,7 @@
                 }
                 return activeConv.Status;
             }
-            if (WorkerState?.Current.ActiveTaskId == _task.Id) return StageExecutionStatus.Running;
+            if (IsTaskRunningInWorker(_task.Id)) return StageExecutionStatus.Running;
             if (_task.Status == TaskOverallStatus.Ready || _task.Status == TaskOverallStatus.Closed) return StageExecutionStatus.Completed;
             if (_task.Status == TaskOverallStatus.Failed) return StageExecutionStatus.Failed;
             return null;
@@ -433,6 +433,28 @@
 
     private WorkerStateService? WorkerState => ServiceProvider.GetService<WorkerStateService>();
     private IDevQueueService? DevQueueService => ServiceProvider.GetService<IDevQueueService>();
+
+    private bool IsTaskRunningInWorker(int taskId)
+    {
+        if (WorkerState == null || !WorkerState.IsRunning) return false;
+        return WorkerState.ActiveTaskId == taskId ||
+               WorkerState.ActiveTaskIds.Contains(taskId) ||
+               WorkerState.Current.ActiveTasks.Any(t => t.TaskId == taskId);
+    }
+
+    private bool IsTaskStageRunningInWorker(int taskId, string stageId)
+    {
+        if (WorkerState == null || !WorkerState.IsRunning) return false;
+        if (WorkerState.ActiveTaskId == taskId &&
+            string.Equals(WorkerState.Current.StageId, stageId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return WorkerState.Current.ActiveTasks.Any(t =>
+            t.TaskId == taskId &&
+            string.Equals(t.CurrentStageId, stageId, StringComparison.OrdinalIgnoreCase));
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -714,10 +736,7 @@
                             _selectedConversation.Status == StageExecutionStatus.Running &&
                             string.Equals(_selectedConversation.StageId, stageId, StringComparison.OrdinalIgnoreCase);
 
-        var isWorkerRunningStage = WorkerState != null &&
-                                   WorkerState.ActiveTaskId == _task.Id &&
-                                   WorkerState.IsRunning &&
-                                   string.Equals(WorkerState.Current.StageId, stageId, StringComparison.OrdinalIgnoreCase);
+        var isWorkerRunningStage = IsTaskStageRunningInWorker(_task.Id, stageId);
 
         return (isConvRunning || isWorkerRunningStage) &&
                _task.Status != TaskOverallStatus.Closed &&
