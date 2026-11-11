@@ -97,6 +97,61 @@ public class Step917AgentsAskToolAndIdeationTests
     }
 
     [Fact]
+    public async Task AskTool_WithDoubleNestedJsonPrompt_ThrowsHumanInterruptionExceptionWithUnpackedQuestions()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(AppContext.BaseDirectory, pathResolver: TestPathResolver.Create());
+        tools.AskHandler = null;
+
+        var rawPrompt = """[{"prompt": "Where should recommended.json persist?", "rationale": "Persistence design", "options": ["Repo root", "Crucible dir"]}, {"prompt": "What should the semantics of default be?", "rationale": "Behavior", "options": ["Opt A", "Opt B"]}]""";
+        var questions = new[]
+        {
+            new QuestionItem(rawPrompt)
+        };
+
+        var ex = await Assert.ThrowsAsync<HumanInterruptionException>(() => tools.AskAsync(questions));
+
+        Assert.Equal(2, ex.Questions.Count);
+        Assert.Equal("Where should recommended.json persist?", ex.Questions[0].Prompt);
+        Assert.Equal("Persistence design", ex.Questions[0].Rationale);
+        Assert.Equal(QuestionType.SingleChoice, ex.Questions[0].QuestionType);
+        Assert.Contains("Repo root", ex.Questions[0].OptionsJson!);
+
+        Assert.Equal("What should the semantics of default be?", ex.Questions[1].Prompt);
+        Assert.Equal("Behavior", ex.Questions[1].Rationale);
+        Assert.Equal(QuestionType.SingleChoice, ex.Questions[1].QuestionType);
+        Assert.Contains("Opt A", ex.Questions[1].OptionsJson!);
+    }
+
+    [Fact]
+    public async Task AskTool_WithDoubleNestedJsonPromptAndHandler_PassesUnpackedQuestionsToHandler()
+    {
+        var tools = TestCanonicalToolsBuilder.Create(AppContext.BaseDirectory, pathResolver: TestPathResolver.Create());
+
+        IReadOnlyList<QuestionItem>? receivedQuestions = null;
+        tools.AskHandler = (questions, ct) =>
+        {
+            receivedQuestions = questions;
+            return Task.FromResult("Q1: Answer 1\nQ2: Answer 2");
+        };
+
+        var rawPrompt = """[{"prompt": "Q1", "options": ["A", "B"]}, {"prompt": "Q2", "options": ["C", "D"]}]""";
+        var questions = new[]
+        {
+            new QuestionItem(rawPrompt)
+        };
+
+        var result = await tools.AskAsync(questions);
+
+        Assert.NotNull(receivedQuestions);
+        Assert.Equal(2, receivedQuestions!.Count);
+        Assert.Equal("Q1", receivedQuestions[0].Prompt);
+        Assert.Equal(["A", "B"], receivedQuestions[0].Options);
+        Assert.Equal("Q2", receivedQuestions[1].Prompt);
+        Assert.Equal(["C", "D"], receivedQuestions[1].Options);
+        Assert.Contains("Q1: Answer 1", result);
+    }
+
+    [Fact]
     public async Task Ideation_AskHandler_BatchedQuestions_AwaitedAndNumberedAnswersReturned()
     {
         var tools = TestCanonicalToolsBuilder.Create(AppContext.BaseDirectory, pathResolver: TestPathResolver.Create());

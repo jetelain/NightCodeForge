@@ -494,6 +494,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             }
         }
 
+        CrucibleAgentHarness.StripAttribution(chatHistory);
         return chatHistory;
     }
 

@@ -73,7 +73,9 @@
     {
         var index = i;
         var q = items[i];
-        var curQId = QuestionIds != null && index < QuestionIds.Count ? QuestionIds[index] : (QuestionId ?? (index + 1));
+        var curQId = QuestionIds != null && index < QuestionIds.Count
+            ? (QuestionIds.Count == items.Count ? QuestionIds[index].ToString() : $"{QuestionIds[index]}-{index + 1}")
+            : (QuestionId.HasValue ? (isMulti ? $"{QuestionId.Value}-{index + 1}" : QuestionId.Value.ToString()) : (index + 1).ToString());
 
         <div class="agent-question-item-card" id="batch-question-@curQId">
             <div class="prompt-title agent-question-prompt d-flex align-items-center mb-1">

@@ -315,7 +315,8 @@ public static class StageConversationParser
     }
 
     /// <summary>
-    /// Maps a 0-indexed dictionary of answers to target Question IDs.
+    /// Maps a 0-indexed dictionary of answers to target Question IDs,
+    /// safely formatting multiple answers when a single Question entity unpacks into multiple <see cref="QuestionItem"/> prompts.
     /// </summary>
     public static Dictionary<int, string> MapAnswersToQuestionIds(
         IReadOnlyList<Question>? batchQuestions,
@@ -327,21 +328,57 @@ public static class StageConversationParser
             return dict;
         }
 
+        int currentIndex = 0;
+        for (int qIdx = 0; qIdx < batchQuestions.Count; qIdx++)
+        {
+            var q = batchQuestions[qIdx];
+            if (q == null) continue;
+
+            var unpacked = QuestionItemParser.ToQuestionItems(q);
+            int itemCount = Math.Max(1, unpacked.Count);
+
+            if (q.Status == QuestionStatus.Pending && !dict.ContainsKey(q.Id))
+            {
+                if (itemCount == 1)
+                {
+                    if (answersByIndex.TryGetValue(currentIndex, out var ans) && !string.IsNullOrWhiteSpace(ans))
+                    {
+                        dict[q.Id] = ans.Trim();
+                    }
+                }
+                else
+                {
+                    var subAnswers = new Dictionary<int, string>();
+                    bool allAnswered = true;
+                    for (int subIdx = 0; subIdx < itemCount; subIdx++)
+                    {
+                        if (answersByIndex.TryGetValue(currentIndex + subIdx, out var ans) && !string.IsNullOrWhiteSpace(ans))
+                        {
+                            subAnswers[subIdx] = ans.Trim();
+                        }
+                        else
+                        {
+                            allAnswered = false;
+                        }
+                    }
+
+                    if (allAnswered && subAnswers.Count == itemCount)
+                    {
+                        dict[q.Id] = FormatSingleSubmissionAnswer(subAnswers);
+                    }
+                }
+            }
+
+            currentIndex += itemCount;
+        }
+
+        // Fallback for any remaining indices beyond the unpacked count
         foreach (var (index, ans) in answersByIndex)
         {
-            if (string.IsNullOrWhiteSpace(ans)) continue;
+            if (index < currentIndex || string.IsNullOrWhiteSpace(ans)) continue;
 
-            Question? targetQuestion = null;
-            if (index < batchQuestions.Count)
-            {
-                targetQuestion = batchQuestions[index];
-            }
-            else
-            {
-                targetQuestion = batchQuestions.FirstOrDefault(q => q.Status == QuestionStatus.Pending && !dict.ContainsKey(q.Id));
-            }
-
-            if (targetQuestion != null && targetQuestion.Status == QuestionStatus.Pending && !dict.ContainsKey(targetQuestion.Id))
+            var targetQuestion = batchQuestions.FirstOrDefault(q => q != null && q.Status == QuestionStatus.Pending && !dict.ContainsKey(q.Id));
+            if (targetQuestion != null)
             {
                 dict[targetQuestion.Id] = ans.Trim();
             }

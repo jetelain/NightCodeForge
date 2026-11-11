@@ -235,4 +235,76 @@ public class QuestionCardTests : BunitContext
         var submitBtn = cut.Find("button.submit-answer-btn");
         Assert.Equal("submit-answer-btn-0", submitBtn.GetAttribute("data-testid"));
     }
+
+    [Fact]
+    public void SingleQuestionEntity_WithNestedJsonPrompt_UnpacksIntoMultipleQuestionCards_RequiresAllAnswers_AndSubmitsCombinedAnswer()
+    {
+        var question = new Question
+        {
+            Id = 129,
+            TaskId = 66,
+            Prompt = "[{\"prompt\": \"Where should recommended.json persist?\", \"rationale\": \"Persistence design\", \"options\": [\"Repo root\", \"Crucible dir\"]}, {\"prompt\": \"What should the semantics of default be?\", \"rationale\": \"Behavior\", \"options\": [\"Opt A\", \"Opt B\"]}]"
+        };
+
+        var cut = Render<QuestionCard>(p => p.Add(c => c.Question, question));
+
+        var itemCards = cut.FindAll(".agent-question-item-card");
+        Assert.Equal(2, itemCards.Count);
+        Assert.Equal("batch-question-129-1", itemCards[0].GetAttribute("id"));
+        Assert.Equal("batch-question-129-2", itemCards[1].GetAttribute("id"));
+
+        var submitBtn = cut.Find("#submit-answer-btn-129");
+        Assert.True(submitBtn.HasAttribute("disabled"));
+
+        // Answer only the first unpacked question -> button remains disabled because RequireAllAnswers is true
+        cut.Find("#clarification-input-129-1").Input("Repo root");
+        Assert.True(cut.Find("#submit-answer-btn-129").HasAttribute("disabled"));
+
+        // Answer the second unpacked question -> button becomes enabled
+        cut.Find("#clarification-input-129-2").Input("Opt B");
+        Assert.False(cut.Find("#submit-answer-btn-129").HasAttribute("disabled"));
+
+        cut.Find("#submit-answer-btn-129").Click();
+
+        Assert.NotNull(_orchestrator.LastSubmitHumanAnswerCall);
+        Assert.Equal(129, _orchestrator.LastSubmitHumanAnswerCall.Value.QuestionId);
+        Assert.Equal("Q1: Repo root\n\nQ2: Opt B", _orchestrator.LastSubmitHumanAnswerCall.Value.Answer);
+    }
+
+    [Fact]
+    public void BatchQuestions_WhenOneEntityContainsNestedJsonArray_MapsUnpackedAnswersToTargetEntityIds()
+    {
+        var batch = new List<Question>
+        {
+            new()
+            {
+                Id = 201,
+                TaskId = 88,
+                BatchId = "b88",
+                Prompt = "[{\"prompt\": \"Sub Q1?\"}, {\"prompt\": \"Sub Q2?\"}]"
+            },
+            new()
+            {
+                Id = 202,
+                TaskId = 88,
+                BatchId = "b88",
+                Prompt = "Standalone Q3?"
+            }
+        };
+
+        var cut = Render<QuestionCard>(p => p.Add(c => c.Questions, batch));
+
+        Assert.Equal(3, cut.FindAll("textarea.question-textarea").Count);
+
+        cut.FindAll("textarea.question-textarea")[0].Input("Ans 1");
+        cut.FindAll("textarea.question-textarea")[1].Input("Ans 2");
+        cut.FindAll("textarea.question-textarea")[2].Input("Ans 3");
+
+        cut.Find("#submit-all-btn-b88").Click();
+
+        Assert.NotNull(_orchestrator.LastSubmitAnswersCall);
+        Assert.Equal(88, _orchestrator.LastSubmitAnswersCall.Value.TaskId);
+        Assert.Equal("Q1: Ans 1\n\nQ2: Ans 2", _orchestrator.LastSubmitAnswersCall.Value.Answers[201]);
+        Assert.Equal("Ans 3", _orchestrator.LastSubmitAnswersCall.Value.Answers[202]);
+    }
 }

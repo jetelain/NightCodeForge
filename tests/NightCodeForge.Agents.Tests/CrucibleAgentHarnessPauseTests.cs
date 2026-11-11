@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible;
@@ -323,6 +324,52 @@ public class CrucibleAgentHarnessPauseTests : IDisposable
         // Assistant turn must be removed because call-2 has no result
         Assert.Single(messages);
         Assert.Equal(ChatRole.User, messages[0].Role);
+    }
+
+    [Fact]
+    public void StripAttribution_WhenMessagesContainMafAttribution_RemovesAttributionKey()
+    {
+        var userMsg = new ChatMessage(ChatRole.User, "Do work")
+            .WithAgentRequestMessageSource(AgentRequestMessageSourceType.ChatHistory);
+        var assistantMsg = new ChatMessage(ChatRole.Assistant, "Working")
+            .WithAgentRequestMessageSource(AgentRequestMessageSourceType.ChatHistory);
+        var toolMsg = new ChatMessage(ChatRole.Tool, "Done");
+
+        var messages = new List<ChatMessage> { userMsg, assistantMsg, toolMsg };
+
+        Assert.Equal(AgentRequestMessageSourceType.ChatHistory, messages[0].GetAgentRequestMessageSourceType());
+        Assert.Equal(AgentRequestMessageSourceType.ChatHistory, messages[1].GetAgentRequestMessageSourceType());
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[2].GetAgentRequestMessageSourceType());
+
+        CrucibleAgentHarness.StripAttribution(messages);
+
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[0].GetAgentRequestMessageSourceType());
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[1].GetAgentRequestMessageSourceType());
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[2].GetAgentRequestMessageSourceType());
+        Assert.False(messages[0].AdditionalProperties?.ContainsKey(AgentRequestMessageSourceAttribution.AdditionalPropertiesKey) ?? false);
+    }
+
+    [Fact]
+    public void SanitizeInFlightTurns_WhenMessagesContainMafAttribution_StripsAttribution()
+    {
+        var messages = new List<ChatMessage>
+        {
+            new ChatMessage(ChatRole.User, "Task #98: Do something")
+                .WithAgentRequestMessageSource(AgentRequestMessageSourceType.ChatHistory),
+            new ChatMessage(ChatRole.Assistant, [
+                new FunctionCallContent("call-1", "bash", new Dictionary<string, object?> { ["command"] = "ls" })
+            ]).WithAgentRequestMessageSource(AgentRequestMessageSourceType.ChatHistory),
+            new ChatMessage(ChatRole.Tool, [
+                new FunctionResultContent("call-1", "file.txt")
+            ])
+        };
+
+        CrucibleAgentHarness.SanitizeInFlightTurns(messages);
+
+        Assert.Equal(3, messages.Count);
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[0].GetAgentRequestMessageSourceType());
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[1].GetAgentRequestMessageSourceType());
+        Assert.Equal(AgentRequestMessageSourceType.External, messages[2].GetAgentRequestMessageSourceType());
     }
 
     [Fact]

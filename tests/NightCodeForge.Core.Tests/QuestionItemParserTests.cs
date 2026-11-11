@@ -311,4 +311,105 @@ public class QuestionItemParserTests
         Assert.Equal("Which DB?", questions[0].Prompt);
         Assert.Equal(["SQLite", "Postgres"], questions[0].Options);
     }
+
+    [Fact]
+    public void Parse_WithDoubleNestedJsonArrayInPrompt_PreservesAllQuestions()
+    {
+        // Live repro: Task 66 double-nested JSON prompt
+        var json = """
+        {
+            "questions": [
+                {
+                    "prompt": "[{\"prompt\": \"Where should recommended.json persist?\", \"rationale\": \"Persistence design\", \"options\": [\"Repo root\", \"Crucible dir\"]}, {\"prompt\": \"What should the semantics of default be?\", \"rationale\": \"Behavior\", \"options\": [\"Opt A\", \"Opt B\"]}]"
+                }
+            ]
+        }
+        """;
+
+        var questions = QuestionItemParser.Parse(json);
+
+        Assert.Equal(2, questions.Count);
+        Assert.Equal("Where should recommended.json persist?", questions[0].Prompt);
+        Assert.Equal("Persistence design", questions[0].Rationale);
+        Assert.Equal(["Repo root", "Crucible dir"], questions[0].Options);
+
+        Assert.Equal("What should the semantics of default be?", questions[1].Prompt);
+        Assert.Equal("Behavior", questions[1].Rationale);
+        Assert.Equal(["Opt A", "Opt B"], questions[1].Options);
+    }
+
+    [Fact]
+    public void Normalize_WithNestedJsonPrompt_FlattensIntoDistinctQuestions()
+    {
+        var rawPrompt = "[{\"prompt\": \"Q1\", \"options\": [\"A\", \"B\"]}, {\"prompt\": \"Q2\", \"options\": [\"C\"]}]";
+        var input = new List<QuestionItem>
+        {
+            new(rawPrompt)
+        };
+
+        var normalized = QuestionItemParser.Normalize(input);
+
+        Assert.Equal(2, normalized.Count);
+        Assert.Equal("Q1", normalized[0].Prompt);
+        Assert.Equal(["A", "B"], normalized[0].Options);
+        Assert.Equal("Q2", normalized[1].Prompt);
+        Assert.Equal(["C"], normalized[1].Options);
+    }
+
+    [Fact]
+    public void Normalize_WithCleanItems_ReturnsSameListWithoutAllocation()
+    {
+        var input = new List<QuestionItem>
+        {
+            new("Clean prompt 1", null, new[] { "A", "B" }),
+            new("Clean prompt 2")
+        };
+
+        var normalized = QuestionItemParser.Normalize(input);
+
+        Assert.Same(input, normalized);
+    }
+
+    [Fact]
+    public void ToQuestionItems_WithDoubleNestedPromptEntity_UnpacksBothQuestions()
+    {
+        var entity = new Question
+        {
+            Id = 129,
+            TaskId = 66,
+            Prompt = "[{\"prompt\": \"Where to persist?\", \"rationale\": \"Design\", \"options\": [\"A\", \"B\"]}, {\"prompt\": \"Semantics?\", \"options\": [\"1\", \"2\"]}]",
+            Rationale = "",
+            OptionsJson = null
+        };
+
+        var items = QuestionItemParser.ToQuestionItems(entity);
+
+        Assert.Equal(2, items.Count);
+        Assert.Equal("Where to persist?", items[0].Prompt);
+        Assert.Equal("Design", items[0].Rationale);
+        Assert.Equal(["A", "B"], items[0].Options);
+
+        Assert.Equal("Semantics?", items[1].Prompt);
+        Assert.Equal(["1", "2"], items[1].Options);
+    }
+
+    [Fact]
+    public void ToQuestionItems_WithCleanEntity_ReturnsMappedItem()
+    {
+        var entity = new Question
+        {
+            Id = 1,
+            TaskId = 10,
+            Prompt = "Target runtime?",
+            Rationale = "Configuration",
+            OptionsJson = "[\"net9.0\", \"net10.0\"]"
+        };
+
+        var items = QuestionItemParser.ToQuestionItems(entity);
+
+        Assert.Single(items);
+        Assert.Equal("Target runtime?", items[0].Prompt);
+        Assert.Equal("Configuration", items[0].Rationale);
+        Assert.Equal(["net9.0", "net10.0"], items[0].Options);
+    }
 }

@@ -1,8 +1,8 @@
 @namespace NightCodeForge.Web.Components.Inbox
-@using System.Text.Json
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Monitoring
+@using NightCodeForge.Web.Services
 @inject ITaskOrchestrator TaskOrchestrator
 @inject ToastService ToastService
 @inject WorkerStateService WorkerState
@@ -10,7 +10,8 @@
 @if (IsSingleQuestion)
 {
     var singleQ = EffectiveQuestions[0];
-    <AgentQuestionTurnCard Questions="@(new[] { new QuestionItem(singleQ.Prompt, singleQ.Rationale, GetOptions(singleQ)) })"
+    var singleItems = QuestionItemParser.ToQuestionItems(singleQ);
+    <AgentQuestionTurnCard Questions="@singleItems"
                            QuestionIds="@(new[] { singleQ.Id })"
                            TaskId="@singleQ.TaskId"
                            TaskTitle="@(singleQ.ForgeTask?.Title ?? $"Task #{singleQ.TaskId}")"
@@ -20,13 +21,14 @@
                            AskedAt="@singleQ.AskedAt"
                            QuestionId="@singleQ.Id"
                            IsWaitingForAnswer="true"
+                           RequireAllAnswers="@(singleItems.Count > 1)"
                            OnAnswerSubmitted="(ans) => SubmitSingleAnswerAsync(singleQ, ans)" />
 }
 else if (EffectiveQuestions.Count > 1)
 {
     var firstQ = EffectiveQuestions[0];
     var batchIdentifier = firstQ.BatchId ?? firstQ.TaskId.ToString();
-    var batchItems = EffectiveQuestions.Select(q => new QuestionItem(q.Prompt, q.Rationale, GetOptions(q))).ToList();
+    var batchItems = QuestionItemParser.ToQuestionItems(EffectiveQuestions);
     var qIds = EffectiveQuestions.Select(q => q.Id).ToList();
 
     <AgentQuestionTurnCard Questions="@batchItems"
@@ -61,21 +63,6 @@ else if (EffectiveQuestions.Count > 1)
 
     private bool IsSingleQuestion => EffectiveQuestions.Count == 1;
 
-    private List<string> GetOptions(Question q)
-    {
-        if (string.IsNullOrWhiteSpace(q.OptionsJson))
-            return new List<string>();
-
-        try
-        {
-            return JsonSerializer.Deserialize<List<string>>(q.OptionsJson) ?? new List<string>();
-        }
-        catch
-        {
-            return new List<string>();
-        }
-    }
-
     private async Task SubmitSingleAnswerAsync(Question q, string answer)
     {
         if (string.IsNullOrWhiteSpace(answer)) return;
@@ -105,15 +92,7 @@ else if (EffectiveQuestions.Count > 1)
         try
         {
             var firstQ = EffectiveQuestions[0];
-            var dict = new Dictionary<int, string>();
-            for (int i = 0; i < EffectiveQuestions.Count; i++)
-            {
-                var q = EffectiveQuestions[i];
-                if (batchAnswers.TryGetValue(i, out var ans) && !string.IsNullOrWhiteSpace(ans))
-                {
-                    dict[q.Id] = ans;
-                }
-            }
+            var dict = StageConversationParser.MapAnswersToQuestionIds(EffectiveQuestions, batchAnswers);
 
             if (dict.Count < EffectiveQuestions.Count)
             {

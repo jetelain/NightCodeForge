@@ -85,6 +85,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var conversationState = await _conversationCoordinator.BeginAsync(context, HarnessId, cancellationToken);
         var conversation = conversationState.Conversation;
         var chatHistory = conversationState.ChatHistory;
+        StripAttribution(chatHistory);
 
         // Announced once the conversation record exists so a live UI can find and follow it.
         var stageMetadata = new Dictionary<string, object?>
@@ -229,6 +230,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         chatHistory.Clear();
                         chatHistory.AddRange(history);
+                        StripAttribution(chatHistory);
                         latestSerializedState = SerializeSession(chatHistory);
                         return Task.CompletedTask;
                     },
@@ -260,6 +262,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             {
                 chatHistory.Clear();
                 chatHistory.AddRange(notification.IncludedMessages);
+                StripAttribution(chatHistory);
                 latestSerializedState = SerializeSession(chatHistory);
 
                 await conversationState.DrainAsync();
@@ -1715,12 +1718,29 @@ public partial class CrucibleAgentHarness : IAgentHarness
     }
 
     /// <summary>
-    /// Rolls back any incomplete assistant tool call turns whose tool results were not recorded.
+    /// Strips MAF internal message source attribution metadata (<c>_attribution</c>) from messages.
+    /// This prevents MAF's <c>DefaultExcludeChatHistoryFilter</c> from discarding messages
+    /// when chat history is re-seeded into a newly created <see cref="AgentSession"/> on retry or resume.
+    /// </summary>
+    public static void StripAttribution(IEnumerable<ChatMessage>? messages)
+    {
+        if (messages == null) return;
+        foreach (var message in messages)
+        {
+            message.AdditionalProperties?.Remove(AgentRequestMessageSourceAttribution.AdditionalPropertiesKey);
+        }
+    }
+
+    /// <summary>
+    /// Rolls back any incomplete assistant tool call turns whose tool results were not recorded,
+    /// and strips MAF history attribution to prevent message dropping upon new session creation.
     /// This prevents HTTP 400 Bad Request syntax errors on session resumption.
     /// </summary>
     public static void SanitizeInFlightTurns(List<ChatMessage> history)
     {
         if (history == null || history.Count == 0) return;
+
+        StripAttribution(history);
 
         var callIdsWithResults = new HashSet<string>(
             history.SelectMany(m => m.Contents)

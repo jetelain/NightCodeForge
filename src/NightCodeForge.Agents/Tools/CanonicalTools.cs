@@ -689,14 +689,16 @@ public partial class CanonicalTools
     /// </summary>
     public async Task<string> AskAsync(IReadOnlyList<QuestionItem>? questions, CancellationToken cancellationToken = default)
     {
-        if (questions == null || questions.Count == 0)
+        var effectiveQuestions = QuestionItemParser.Normalize(questions);
+
+        if (effectiveQuestions == null || effectiveQuestions.Count == 0)
         {
             return "Error: At least one question must be provided in 'questions'. Consolidate all clarifying questions into a list.";
         }
 
-        for (int i = 0; i < questions.Count; i++)
+        for (int i = 0; i < effectiveQuestions.Count; i++)
         {
-            var q = questions[i];
+            var q = effectiveQuestions[i];
             if (string.IsNullOrWhiteSpace(q.Prompt))
             {
                 return $"Error: Question at index {i} has a blank or empty prompt.";
@@ -705,10 +707,10 @@ public partial class CanonicalTools
 
         if (AskHandler == null)
         {
-            throw new HumanInterruptionException(questions);
+            throw new HumanInterruptionException(effectiveQuestions);
         }
 
-        return await AskHandler(questions, cancellationToken).ConfigureAwait(false);
+        return await AskHandler(effectiveQuestions, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

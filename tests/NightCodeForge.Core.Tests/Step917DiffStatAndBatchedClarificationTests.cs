@@ -122,6 +122,29 @@ public class Step917DiffStatAndBatchedClarificationTests
     }
 
     [Fact]
+    public void HumanInterruptionException_WithNestedJsonPrompt_UnpacksIntoDistinctQuestions()
+    {
+        var rawPrompt = """[{"prompt": "Q1", "options": ["A", "B"]}, {"prompt": "Q2", "options": ["C"]}]""";
+        var items = new[] { new QuestionItem(rawPrompt) };
+
+        var ex = new HumanInterruptionException(items);
+
+        Assert.Equal(2, ex.Questions.Count);
+        Assert.Equal("Q1", ex.Questions[0].Prompt);
+        Assert.Equal("Q2", ex.Questions[1].Prompt);
+        Assert.Equal(QuestionType.SingleChoice, ex.Questions[0].QuestionType);
+        Assert.Contains("A", ex.Questions[0].OptionsJson!);
+
+        // Also test with Question entity collection
+        var entityQuestions = new[] { new Question { Prompt = rawPrompt } };
+        var ex2 = new HumanInterruptionException(entityQuestions);
+
+        Assert.Equal(2, ex2.Questions.Count);
+        Assert.Equal("Q1", ex2.Questions[0].Prompt);
+        Assert.Equal("Q2", ex2.Questions[1].Prompt);
+    }
+
+    [Fact]
     public async Task Orchestrator_BatchResumption_ValidatesStrictly()
     {
         var taskRepo = new InMemoryTaskRepository();
