@@ -52,6 +52,7 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
         if (existing != null)
         {
             context.Entry(existing).CurrentValues.SetValues(workspace);
+            existing.GitHubSettings = workspace.GitHubSettings;
             await SyncAgentProfilesAsync(context, workspace, existing, cancellationToken);
         }
         else

@@ -1,0 +1,607 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using Microsoft.Extensions.Options
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Security
+@using NightCodeForge.Web.Services
+@inject GitHubSettingsUiService UiService
+@inject IOptions<SecurityOptions> SecurityOptions
+@inject ToastService ToastService
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+
+<div class="forge-card mt-3" style="padding: 2rem;">
+    <!-- Header -->
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem; flex-wrap: wrap; gap: 1.5rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                <span style="font-size: 1.75rem;">🐙</span>
+                <h3 style="font-weight: 700; font-size: 1.35rem; margin: 0; color: var(--text-primary);">
+                    GitHub App Integration
+                </h3>
+                @if (_connectionState.IsConnected)
+                {
+                    <span class="forge-badge badge-teal" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
+                        🟢 Connected (@(_connectionState.AuthenticatedUser?.Login ?? "Authorized"))
+                    </span>
+                }
+                else
+                {
+                    <span class="forge-badge badge-gray" style="padding: 0.3rem 0.75rem; font-size: 0.82rem;">
+                        ⚪ Disconnected
+                    </span>
+                }
+            </div>
+            <p style="margin: 0; font-size: 0.92rem; color: var(--text-secondary); line-height: 1.6; max-width: 820px;">
+                Connect your GitHub account using the GitHub App Device Flow with fine-grained repository permissions. Credentials are stored securely in your operating system keyring (via KeySharp), never in SQLite.
+            </p>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@_isSaving">
+                @(_isSaving ? "Saving..." : "💾 Save GitHub Settings")
+            </button>
+        </div>
+    </div>
+
+    @if (_isLoading)
+    {
+        <div style="display: flex; justify-content: center; padding: 3rem;">
+            <span class="forge-spinner"></span>
+            <span style="margin-left: 1rem; color: var(--text-secondary);">Loading GitHub integration settings...</span>
+        </div>
+    }
+    else
+    {
+        var availableOwners = UiService.GetAvailableOwners(_accessibleRepositories, _connectionState.AuthenticatedUser?.Login, _settings.RepositoryOwner);
+        var availableReposForOwner = UiService.GetRepositoriesForOwner(_accessibleRepositories, _settings.RepositoryOwner, _settings.RepositoryName);
+
+        <!-- Section 1: Authentication & Device Flow -->
+        <div class="forge-subcard" style="margin-bottom: 2rem; padding: 1.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
+            <h4 style="margin: 0 0 1rem 0; font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                🔐 GitHub App Authentication (Device Flow)
+            </h4>
+
+            @if (_connectionState.IsConnected)
+            {
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 1rem;">
+                        @if (UiService.ShouldDisplayAvatar(_connectionState.AuthenticatedUser, SecurityOptions.Value))
+                        {
+                            <img src="@_connectionState.AuthenticatedUser!.AvatarUrl" alt="Avatar" style="width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--accent-indigo);" />
+                        }
+                        <div>
+                            <div style="font-weight: 600; font-size: 1rem; color: var(--text-primary);">
+                                @(_connectionState.AuthenticatedUser?.Name ?? _connectionState.AuthenticatedUser?.Login)
+                            </div>
+                            <div style="font-size: 0.85rem; color: var(--text-secondary);">
+                                @("@" + _connectionState.AuthenticatedUser?.Login)
+                                @if (!string.IsNullOrWhiteSpace(_connectionState.AuthenticatedUser?.Email))
+                                {
+                                    <span> • @_connectionState.AuthenticatedUser.Email</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+                        <a href="@UiService.GetAppInstallationUrl(_settings.ClientId)" target="_blank" rel="noopener noreferrer" class="forge-btn forge-btn-outline" style="text-decoration: none; font-size: 0.88rem;">
+                            ⚙️ Manage App Connection ↗
+                        </a>
+                        <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.88rem; color: var(--accent-crimson); border-color: rgba(239, 68, 68, 0.4);" @onclick="DisconnectGitHubAsync" disabled="@_isDisconnecting">
+                            @(_isDisconnecting ? "Disconnecting..." : "Disconnect Account")
+                        </button>
+                    </div>
+                </div>
+            }
+            else if (_isAuthenticating && _deviceCode != null)
+            {
+                <!-- Interactive Device Flow In Progress -->
+                <div style="background: var(--bg-input); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+                    <div style="font-weight: 600; margin-bottom: 0.75rem; font-size: 1.05rem;">
+                        1. Authorize NightCodeForge on GitHub
+                    </div>
+                    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                        Enter the following activation code on GitHub to authenticate this instance:
+                    </p>
+
+                    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
+                        <div style="font-family: var(--font-mono); font-size: 1.6rem; font-weight: 700; letter-spacing: 0.15em; background: var(--bg-surface); padding: 0.5rem 1.2rem; border-radius: var(--radius-md); border: 2px dashed var(--accent-indigo); user-select: all;">
+                            @_deviceCode.UserCode
+                        </div>
+                        <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.9rem;" @onclick="CopyUserCodeAsync">
+                            📋 Copy Code
+                        </button>
+                        <a href="@_deviceCode.VerificationUri" target="_blank" rel="noopener noreferrer" class="forge-btn forge-btn-primary" style="font-size: 0.9rem; text-decoration: none;">
+                            🔗 Open GitHub Device Activation ↗
+                        </a>
+                    </div>
+
+                    <div style="display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border-subtle); padding-top: 1rem; margin-top: 1rem;">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.9rem; color: var(--text-secondary);">
+                            <span class="forge-spinner"></span>
+                            <span>Waiting for GitHub authorization... (Expires in @_deviceCode.ExpiresIn s)</span>
+                        </div>
+                        <button type="button" class="forge-btn forge-btn-ghost" style="font-size: 0.88rem;" @onclick="CancelDeviceFlow">
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <p style="margin: 0; font-size: 0.9rem; color: var(--text-secondary);">
+                            Authenticate with GitHub using the official NightCodeForge GitHub App. No personal access tokens required.
+                        </p>
+                    </div>
+                    <button type="button" class="forge-btn forge-btn-primary" style="font-size: 0.92rem; font-weight: 600;" @onclick="StartDeviceFlowAsync" disabled="@_isStartingAuth">
+                        @(_isStartingAuth ? "Initiating..." : "🔑 Connect GitHub Account")
+                    </button>
+                </div>
+            }
+        </div>
+
+        <!-- Section 2: Workspace Repository Binding -->
+        <div class="forge-subcard" style="margin-bottom: 2rem; padding: 1.75rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-wrap: wrap; gap: 1rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                    <h4 style="margin: 0; font-size: 1.1rem; font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                        📁 Target GitHub Repository
+                    </h4>
+                    @if (_connectionState.IsConnected)
+                    {
+                        <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.3rem 0.75rem; font-size: 0.8rem;" @onclick="RefreshRepositoriesAsync" disabled="@_isLoadingRepos">
+                            @(_isLoadingRepos ? "Refreshing..." : "🔄 Refresh Repositories")
+                        </button>
+                        <button type="button" class="forge-btn forge-btn-ghost" style="padding: 0.3rem 0.65rem; font-size: 0.8rem;" @onclick="ToggleCustomRepoEntry">
+                            @(_useCustomRepoEntry ? "Select from dropdowns" : "Enter manually")
+                        </button>
+                    }
+                </div>
+                <div class="form-check form-switch" style="display: flex; align-items: center; gap: 0.5rem;">
+                    <input class="form-check-input" type="checkbox" id="enableGitHub" @bind="_settings.Enabled" style="cursor: pointer;" />
+                    <label class="form-check-label" for="enableGitHub" style="font-weight: 600; font-size: 0.92rem; cursor: pointer;">
+                        Enable GitHub Integration for this Workspace
+                    </label>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
+                <div>
+                    <label class="forge-field-label" for="github-repo-owner">
+                        Repository Owner (User or Organization)
+                    </label>
+                    @if (!_useCustomRepoEntry && availableOwners.Count > 0)
+                    {
+                        <select id="github-repo-owner" class="forge-input" value="@(_settings.RepositoryOwner ?? string.Empty)" @onchange="OnOwnerSelected">
+                            <option value="">-- Select Owner --</option>
+                            @foreach (var owner in availableOwners)
+                            {
+                                <option value="@owner">@owner</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input id="github-repo-owner" type="text" class="forge-input" placeholder="e.g. octocat" @bind="_settings.RepositoryOwner" style="width: 100%;" />
+                    }
+                </div>
+                <div>
+                    <label class="forge-field-label" for="github-repo-name">
+                        Repository Name
+                    </label>
+                    @if (!_useCustomRepoEntry && (availableReposForOwner.Count > 0 || availableOwners.Count > 0))
+                    {
+                        <select id="github-repo-name" class="forge-input" value="@(_settings.RepositoryName ?? string.Empty)" @onchange="OnRepositorySelected" disabled="@(string.IsNullOrWhiteSpace(_settings.RepositoryOwner))">
+                            <option value="">@(string.IsNullOrWhiteSpace(_settings.RepositoryOwner) ? "-- Select Owner First --" : "-- Select Repository --")</option>
+                            @foreach (var repo in availableReposForOwner)
+                            {
+                                <option value="@repo.Name">@repo.Name @(repo.Private ? "(Private)" : "")</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input id="github-repo-name" type="text" class="forge-input" placeholder="e.g. Hello-World" @bind="_settings.RepositoryName" style="width: 100%;" />
+                    }
+                </div>
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+                <button type="button" class="forge-btn forge-btn-outline" style="font-size: 0.88rem;" @onclick="TestConnectionAsync" disabled="@(_isTestingRepo || !_connectionState.IsConnected || string.IsNullOrWhiteSpace(_settings.RepositoryOwner) || string.IsNullOrWhiteSpace(_settings.RepositoryName))">
+                    @(_isTestingRepo ? "Testing..." : "🔍 Test Repository Access")
+                </button>
+
+                @if (_testResult != null)
+                {
+                    @if (_testResult.Success)
+                    {
+                        <span class="forge-badge badge-teal" style="font-size: 0.85rem; padding: 0.35rem 0.75rem;">
+                            ✓ Access verified: @(_testResult.Repository?.FullName) (Push: @(_testResult.HasPushAccess ? "Yes" : "No"), Admin: @(_testResult.HasAdminAccess ? "Yes" : "No"))
+                        </span>
+                    }
+                    else
+                    {
+                        <span class="forge-badge badge-crimson" style="font-size: 0.85rem; padding: 0.35rem 0.75rem;">
+                            ✗ Probe failed: @_testResult.ErrorMessage
+                        </span>
+                    }
+                }
+            </div>
+        </div>
+
+        <!-- Section 3: Sub-Features & Automation Policies -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+            <!-- Sub-Feature A: Untrusted Issue Intake & Triage (Step 12.11C) -->
+            <div class="forge-subcard" style="padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                    <div>
+                        <h4 style="margin: 0; font-size: 1.05rem; font-weight: 600;">📥 Untrusted Issue Intake &amp; Triage</h4>
+                        <span style="font-size: 0.82rem; color: var(--text-secondary);">Step 12.11C</span>
+                    </div>
+                    <input type="checkbox" class="form-check-input" @bind="_settings.IssueTriageEnabled" style="cursor: pointer;" />
+                </div>
+
+                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                    Periodically polls repository issues, sanitizes untrusted input, and generates structured task proposals in the Backlog.
+                </p>
+
+                <div style="display: flex; flex-direction: column; gap: 0.85rem;">
+                    <div>
+                        <label class="forge-field-label" for="github-triage-scope">Triage Scope</label>
+                        <select id="github-triage-scope" class="forge-input" @bind="_settings.IssueTriageScope" style="width: 100%; font-size: 0.88rem;">
+                            <option value="@GitHubIssueTriageScope.AssignedToMeOrUnassigned">Assigned to Me or Unassigned (Default)</option>
+                            <option value="@GitHubIssueTriageScope.AssignedToMeOnly">Assigned to Me Only</option>
+                            <option value="@GitHubIssueTriageScope.AllOpenIssues">All Open Issues</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="forge-field-label" for="github-filter-label">Issue Filter Label (Optional)</label>
+                        <input id="github-filter-label" type="text" class="forge-input" placeholder="e.g. triage" @bind="_settings.IssueFilterLabel" style="width: 100%; font-size: 0.88rem;" />
+                    </div>
+
+                    <div>
+                        <label class="forge-field-label" for="github-polling-interval">Polling Interval (Minutes)</label>
+                        <input id="github-polling-interval" type="number" min="1" max="1440" class="forge-input" @bind="_settings.PollingIntervalMinutes" style="width: 100%; font-size: 0.88rem;" />
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sub-Feature B: PR Delivery (Step 12.11B) -->
+            <div class="forge-subcard" style="padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                    <div>
+                        <h4 style="margin: 0; font-size: 1.05rem; font-weight: 600;">🚀 Outbound Pull Request Delivery</h4>
+                        <span style="font-size: 0.82rem; color: var(--text-secondary);">Step 12.11B</span>
+                    </div>
+                    <input type="checkbox" class="form-check-input" @bind="_settings.PullRequestDeliveryEnabled" style="cursor: pointer;" />
+                </div>
+
+                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                    Delivers completed task branches as GitHub Pull Requests with linked issue references and status updates.
+                </p>
+
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="createDraft" @bind="_settings.CreateAsDraft" style="cursor: pointer;" />
+                        <label class="form-check-label" for="createDraft" style="font-size: 0.85rem; cursor: pointer;">
+                            Open Pull Requests as Draft
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="closeOnMerge" @bind="_settings.CloseTaskOnPrMerge" style="cursor: pointer;" />
+                        <label class="form-check-label" for="closeOnMerge" style="font-size: 0.85rem; cursor: pointer;">
+                            Auto-close Task when Pull Request merges
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sub-Feature C: Task Mirroring & Multi-User Coordination (Step 12.11D) -->
+            <div class="forge-subcard" style="padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                    <div>
+                        <h4 style="margin: 0; font-size: 1.05rem; font-weight: 600;">🔄 Task Mirroring &amp; Multi-User</h4>
+                        <span style="font-size: 0.82rem; color: var(--text-secondary);">Step 12.11D</span>
+                    </div>
+                    <input type="checkbox" class="form-check-input" @bind="_settings.TaskMirroringEnabled" style="cursor: pointer;" />
+                </div>
+
+                <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                    Synchronizes task status with GitHub labels, claims issues on task start, and mirrors local tasks to GitHub issues.
+                </p>
+
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="mirrorLocalTasks" @bind="_settings.CreateGitHubIssuesForLocalTasks" style="cursor: pointer;" />
+                        <label class="form-check-label" for="mirrorLocalTasks" style="font-size: 0.85rem; cursor: pointer;">
+                            Create GitHub Issues for local tasks
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="autoAssign" @bind="_settings.AutoAssignIssueOnStart" style="cursor: pointer;" />
+                        <label class="form-check-label" for="autoAssign" style="font-size: 0.85rem; cursor: pointer;">
+                            Auto-assign issue to me on task start
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="syncStatus" @bind="_settings.SyncStatusLabels" style="cursor: pointer;" />
+                        <label class="form-check-label" for="syncStatus" style="font-size: 0.85rem; cursor: pointer;">
+                            Synchronize task status labels
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="postMilestone" @bind="_settings.PostMilestoneComments" style="cursor: pointer;" />
+                        <label class="form-check-label" for="postMilestone" style="font-size: 0.85rem; cursor: pointer;">
+                            Post stage milestone comments on issue
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public int WorkspaceId { get; set; }
+
+    private GitHubIntegrationSettings _settings = new();
+    private GitHubConnectionState _connectionState = new();
+    private IReadOnlyList<GitHubRepository> _accessibleRepositories = Array.Empty<GitHubRepository>();
+    private GitHubDeviceCodeResponse? _deviceCode;
+    private GitHubRepositoryAccessResult? _testResult;
+    private int? _loadedWorkspaceId;
+
+    private bool _isLoading = true;
+    private bool _isLoadingRepos = false;
+    private bool _useCustomRepoEntry = false;
+    private bool _isSaving = false;
+    private bool _isStartingAuth = false;
+    private bool _isAuthenticating = false;
+    private bool _isDisconnecting = false;
+    private bool _isTestingRepo = false;
+    private bool _disposed = false;
+
+    private CancellationTokenSource? _pollCts;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedWorkspaceId != WorkspaceId)
+        {
+            _loadedWorkspaceId = WorkspaceId;
+            _testResult = null;
+            await LoadDataAsync();
+        }
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            _settings = await UiService.LoadSettingsAsync(WorkspaceId);
+            _connectionState = await UiService.GetConnectionStateAsync();
+            if (_connectionState.IsConnected)
+            {
+                _accessibleRepositories = await UiService.LoadAccessibleRepositoriesAsync();
+                ApplyDefaultOwnerIfEmpty();
+            }
+            else
+            {
+                _accessibleRepositories = Array.Empty<GitHubRepository>();
+            }
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Load Failed", $"Failed to load GitHub settings: {ex.Message}", ToastLevel.Error);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task RefreshRepositoriesAsync()
+    {
+        if (!_connectionState.IsConnected || _isLoadingRepos) return;
+        _isLoadingRepos = true;
+        try
+        {
+            _accessibleRepositories = await UiService.LoadAccessibleRepositoriesAsync();
+            ApplyDefaultOwnerIfEmpty();
+            ToastService.Show("Repositories Refreshed", $"Discovered {_accessibleRepositories.Count} accessible GitHub repositories.", ToastLevel.Info);
+        }
+        finally
+        {
+            _isLoadingRepos = false;
+        }
+    }
+
+    private void ApplyDefaultOwnerIfEmpty()
+    {
+        if (string.IsNullOrWhiteSpace(_settings.RepositoryOwner))
+        {
+            var owners = UiService.GetAvailableOwners(_accessibleRepositories, _connectionState.AuthenticatedUser?.Login, _settings.RepositoryOwner);
+            if (owners.Count > 0)
+            {
+                _settings.RepositoryOwner = owners[0];
+            }
+        }
+    }
+
+    private void ToggleCustomRepoEntry()
+    {
+        _useCustomRepoEntry = !_useCustomRepoEntry;
+    }
+
+    private void OnOwnerSelected(ChangeEventArgs e)
+    {
+        var selectedOwner = e.Value?.ToString();
+        _settings.RepositoryOwner = string.IsNullOrWhiteSpace(selectedOwner) ? null : selectedOwner;
+        _testResult = null;
+
+        var reposForOwner = UiService.GetRepositoriesForOwner(_accessibleRepositories, _settings.RepositoryOwner);
+        if (!reposForOwner.Any(r => string.Equals(r.Name, _settings.RepositoryName, StringComparison.OrdinalIgnoreCase)))
+        {
+            _settings.RepositoryName = reposForOwner.FirstOrDefault()?.Name;
+        }
+    }
+
+    private void OnRepositorySelected(ChangeEventArgs e)
+    {
+        var selectedRepo = e.Value?.ToString();
+        _settings.RepositoryName = string.IsNullOrWhiteSpace(selectedRepo) ? null : selectedRepo;
+        _testResult = null;
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        _isSaving = true;
+        try
+        {
+            await UiService.SaveSettingsAsync(WorkspaceId, _settings);
+            ToastService.Show("Settings Saved", "GitHub integration settings saved successfully.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Save Error", $"Failed to save settings: {ex.Message}", ToastLevel.Error);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task StartDeviceFlowAsync()
+    {
+        _isStartingAuth = true;
+        _deviceCode = null;
+        _pollCts?.Cancel();
+        _pollCts = new CancellationTokenSource();
+
+        try
+        {
+            _deviceCode = await UiService.StartDeviceFlowAsync(_settings.ClientId, _pollCts.Token);
+            _isAuthenticating = true;
+            _isStartingAuth = false;
+            StateHasChanged();
+
+            // Background poll for access token
+            _ = PollDeviceCodeBackgroundAsync(_deviceCode, _pollCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _isStartingAuth = false;
+            _isAuthenticating = false;
+            ToastService.Show("Device Flow Error", $"Failed to start device flow: {ex.Message}", ToastLevel.Error);
+        }
+    }
+
+    private async Task PollDeviceCodeBackgroundAsync(GitHubDeviceCodeResponse codeResponse, CancellationToken ct)
+    {
+        try
+        {
+            var expiresAt = DateTimeOffset.UtcNow.AddSeconds(codeResponse.ExpiresIn);
+            await UiService.PollForAccessTokenAsync(
+                codeResponse.DeviceCode,
+                codeResponse.Interval,
+                expiresAt,
+                _settings.ClientId,
+                ct);
+
+            if (_disposed) return;
+
+            _isAuthenticating = false;
+            _deviceCode = null;
+            _connectionState = await UiService.GetConnectionStateAsync(ct);
+            if (_connectionState.IsConnected)
+            {
+                _accessibleRepositories = await UiService.LoadAccessibleRepositoriesAsync(ct);
+                ApplyDefaultOwnerIfEmpty();
+            }
+            ToastService.Show("GitHub Connected", "Successfully authenticated with GitHub!", ToastLevel.Success);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // Flow cancelled by user or component disposal
+        }
+        catch (Exception ex)
+        {
+            if (_disposed) return;
+
+            _isAuthenticating = false;
+            _deviceCode = null;
+            ToastService.Show("Authentication Error", $"Authentication failed: {ex.Message}", ToastLevel.Error);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task CopyUserCodeAsync()
+    {
+        if (_deviceCode != null)
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", _deviceCode.UserCode);
+            ToastService.Show("Code Copied", "User activation code copied to clipboard.", ToastLevel.Success);
+        }
+    }
+
+    private void CancelDeviceFlow()
+    {
+        _pollCts?.Cancel();
+        _isAuthenticating = false;
+        _deviceCode = null;
+    }
+
+    private async Task DisconnectGitHubAsync()
+    {
+        _isDisconnecting = true;
+        try
+        {
+            await UiService.DisconnectAsync();
+            _connectionState = new GitHubConnectionState { IsConnected = false };
+            _accessibleRepositories = Array.Empty<GitHubRepository>();
+            ToastService.Show("GitHub Disconnected", "Disconnected GitHub account.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Disconnect Error", $"Failed to disconnect: {ex.Message}", ToastLevel.Error);
+        }
+        finally
+        {
+            _isDisconnecting = false;
+        }
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        _isTestingRepo = true;
+        _testResult = null;
+        try
+        {
+            _testResult = await UiService.TestRepositoryAccessAsync(_settings.RepositoryOwner ?? string.Empty, _settings.RepositoryName ?? string.Empty);
+            if (_testResult.Success)
+            {
+                ToastService.Show("Access Verified", $"Connected to {_testResult.Repository?.FullName} successfully.", ToastLevel.Success);
+            }
+            else
+            {
+                ToastService.Show("Access Check Failed", _testResult.ErrorMessage ?? "Repository access check failed.", ToastLevel.Error);
+            }
+        }
+        finally
+        {
+            _isTestingRepo = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+    }
+}

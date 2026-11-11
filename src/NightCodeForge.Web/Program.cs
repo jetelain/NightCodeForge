@@ -84,6 +84,7 @@ builder.Services.AddScoped<OperationsTelemetryUiService>();
 builder.Services.AddSingleton<ISyntaxHighlightingService, SimpleSyntaxHighlighter>();
 builder.Services.AddScoped<ITaskDiffService, TaskDiffService>();
 builder.Services.AddScoped<IGlobalSkillsManagerService, GlobalSkillsManagerService>();
+builder.Services.AddScoped<GitHubSettingsUiService>();
 
 // Register NightCodeForge domain and infrastructure services
 var defaultConnStr = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";

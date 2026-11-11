@@ -37,6 +37,15 @@ public class AppDbContext : DbContext
         base.OnModelCreating(modelBuilder);
 
         // 1. Workspace
+        var gitHubSettingsConverter = new ValueConverter<GitHubIntegrationSettings, string>(
+            v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+            v => string.IsNullOrWhiteSpace(v) ? new GitHubIntegrationSettings() : JsonSerializer.Deserialize<GitHubIntegrationSettings>(v, (JsonSerializerOptions?)null) ?? new GitHubIntegrationSettings());
+
+        var gitHubSettingsComparer = new ValueComparer<GitHubIntegrationSettings>(
+            (c1, c2) => JsonSerializer.Serialize(c1, (JsonSerializerOptions?)null) == JsonSerializer.Serialize(c2, (JsonSerializerOptions?)null),
+            c => c == null ? 0 : JsonSerializer.Serialize(c, (JsonSerializerOptions?)null).GetHashCode(),
+            c => c == null ? new GitHubIntegrationSettings() : JsonSerializer.Deserialize<GitHubIntegrationSettings>(JsonSerializer.Serialize(c, (JsonSerializerOptions?)null), (JsonSerializerOptions?)null)!);
+
         modelBuilder.Entity<Workspace>(b =>
         {
             b.HasKey(w => w.Id);
@@ -59,6 +68,9 @@ public class AppDbContext : DbContext
             b.Property(w => w.ColorCode).HasMaxLength(32);
             b.Property(w => w.DisabledGlobalSkillsJson)
                 .HasMaxLength(4096);
+            b.Property(w => w.GitHubSettings)
+                .HasConversion(gitHubSettingsConverter)
+                .Metadata.SetValueComparer(gitHubSettingsComparer);
 
             b.HasMany(w => w.Tasks)
                 .WithOne(i => i.Workspace)
@@ -459,6 +471,11 @@ public class AppDbContext : DbContext
     public const string AddSessionCostAndTokenMetricsMigrationId = "20261110110000_AddSessionCostAndTokenMetrics";
 
     /// <summary>
+    /// Migration identifier for workspace GitHub integration settings.
+    /// </summary>
+    public const string AddWorkspaceGitHubSettingsMigrationId = "20261111155548_AddWorkspaceGitHubSettings";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -619,6 +636,17 @@ VALUES ('" + AddAgentProfileMaxOutputTokensMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddSessionCostAndTokenMetricsMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Workspaces') WHERE name = 'GitHubSettings';";
+                var hasGitHubSettingsColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasGitHubSettingsColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddWorkspaceGitHubSettingsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

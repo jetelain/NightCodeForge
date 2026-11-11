@@ -1,9 +1,9 @@
-# 🐙 Step 12.11A: GitHub App Device Flow, DPAPI Token Store, REST Client & Workspace Settings UI
+# 🐙 Step 12.11A: GitHub App Device Flow, KeySharp OS Keyring Token Store, REST Client & Workspace Settings UI
 
 > **Feature Implementation Step (Part 1 of 4 — Authentication, Token Store, Client & Settings UI)** *(formerly Step 11.10)*  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Companion Steps:* [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.11C: Untrusted Issue Intake & Triage](STEP_12_11C_GITHUB_UNTRUSTED_ISSUE_INTAKE_AND_TRIAGE.md) | [Step 12.11D: Bi-Directional Task Mirroring & Multi-User Claiming](STEP_12_11D_GITHUB_TASK_MIRRORING_AND_MULTI_USER_CLAIMING.md)  
-> *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -12,13 +12,12 @@
 
 ## 1. Executive Objective
 
-Provide a self-contained, **fully optional** GitHub integration foundation consisting of **GitHub App Device Flow** authentication, a DPAPI-protected token store, a typed GitHub REST client (`IGitHubClientService`), per-workspace configuration (`GitHubIntegrationSettings`), and the `/settings` configuration UI (`GitHubSettingsTab.razor`)—with **zero impact on existing task orchestration or Git pipelines**:
+Provide a self-contained, **fully optional** GitHub integration foundation consisting of **GitHub App Device Flow** authentication, a native OS keyring token store via **`Pmad.KeySharp`**, a typed GitHub REST client (`IGitHubClientService`), per-workspace configuration (`GitHubIntegrationSettings`), and the `/settings` configuration UI (`GitHubSettingsTab.razor`)—with **zero impact on existing task orchestration or Git pipelines**:
 
-1. **GitHub App Device Flow, Least-Privilege Permissions & Dedicated DPAPI-Protected Token Store (`IGitHubDeviceAuthService`, `IGitHubTokenStore`):**
+1. **GitHub App Device Flow, Least-Privilege Permissions & Native OS Keyring Token Store (`IGitHubDeviceAuthService`, `IGitHubTokenStore`):**
    - Authenticate developers using a **GitHub App** (rather than a legacy OAuth App or manual Personal Access Token) via the [GitHub App Device Flow](https://docs.github.com/en/apps/creating-github-apps/writing-code-for-a-github-app/building-a-cli-with-a-github-app) (`ClientId = "Iv23lienpd2ZF3rkKyfg"`).
    - **Blast-Radius & Right Management Isolation:** Using a GitHub App instead of an OAuth App enforces fine-grained repository permissions (`Contents: Read & write`, `Pull requests: Read & write`, `Issues: Read & write`, `Administration: Read & write` for optional remote repository creation in [Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md)/[12.32B](STEP_12_32B_WORKSPACE_TEMPLATES_NATIVE_CLI_SCAFFOLDING_AND_REMOTE_PUBLISH.md), `Metadata: Read-only`), restricts access strictly to the intersection of the authenticated user's rights and the specific repositories where the GitHub App is installed, and issues short-lived **8-hour user access tokens (`ghu_...`)** with rotating refresh tokens (`ghr_...`) to strictly limit the impact of a leaked token.
-   - Persist the issued user-to-server token payload in a **dedicated file** (`%APPDATA%\NightCodeForge\config\github-oauth-token.dat` on Windows; `~/.config/NightCodeForge/config/github-oauth-token.dat` or platform `Environment.SpecialFolder.ApplicationData` equivalent on Linux/macOS), strictly separated from `GitHubIntegrationSettings`.
-   - On Windows, encrypt and decrypt the token file at rest using **DPAPI** (`ProtectedData.Protect` / `ProtectedData.Unprotect` with `DataProtectionScope.CurrentUser` via the `System.Security.Cryptography.ProtectedData` package). On Unix platforms, enforce `0600` (`UserRead | UserWrite`) file permissions.
+   - Persist the issued user-to-server token payload in the **native OS keyring** using [`Pmad.KeySharp`](https://www.nuget.org/packages/Pmad.KeySharp/) (`KeySharp.Keyring` — Windows Credential Manager on Windows, `SecItem` Keychain on macOS, `libsecret` Secret Service on Linux), strictly separated from `GitHubIntegrationSettings` and SQLite.
 2. **GitHub Client Abstraction (`IGitHubClientService`) & Workspace Settings (`GitHubIntegrationSettings`):**
    - Provide a clean, DI-registered GitHub REST client resolving refresh-aware credentials from `IGitHubDeviceAuthService` / `IGitHubTokenStore` with fail-fast validation and per-workspace configuration persisted on the [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) entity and editable in `/settings`.
 
@@ -81,7 +80,7 @@ Instead of using a legacy OAuth App (which grants broad `repo`-wide OAuth scopes
    - Returns `GitHubDeviceCodeResponse` (`DeviceCode`, `UserCode`, `VerificationUri` = `https://github.com/login/device`, `ExpiresIn`, `Interval`).
 2. **Developer Verification & App Installation UI in `/settings` (`GitHubSettingsTab.razor`):**
    - Displays the `user_code` (e.g. `WDJB-MJHT`) with a 1-click **Copy Code** button and an **Open GitHub Device Activation** link (`https://github.com/login/device`).
-   - Also provides a direct link to install/configure the NightCodeForge GitHub App on the target repository (`RepositoryOwner`/`RepositoryName`) if the app is not yet installed on that repository.
+   - Also provides a direct link to view/manage the NightCodeForge GitHub App connection (`https://github.com/settings/connections/applications/Iv23lienpd2ZF3rkKyfg`).
    - Keeps presentation logic separated from HTTP/polling orchestration per [AGENTS.md](../../AGENTS.md) UI separation rules.
 3. **Token Polling (`PollForAccessTokenAsync`):**
    - Polls `POST https://github.com/login/oauth/access_token` (`Accept: application/json`) with `client_id = "Iv23lienpd2ZF3rkKyfg"`, `device_code`, and `grant_type=urn:ietf:params:oauth:grant-type:device_code` at the server-specified `interval`.
@@ -98,21 +97,17 @@ Instead of using a legacy OAuth App (which grants broad `repo`-wide OAuth scopes
      - **Atomic Persistence:** Immediately persists the newly rotated `access_token`, `AccessTokenExpiresAtUtc`, `refresh_token`, and `RefreshTokenExpiresAtUtc` to `IGitHubTokenStore` before releasing the semaphore.
      - **Reactive `401 Unauthorized` Recovery & Fail-Fast:** If an API call returns `401 Unauthorized`, attempts a single synchronized refresh; if the `refresh_token` itself is expired (`RefreshTokenExpiresAtUtc <= UtcNow`) or rejected (`bad_refresh_token`), throws a domain-specific `GitHubAuthenticationException` instructing the user to re-authenticate in `/settings`.
 
-### 2.3 Dedicated Token File & Windows DPAPI Protection (`IGitHubTokenStore`)
-The OAuth token payload (`GitHubOAuthTokenPayload`: `AccessToken`, `AccessTokenExpiresAtUtc`, `RefreshToken`, `RefreshTokenExpiresAtUtc`, `TokenType`, `Scope`, `AuthenticatedUserLogin`) must **never** be stored inside `GitHubIntegrationSettings`, `appsettings.json`, or the SQLite database:
+### 2.3 Native OS Keyring Token Storage via `Pmad.KeySharp` (`IGitHubTokenStore`)
+The OAuth token payload (`GitHubOAuthTokenPayload`: `AccessToken`, `AccessTokenExpiresAtUtc`, `RefreshToken`, `RefreshTokenExpiresAtUtc`, `TokenType`, `Scope`, `AuthenticatedUserLogin`, `ClientId`) must **never** be stored inside `GitHubIntegrationSettings`, `appsettings.json`, or the SQLite database:
 
-- **Dedicated File Location:**
-  - Default path resolved via `Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "NightCodeForge", "config", "github-oauth-token.dat")` (`%APPDATA%\NightCodeForge\config\github-oauth-token.dat` on Windows; `~/.config/NightCodeForge/config/github-oauth-token.dat` on Linux; `~/Library/Application Support/NightCodeForge/config/github-oauth-token.dat` on macOS), with support for an explicit file path override in tests.
-- **Windows DPAPI Encryption:**
-  - Reference `System.Security.Cryptography.ProtectedData` in [`NightCodeForge.Infrastructure.csproj`](../../src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj).
-  - On Windows (`OperatingSystem.IsWindows()`), serialized token bytes are encrypted before writing using `System.Security.Cryptography.ProtectedData.Protect(plaintextBytes, optionalEntropy: null, DataProtectionScope.CurrentUser)` and decrypted on read via `ProtectedData.Unprotect(..., DataProtectionScope.CurrentUser)`.
-- **Non-Windows File Permissions:**
-  - On Linux/macOS, the file is created and restricted to `UnixFileMode.UserRead | UnixFileMode.UserWrite` (`0600`).
-- **Atomic File Writes:**
-  - Writes to a temporary sibling file (`.tmp`) and atomically replaces `github-oauth-token.dat` (`File.Move(..., overwrite: true)`) so a crash or power loss during an 8-hour token refresh never corrupts the stored `refresh_token`.
+- **Cross-Platform OS Keyring Backend (`Pmad.KeySharp`):**
+  - Reference `Pmad.KeySharp` in [`NightCodeForge.Infrastructure.csproj`](../../src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj).
+  - Persist serialized `GitHubOAuthTokenPayload` JSON in the OS credential store via `KeySharp.Keyring.SetPassword(package, service, username, json)`, read via `KeySharp.Keyring.GetPassword(package, service, username)`, and delete via `KeySharp.Keyring.DeletePassword(package, service, username)` (default coordinates: `Package = "NightCodeForge"`, `Service = "GitHubAppOAuth"`, `Username = "oauth-token"`, with constructor overrides for isolated test coordinates).
+  - Uses Windows Credential Manager (`skeychain.dll`) on Windows (`win-x64` / `win-arm64`), macOS Keychain `SecItem` APIs (`libskeychain.dylib`) on macOS (`osx-x64` / `osx-arm64`), and `libsecret-1` Secret Service (`libskeychain.so`) on Linux (`linux-x64` / `linux-arm64`).
 - **Fail-Fast & Sign-Out Lifecycle:**
-  - If a GitHub operation is invoked when no valid token exists in `IGitHubTokenStore`, when decryption fails, or when both access and refresh tokens are expired, throws a domain-specific `GitHubAuthenticationException` (no silent fallback).
-  - Calling `ClearTokenAsync` deletes the dedicated token file to disconnect the GitHub account cleanly.
+  - When `Keyring.GetPassword` throws `KeyringException` with `ErrorType.NotFound`, `GetTokenAsync` returns `null` and `HasTokenAsync` returns `false`.
+  - If a GitHub operation is invoked when no valid token exists in `IGitHubTokenStore`, when the keyring is unavailable or throws another `KeyringException`, when payload deserialization fails, or when both access and refresh tokens are expired, throws a domain-specific `GitHubAuthenticationException` (no silent fallback).
+  - Calling `ClearTokenAsync` invokes `Keyring.DeletePassword` (ignoring `ErrorType.NotFound`) to disconnect the GitHub account cleanly.
 
 ### 2.4 GitHub REST Client Abstraction (`IGitHubClientService`)
 Implemented in `src/NightCodeForge.Infrastructure/GitHub` using `HttpClient` (`Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, `User-Agent: NightCodeForge`) resolving refresh-aware credentials via `IGitHubDeviceAuthService.GetValidAccessTokenAsync`:
@@ -126,27 +121,28 @@ Implemented in `src/NightCodeForge.Infrastructure/GitHub` using `HttpClient` (`A
   - `CreateIssueAsync(string owner, string repo, CreateGitHubIssueRequest request, CancellationToken ct)` (`POST /repos/{owner}/{repo}/issues`)
   - `UpdateIssueAsync(string owner, string repo, int issueNumber, UpdateGitHubIssueRequest request, CancellationToken ct)` (`PATCH /repos/{owner}/{repo}/issues/{issueNumber}` for state, labels, and assignees)
   - `AddIssueCommentAsync(string owner, string repo, int issueNumber, string body, CancellationToken ct)` (`POST /repos/{owner}/{repo}/issues/{issueNumber}/comments`)
-- **Repository Probe / Connection Test:**
+- **Repository Probe / Connection Test & Discovery:**
   - `GetRepositoryAsync(string owner, string repo, CancellationToken ct)` (`GET /repos/{owner}/{repo}`) to validate repository access and GitHub App installation status from `/settings`.
+  - `ListAccessibleRepositoriesAsync(CancellationToken ct)` (`GET /user/repos?sort=updated&per_page=100`) to populate the `RepositoryOwner` and `RepositoryName` dropdown selectors in `/settings`.
 
 ---
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **GitHub App Device Flow, Refresh Token Rotation & DPAPI Token Store (`IGitHubDeviceAuthService`, `IGitHubTokenStore`):**
-  - [ ] Add `System.Security.Cryptography.ProtectedData` to `NightCodeForge.Infrastructure.csproj`.
-  - [ ] Implement `IGitHubDeviceAuthService` with `DefaultClientId = "Iv23lienpd2ZF3rkKyfg"` (`POST https://github.com/login/device/code` without `scope` parameter and polling `POST https://github.com/login/oauth/access_token` with `authorization_pending` / `slow_down` handling).
-  - [ ] Implement proactive and reactive 8-hour access token refresh (`grant_type=refresh_token`) guarded by a single-flight `SemaphoreSlim(1, 1)` to safely persist rotated `refresh_token` values without race conditions.
-  - [ ] Implement `IGitHubTokenStore` persisting the full GitHub App user token & refresh token payload atomically in `%APPDATA%\NightCodeForge\config\github-oauth-token.dat` (`Environment.SpecialFolder.ApplicationData`), encrypted at rest with Windows **DPAPI** (`ProtectedData.Protect` / `ProtectedData.Unprotect` under `DataProtectionScope.CurrentUser`) on Windows and `0600` file permissions on Unix.
-- [ ] **Workspace Settings Model & EF Core Persistence (`GitHubIntegrationSettings`):**
-  - [ ] Add `GitHubIntegrationSettings` and `GitHubIssueTriageScope` on [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs).
-  - [ ] Add EF Core migration, update `AppDbContext.BaselineExistingPreMigrationDatabaseAsync`, and update `EfCoreWorkspaceRepository`.
-- [ ] **GitHub Client Abstraction (`IGitHubClientService`):**
-  - [ ] Implement `IGitHubClientService` in `NightCodeForge.Infrastructure/GitHub` using `HttpClient` resolving refresh-aware credentials via `IGitHubDeviceAuthService.GetValidAccessTokenAsync` with strict constructor DI and fail-fast domain exceptions (`GitHubAuthenticationException`, `GitHubApiException`).
-- [ ] **Workspace Settings UI (`GitHubSettingsTab.razor`):**
-  - [ ] Add GitHub Integration workspace settings tab (`GitHubSettingsTab.razor` in [`Settings.razor`](../../src/NightCodeForge.Web/Components/Pages/Settings.razor) under Workspace Scope) with `RepositoryOwner`, `RepositoryName`, connection test button, interactive GitHub App Device Flow connect/disconnect UI (`user_code`, copy button, `https://github.com/login/device` link, GitHub App repository installation link, connected user status badge), and sub-feature toggles.
-- [ ] **Unit & Mock Tests:**
-  - [ ] Unit tests for `IGitHubDeviceAuthService` (device code request, polling state machine, 8-hour access token expiration refresh, rotated `refresh_token` persistence, and concurrent refresh deduplication).
-  - [ ] Unit tests for `IGitHubTokenStore` (atomic file persistence, missing/corrupt token fail-fast, and Windows DPAPI round-trip protection).
-  - [ ] Unit tests for `IGitHubClientService` (PR, Issue, Comment, and Repository endpoints, plus reactive `401 Unauthorized` refresh retry).
+- [x] **GitHub App Device Flow, Refresh Token Rotation & KeySharp OS Keyring Token Store (`IGitHubDeviceAuthService`, `IGitHubTokenStore`):**
+  - [x] Add `Pmad.KeySharp` to `NightCodeForge.Infrastructure.csproj`.
+  - [x] Implement `IGitHubDeviceAuthService` with `DefaultClientId = "Iv23lienpd2ZF3rkKyfg"` (`POST https://github.com/login/device/code` without `scope` parameter and polling `POST https://github.com/login/oauth/access_token` with `authorization_pending` / `slow_down` handling).
+  - [x] Implement proactive and reactive 8-hour access token refresh (`grant_type=refresh_token`) guarded by a single-flight `SemaphoreSlim(1, 1)` to safely persist rotated `refresh_token` values without race conditions.
+  - [x] Implement `IGitHubTokenStore` persisting the full GitHub App user token & refresh token payload in the native OS keyring via `Pmad.KeySharp` (`KeySharp.Keyring`).
+- [x] **Workspace Settings Model & EF Core Persistence (`GitHubIntegrationSettings`):**
+  - [x] Add `GitHubIntegrationSettings` and `GitHubIssueTriageScope` on [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs).
+  - [x] Add EF Core migration, update `AppDbContext.BaselineExistingPreMigrationDatabaseAsync`, and update `EfCoreWorkspaceRepository`.
+- [x] **GitHub Client Abstraction (`IGitHubClientService`):**
+  - [x] Implement `IGitHubClientService` in `NightCodeForge.Infrastructure/GitHub` using `HttpClient` resolving refresh-aware credentials via `IGitHubDeviceAuthService.GetValidAccessTokenAsync` with strict constructor DI and fail-fast domain exceptions (`GitHubAuthenticationException`, `GitHubApiException`).
+- [x] **Workspace Settings UI (`GitHubSettingsTab.razor`):**
+  - [x] Add GitHub Integration workspace settings tab (`GitHubSettingsTab.razor` in [`Settings.razor`](../../src/NightCodeForge.Web/Components/Pages/Settings.razor) under Workspace Scope) with `RepositoryOwner` and `RepositoryName` dropdowns (populated from `ListAccessibleRepositoriesAsync` with manual override support), connection test button, interactive GitHub App Device Flow connect/disconnect UI (`user_code`, copy button, `https://github.com/login/device` link, GitHub App repository installation link, connected user status badge suppressing external avatar `<img>` when `SecurityOptions.EnableContentSecurityPolicy` is enabled), and sub-feature toggles.
+- [x] **Unit & Mock Tests:**
+  - [x] Unit tests for `IGitHubDeviceAuthService` (device code request, polling state machine, 8-hour access token expiration refresh, rotated `refresh_token` persistence, and concurrent refresh deduplication).
+  - [x] Unit tests for `IGitHubTokenStore` (OS keyring round-trip persistence via `Pmad.KeySharp`, missing/corrupt token fail-fast, and credential deletion).
+  - [x] Unit tests for `IGitHubClientService` (PR, Issue, Comment, and Repository endpoints, plus reactive `401 Unauthorized` refresh retry).
 

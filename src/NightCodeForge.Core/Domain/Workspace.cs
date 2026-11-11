@@ -32,6 +32,7 @@ public class Workspace
     public int? DefaultWorkflowId { get; set; }
     public GlobalSkillsInjectionMode GlobalSkillsInjectionMode { get; set; } = GlobalSkillsInjectionMode.Inherit;
     public string? DisabledGlobalSkillsJson { get; set; }
+    public GitHubIntegrationSettings GitHubSettings { get; set; } = new();
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ICollection<ForgeTask> Tasks { get; set; } = new List<ForgeTask>();

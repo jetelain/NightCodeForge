@@ -121,6 +121,11 @@ public static class ServiceCollectionExtensions
         // 10. Streaming & Activity Streamer
         services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();
 
+        // 11. GitHub Integration Services
+        services.TryAddSingleton<IGitHubTokenStore, GitHub.GitHubTokenStore>();
+        services.AddHttpClient<IGitHubDeviceAuthService, GitHub.GitHubDeviceAuthService>();
+        services.AddHttpClient<IGitHubClientService, GitHub.GitHubClientService>();
+
         return services;
     }
 

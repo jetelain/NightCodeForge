@@ -84,7 +84,7 @@
     background-color: var(--bg-card-hover);
 }
 
-.forge-input, .form-control-dark {
+.forge-input, .forge-select, .form-control-dark {
     width: 100%;
     background-color: var(--bg-input);
     border: 1px solid var(--border-subtle);
@@ -99,19 +99,23 @@
     transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
 }
 
-.forge-input:focus, .form-control-dark:focus {
+select.forge-input, .forge-select {
+    cursor: pointer;
+}
+
+.forge-input:focus, .forge-select:focus, .form-control-dark:focus {
     border-color: var(--accent-indigo);
     box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
     background-color: var(--bg-surface);
 }
 
-.forge-input:disabled, .form-control-dark:disabled {
+.forge-input:disabled, .forge-select:disabled, .form-control-dark:disabled {
     opacity: 0.6;
     cursor: not-allowed;
     background-color: rgba(255, 255, 255, 0.02);
 }
 
-.forge-input option, .form-control-dark option {
+.forge-input option, .forge-select option, .form-control-dark option {
     background-color: var(--bg-card);
     color: var(--text-primary);
     padding: 0.5rem;
