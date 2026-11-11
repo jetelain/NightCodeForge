@@ -1,10 +1,10 @@
 # 🧠 Step 12.27: Dynamic Ollama & OllamaRouter Thinking Effort Discovery & Mapping (`/api/show`)
 
 > **Feature Specification (Local LLM Reasoning & Dynamic Capability Discovery)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Planned  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
 > *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Infrastructure.Tests`  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -15,7 +15,7 @@
 ### 1.1 The Limitation of Static & Hard-Coded Reasoning Mapping
 In local and router-driven inference (Ollama and OllamaRouter), modern reasoning models (such as `Qwen 3.8`, `DeepSeek R1`, `Qwen 2.5 Max`, and custom fine-tunes) use Ollama's `think` parameter to control reasoning behavior.
 
-Currently, [`OllamaCapabilityResolver`](../../src/NightCodeForge.Agents/Inference/OllamaCapabilityResolver.cs#L118-L125) maps NightCodeForge's [`ThinkingEffort`](../../src/NightCodeForge.Core/Interfaces/ILlmProviderOptions.cs#L6-L13) enum to fixed strings and relies on static substring profiles in [`LlmProviderOptions.CreateDefaultModelProfiles()`](../../src/NightCodeForge.Core/Inference/LlmProviderOptions.cs#L137-L152):
+Currently, [`OllamaCapabilityResolver`](../../../src/NightCodeForge.Agents/Inference/OllamaCapabilityResolver.cs#L118-L125) maps NightCodeForge's [`ThinkingEffort`](../../../src/NightCodeForge.Core/Interfaces/ILlmProviderOptions.cs#L6-L13) enum to fixed strings and relies on static substring profiles in [`LlmProviderOptions.CreateDefaultModelProfiles()`](../../../src/NightCodeForge.Core/Inference/LlmProviderOptions.cs#L137-L152):
 ```csharp
 private static string? MapThinkingEffort(ThinkingEffort effort) => effort switch
 {
@@ -54,7 +54,7 @@ Or for boolean models:
 }
 ```
 
-By parsing this object in [`OllamaShowParser`](../../src/NightCodeForge.Infrastructure/Inference/OllamaShowParser.cs), caching it alongside model context-window metadata in [`ILlmContextWindowCache`](../../src/NightCodeForge.Core/Interfaces/ILlmContextWindowCache.cs) during both catalog enumeration and on-demand gateway resolution, and applying a deterministic mapping algorithm, NightCodeForge maps `None`, `Low`, `Medium`, `High`, and `CustomBudget` accurately to each model's native capability without manual configuration.
+By parsing this object in [`OllamaShowParser`](../../../src/NightCodeForge.Infrastructure/Inference/OllamaShowParser.cs), caching it alongside model context-window metadata in [`ILlmContextWindowCache`](../../../src/NightCodeForge.Core/Interfaces/ILlmContextWindowCache.cs) during both catalog enumeration and on-demand gateway resolution, and applying a deterministic mapping algorithm, NightCodeForge maps `None`, `Low`, `Medium`, `High`, and `CustomBudget` accurately to each model's native capability without manual configuration.
 
 ---
 
@@ -63,7 +63,7 @@ By parsing this object in [`OllamaShowParser`](../../src/NightCodeForge.Infrastr
 ### 2.1 Metadata Parsing in `OllamaShowParser`
 
 1. **Define `ModelThinkingCapability` in `NightCodeForge.Core.Interfaces`:**
-   - Place the capability contract in `NightCodeForge.Core.Interfaces` (alongside [`AvailableModelInfo`](../../src/NightCodeForge.Core/Interfaces/ILlmModelCatalogService.cs) and [`ILlmContextWindowCache`](../../src/NightCodeForge.Core/Interfaces/ILlmContextWindowCache.cs)) so all layers (`Core`, `Infrastructure`, `Agents`, `Web`) can reference it without circular dependencies:
+   - Place the capability contract in `NightCodeForge.Core.Interfaces` (alongside [`AvailableModelInfo`](../../../src/NightCodeForge.Core/Interfaces/ILlmModelCatalogService.cs) and [`ILlmContextWindowCache`](../../../src/NightCodeForge.Core/Interfaces/ILlmContextWindowCache.cs)) so all layers (`Core`, `Infrastructure`, `Agents`, `Web`) can reference it without circular dependencies:
      ```csharp
      public record ModelThinkingCapability(
          bool SupportsThinking,
@@ -139,14 +139,14 @@ By parsing this object in [`OllamaShowParser`](../../src/NightCodeForge.Infrastr
 ### 2.3 Caching, Cold-Start Gateway Probing & Service Integration
 
 1. **Extend `ILlmContextWindowCache` (`NightCodeForge.Core.Interfaces` / `NightCodeForge.Infrastructure.Inference`):**
-   - Extend [`ILlmContextWindowCache`](../../src/NightCodeForge.Core/Interfaces/ILlmContextWindowCache.cs) and [`LlmContextWindowCache`](../../src/NightCodeForge.Infrastructure/Inference/LlmContextWindowCache.cs) to also store and retrieve `ModelThinkingCapability` per model (normalized by trimmed lowercase model name):
+   - Extend [`ILlmContextWindowCache`](../../../src/NightCodeForge.Core/Interfaces/ILlmContextWindowCache.cs) and [`LlmContextWindowCache`](../../../src/NightCodeForge.Infrastructure/Inference/LlmContextWindowCache.cs) to also store and retrieve `ModelThinkingCapability` per model (normalized by trimmed lowercase model name):
      ```csharp
      bool TryGetThinkingCapability(string modelName, out ModelThinkingCapability capability);
      void SetThinkingCapability(string modelName, ModelThinkingCapability capability);
      ```
 
 2. **Catalog Discovery (`OllamaModelCatalogService` & `OllamaRouterModelCatalogService`):**
-   - Inject `ILlmContextWindowCache` as a required constructor parameter in both [`OllamaModelCatalogService`](../../src/NightCodeForge.Infrastructure/Inference/OllamaModelCatalogService.cs) and [`OllamaRouterModelCatalogService`](../../src/NightCodeForge.Infrastructure/Inference/OllamaRouterModelCatalogService.cs) (adhering to [AGENTS.md](../../AGENTS.md): no optional constructor parameters in services).
+   - Inject `ILlmContextWindowCache` as a required constructor parameter in both [`OllamaModelCatalogService`](../../../src/NightCodeForge.Infrastructure/Inference/OllamaModelCatalogService.cs) and [`OllamaRouterModelCatalogService`](../../../src/NightCodeForge.Infrastructure/Inference/OllamaRouterModelCatalogService.cs) (adhering to [AGENTS.md](../../../AGENTS.md): no optional constructor parameters in services).
    - In `OllamaModelCatalogService.BuildModelInfoAsync`:
      - Parse both `context = OllamaShowParser.ParseContextWindow(doc.RootElement)` and `thinking = OllamaShowParser.ParseThinkingCapability(doc.RootElement)`.
      - Cache both in `ILlmContextWindowCache` (`SetContextWindow` when `context > 0`, and `SetThinkingCapability`).
@@ -158,18 +158,18 @@ By parsing this object in [`OllamaShowParser`](../../src/NightCodeForge.Infrastr
      - If `POST /api/show` fails for a router model, fall back gracefully without failing catalog enumeration.
 
 3. **On-Demand Gateway Probing for Cold-Start Background Workers (`ILlmGatewayService` & `HarnessAgentFactory`):**
-   - Background Hangfire workers executing stages via [`HarnessAgentFactory.CreateAsync`](../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs) may run before any UI catalog refresh has occurred.
-   - In [`OllamaGatewayServiceBase`](../../src/NightCodeForge.Infrastructure/Inference/OllamaGatewayServiceBase.cs), when `ProbeShowContextWindowAsync` (or a dedicated `/api/show` capability probe) parses `POST /api/show`, also parse and cache `ModelThinkingCapability` via `_contextWindowCache.SetThinkingCapability(normalizedModelName, capability)`.
-   - Add `Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default)` to [`ILlmGatewayService`](../../src/NightCodeForge.Core/Interfaces/IOllamaRouterGatewayService.cs#L116-L132):
+   - Background Hangfire workers executing stages via [`HarnessAgentFactory.CreateAsync`](../../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs) may run before any UI catalog refresh has occurred.
+   - In [`OllamaGatewayServiceBase`](../../../src/NightCodeForge.Infrastructure/Inference/OllamaGatewayServiceBase.cs), when `ProbeShowContextWindowAsync` (or a dedicated `/api/show` capability probe) parses `POST /api/show`, also parse and cache `ModelThinkingCapability` via `_contextWindowCache.SetThinkingCapability(normalizedModelName, capability)`.
+   - Add `Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default)` to [`ILlmGatewayService`](../../../src/NightCodeForge.Core/Interfaces/IOllamaRouterGatewayService.cs#L116-L132):
      - Implemented in `OllamaGatewayServiceBase`: checks `_contextWindowCache.TryGetThinkingCapability`; if not cached, probes `POST /api/show` (also caching context window if discovered), caches the resulting `ModelThinkingCapability`, and returns it (or `null` if unreachable).
-     - Implemented in [`OpenAiCompatibleGatewayService`](../../src/NightCodeForge.Infrastructure/Inference/OpenAiCompatibleGatewayService.cs): returns `Task.FromResult<ModelThinkingCapability?>(null)`.
-   - In [`HarnessAgentFactory.CreateAsync`](../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs#L105):
+     - Implemented in [`OpenAiCompatibleGatewayService`](../../../src/NightCodeForge.Infrastructure/Inference/OpenAiCompatibleGatewayService.cs): returns `Task.FromResult<ModelThinkingCapability?>(null)`.
+   - In [`HarnessAgentFactory.CreateAsync`](../../../src/NightCodeForge.Agents/Inference/HarnessAgentFactory.cs#L105):
      - Ensure `_gatewayService.ResolveThinkingCapabilityAsync(effectiveModel, cancellationToken)` is awaited **before** calling `_capabilityResolver.CreateChatOptions(profile, effectiveModel)` so that cold-start agent sessions always have the model's `/api/show` thinking capability warmed in `ILlmContextWindowCache`.
 
 4. **Integration into `OllamaCapabilityResolver`:**
-   - Inject `ILlmContextWindowCache` as a required constructor parameter into [`OllamaCapabilityResolver`](../../src/NightCodeForge.Agents/Inference/OllamaCapabilityResolver.cs):
+   - Inject `ILlmContextWindowCache` as a required constructor parameter into [`OllamaCapabilityResolver`](../../../src/NightCodeForge.Agents/Inference/OllamaCapabilityResolver.cs):
      `public OllamaCapabilityResolver(IOptions<LlmProviderOptions> options, ILlmContextWindowCache capabilityCache)`
-   - Update DI registration in [` NightCodeForge.Agents/ServiceCollectionExtensions.cs`](../../src/NightCodeForge.Agents/ServiceCollectionExtensions.cs) (which resolves `ILlmContextWindowCache` from DI) and update test builders ([`TestCrucibleHarnessBuilder`](../../tests/NightCodeForge.Agents.Tests/Fixtures/TestCrucibleHarnessBuilder.cs), [`TestIdeationServiceBuilder`](../../tests/NightCodeForge.Agents.Tests/Fixtures/TestIdeationServiceBuilder.cs)) and [`ModelCapabilityResolver`](../../src/NightCodeForge.Agents/Inference/ModelCapabilityResolver.cs).
+   - Update DI registration in [` NightCodeForge.Agents/ServiceCollectionExtensions.cs`](../../../src/NightCodeForge.Agents/ServiceCollectionExtensions.cs) (which resolves `ILlmContextWindowCache` from DI) and update test builders ([`TestCrucibleHarnessBuilder`](../../../tests/NightCodeForge.Agents.Tests/Fixtures/TestCrucibleHarnessBuilder.cs), [`TestIdeationServiceBuilder`](../../../tests/NightCodeForge.Agents.Tests/Fixtures/TestIdeationServiceBuilder.cs)) and [`ModelCapabilityResolver`](../../../src/NightCodeForge.Agents/Inference/ModelCapabilityResolver.cs).
    - Precedence in `OllamaCapabilityResolver`:
      1. **Discovered `ModelThinkingCapability` in `ILlmContextWindowCache`:**
         - If `capabilityCache.TryGetThinkingCapability(effectiveModel, out var capability)` succeeds:
@@ -180,9 +180,9 @@ By parsing this object in [`OllamaShowParser`](../../src/NightCodeForge.Infrastr
         - If the model is not in `ILlmContextWindowCache`, retain existing fallback resolution via `LlmProviderOptions.ModelProfiles` and standard effort ranks (`"low"`, `"medium"`, `"high"`, `"xhigh"`), and `["think"] = false` when `ThinkingEffort.None`.
 
 5. **`AvailableModelInfo` & Declarative Display in `AgentProfilesTab.razor`:**
-   - Add `ModelThinkingCapability? ThinkingCapability = null` to [`AvailableModelInfo`](../../src/NightCodeForge.Core/Interfaces/ILlmModelCatalogService.cs).
-   - Keep presentation formatting inside `ModelThinkingCapability.FormattedBadge` (in `NightCodeForge.Core.Interfaces`) in compliance with [AGENTS.md](../../AGENTS.md) UI/Presentation separation rules (no parsing or string-building logic in `.razor` `@code` blocks).
-   - In [`AgentProfilesTab.razor`](../../src/NightCodeForge.Web/Components/Settings/AgentProfilesTab.razor), alongside the discovered context window badge, render the model's thinking capability badge when non-empty (e.g., `🧠 Reasoning: low, medium, xhigh` or `🧠 Reasoning: boolean (on/off)`).
+   - Add `ModelThinkingCapability? ThinkingCapability = null` to [`AvailableModelInfo`](../../../src/NightCodeForge.Core/Interfaces/ILlmModelCatalogService.cs).
+   - Keep presentation formatting inside `ModelThinkingCapability.FormattedBadge` (in `NightCodeForge.Core.Interfaces`) in compliance with [AGENTS.md](../../../AGENTS.md) UI/Presentation separation rules (no parsing or string-building logic in `.razor` `@code` blocks).
+   - In [`AgentProfilesTab.razor`](../../../src/NightCodeForge.Web/Components/Settings/AgentProfilesTab.razor), alongside the discovered context window badge, render the model's thinking capability badge when non-empty (e.g., `🧠 Reasoning: low, medium, xhigh` or `🧠 Reasoning: boolean (on/off)`).
 
 ---
 

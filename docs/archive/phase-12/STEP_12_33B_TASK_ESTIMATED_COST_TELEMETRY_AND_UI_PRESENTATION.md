@@ -1,11 +1,11 @@
 # 📊 Step 12.33B: Task Estimated Cost Telemetry, Roll-up Aggregates & UI Presentation
 
 > **Feature Specification (Part 2 of 2 — Task Roll-up Metrics, Telemetry Events & Web UI Presentation)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
 > *Prerequisite Step:* [Step 12.33A: OllamaRouter Session Affinity Lease Release & Session Cost Tracking Engine](STEP_12_33A_OLLAMAROUTER_SESSION_AFFINITY_RELEASE_AND_COST_COLLECTION.md)  
 > *Target Components:* `src/NightCodeForge.Core/Workflow`, `src/NightCodeForge.Web/Services`, `src/NightCodeForge.Web/Components/Pages`, `src/NightCodeForge.Web/Components/Backlog`, `tests/NightCodeForge.Web.Tests`, `tests/NightCodeForge.Agents.Tests`  
-> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -19,15 +19,15 @@ Step 12.33B surfaces this telemetry to users:
 1. **Task-Level Cost Aggregation:**
    Aggregate all stage runs belonging to a `ForgeTask` to produce an authoritative estimated total cost (summing local electricity cost and actual cloud spend, as well as total cloud savings).
 2. **UI & Presentation Separation:**
-   Adhere strictly to the [AGENTS.md](../../AGENTS.md) UI separation rule: extract all cost formatting, currency symbol handling, breakdown text generation, and null handling into a dedicated `TaskCostPresentationHelper` in `NightCodeForge.Web.Services` (or Core presentation models). Razor components (`.razor`) remain clean and focused on markup and layout.
+   Adhere strictly to the [AGENTS.md](../../../AGENTS.md) UI separation rule: extract all cost formatting, currency symbol handling, breakdown text generation, and null handling into a dedicated `TaskCostPresentationHelper` in `NightCodeForge.Web.Services` (or Core presentation models). Razor components (`.razor`) remain clean and focused on markup and layout.
 3. **Task Detail & Drawer Visualization:**
-   - Display an estimated task cost summary badge in [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
+   - Display an estimated task cost summary badge in [`TaskDetail.razor`](../../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor) and [`TaskDetailDrawer.razor`](../../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
    - Provide an informative breakdown popover/tooltip: e.g. `Total: $0.042 (Cloud: $0.035, Electricity: $0.007, Saved: $0.120 vs all-cloud)`.
    - Render a per-stage cost badge in each row of the Execution Records timeline.
 4. **Kanban & Backlog Visibility:**
-   - In [`KanbanCard.razor`](../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor), show a subtle cost pill (e.g. `💰 $0.04`) for tasks that have recorded LLM execution spend.
+   - In [`KanbanCard.razor`](../../../src/NightCodeForge.Web/Components/Backlog/KanbanCard.razor), show a subtle cost pill (e.g. `💰 $0.04`) for tasks that have recorded LLM execution spend.
 5. **Ideation Chat Cost Indicator:**
-   - In [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor), display the active or completed session's accumulated cost badge in the conversation header.
+   - In [`Ideation.razor`](../../../src/NightCodeForge.Web/Components/Pages/Ideation.razor), display the active or completed session's accumulated cost badge in the conversation header.
 6. **Live Telemetry Activity Broadcast:**
    - Include cost metrics in the `AgentActivityEvent` published via `IAgentActivityStreamer` when a stage or conversation completes, ensuring web clients update live without page reloads.
 
@@ -74,7 +74,7 @@ public sealed record TaskCostSummary(
 
 ## 3. UI & Presentation Helper Specification
 
-Per [AGENTS.md](../../AGENTS.md), non-trivial formatting and calculations must live outside Razor `@code` blocks:
+Per [AGENTS.md](../../../AGENTS.md), non-trivial formatting and calculations must live outside Razor `@code` blocks:
 
 ### 3.1 `TaskCostPresentationHelper`
 Created `NightCodeForge.Web.Services.TaskCostPresentationHelper`:

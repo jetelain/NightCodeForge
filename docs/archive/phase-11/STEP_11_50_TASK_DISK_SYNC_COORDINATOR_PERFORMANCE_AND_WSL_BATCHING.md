@@ -1,11 +1,11 @@
 # ⚡ Step 11.50: TaskDiskSyncCoordinator & Markdown Sync Performance Hardening ($O(N^2) \to O(N)$ In-Memory Indexing, Hash Diffing & WSL UNC Parallelism)
 
 > **Performance, Scalability & Startup Resiliency Specification**  
-> *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
-> *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Web`](../../src/NightCodeForge.Web), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Web.Tests`](../../tests/NightCodeForge.Web.Tests)  
-> *Dependencies:* [Step 11.23: Markdown Task Sync Hygiene & Bi-Directional Normalization](../archive/phase-11/STEP_11_23_MARKDOWN_TASK_SYNC_HYGIENE_AND_DUPLICATE_PURGE.md), [Step 11.33: Multi-Workspace Isolation & Ext4 Working Clones](../archive/phase-11/STEP_11_33_MULTI_WORKSPACE_CONTAINER_ISOLATION_AND_HOST_WSL_PATH_PARITY.md)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Web`](../../../src/NightCodeForge.Web), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Web.Tests`](../../../tests/NightCodeForge.Web.Tests)  
+> *Dependencies:* [Step 11.23: Backlog Rejection & Kanban Hygiene](STEP_11_23_BACKLOG_REJECTION_KANBAN_HYGIENE_AND_SHELL_ERGONOMICS.md), [Step 11.33: Unified LLM Provider & Dynamic Context](STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

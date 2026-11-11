@@ -1,11 +1,11 @@
 # 🛡️ Step 11.48: Large-Context Timeout KV-Cache Compaction Recovery (Pre-Abandonment Compaction)
 
 > **Bug Fix, Resiliency & Inference Recovery Step (KV-Cache Stall Recovery, 30m Timeout Interception, Pre-Abandonment Context Compaction & Seamless Resumption)**  
-> *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
-> *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
-> *Dependencies:* [Step 11.37A: HTTP Transport Hardening & Outage Retry Policy](../archive/phase-11/STEP_11_37A_HTTP_TRANSPORT_HARDENING_AND_OUTAGE_RETRY_POLICY.md), [Step 11.45: Measured-Token Compaction Trigger & Pmad.AI Estimator](../archive/phase-11/STEP_11_45_MEASURED_TOKEN_COMPACTION_TRIGGER_AND_PMAD_AI_ESTIMATOR.md), [Step 11.47: Compaction Checkpoint Persistence, Resume Fidelity & Telemetry](../archive/phase-11/STEP_11_47_COMPACTION_CHECKPOINT_PERSISTENCE_RESUME_FIDELITY_AND_IN_FLIGHT_TELEMETRY.md), [Step 11.49: Two-Phase Streaming Idle Watchdog & Output Token Cap](STEP_11_49_STREAMING_IDLE_WATCHDOG_OUTPUT_TOKEN_CAP_AND_TIMEOUT_DIAGNOSTICS.md), [Step 12.33A: OllamaRouter Session Affinity Lease Release](../features/STEP_12_33A_OLLAMAROUTER_SESSION_AFFINITY_RELEASE_AND_COST_COLLECTION.md)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Agents`](../../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../../tests/NightCodeForge.Agents.Tests)  
+> *Dependencies:* [Step 11.37A: HTTP Transport Hardening & Outage Retry Policy](STEP_11_37A_HTTP_TRANSPORT_HARDENING_AND_OUTAGE_RETRY_POLICY.md), [Step 11.45: Measured-Token Compaction Trigger & Pmad.AI Estimator](STEP_11_45_MEASURED_TOKEN_COMPACTION_TRIGGER_AND_PMAD_AI_ESTIMATOR.md), [Step 11.47: Compaction Checkpoint Persistence, Resume Fidelity & Telemetry](STEP_11_47_COMPACTION_CHECKPOINT_PERSISTENCE_RESUME_FIDELITY_AND_IN_FLIGHT_TELEMETRY.md), [Step 11.49: Two-Phase Streaming Idle Watchdog & Output Token Cap](STEP_11_49_STREAMING_IDLE_WATCHDOG_OUTPUT_TOKEN_CAP_AND_TIMEOUT_DIAGNOSTICS.md), [Step 12.33A: OllamaRouter Session Affinity Lease Release](../phase-12/STEP_12_33A_OLLAMAROUTER_SESSION_AFFINITY_RELEASE_AND_COST_COLLECTION.md)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

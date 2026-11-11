@@ -1,6 +1,6 @@
 # 🛡️ Step 11.49C: Streaming Tool-Call Delta Telemetry (`OpenAI`) & 10-Minute `StreamIdleTimeoutMinutes` for Ollama Native Buffering
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Agents`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Core.Tests`  

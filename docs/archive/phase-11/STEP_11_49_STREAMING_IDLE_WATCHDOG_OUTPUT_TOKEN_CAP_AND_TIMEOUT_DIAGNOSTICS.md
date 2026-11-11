@@ -1,6 +1,6 @@
 # 🛡️ Step 11.49: Two-Phase Streaming Idle Watchdog, Output Token Cap (`MaxOutputTokens` / `num_predict`) & Mid-Stream Timeout Diagnostics
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Agents`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Core.Tests`  
@@ -110,7 +110,7 @@ Instead of applying a single rigid wall-clock deadline to an entire generation (
    - Once the first chunk has been received, every subsequent `enumerator.MoveNextAsync()` call MUST be guarded by a sliding timeout of `StreamIdleTimeoutSeconds` (default `300s` / 5 minutes), driven by `TimeProvider` (e.g., via `.AsTask().WaitAsync(idleTimeout, timeProvider, cancellationToken)`).
    - Every received chunk resets the `300s` timer. As long as the inference server continues emitting at least one chunk every `5` minutes, **there is no total wall-clock cap on the stream**, allowing legitimate 15–60 minute deep-reasoning or large refactoring turns to finish uninterrupted.
 5. **Deterministic Teardown of `OllamaSharp`'s Token-Less `ReadLineAsync()` (Preventing State-Machine `NotSupportedException`):**
-   - *Note (Temporary Workaround):* `StreamingCancellationScope` and `CancellationAwareStream` / `CancellationAwareHttpContent` are a temporary workaround required until upstream `OllamaSharp` PR [awaescher/OllamaSharp#400](https://github.com/awaescher/OllamaSharp/pull/400) (scoped to `.NET 7+`, which covers `NightCodeForge` on `.NET 10`) is released and referenced (tracked in [docs/fixes/OLLAMASHARP_STREAMING_CANCELLATION_PR_SPEC.md](OLLAMASHARP_STREAMING_CANCELLATION_PR_SPEC.md)).
+   - *Note (Temporary Workaround):* `StreamingCancellationScope` and `CancellationAwareStream` / `CancellationAwareHttpContent` are a temporary workaround required until upstream `OllamaSharp` PR [awaescher/OllamaSharp#400](https://github.com/awaescher/OllamaSharp/pull/400) (scoped to `.NET 7+`, which covers `NightCodeForge` on `.NET 10`) is released and referenced (tracked in [docs/fixes/OLLAMASHARP_STREAMING_CANCELLATION_PR_SPEC.md](../../fixes/OLLAMASHARP_STREAMING_CANCELLATION_PR_SPEC.md)).
    - At the HTTP transport layer (`TransientHttpErrorRetryHandler` or a response `HttpContent` / `Stream` wrapper), wrap streaming response streams so that every `Stream.ReadAsync` call links the request's `CancellationToken` (and disposes the inner response stream when cancelled), even when `OllamaSharp`'s `StreamReader.ReadLineAsync()` passes `CancellationToken.None`.
    - In `TelemetryChatClient.GetStreamingResponseAsync`, create a linked `CancellationTokenSource` (`streamCts`) and pass `streamCts.Token` to `base.GetStreamingResponseAsync(messagesList, options, streamCts.Token)`.
    - When the Phase 2A (`FirstTokenTimeout`) or Phase 2B (`StreamIdleTimeout`) watchdog fires (`TimeoutException` from `moveNextTask.WaitAsync(timeout, _timeProvider, cancellationToken)`), the wrapper MUST:

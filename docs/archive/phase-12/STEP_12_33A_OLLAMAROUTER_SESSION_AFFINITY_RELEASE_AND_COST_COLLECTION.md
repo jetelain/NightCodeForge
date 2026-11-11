@@ -1,12 +1,12 @@
 # 🚀 Step 12.33A: OllamaRouter Session Affinity Lease Release & Session Cost Tracking Engine
 
 > **Feature Specification (Part 1 of 2 — Backend Engine, Session Lifecycle, Gateway API & Delta Accounting)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisites:* [Step 11.33: Unified LLM Provider & Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.29: Smart Router Model Preload & Context-Intent Warmup](../archive/phase-12/STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)  
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Prerequisites:* [Step 11.33: Unified LLM Provider & Fleet Integration](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.29: Smart Router Model Preload & Context-Intent Warmup](STEP_12_29_SMART_ROUTER_MODEL_PRELOAD_AND_CONTEXT_INTENT.md)  
 > *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
 > *OpenAPI Specification:* OllamaRouter OpenAPI 3.1.1 (`/api/router/sessions/affinity/release`, `/api/router/monitor/sessions/{sessionId}`)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 

@@ -2,7 +2,7 @@
 
 > **Phase 12 Implementation Step (Extend Features - Intelligence & Multi-Harness Escalation)** *(formerly Step 11.1 / Step 12.5)*  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Dependencies:* [Step 12.5A: ACP Harness Catalog, Antigravity (`agy acp`) Authentication & Container-Ready Rework](STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md), [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.27: Dynamic Ollama & OllamaRouter Thinking Effort Discovery & Mapping](STEP_12_27_DYNAMIC_OLLAMA_THINKING_EFFORT_MAPPING.md)  
+> *Dependencies:* [Step 12.5A: ACP Harness Catalog, Antigravity (`agy acp`) Authentication & Container-Ready Rework](STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md), [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.27: Dynamic Ollama & OllamaRouter Thinking Effort Discovery & Mapping](../archive/phase-12/STEP_12_27_DYNAMIC_OLLAMA_THINKING_EFFORT_MAPPING.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Partially Implemented (Foundations completed in 11.33, 11.35 & 12.27; Difficulty Matrix Planned) | *Target Framework:* .NET 10 (C# 13)

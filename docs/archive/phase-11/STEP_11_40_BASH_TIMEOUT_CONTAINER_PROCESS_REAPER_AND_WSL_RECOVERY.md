@@ -1,11 +1,11 @@
 # 🛡️ Step 11.40: Bash Timeout Escalation Ladder, In-Container Process Reaper, Stale Container Recycling & WSL2 Self-Healing
 
 > **Bug Fix & Resiliency Step (Execution Sandbox, Container Process Hygiene & WSL2 Recovery)**  
-> *Parent Plan:* [Bug Fixes & Resiliency Roadmap](README.md)  
-> *Target Framework:* .NET 10 (C# 13) | *Status:* Implemented  
-> *Target Projects:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Infrastructure.Tests`](../../tests/NightCodeForge.Infrastructure.Tests)  
-> *Dependencies:* [Step 11.21: Container ICU & Dynamic Timeouts](../archive/phase-11/STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md), [Step 11.26: Container Reuse Validation & Task Lifecycle Cleanup](../archive/phase-11/STEP_11_26_CONTAINER_REUSE_VALIDATION_AND_TASK_LIFECYCLE_CLEANUP.md)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Parent Plan:* [Phase 11 Master Plan](../11_EXTEND_FEATURES.md)  
+> *Target Framework:* .NET 10 (C# 13) | *Status:* Completed  
+> *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](../../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Infrastructure.Tests`](../../../tests/NightCodeForge.Infrastructure.Tests)  
+> *Dependencies:* [Step 11.21: Container ICU & Dynamic Timeouts](STEP_11_21_CONTAINER_ICU_DYNAMIC_TIMEOUTS_AND_REVIEW_TEST_MANDATE.md), [Step 11.26: Container Reuse Validation & Task Lifecycle Cleanup](STEP_11_26_CONTAINER_REUSE_VALIDATION_AND_TASK_LIFECYCLE_CLEANUP.md)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -16,15 +16,15 @@
 ### 1.1 Problem Statement
 During autonomous stage execution and interactive sessions, shell commands executed via the `bash` tool or deterministic quality gates occasionally time out due to hung test runners (`dotnet test` / `testhost`), deadlocked child processes, compiler server stalls, or underlying Docker / WSL2 instability.
 
-Investigation of how [`NightCodeForgeContainerExecutor`](../../src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs) and [`WslExecutionEnvironment`](../../src/NightCodeForge.Infrastructure/Execution/WslExecutionEnvironment.cs) currently handle command timeouts reveals four critical failure modes:
+Investigation of how [`NightCodeForgeContainerExecutor`](../../../src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs) and [`WslExecutionEnvironment`](../../../src/NightCodeForge.Infrastructure/Execution/WslExecutionEnvironment.cs) currently handle command timeouts reveals four critical failure modes:
 
 | # | Vulnerability | Root Cause in Current Codebase | Impact |
 | :--- | :--- | :--- | :--- |
-| **1** | **Orphaned In-Container Processes Survive Timeouts** | On timeout, [`NightCodeForgeContainerExecutor.ExecuteAsync`](../../src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs#L391-L431) writes `\x03` to `_stdin` (which is a non-PTY pipe where `\x03` does not generate kernel `SIGINT`, and the subshell redirects `< /dev/null` anyway), then calls `ForceRestartShellProcess()` which only kills the host-side `docker exec -i` client process. | Hung child processes (`dotnet`, `testhost`, `msbuild`, `node`, `python3`, `git`) remain alive inside the container reparented to `PID 1`, holding file locks (`obj/`, `bin/`, `.git/index.lock`), ports, and RAM/CPU, causing all subsequent turns to fail or time out. |
+| **1** | **Orphaned In-Container Processes Survive Timeouts** | On timeout, [`NightCodeForgeContainerExecutor.ExecuteAsync`](../../../src/NightCodeForge.Infrastructure/Execution/NightCodeForgeContainerExecutor.cs#L391-L431) writes `\x03` to `_stdin` (which is a non-PTY pipe where `\x03` does not generate kernel `SIGINT`, and the subshell redirects `< /dev/null` anyway), then calls `ForceRestartShellProcess()` which only kills the host-side `docker exec -i` client process. | Hung child processes (`dotnet`, `testhost`, `msbuild`, `node`, `python3`, `git`) remain alive inside the container reparented to `PID 1`, holding file locks (`obj/`, `bin/`, `.git/index.lock`), ports, and RAM/CPU, causing all subsequent turns to fail or time out. |
 | **2** | **Zombie Process Accumulation (`PID 1 = tail`)** | Containers are launched with `tail -f /dev/null` as `PID 1` without `--init`. `tail` does not call `waitpid(-1)` on reparented child processes. | Every terminated or orphaned subprocess inside the container becomes a permanent `<defunct>` zombie in the container's PID table. |
 | **3** | **Wedged Container State After Timeout** | `ForceRestartShellProcess()` immediately spawns a new `docker exec -i` without verifying whether the container runtime can still execute commands or whether the container's namespace/mounts are wedged. | If the container is wedged, the next command hangs until another full build/test timeout (5–10 minutes) expires. |
 | **4** | **WSL2 / Docker Daemon Deadlocks on Windows** | On Windows hosts using WSL2 (`UseWsl = true` or `ExecutionMode.WslDirect`), the WSL2 utility VM, 9P/Plan9 mount bridge, or in-WSL Docker daemon occasionally freezes under heavy I/O or memory pressure. | Killing the container fails or hangs indefinitely until a human manually runs `wsl --shutdown`. |
-| **5** | **Idle Containers Remain Resident on `Ready` / `WaitingForHuman` / `Failed` Tasks** | [`TaskContainerReaper`](../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) only reaps containers when a task reaches `Closed`, `Rejected`, or `Cancelled`. | Tasks waiting hours or days for human review (`Ready`), human answers (`WaitingForHuman`), or sitting in `Failed` state keep their containers (and inside-container daemons like `csnav` holding 500 MB–2 GB RAM each) alive indefinitely. |
+| **5** | **Idle Containers Remain Resident on `Ready` / `WaitingForHuman` / `Failed` Tasks** | [`TaskContainerReaper`](../../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) only reaps containers when a task reaches `Closed`, `Rejected`, or `Cancelled`. | Tasks waiting hours or days for human review (`Ready`), human answers (`WaitingForHuman`), or sitting in `Failed` state keep their containers (and inside-container daemons like `csnav` holding 500 MB–2 GB RAM each) alive indefinitely. |
 
 ---
 
@@ -84,7 +84,7 @@ flowchart TD
 ### 3.2 Step 2: Container Liveness Probe (5s) & Container Recycling (5s Retry)
 
 1. **Recovery Telemetry Contract (`ContainerRecoveryStage`):**
-   - Define `ContainerRecoveryStage` (`None`, `ProcessSweepSucceeded`, `ContainerRecreated`, `WslShutdownRecovered`, `RecoveryFailed`) in [`OperationsTelemetryModels.cs`](../../src/NightCodeForge.Core/Workflow/OperationsTelemetryModels.cs) and include it as an optional property on `ShellCommandRecord` (`ContainerRecoveryStage RecoveryStage = ContainerRecoveryStage.None`) so recovery outcomes are recorded on `RecordShellCommandCompleted` without adding new dependencies to `NightCodeForgeContainerExecutor`.
+   - Define `ContainerRecoveryStage` (`None`, `ProcessSweepSucceeded`, `ContainerRecreated`, `WslShutdownRecovered`, `RecoveryFailed`) in [`OperationsTelemetryModels.cs`](../../../src/NightCodeForge.Core/Workflow/OperationsTelemetryModels.cs) and include it as an optional property on `ShellCommandRecord` (`ContainerRecoveryStage RecoveryStage = ContainerRecoveryStage.None`) so recovery outcomes are recorded on `RecordShellCommandCompleted` without adding new dependencies to `NightCodeForgeContainerExecutor`.
 
 2. **Initial Liveness Probe (5-Second Timeout):**
    - Immediately after Step 1 completes (or if Step 1 timed out / failed), run a lightweight probe command inside the container (e.g., `docker exec <containerName> echo __NCF_PROBE_OK__` or equivalent sentinel check) via `_processRunner.RunAsync` with a strict **5-second timeout**.
@@ -121,7 +121,7 @@ flowchart TD
    - If the 30-second probe still fails, log an error with full diagnostic context, record `ContainerRecoveryStage.RecoveryFailed`, and surface a clear failure message in the timeout `CommandResult` (exit code `124`).
 
 3. **`WslExecutionEnvironment` (`WslDirect` Mode) Parity:**
-   - In [`WslExecutionEnvironment.ExecuteAsync`](../../src/NightCodeForge.Infrastructure/Execution/WslExecutionEnvironment.cs), command timeouts surface either as `res.ExitCode == 124` (from `IProcessRunner`) or `OperationCanceledException when (!cancellationToken.IsCancellationRequested)` (from the internal timeout `CancellationTokenSource`).
+   - In [`WslExecutionEnvironment.ExecuteAsync`](../../../src/NightCodeForge.Infrastructure/Execution/WslExecutionEnvironment.cs), command timeouts surface either as `res.ExitCode == 124` (from `IProcessRunner`) or `OperationCanceledException when (!cancellationToken.IsCancellationRequested)` (from the internal timeout `CancellationTokenSource`).
    - On Windows (`RuntimeInformation.IsOSPlatform(OSPlatform.Windows)`), both timeout paths must:
      - Run a 5-second WSL probe (`wsl.exe [-d <distro>] -- echo __NCF_PROBE_OK__`).
      - If the 5-second probe fails or times out, execute `wsl.exe --shutdown` and retry the probe with a **30-second timeout**.
@@ -137,16 +137,16 @@ flowchart TD
    - Existing containers created prior to this change do not require forced drift-detection recreation solely for `--init`/`--pids-limit`; they will adopt the new flags naturally as containers are reaped or recycled.
 
 2. **Expand `TaskContainerReaper` & Lifecycle Teardown to Non-Active States:**
-   - When a task finishes a worker turn in [`TaskOrchestrator.ProcessTaskAsync`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) (and [`TaskMergeAndCascadeCoordinator`](../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs)) and its resulting state is non-executing:
+   - When a task finishes a worker turn in [`TaskOrchestrator.ProcessTaskAsync`](../../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) (and [`TaskMergeAndCascadeCoordinator`](../../../src/NightCodeForge.Core/Workflow/TaskMergeAndCascadeCoordinator.cs)) and its resulting state is non-executing:
      - Specifically, when `task.Status` is `Ready` (awaiting human review in Review Room), `Failed`, `Cancelled`, `Closed`, or `Rejected`, **or** when `task.IsWaitingForHuman == true` (awaiting human answer or manual conflict rebase in Inbox) or `task.IsDeferredByPause == true`:
-     - Tear down its per-task sandbox container via [`ITaskWorkspacePreparer.CleanupTaskContainerSafeAsync`](../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs) so idle containers and in-container daemons (`csnav`) do not consume gigabytes of WSL2 memory while waiting for human action.
+     - Tear down its per-task sandbox container via [`ITaskWorkspacePreparer.CleanupTaskContainerSafeAsync`](../../../src/NightCodeForge.Core/Workflow/TaskWorkspacePreparer.cs) so idle containers and in-container daemons (`csnav`) do not consume gigabytes of WSL2 memory while waiting for human action.
      - **Cross-Cohort Loopback Guard:** Do **not** key container teardown off `cohortExitReason == CohortExitReason.Failed` alone, because cross-cohort loopbacks (e.g., `HandleCrossCohortLoopBackAsync` or `ConflictVerificationOutcome.LoopedBackToImplementation`) set `cohortExitReason = CohortExitReason.Failed` while leaving `task.Status == TaskOverallStatus.Open` and immediately enqueuing the target stage. Always inspect the actual post-run task state (`Status`, `IsWaitingForHuman`, `IsDeferredByPause`).
      - When the task later resumes (e.g., human answers a question, requests changes in Review Room, or restarts a failed stage), `EnsureContainerRunning` transparently recreates the container on demand with all volume mounts and caches intact.
-   - Update [`TaskContainerReaper.ReapAsync`](../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) (and share `TaskContainerReaper.ShouldReapTaskContainer`) so periodic and startup sweeps also reap containers belonging to `Failed` tasks, `Ready` tasks, and `Open` tasks where `IsWaitingForHuman == true` or `IsDeferredByPause == true`.
+   - Update [`TaskContainerReaper.ReapAsync`](../../../src/NightCodeForge.Core/Services/TaskContainerReaper.cs) (and share `TaskContainerReaper.ShouldReapTaskContainer`) so periodic and startup sweeps also reap containers belonging to `Failed` tasks, `Ready` tasks, and `Open` tasks where `IsWaitingForHuman == true` or `IsDeferredByPause == true`.
 
 3. **Idle Workspace Container TTL Eviction:**
    - Track `LastExecutionTimestampUtc` (initialized to `DateTime.UtcNow` and updated when `ExecuteAsync` completes) and `IsExecuting` (true while `_execLock` is held) on `NightCodeForgeContainerExecutor`.
-   - Expose `EvictIdleWorkspaceContainersAsync` on [`IExecutionEnvironmentProvider`](../../src/NightCodeForge.Core/Interfaces/IExecutionEnvironment.cs) (implemented on [`ExecutionEnvironmentProvider`](../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs)) and invoke it during periodic maintenance sweeps ([`GitSyncService.PruneWorktreesAsync`](../../src/NightCodeForge.Web/Services/GitSyncService.cs) / `TaskContainerReaper.ReapAsync`).
+   - Expose `EvictIdleWorkspaceContainersAsync` on [`IExecutionEnvironmentProvider`](../../../src/NightCodeForge.Core/Interfaces/IExecutionEnvironment.cs) (implemented on [`ExecutionEnvironmentProvider`](../../../src/NightCodeForge.Infrastructure/Execution/ExecutionEnvironmentProvider.cs)) and invoke it during periodic maintenance sweeps ([`GitSyncService.PruneWorktreesAsync`](../../../src/NightCodeForge.Web/Services/GitSyncService.cs) / `TaskContainerReaper.ReapAsync`).
    - Because all cached workspace-level executors (`TaskId == null` across `SandboxSecurityTier` values) share the same underlying base container (`ncf-sandbox-{workspaceId}`), `EvictIdleWorkspaceContainersAsync` evaluates all cached workspace-level executors for a workspace together: only when **all** cached workspace-level tier executors are not currently executing (`!IsExecuting`) and have been idle for at least `idleTimeout` (default: `30 minutes`) are all cached workspace-level entries removed, disposed, and the underlying base container removed once via `IContainerEnvironmentFactory.RemoveBaseContainerAsync`.
 
 ---
