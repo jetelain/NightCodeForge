@@ -3,7 +3,7 @@
 > **Feature Implementation Step (Part 2 of 2 — Native CLI Scaffolding, Clean Architecture Templates & Remote Publishing)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Step:* [Step 12.32A: Workspace Wizard Local Git Discovery & Remote Hosting](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md)  
-> *Related Steps:* [Step 12.11A: GitHub Client & Outbound PR Delivery](STEP_12_11A_GITHUB_CLIENT_SETTINGS_AND_PR_DELIVERY.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
+> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
@@ -28,7 +28,7 @@ This step (Part 2 of Step 12.32) enables creating fresh, production-ready worksp
    - **CLI Application (Clean Architecture):** Command-line tool structured into `Cli`, `Core` with test suites.
    - **Class Library:** Reusable modular library with documentation and unit tests.
 4. **Automated Git Initialization & Clean First Commit:** Auto-provisions `.gitignore`, `.editorconfig`, `README.md`, runs `git init -b main`, stages all files, and creates the baseline commit.
-5. **Remote Forge Publishing (GitHub / GitLab):** When VCS provider integration ([Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md) / [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_SETTINGS_AND_PR_DELIVERY.md)) is active, developers can choose to automatically create the remote repository (public or private), register the `origin` remote, push `main`, and link workspace integration settings in one seamless flow.
+5. **Remote Forge Publishing (GitHub / GitLab):** When VCS provider integration ([Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md) / [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is active, developers can choose to automatically create the remote repository (public or private), register the `origin` remote, push `main`, and link workspace integration settings in one seamless flow.
 
 ---
 
@@ -211,7 +211,7 @@ When `PublishToRemoteForge == true`:
 3. Calls `IVcsHostingProvider.CreateRepositoryAsync(request.ProjectName, request.RemoteDescription, request.RemoteIsPrivate)`.
 4. Executes native Git remote linkage via `IGitCliRunner` / `CliWrap`:
    - `git remote add origin <HttpsCloneUrl>`
-   - `git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" push -u origin main` (using the ephemeral HTTP header authentication pattern from [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_SETTINGS_AND_PR_DELIVERY.md) with `GIT_TERMINAL_PROMPT=0` so short-lived `ghu_...` tokens are **never** written into `.git/config`).
+   - `git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" push -u origin main` (using the ephemeral HTTP header authentication pattern from [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) with `GIT_TERMINAL_PROMPT=0` so short-lived `ghu_...` tokens are **never** written into `.git/config`).
 5. Populates `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`) to be persisted on the newly provisioned [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite.
 
 ---

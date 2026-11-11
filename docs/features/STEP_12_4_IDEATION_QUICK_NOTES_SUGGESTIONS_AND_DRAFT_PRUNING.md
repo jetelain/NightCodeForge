@@ -102,7 +102,7 @@ flowchart TD
 When the agent proposes tasks during chat, [`IdeationProposalCard.razor`](../../src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor) renders three distinct buttons:
 1. **Approve (Promote to Open):**
    - Sets `Status = TaskOverallStatus.Open`.
-   - Allows maintainer to configure `MergeMode` (`Automatic`, `ManualReviewRequired`; `ExternalPullRequest` enabled via Step 12.11A).
+   - Allows maintainer to configure `MergeMode` (`Automatic`, `ManualReviewRequired`; `ExternalPullRequest` enabled via [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md)).
    - Task enters the active Kanban backlog and execution queue.
 2. **Keep as Suggestion (`Draft` $\rightarrow$ `Suggested`):**
    - Sets `Status = TaskOverallStatus.Suggested`.
