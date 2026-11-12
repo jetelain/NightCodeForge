@@ -59,6 +59,9 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
     public bool IsPauseRequested(int taskId) =>
         _cancellationManager.IsPauseRequested(taskId);
 
+    public bool IsHostShuttingDown =>
+        _cancellationManager.IsHostShuttingDown;
+
     public bool CanRestoreCheckpointMemory(IEnumerable<Conversation>? conversations, StageCheckpoint? checkpoint, string? stageId) =>
         CanRestoreCheckpointMemoryInternal(conversations, checkpoint, stageId);
 

@@ -303,6 +303,19 @@ public class TelemetryChatClient : DelegatingChatClient
 
                         throw enrichedEx;
                     }
+                    catch (OperationCanceledException) when (!moveNextTask.IsCompleted)
+                    {
+                        streamCts.Cancel();
+                        try
+                        {
+                            await moveNextTask;
+                        }
+                        catch (Exception)
+                        {
+                            // Justification: Drain in-flight MoveNextAsync so enumerator.DisposeAsync() is never called while the async iterator state machine is still running.
+                        }
+                        throw;
+                    }
 
                     if (hasMore)
                     {

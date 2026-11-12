@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Infrastructure.BackgroundJobs;
 
@@ -11,13 +12,16 @@ namespace NightCodeForge.Infrastructure.BackgroundJobs;
 public sealed class GracefulHangfireServerHostedService : IHostedService, IDisposable
 {
     private readonly IHostedService _inner;
+    private readonly ITaskCancellationManager _cancellationManager;
     private readonly ILogger<GracefulHangfireServerHostedService> _logger;
 
     public GracefulHangfireServerHostedService(
         IHostedService inner,
+        ITaskCancellationManager cancellationManager,
         ILogger<GracefulHangfireServerHostedService> logger)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _cancellationManager = cancellationManager ?? throw new ArgumentNullException(nameof(cancellationManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -25,6 +29,7 @@ public sealed class GracefulHangfireServerHostedService : IHostedService, IDispo
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        _cancellationManager.NotifyHostShuttingDown();
         try
         {
             await _inner.StopAsync(cancellationToken);

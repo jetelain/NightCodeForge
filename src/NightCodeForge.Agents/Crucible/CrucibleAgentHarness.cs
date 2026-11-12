@@ -320,13 +320,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
 
-        var session = await agent.CreateSessionAsync(cancellationToken);
-
         string? targetRouting = null;
         var accumulatedText = new StringBuilder();
         var accumulatedReasoning = new StringBuilder();
         bool streamingFailed = false;
         bool sawToolCallInPass = false;
+        bool conversationClosed = false;
 
         (long Prompt, long Completion) GetEffectiveTokenTotals()
         {
@@ -372,7 +371,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         async Task<string?> SaveAsync(AgentRunStatus status, string? summary, CancellationToken ct)
         {
             var (effPrompt, effCompletion) = GetEffectiveTokenTotals();
-            return await _conversationCoordinator.SaveTranscriptAsync(
+            var savedState = await _conversationCoordinator.SaveTranscriptAsync(
                 conversationState,
                 new CrucibleTranscriptRequest(
                     context,
@@ -387,6 +386,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     harnessOptions,
                     activeSkills),
                 ct);
+            conversationClosed = true;
+            return savedState;
         }
 
         async Task<AgentRunResult> CompleteWithRequestChangesAsync(RequestChangesException reqChange)
@@ -506,10 +507,33 @@ public partial class CrucibleAgentHarness : IAgentHarness
             // The caller's token is already cancelled: close the conversation with a token that still works,
             // otherwise the stage conversation would stay "Running" forever.
             stopwatch.Stop();
+            try
+            {
+                interruptionCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Justification: CTS was already disposed upon stream completion
+            }
+            var isShutdown = _cancellationManager.IsHostShuttingDown && !_cancellationManager.IsCancelRequested(context.ForgeTask.Id);
+            if (isShutdown)
+            {
+                SanitizeInFlightTurns(chatHistory);
+            }
             latestSerializedState = SerializeSession(chatHistory);
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, "Stage cancelled", timeoutCts.Token);
-            await SaveAsync(AgentRunStatus.Cancelled, "Stage cancelled", timeoutCts.Token);
+            using var timeoutCts = new CancellationTokenSource(PauseAbortTimeout);
+            if (isShutdown)
+            {
+                await conversationState.DrainAsync();
+                await conversationState.SanitizeTrailingInterruptedTurnsAsync(timeoutCts.Token);
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, "Stage interrupted by host shutdown", timeoutCts.Token);
+                await SaveAsync(AgentRunStatus.Interrupted, "Stage interrupted by host shutdown", timeoutCts.Token);
+            }
+            else
+            {
+                await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, "Stage cancelled", timeoutCts.Token);
+                await SaveAsync(AgentRunStatus.Cancelled, "Stage cancelled", timeoutCts.Token);
+            }
         }
 
         async Task SuspendOnPauseAsync()
@@ -757,405 +781,232 @@ public partial class CrucibleAgentHarness : IAgentHarness
             return false;
         }
 
-        // The agent receives a copy: the persisting middleware rewrites chatHistory in place on every model call.
-        int consecutiveTruncationNudges = 0;
-        while (true)
+        try
         {
-            sawToolCallInPass = false;
-            var historySnapshot = chatHistory.ToList();
-            var maxTransientRetries = _retryOptions.MaxRetries;
-            int streamRetryCount = 0;
-            int streamTimeoutRetries = 0;
-            long? streamOutageStartTimestamp = null;
-            var recoveryState = new TurnRecoveryState();
+            var session = await agent.CreateSessionAsync(cancellationToken);
 
-            IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
-                .GetAsyncEnumerator(interruptionCts.Token);
-            try
+            // The agent receives a copy: the persisting middleware rewrites chatHistory in place on every model call.
+            int consecutiveTruncationNudges = 0;
+            while (true)
             {
-                while (true)
+                sawToolCallInPass = false;
+                var historySnapshot = chatHistory.ToList();
+                var maxTransientRetries = _retryOptions.MaxRetries;
+                int streamRetryCount = 0;
+                int streamTimeoutRetries = 0;
+                long? streamOutageStartTimestamp = null;
+                var recoveryState = new TurnRecoveryState();
+
+                IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
+                    .GetAsyncEnumerator(interruptionCts.Token);
+                try
                 {
-                    bool hasMore;
-                    try
+                    while (true)
                     {
-                        hasMore = await enumerator.MoveNextAsync();
-                    }
-                    catch (RequestChangesException reqChange)
-                    {
-                        return await CompleteWithRequestChangesAsync(reqChange);
-                    }
-                    catch (HumanInterruptionException interruption)
-                    {
-                        return await CompleteWithInterruptionAsync(interruption);
-                    }
-                    catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
-                    {
-                        streamingFailed = true;
-                        break;
-                    }
-                    catch (OperationCanceledException) when (capturedInterruption != null ||
-                                                           capturedRequestChanges != null ||
-                                                           interruptionCts.IsCancellationRequested ||
-                                                           cancellationToken.IsCancellationRequested ||
-                                                           _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
-                                                           _operationsControlService.IsPaused)
-                    {
-                        if (capturedInterruption != null)
+                        bool hasMore;
+                        try
                         {
-                            return await CompleteWithInterruptionAsync(capturedInterruption);
+                            hasMore = await enumerator.MoveNextAsync();
                         }
-                        if (capturedRequestChanges != null)
+                        catch (RequestChangesException reqChange)
                         {
-                            return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                            return await CompleteWithRequestChangesAsync(reqChange);
                         }
-                        var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
-                        if (isPause)
+                        catch (HumanInterruptionException interruption)
                         {
-                            await SuspendOnPauseAsync();
+                            return await CompleteWithInterruptionAsync(interruption);
+                        }
+                        catch (Exception ex) when (ex is NotImplementedException or NotSupportedException)
+                        {
+                            streamingFailed = true;
+                            break;
+                        }
+                        catch (OperationCanceledException) when (capturedInterruption != null ||
+                                                               capturedRequestChanges != null ||
+                                                               interruptionCts.IsCancellationRequested ||
+                                                               cancellationToken.IsCancellationRequested ||
+                                                               _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
+                                                               _operationsControlService.IsPaused)
+                        {
+                            if (capturedInterruption != null)
+                            {
+                                return await CompleteWithInterruptionAsync(capturedInterruption);
+                            }
+                            if (capturedRequestChanges != null)
+                            {
+                                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                            }
+                            var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                            if (isPause)
+                            {
+                                await SuspendOnPauseAsync();
+                                throw;
+                            }
+                            await AbortOnCancellationAsync();
                             throw;
                         }
-                        await AbortOnCancellationAsync();
-                        throw;
-                    }
-                    catch (Exception ex) when (HttpErrorDetailHelper.FindException<NightCodeForge.Core.Exceptions.OperationsPausedException>(ex) is { } opex)
-                    {
-                        _logger.LogInformation(opex, "Crucible streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
-                        await SuspendOnPauseAsync();
-                        throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
-                    }
-                    catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
-                    {
-                        if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+                        catch (Exception ex) when (HttpErrorDetailHelper.FindException<NightCodeForge.Core.Exceptions.OperationsPausedException>(ex) is { } opex)
                         {
+                            _logger.LogInformation(opex, "Crucible streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
                             await SuspendOnPauseAsync();
-                            throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", ex);
+                            throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
                         }
-
-                        streamOutageStartTimestamp ??= _timeProvider.GetTimestamp();
-                        var elapsed = _timeProvider.GetElapsedTime(streamOutageStartTimestamp.Value);
-                        bool isTimeout = TransientErrorDetector.IsHttpTimeout(ex);
-                        bool timeoutExhausted = isTimeout && streamTimeoutRetries >= _retryOptions.MaxTimeoutRetries;
-
-                        if (timeoutExhausted || streamRetryCount >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                        catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
                         {
+                            if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+                            {
+                                await SuspendOnPauseAsync();
+                                throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", ex);
+                            }
+
+                            streamOutageStartTimestamp ??= _timeProvider.GetTimestamp();
+                            var elapsed = _timeProvider.GetElapsedTime(streamOutageStartTimestamp.Value);
+                            bool isTimeout = TransientErrorDetector.IsHttpTimeout(ex);
+                            bool timeoutExhausted = isTimeout && streamTimeoutRetries >= _retryOptions.MaxTimeoutRetries;
+
+                            if (timeoutExhausted || streamRetryCount >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                            {
+                                await enumerator.DisposeAsync();
+                                enumerator = null;
+
+                                try
+                                {
+                                    if (await TryRecoverFromLargeContextTimeoutAsync(
+                                        ex,
+                                        isTimeout,
+                                        recoveryState,
+                                        piStrategy,
+                                        chatHistory,
+                                        accumulatedText,
+                                        accumulatedReasoning,
+                                        context,
+                                        conversationState,
+                                        sessionId,
+                                        setup.EffectiveModelId,
+                                        elapsed,
+                                        cancellationToken))
+                                    {
+                                        latestSerializedState = SerializeSession(chatHistory);
+                                        historySnapshot = chatHistory.ToList();
+                                        streamRetryCount = 0;
+                                        streamTimeoutRetries = 0;
+                                        streamOutageStartTimestamp = null;
+
+                                        session = await agent.CreateSessionAsync(cancellationToken);
+                                        enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
+                                            .GetAsyncEnumerator(interruptionCts.Token);
+                                        continue;
+                                    }
+                                    latestSerializedState = SerializeSession(chatHistory);
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                                    if (isPause)
+                                    {
+                                        await SuspendOnPauseAsync();
+                                        throw;
+                                    }
+                                    await AbortOnCancellationAsync();
+                                    throw;
+                                }
+
+                                if (streamRetryCount > 0)
+                                {
+                                    ex.Data[ResilienceConstants.RetriedKey] = true;
+                                }
+                                var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                                _logger.LogError(ex, "Crucible streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
+                                    streamRetryCount, maxTransientRetries, elapsed, failMsg);
+                                return await FailAsync(failMsg);
+                            }
+
+                            if (isTimeout)
+                            {
+                                streamTimeoutRetries++;
+                            }
+                            streamRetryCount++;
+                            var delay = ResilienceJitterHelper.CalculateJitteredDelay(streamRetryCount, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
+                            var remaining = _retryOptions.MaxRetryDuration - elapsed;
+                            if (remaining > TimeSpan.Zero && delay > remaining)
+                            {
+                                delay = remaining;
+                            }
+                            var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+
+                            var partialChars = accumulatedText.Length + accumulatedReasoning.Length;
+                            string progressDetail;
+                            if (HttpErrorDetailHelper.TryGetStreamTimeoutDiagnostics(ex, out var streamDiag) && streamDiag != null)
+                            {
+                                progressDetail = streamDiag.GeneratedTokens > 0
+                                    ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" ({streamDiag.GeneratedTokens:N0} tokens generated in {streamDiag.ElapsedSeconds:F1}s before failure)")
+                                    : string.Create(System.Globalization.CultureInfo.InvariantCulture, $" (0 tokens generated in {streamDiag.ElapsedSeconds:F1}s prefill before failure)");
+                            }
+                            else
+                            {
+                                progressDetail = partialChars > 0
+                                    ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" (~{partialChars:N0} chars accumulated before failure)")
+                                    : string.Empty;
+                            }
+
+                            _logger.LogWarning(
+                                ex,
+                                "Crucible streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}{ProgressDetail}. Retrying after {DelayMs}ms delay...",
+                                streamRetryCount, maxTransientRetries, errorMsg, progressDetail, delay.TotalMilliseconds);
+
+                            await BroadcastAsync(
+                                sessionId,
+                                context.ForgeTask.Id,
+                                context.StageId,
+                                AgentActivityKind.Notice,
+                                $"Transient network error: {errorMsg}{progressDetail}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
+                                cancellationToken);
+
+                            accumulatedText.Clear();
+                            accumulatedReasoning.Clear();
+
                             await enumerator.DisposeAsync();
                             enumerator = null;
+                            await WaitRetryBackoffAsync(delay);
 
-                            try
-                            {
-                                if (await TryRecoverFromLargeContextTimeoutAsync(
-                                    ex,
-                                    isTimeout,
-                                    recoveryState,
-                                    piStrategy,
-                                    chatHistory,
-                                    accumulatedText,
-                                    accumulatedReasoning,
-                                    context,
-                                    conversationState,
-                                    sessionId,
-                                    setup.EffectiveModelId,
-                                    elapsed,
-                                    cancellationToken))
-                                {
-                                    latestSerializedState = SerializeSession(chatHistory);
-                                    historySnapshot = chatHistory.ToList();
-                                    streamRetryCount = 0;
-                                    streamTimeoutRetries = 0;
-                                    streamOutageStartTimestamp = null;
+                            SanitizeInFlightTurns(chatHistory);
 
-                                    session = await agent.CreateSessionAsync(cancellationToken);
-                                    enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
-                                        .GetAsyncEnumerator(interruptionCts.Token);
-                                    continue;
-                                }
-                                latestSerializedState = SerializeSession(chatHistory);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
-                                if (isPause)
-                                {
-                                    await SuspendOnPauseAsync();
-                                    throw;
-                                }
-                                await AbortOnCancellationAsync();
-                                throw;
-                            }
-
-                            if (streamRetryCount > 0)
-                            {
-                                ex.Data[ResilienceConstants.RetriedKey] = true;
-                            }
-                            var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
-                            _logger.LogError(ex, "Crucible streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
-                                streamRetryCount, maxTransientRetries, elapsed, failMsg);
-                            return await FailAsync(failMsg);
+                            session = await agent.CreateSessionAsync(cancellationToken);
+                            enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
+                                .GetAsyncEnumerator(interruptionCts.Token);
+                            continue;
                         }
-
-                        if (isTimeout)
+                        catch (Exception ex)
                         {
-                            streamTimeoutRetries++;
+                            var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                            _logger.LogError(ex, "Error during Crucible streaming LLM invocation: {ErrorMessage}", errorMsg);
+                            return await FailAsync(errorMsg);
                         }
-                        streamRetryCount++;
-                        var delay = ResilienceJitterHelper.CalculateJitteredDelay(streamRetryCount, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
-                        var remaining = _retryOptions.MaxRetryDuration - elapsed;
-                        if (remaining > TimeSpan.Zero && delay > remaining)
+
+                        if (!hasMore) break;
+
+                        // Reset streamRetryCount, streamTimeoutRetries, and outage timer when a tool execution completes
+                        // so subsequent model turns have their full retry budget, without resetting on partial mid-turn chunks
+                        var currentUpdate = enumerator.Current;
+                        if (currentUpdate.Contents?.OfType<FunctionResultContent>().Any() == true)
                         {
-                            delay = remaining;
+                            streamRetryCount = 0;
+                            streamTimeoutRetries = 0;
+                            streamOutageStartTimestamp = null;
+                            recoveryState.HasAttemptedTimeoutRecoveryCompaction = false;
                         }
-                        var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
 
-                        var partialChars = accumulatedText.Length + accumulatedReasoning.Length;
-                        string progressDetail;
-                        if (HttpErrorDetailHelper.TryGetStreamTimeoutDiagnostics(ex, out var streamDiag) && streamDiag != null)
+                        if (await ProcessUpdateAsync(currentUpdate, streaming: true))
                         {
-                            progressDetail = streamDiag.GeneratedTokens > 0
-                                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" ({streamDiag.GeneratedTokens:N0} tokens generated in {streamDiag.ElapsedSeconds:F1}s before failure)")
-                                : string.Create(System.Globalization.CultureInfo.InvariantCulture, $" (0 tokens generated in {streamDiag.ElapsedSeconds:F1}s prefill before failure)");
+                            break;
                         }
-                        else
-                        {
-                            progressDetail = partialChars > 0
-                                ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $" (~{partialChars:N0} chars accumulated before failure)")
-                                : string.Empty;
-                        }
-
-                        _logger.LogWarning(
-                            ex,
-                            "Crucible streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}{ProgressDetail}. Retrying after {DelayMs}ms delay...",
-                            streamRetryCount, maxTransientRetries, errorMsg, progressDetail, delay.TotalMilliseconds);
-
-                        await BroadcastAsync(
-                            sessionId,
-                            context.ForgeTask.Id,
-                            context.StageId,
-                            AgentActivityKind.Notice,
-                            $"Transient network error: {errorMsg}{progressDetail}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {streamRetryCount}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
-                            cancellationToken);
-
-                        accumulatedText.Clear();
-                        accumulatedReasoning.Clear();
-
+                    }
+                }
+                finally
+                {
+                    if (enumerator != null)
+                    {
                         await enumerator.DisposeAsync();
-                        enumerator = null;
-                        await WaitRetryBackoffAsync(delay);
-
-                        SanitizeInFlightTurns(chatHistory);
-
-                        session = await agent.CreateSessionAsync(cancellationToken);
-                        enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
-                            .GetAsyncEnumerator(interruptionCts.Token);
-                        continue;
-                    }
-                    catch (Exception ex)
-                    {
-                        var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
-                        _logger.LogError(ex, "Error during Crucible streaming LLM invocation: {ErrorMessage}", errorMsg);
-                        return await FailAsync(errorMsg);
-                    }
-
-                    if (!hasMore) break;
-
-                    // Reset streamRetryCount, streamTimeoutRetries, and outage timer when a tool execution completes
-                    // so subsequent model turns have their full retry budget, without resetting on partial mid-turn chunks
-                    var currentUpdate = enumerator.Current;
-                    if (currentUpdate.Contents?.OfType<FunctionResultContent>().Any() == true)
-                    {
-                        streamRetryCount = 0;
-                        streamTimeoutRetries = 0;
-                        streamOutageStartTimestamp = null;
-                        recoveryState.HasAttemptedTimeoutRecoveryCompaction = false;
-                    }
-
-                    if (await ProcessUpdateAsync(currentUpdate, streaming: true))
-                    {
-                        break;
-                    }
-                }
-            }
-            finally
-            {
-                if (enumerator != null)
-                {
-                    await enumerator.DisposeAsync();
-                }
-            }
-
-            if (capturedInterruption != null)
-            {
-                return await CompleteWithInterruptionAsync(capturedInterruption);
-            }
-            if (capturedRequestChanges != null)
-            {
-                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
-            }
-
-            if (streamingFailed)
-            {
-                // Discard what a partially consumed stream produced so the non-streaming retry does not duplicate it.
-                accumulatedText.Clear();
-                accumulatedReasoning.Clear();
-                chatHistory.Clear();
-                chatHistory.AddRange(historySnapshot);
-
-                int nonStreamingRetries = 0;
-                int nonStreamingTimeoutRetries = 0;
-                long? nonStreamingOutageStartTimestamp = null;
-                while (true)
-                {
-                    try
-                    {
-                        var response = await agent.RunAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token);
-                        foreach (var update in response.ToAgentResponseUpdates())
-                        {
-                            await ProcessUpdateAsync(update, streaming: false);
-                        }
-                        break;
-                    }
-                    catch (RequestChangesException reqChange)
-                    {
-                        return await CompleteWithRequestChangesAsync(reqChange);
-                    }
-                    catch (HumanInterruptionException interruption)
-                    {
-                        return await CompleteWithInterruptionAsync(interruption);
-                    }
-                    catch (OperationCanceledException) when (capturedInterruption != null ||
-                                                           capturedRequestChanges != null ||
-                                                           interruptionCts.IsCancellationRequested ||
-                                                           cancellationToken.IsCancellationRequested ||
-                                                           _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
-                                                           _operationsControlService.IsPaused)
-                    {
-                        if (capturedInterruption != null)
-                        {
-                            return await CompleteWithInterruptionAsync(capturedInterruption);
-                        }
-                        if (capturedRequestChanges != null)
-                        {
-                            return await CompleteWithRequestChangesAsync(capturedRequestChanges);
-                        }
-                        var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
-                        if (isPause)
-                        {
-                            await SuspendOnPauseAsync();
-                            throw;
-                        }
-                        await AbortOnCancellationAsync();
-                        throw;
-                    }
-                    catch (Exception ex) when (HttpErrorDetailHelper.FindException<NightCodeForge.Core.Exceptions.OperationsPausedException>(ex) is { } opex)
-                    {
-                        _logger.LogInformation(opex, "Crucible non-streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
-                        await SuspendOnPauseAsync();
-                        throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
-                    }
-                    catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
-                    {
-                        if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
-                        {
-                            await SuspendOnPauseAsync();
-                            throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", ex);
-                        }
-
-                        nonStreamingOutageStartTimestamp ??= _timeProvider.GetTimestamp();
-                        var elapsed = _timeProvider.GetElapsedTime(nonStreamingOutageStartTimestamp.Value);
-                        bool isTimeout = TransientErrorDetector.IsHttpTimeout(ex);
-                        bool timeoutExhausted = isTimeout && nonStreamingTimeoutRetries >= _retryOptions.MaxTimeoutRetries;
-
-                        if (timeoutExhausted || nonStreamingRetries >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
-                        {
-                            try
-                            {
-                                if (await TryRecoverFromLargeContextTimeoutAsync(
-                                    ex,
-                                    isTimeout,
-                                    recoveryState,
-                                    piStrategy,
-                                    chatHistory,
-                                    accumulatedText,
-                                    accumulatedReasoning,
-                                    context,
-                                    conversationState,
-                                    sessionId,
-                                    setup.EffectiveModelId,
-                                    elapsed,
-                                    cancellationToken))
-                                {
-                                    latestSerializedState = SerializeSession(chatHistory);
-                                    nonStreamingRetries = 0;
-                                    nonStreamingTimeoutRetries = 0;
-                                    nonStreamingOutageStartTimestamp = null;
-
-                                    session = await agent.CreateSessionAsync(cancellationToken);
-                                    continue;
-                                }
-                                latestSerializedState = SerializeSession(chatHistory);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
-                                if (isPause)
-                                {
-                                    await SuspendOnPauseAsync();
-                                    throw;
-                                }
-                                await AbortOnCancellationAsync();
-                                throw;
-                            }
-
-                            if (nonStreamingRetries > 0)
-                            {
-                                ex.Data[ResilienceConstants.RetriedKey] = true;
-                            }
-                            var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
-                            _logger.LogError(ex, "Crucible non-streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
-                                nonStreamingRetries, maxTransientRetries, elapsed, failMsg);
-                            return await FailAsync(failMsg);
-                        }
-
-                        if (isTimeout)
-                        {
-                            nonStreamingTimeoutRetries++;
-                        }
-                        nonStreamingRetries++;
-                        var delay = ResilienceJitterHelper.CalculateJitteredDelay(nonStreamingRetries, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
-                        var remaining = _retryOptions.MaxRetryDuration - elapsed;
-                        if (remaining > TimeSpan.Zero && delay > remaining)
-                        {
-                            delay = remaining;
-                        }
-                        var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
-
-                        _logger.LogWarning(
-                            ex,
-                            "Crucible non-streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}. Retrying after {DelayMs}ms delay...",
-                            nonStreamingRetries, maxTransientRetries, errorMsg, delay.TotalMilliseconds);
-
-                        await BroadcastAsync(
-                            sessionId,
-                            context.ForgeTask.Id,
-                            context.StageId,
-                            AgentActivityKind.Notice,
-                            $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {nonStreamingRetries}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
-                            cancellationToken);
-
-                        accumulatedText.Clear();
-                        accumulatedReasoning.Clear();
-
-                        await WaitRetryBackoffAsync(delay);
-
-                        SanitizeInFlightTurns(chatHistory);
-
-                        session = await agent.CreateSessionAsync(cancellationToken);
-                        continue;
-                    }
-                    catch (Exception ex)
-                    {
-                        var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
-                        _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation: {ErrorMessage}", errorMsg);
-                        return await FailAsync(errorMsg);
                     }
                 }
 
@@ -1167,54 +1018,251 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 {
                     return await CompleteWithRequestChangesAsync(capturedRequestChanges);
                 }
+
+                if (streamingFailed)
+                {
+                    // Discard what a partially consumed stream produced so the non-streaming retry does not duplicate it.
+                    accumulatedText.Clear();
+                    accumulatedReasoning.Clear();
+                    chatHistory.Clear();
+                    chatHistory.AddRange(historySnapshot);
+
+                    int nonStreamingRetries = 0;
+                    int nonStreamingTimeoutRetries = 0;
+                    long? nonStreamingOutageStartTimestamp = null;
+                    while (true)
+                    {
+                        try
+                        {
+                            var response = await agent.RunAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token);
+                            foreach (var update in response.ToAgentResponseUpdates())
+                            {
+                                await ProcessUpdateAsync(update, streaming: false);
+                            }
+                            break;
+                        }
+                        catch (RequestChangesException reqChange)
+                        {
+                            return await CompleteWithRequestChangesAsync(reqChange);
+                        }
+                        catch (HumanInterruptionException interruption)
+                        {
+                            return await CompleteWithInterruptionAsync(interruption);
+                        }
+                        catch (OperationCanceledException) when (capturedInterruption != null ||
+                                                               capturedRequestChanges != null ||
+                                                               interruptionCts.IsCancellationRequested ||
+                                                               cancellationToken.IsCancellationRequested ||
+                                                               _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
+                                                               _operationsControlService.IsPaused)
+                        {
+                            if (capturedInterruption != null)
+                            {
+                                return await CompleteWithInterruptionAsync(capturedInterruption);
+                            }
+                            if (capturedRequestChanges != null)
+                            {
+                                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                            }
+                            var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                            if (isPause)
+                            {
+                                await SuspendOnPauseAsync();
+                                throw;
+                            }
+                            await AbortOnCancellationAsync();
+                            throw;
+                        }
+                        catch (Exception ex) when (HttpErrorDetailHelper.FindException<NightCodeForge.Core.Exceptions.OperationsPausedException>(ex) is { } opex)
+                        {
+                            _logger.LogInformation(opex, "Crucible non-streaming execution paused by OperationsPausedException for task #{TaskId}", context.ForgeTask.Id);
+                            await SuspendOnPauseAsync();
+                            throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", opex);
+                        }
+                        catch (Exception ex) when (TransientErrorDetector.IsTransient(ex))
+                        {
+                            if (_cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused)
+                            {
+                                await SuspendOnPauseAsync();
+                                throw new OperationCanceledException("Operations paused by user (GPU VRAM reclaimed).", ex);
+                            }
+
+                            nonStreamingOutageStartTimestamp ??= _timeProvider.GetTimestamp();
+                            var elapsed = _timeProvider.GetElapsedTime(nonStreamingOutageStartTimestamp.Value);
+                            bool isTimeout = TransientErrorDetector.IsHttpTimeout(ex);
+                            bool timeoutExhausted = isTimeout && nonStreamingTimeoutRetries >= _retryOptions.MaxTimeoutRetries;
+
+                            if (timeoutExhausted || nonStreamingRetries >= maxTransientRetries || elapsed >= _retryOptions.MaxRetryDuration)
+                            {
+                                try
+                                {
+                                    if (await TryRecoverFromLargeContextTimeoutAsync(
+                                        ex,
+                                        isTimeout,
+                                        recoveryState,
+                                        piStrategy,
+                                        chatHistory,
+                                        accumulatedText,
+                                        accumulatedReasoning,
+                                        context,
+                                        conversationState,
+                                        sessionId,
+                                        setup.EffectiveModelId,
+                                        elapsed,
+                                        cancellationToken))
+                                    {
+                                        latestSerializedState = SerializeSession(chatHistory);
+                                        nonStreamingRetries = 0;
+                                        nonStreamingTimeoutRetries = 0;
+                                        nonStreamingOutageStartTimestamp = null;
+
+                                        session = await agent.CreateSessionAsync(cancellationToken);
+                                        continue;
+                                    }
+                                    latestSerializedState = SerializeSession(chatHistory);
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+                                    if (isPause)
+                                    {
+                                        await SuspendOnPauseAsync();
+                                        throw;
+                                    }
+                                    await AbortOnCancellationAsync();
+                                    throw;
+                                }
+
+                                if (nonStreamingRetries > 0)
+                                {
+                                    ex.Data[ResilienceConstants.RetriedKey] = true;
+                                }
+                                var failMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                                _logger.LogError(ex, "Crucible non-streaming LLM invocation exhausted retry policy ({Attempt}/{MaxRetries}, elapsed {Elapsed}): {ErrorMessage}",
+                                    nonStreamingRetries, maxTransientRetries, elapsed, failMsg);
+                                return await FailAsync(failMsg);
+                            }
+
+                            if (isTimeout)
+                            {
+                                nonStreamingTimeoutRetries++;
+                            }
+                            nonStreamingRetries++;
+                            var delay = ResilienceJitterHelper.CalculateJitteredDelay(nonStreamingRetries, _retryOptions.BaseDelay, _retryOptions.MaxDelay);
+                            var remaining = _retryOptions.MaxRetryDuration - elapsed;
+                            if (remaining > TimeSpan.Zero && delay > remaining)
+                            {
+                                delay = remaining;
+                            }
+                            var errorMsg = ex.InnerException != null ? $"{ex.Message} (Inner: {ex.InnerException.Message})" : ex.Message;
+
+                            _logger.LogWarning(
+                                ex,
+                                "Crucible non-streaming LLM invocation encountered transient network error on attempt {Attempt}/{MaxRetries}: {ErrorMessage}. Retrying after {DelayMs}ms delay...",
+                                nonStreamingRetries, maxTransientRetries, errorMsg, delay.TotalMilliseconds);
+
+                            await BroadcastAsync(
+                                sessionId,
+                                context.ForgeTask.Id,
+                                context.StageId,
+                                AgentActivityKind.Notice,
+                                $"Transient network error: {errorMsg}. Retrying in {Math.Round(delay.TotalSeconds, 1)}s (attempt {nonStreamingRetries}/{maxTransientRetries}, elapsed {Math.Round(elapsed.TotalSeconds, 0)}s / {Math.Round(_retryOptions.MaxRetryDuration.TotalSeconds, 0)}s)...",
+                                cancellationToken);
+
+                            accumulatedText.Clear();
+                            accumulatedReasoning.Clear();
+
+                            await WaitRetryBackoffAsync(delay);
+
+                            SanitizeInFlightTurns(chatHistory);
+
+                            session = await agent.CreateSessionAsync(cancellationToken);
+                            continue;
+                        }
+                        catch (Exception ex)
+                        {
+                            var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
+                            _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation: {ErrorMessage}", errorMsg);
+                            return await FailAsync(errorMsg);
+                        }
+                    }
+
+                    if (capturedInterruption != null)
+                    {
+                        return await CompleteWithInterruptionAsync(capturedInterruption);
+                    }
+                    if (capturedRequestChanges != null)
+                    {
+                        return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                    }
+                }
+
+                FlushTurnToHistory();
+
+                var lastAssistantMsg = chatHistory.LastOrDefault(m => m.Role == ChatRole.Assistant);
+                if (sawToolCallInPass)
+                {
+                    consecutiveTruncationNudges = 0;
+                }
+
+                if (!InterruptedGenerationDetector.IsTruncated(lastAssistantMsg))
+                {
+                    break;
+                }
+
+                consecutiveTruncationNudges++;
+                var modelCallsUsed = tracingClient.TotalModelCalls;
+                if (consecutiveTruncationNudges > MaxConsecutiveTruncationNudges || modelCallsUsed >= maxTurns)
+                {
+                    var truncationFailure = consecutiveTruncationNudges > MaxConsecutiveTruncationNudges
+                        ? $"Model repeatedly emitted truncated responses ({MaxConsecutiveTruncationNudges} consecutive continuation prompts did not recover the turn)."
+                        : $"Model response was cut off mid-thought and the turn budget ({maxTurns}) is exhausted.";
+                    _logger.LogError("Crucible stage for task #{TaskId} failed: {Reason}", context.ForgeTask.Id, truncationFailure);
+                    return await FailAsync(truncationFailure);
+                }
+
+                _logger.LogWarning(
+                    "Assistant response in conversation #{ConversationId} appears cut off mid-thought. Injecting continuation prompt.",
+                    conversation.Id);
+
+                chatHistory.Add(new ChatMessage(ChatRole.User, TruncationContinuationPrompt));
+                latestSerializedState = SerializeSession(chatHistory);
+                conversationState.EnqueueTurn(
+                    StageTurnRole.User,
+                    $"Failed to record continuation turn for conversation #{conversation.Id}",
+                    content: TruncationContinuationPrompt);
+
+                await BroadcastAsync(
+                    sessionId,
+                    context.ForgeTask.Id,
+                    context.StageId,
+                    AgentActivityKind.Notice,
+                    $"Response was interrupted mid-thought; asking the model to resume (attempt {consecutiveTruncationNudges}/{MaxConsecutiveTruncationNudges}).",
+                    cancellationToken);
+
+                harnessOptions.MaximumIterationsPerRequest = Math.Max(1, maxTurns - modelCallsUsed);
+                agent = new HarnessAgent(activeClient, harnessOptions);
+                session = await agent.CreateSessionAsync(cancellationToken);
             }
-
-            FlushTurnToHistory();
-
-            var lastAssistantMsg = chatHistory.LastOrDefault(m => m.Role == ChatRole.Assistant);
-            if (sawToolCallInPass)
+        }
+        catch (OperationCanceledException) when (!conversationClosed)
+        {
+            if (capturedInterruption != null)
             {
-                consecutiveTruncationNudges = 0;
+                return await CompleteWithInterruptionAsync(capturedInterruption);
             }
-
-            if (!InterruptedGenerationDetector.IsTruncated(lastAssistantMsg))
+            if (capturedRequestChanges != null)
             {
-                break;
+                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
             }
-
-            consecutiveTruncationNudges++;
-            var modelCallsUsed = tracingClient.TotalModelCalls;
-            if (consecutiveTruncationNudges > MaxConsecutiveTruncationNudges || modelCallsUsed >= maxTurns)
+            var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
+            if (isPause)
             {
-                var truncationFailure = consecutiveTruncationNudges > MaxConsecutiveTruncationNudges
-                    ? $"Model repeatedly emitted truncated responses ({MaxConsecutiveTruncationNudges} consecutive continuation prompts did not recover the turn)."
-                    : $"Model response was cut off mid-thought and the turn budget ({maxTurns}) is exhausted.";
-                _logger.LogError("Crucible stage for task #{TaskId} failed: {Reason}", context.ForgeTask.Id, truncationFailure);
-                return await FailAsync(truncationFailure);
+                await SuspendOnPauseAsync();
+                throw;
             }
-
-            _logger.LogWarning(
-                "Assistant response in conversation #{ConversationId} appears cut off mid-thought. Injecting continuation prompt.",
-                conversation.Id);
-
-            chatHistory.Add(new ChatMessage(ChatRole.User, TruncationContinuationPrompt));
-            latestSerializedState = SerializeSession(chatHistory);
-            conversationState.EnqueueTurn(
-                StageTurnRole.User,
-                $"Failed to record continuation turn for conversation #{conversation.Id}",
-                content: TruncationContinuationPrompt);
-
-            await BroadcastAsync(
-                sessionId,
-                context.ForgeTask.Id,
-                context.StageId,
-                AgentActivityKind.Notice,
-                $"Response was interrupted mid-thought; asking the model to resume (attempt {consecutiveTruncationNudges}/{MaxConsecutiveTruncationNudges}).",
-                cancellationToken);
-
-            harnessOptions.MaximumIterationsPerRequest = Math.Max(1, maxTurns - modelCallsUsed);
-            agent = new HarnessAgent(activeClient, harnessOptions);
-            session = await agent.CreateSessionAsync(cancellationToken);
+            await AbortOnCancellationAsync();
+            throw;
         }
 
         stopwatch.Stop();

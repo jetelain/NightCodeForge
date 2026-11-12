@@ -221,7 +221,7 @@ public class MobileResponsiveLayoutE2ETests : IAsyncLifetime
 
         await sidebar.Locator("a.forge-nav-link", new LocatorLocatorOptions { HasText = "Review Room" }).ClickAsync();
 
-        await _page.WaitForURLAsync(new System.Text.RegularExpressions.Regex("/review"), new PageWaitForURLOptions { Timeout = PageReadyTimeoutMs });
+        await Assertions.Expect(_page).ToHaveURLAsync(new System.Text.RegularExpressions.Regex("/review"), new PageAssertionsToHaveURLOptions { Timeout = PageReadyTimeoutMs });
         await _page.WaitForSelectorAsync("#mobile-nav-backdrop", new PageWaitForSelectorOptions { State = WaitForSelectorState.Detached });
         await sidebar.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden, Timeout = PageReadyTimeoutMs });
     }

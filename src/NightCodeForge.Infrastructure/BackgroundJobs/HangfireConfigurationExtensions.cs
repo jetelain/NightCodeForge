@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.BackgroundJobs;
@@ -150,7 +151,8 @@ public static class HangfireConfigurationExtensions
                         if (instance is BackgroundJobServerHostedService && instance is not GracefulHangfireServerHostedService)
                         {
                             var logger = sp.GetRequiredService<ILogger<GracefulHangfireServerHostedService>>();
-                            return new GracefulHangfireServerHostedService(instance, logger);
+                            var cancellationManager = sp.GetRequiredService<ITaskCancellationManager>();
+                            return new GracefulHangfireServerHostedService(instance, cancellationManager, logger);
                         }
                         return instance;
                     },
@@ -172,12 +174,17 @@ public static class HangfireConfigurationExtensions
         return app;
     }
     /// <summary>
-    /// Creates the default SQLiteStorageOptions with 4-hour InvisibilityTimeout to support atomic cohorts.
+    /// Default Hangfire job invisibility timeout for SQLite storage to support long-running agent cohorts.
+    /// </summary>
+    public static readonly TimeSpan DefaultInvisibilityTimeout = TimeSpan.FromHours(12);
+
+    /// <summary>
+    /// Creates the default SQLiteStorageOptions with 12-hour InvisibilityTimeout to support atomic cohorts.
     /// </summary>
     public static SQLiteStorageOptions CreateDefaultStorageOptions() => new()
     {
         QueuePollInterval = TimeSpan.FromSeconds(1),
-        InvisibilityTimeout = TimeSpan.FromHours(4)
+        InvisibilityTimeout = DefaultInvisibilityTimeout
     };
 #pragma warning restore CS0618
 }

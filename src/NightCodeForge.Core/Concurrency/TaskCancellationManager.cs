@@ -28,6 +28,17 @@ public class TaskCancellationManager : ITaskCancellationManager
     private readonly ConcurrentDictionary<int, Registration> _registrations = new();
     private readonly ConcurrentDictionary<int, bool> _pausedTasks = new();
     private readonly ILogger<TaskCancellationManager> _logger;
+    private int _isHostShuttingDown;
+
+    public bool IsHostShuttingDown => Volatile.Read(ref _isHostShuttingDown) != 0;
+
+    public void NotifyHostShuttingDown()
+    {
+        if (Interlocked.Exchange(ref _isHostShuttingDown, 1) == 0)
+        {
+            _logger.LogInformation("Host shutdown notification received by TaskCancellationManager.");
+        }
+    }
 
     public TaskCancellationManager(ILogger<TaskCancellationManager> logger)
     {

@@ -1049,4 +1049,55 @@ public class TelemetryChatClientTests
         Assert.Equal(NightCodeForge.Core.Resilience.StreamTimeoutPhase.MidStreamConnectionClosed, diag.Phase);
         Assert.Equal(failedRecord.CompletionTokens, diag.GeneratedTokens);
     }
+
+    [Fact]
+    public async Task GetStreamingResponseAsync_WhenCallerCancelsDuringInFlightMoveNext_CancelsInnerStreamAndDrainsBeforeDispose()
+    {
+        var messages = new List<ChatMessage> { new(ChatRole.User, "Stream with slow chunk") };
+        using var callerCts = new CancellationTokenSource();
+        var secondMoveNextEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool moveNextDrained = false;
+
+        async IAsyncEnumerable<ChatResponseUpdate> SlowStream([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "First chunk");
+            secondMoveNextEntered.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            }
+            finally
+            {
+                moveNextDrained = true;
+            }
+        }
+
+        _innerClient
+            .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Returns((IEnumerable<ChatMessage> _, ChatOptions? _, CancellationToken ct) => SlowStream(ct));
+
+        LlmCallRecord? completedRecord = null;
+        _telemetryService
+            .Setup(t => t.RecordLlmCallCompleted(It.IsAny<LlmCallRecord>()))
+            .Callback<LlmCallRecord>(r => completedRecord = r);
+
+        var enumerator = _client.GetStreamingResponseAsync(messages, cancellationToken: callerCts.Token)
+            .GetAsyncEnumerator(callerCts.Token);
+
+        await using (enumerator)
+        {
+            Assert.True(await enumerator.MoveNextAsync());
+            var pendingMoveNext = enumerator.MoveNextAsync().AsTask();
+            await secondMoveNextEntered.Task;
+
+            callerCts.Cancel();
+
+            // Must throw OperationCanceledException cleanly without NotSupportedException from disposing an active async state machine
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pendingMoveNext);
+        }
+
+        Assert.True(moveNextDrained);
+        Assert.NotNull(completedRecord);
+        Assert.Equal(LlmCallStatus.Cancelled, completedRecord.Status);
+    }
 }

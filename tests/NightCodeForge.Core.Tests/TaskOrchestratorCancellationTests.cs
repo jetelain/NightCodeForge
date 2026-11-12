@@ -1,8 +1,10 @@
+using Moq;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Core.Workflow.Stages;
 
@@ -244,5 +246,302 @@ public class TaskOrchestratorCancellationTests
         var lastRecord = records.LastOrDefault();
         Assert.NotNull(lastRecord);
         Assert.Equal(StageExecutionStatus.Failed, lastRecord.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenHostShuttingDownDuringStage_MarksConversationInterrupted_PreservesOpenStatusAndInterruptedStageId()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 52,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage"
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        var conv = await _taskRepo.StartConversationAsync(task.Id, "test-stage", WorkflowStageKind.Agentic, 1);
+        await _taskRepo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Initial prompt");
+
+        using var cts = new CancellationTokenSource();
+        var pipelineProvider = new CancellingPipelineProvider((ctx, ct) =>
+        {
+            _cancellationManager.NotifyHostShuttingDown();
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult(StageExecutionResult.Success());
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        await orchestrator.ProcessTaskAsync(task.Id, cts.Token);
+
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Open, updatedTask.Status);
+        Assert.Equal("test-stage", updatedTask.InterruptedStageId);
+
+        var convs = await _taskRepo.GetConversationsAsync(task.Id);
+        var updatedConv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Interrupted, updatedConv.Status);
+        Assert.Contains("interrupted by application shutdown", updatedConv.Summary);
+
+        var logs = _taskRepo.GetAllLogs().Where(l => l.TaskId == task.Id).ToList();
+        Assert.Contains(logs, l => l.Message.Contains("Stage 'test-stage' execution interrupted by application shutdown."));
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenTaskAlreadyFailedAtEntry_AbortsExecutionImmediately()
+    {
+        bool stageExecuted = false;
+        var pipelineProvider = new CancellingPipelineProvider((ctx, ct) =>
+        {
+            stageExecuted = true;
+            return Task.FromResult(StageExecutionResult.Success());
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 53,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Failed
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Failed);
+
+        await orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None);
+
+        Assert.False(stageExecuted);
+        var reloaded = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskOverallStatus.Failed, reloaded.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenTaskTransitionsToFailedWhileWaitingForTaskLock_AbortsExecutionImmediately()
+    {
+        bool stageExecuted = false;
+        var pipelineProvider = new CancellingPipelineProvider((ctx, ct) =>
+        {
+            stageExecuted = true;
+            return Task.FromResult(StageExecutionResult.Success());
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 54,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        var lockHandle = await _lockProvider.AcquireTaskLockAsync(_workspace.Id, task.Id);
+
+        var runTask = Task.Run(() => orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None));
+        await Task.Delay(50);
+
+        task.Status = TaskOverallStatus.Failed;
+        await _taskRepo.UpdateAsync(task);
+        lockHandle.Dispose();
+
+        await runTask;
+
+        Assert.False(stageExecuted);
+        var reloaded = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskOverallStatus.Failed, reloaded.Status);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenTaskTransitionsToFailedWhileWaitingForBareHostLock_AbortsExecutionImmediately()
+    {
+        var bareHostWs = await _workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 2,
+            Name = "BareHost Workspace",
+            RepositoryPath = "C:/test/barehost",
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        bool stageExecuted = false;
+        var pipelineProvider = new CancellingPipelineProvider((ctx, ct) =>
+        {
+            stageExecuted = true;
+            return Task.FromResult(StageExecutionResult.Success());
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 55,
+            WorkspaceId = bareHostWs.Id,
+            Status = TaskOverallStatus.Open
+        });
+        _depStore.AddTask(task.Id, bareHostWs.Id, TaskOverallStatus.Open);
+
+        var sentinelHandle = await _lockProvider.AcquireTaskLockAsync(
+            bareHostWs.Id,
+            WorkspaceLockProvider.WorkspaceExecutionSentinelTaskId);
+
+        var runTask = Task.Run(() => orchestrator.ProcessTaskAsync(task.Id, CancellationToken.None));
+        await Task.Delay(50);
+
+        task.Status = TaskOverallStatus.Failed;
+        await _taskRepo.UpdateAsync(task);
+        sentinelHandle.Dispose();
+
+        await runTask;
+
+        Assert.False(stageExecuted);
+        var reloaded = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal(TaskOverallStatus.Failed, reloaded.Status);
+    }
+
+    private sealed class TwoStageSameCohortPipelineProvider : IWorkflowPipelineProvider
+    {
+        private readonly Func<PipelineContext, CancellationToken, Task<StageExecutionResult>> _stage1Func;
+        private readonly Func<PipelineContext, CancellationToken, Task<StageExecutionResult>> _stage2Func;
+
+        public TwoStageSameCohortPipelineProvider(
+            Func<PipelineContext, CancellationToken, Task<StageExecutionResult>> stage1Func,
+            Func<PipelineContext, CancellationToken, Task<StageExecutionResult>> stage2Func)
+        {
+            _stage1Func = stage1Func;
+            _stage2Func = stage2Func;
+        }
+
+        public Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default)
+        {
+            var stage1 = new GenericAgenticStage("stage-1", "Stage 1", new(), new MockPromptRenderer(), TimeProvider.System)
+            {
+                Handler = _stage1Func
+            };
+            var stage2 = new GenericAgenticStage("stage-2", "Stage 2", new(), new MockPromptRenderer(), TimeProvider.System)
+            {
+                Handler = _stage2Func
+            };
+            return Task.FromResult<IWorkflowPipeline>(new WorkflowPipeline(new IWorkflowStage[] { stage1, stage2 }));
+        }
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenHostShuttingDownBetweenInProcessStages_SetsInterruptedStageIdToNextStage()
+    {
+        using var cts = new CancellationTokenSource();
+        bool stage2Entered = false;
+
+        var pipelineProvider = new TwoStageSameCohortPipelineProvider(
+            stage1Func: (ctx, ct) => Task.FromResult(StageExecutionResult.Success()),
+            stage2Func: (ctx, ct) =>
+            {
+                stage2Entered = true;
+                return Task.FromResult(StageExecutionResult.Success());
+            });
+
+        var markdownSyncMock = new Mock<ITaskMarkdownSyncService>();
+        markdownSyncMock
+            .Setup(m => m.SyncAllTasksToDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SyncAllToDiskResult(
+                new Dictionary<int, string>(),
+                new Dictionary<int, TaskBaselineEntry>()));
+        markdownSyncMock
+            .Setup(m => m.SyncAllTasksFromDiskAsync(
+                It.IsAny<Workspace>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<ForgeTask>());
+        markdownSyncMock
+            .Setup(m => m.SyncTaskToDiskAsync(
+                It.IsAny<ForgeTask>(),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<int>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                // Host shutdown occurs right after stage-1 persisted advancement to stage-2, before loop continues to stage-2
+                _cancellationManager.NotifyHostShuttingDown();
+                cts.Cancel();
+            })
+            .ReturnsAsync("C:/test/repo/docs/tasks/0056-task.md");
+
+        var orchestrator = new Fixtures.TestOrchestratorBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            LockProvider = _lockProvider,
+            JobQueue = _jobQueue,
+            DependencyStore = _depStore,
+            CancellationManager = _cancellationManager,
+            PipelineProvider = pipelineProvider,
+            MarkdownSyncService = markdownSyncMock.Object
+        }.Build();
+
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 56,
+            WorkspaceId = _workspace.Id,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "stage-1"
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        await orchestrator.ProcessTaskAsync(task.Id, cts.Token);
+
+        Assert.False(stage2Entered);
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Open, updatedTask.Status);
+        Assert.Equal("stage-2", updatedTask.CurrentStageId);
+        Assert.Equal("stage-2", updatedTask.InterruptedStageId);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenHostShuttingDownAndTaskConcurrentlyMarkedFailedInDb_DoesNotOverwriteFailedStatus()
+    {
+        var task = await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 57,
+            WorkspaceId = _workspace.Id,
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = "test-stage"
+        });
+        _depStore.AddTask(task.Id, _workspace.Id, TaskOverallStatus.Open);
+
+        using var cts = new CancellationTokenSource();
+        var pipelineProvider = new CancellingPipelineProvider(async (ctx, ct) =>
+        {
+            var dbTask = await _taskRepo.GetByIdAsync(task.Id);
+            dbTask!.Status = TaskOverallStatus.Failed;
+            await _taskRepo.UpdateAsync(dbTask);
+
+            _cancellationManager.NotifyHostShuttingDown();
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return StageExecutionResult.Success();
+        });
+
+        var orchestrator = CreateOrchestrator(pipelineProvider);
+
+        await orchestrator.ProcessTaskAsync(task.Id, cts.Token);
+
+        var updatedTask = await _taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(updatedTask);
+        Assert.Equal(TaskOverallStatus.Failed, updatedTask.Status);
     }
 }

@@ -96,6 +96,7 @@ public class TaskOrchestratorPauseTests
     [InlineData(TaskOverallStatus.Cancelled)]
     [InlineData(TaskOverallStatus.Closed)]
     [InlineData(TaskOverallStatus.Rejected)]
+    [InlineData(TaskOverallStatus.Failed)]
     public async Task ProcessTaskAsync_WhenGloballyPausedAtEntry_WithTerminalStatus_DoesNotFlagIsDeferredByPause(TaskOverallStatus terminalStatus)
     {
         _operationsControlMock.Setup(o => o.IsPaused).Returns(true);

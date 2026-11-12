@@ -54,4 +54,14 @@ public interface ITaskCancellationManager
     /// Clears pause flags across all tasks upon global operations resumption.
     /// </summary>
     void ClearAllPauses();
+
+    /// <summary>
+    /// Indicates whether the host application is currently shutting down.
+    /// </summary>
+    bool IsHostShuttingDown { get; }
+
+    /// <summary>
+    /// Notifies the manager that the host application is shutting down.
+    /// </summary>
+    void NotifyHostShuttingDown();
 }

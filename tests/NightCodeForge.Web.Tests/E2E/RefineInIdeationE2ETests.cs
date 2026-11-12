@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using NightCodeForge.Core.Domain;
 using Xunit;
@@ -94,7 +94,7 @@ public class RefineInIdeationE2ETests : IAsyncLifetime
         Assert.Contains("Refine in Ideation", await refine.InnerTextAsync());
 
         await refine.ClickAsync();
-        await _page.WaitForURLAsync(new Regex($@"/w/{ws.Id}/ideation\?taskId={unstarted.Id}"), new PageWaitForURLOptions { Timeout = 15000 });
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"/w/{ws.Id}/ideation\?taskId={unstarted.Id}"), new PageAssertionsToHaveURLOptions { Timeout = 15000 });
 
         var textarea = _page.Locator("textarea.chat-textarea");
         await Assertions.Expect(textarea).ToHaveValueAsync(new Regex($@"get_task\({unstarted.Id}\)"), new LocatorAssertionsToHaveValueOptions { Timeout = 15000 });

@@ -295,7 +295,7 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
         await detailsLink.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 10000 });
         await detailsLink.ClickAsync();
 
-        await _page.WaitForURLAsync(new Regex($@"tasks/{taskId}"), new PageWaitForURLOptions { Timeout = 15000 });
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"tasks/{taskId}"), new PageAssertionsToHaveURLOptions { Timeout = 15000 });
         await _page.WaitForSelectorAsync(".task-detail-page");
 
         // 8. Reject the task via #btn-reject-task and TaskRejectionModal
@@ -398,7 +398,7 @@ public class HitlAndObservabilityE2ETests : IAsyncLifetime
             Assert.Equal(0, await _page.Locator($"#home-pending-review-{closedTask.Id}").CountAsync());
 
             await _page.Locator($"#home-review-task-btn-{readyRunTask.Id}").ClickAsync();
-            await _page.WaitForURLAsync(new Regex($@"/w/{ws.Id}/review/{readyRunTask.Id}"), new PageWaitForURLOptions { Timeout = 15000 });
+            await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"/w/{ws.Id}/review/{readyRunTask.Id}"), new PageAssertionsToHaveURLOptions { Timeout = 15000 });
             await _page.WaitForSelectorAsync(".review-room-container");
         }
         finally

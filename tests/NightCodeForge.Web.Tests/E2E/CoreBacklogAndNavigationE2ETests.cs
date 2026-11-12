@@ -120,30 +120,33 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         await finishBtn.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 30000 });
         await finishBtn.ClickAsync();
 
-        // 5. Verify the browser navigates to /w/{workspaceBId}
-        await _page.WaitForURLAsync(new Regex(@"/w/\d+"), new PageWaitForURLOptions { Timeout = 15000 });
+        // 5. Verify the wizard modal closes and the browser navigates to /w/{workspaceBId}
+        await wizardModal.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Hidden, Timeout = 15000 });
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex(@"/w/\d+"), new PageAssertionsToHaveURLOptions { Timeout = 15000 });
         var match = Regex.Match(_page.Url, @"/w/(\d+)");
         Assert.True(match.Success, $"Expected URL to contain /w/{{id}}, but was: {_page.Url}");
         var workspaceBId = int.Parse(match.Groups[1].Value);
         Assert.NotEqual(wsA.Id, workspaceBId);
 
+        var breadcrumb = _page.Locator(".forge-breadcrumbs .breadcrumb-item.font-mono");
+        await Assertions.Expect(breadcrumb).ToContainTextAsync(repoB.WorkspaceName, new LocatorAssertionsToContainTextOptions { Timeout = 10000 });
+
         // 6. Use select.workspace-dropdown in TopNavBar to switch to Workspace A
         var wsDropdown = _page.Locator("select.workspace-dropdown");
         await wsDropdown.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
+        await Assertions.Expect(wsDropdown).ToHaveValueAsync(workspaceBId.ToString(), new LocatorAssertionsToHaveValueOptions { Timeout = 10000 });
         await wsDropdown.SelectOptionAsync(wsA.Id.ToString());
 
         // Assert URL updates to /w/{wsA.Id} and breadcrumb reflects Workspace A
-        await _page.WaitForURLAsync(new Regex($@"/w/{wsA.Id}"), new PageWaitForURLOptions { Timeout = 10000 });
-        var breadcrumb = _page.Locator(".forge-breadcrumbs .breadcrumb-item.font-mono");
-        await breadcrumb.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible });
-        var breadcrumbTextA = await breadcrumb.InnerTextAsync();
-        Assert.Contains(wsA.Name, breadcrumbTextA);
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"/w/{wsA.Id}"), new PageAssertionsToHaveURLOptions { Timeout = 10000 });
+        await Assertions.Expect(breadcrumb).ToContainTextAsync(wsA.Name, new LocatorAssertionsToContainTextOptions { Timeout = 10000 });
+        await Assertions.Expect(wsDropdown).ToHaveValueAsync(wsA.Id.ToString(), new LocatorAssertionsToHaveValueOptions { Timeout = 10000 });
 
         // Switch back to Workspace B
         await wsDropdown.SelectOptionAsync(workspaceBId.ToString());
-        await _page.WaitForURLAsync(new Regex($@"/w/{workspaceBId}"), new PageWaitForURLOptions { Timeout = 10000 });
-        var breadcrumbTextB = await breadcrumb.InnerTextAsync();
-        Assert.Contains(repoB.WorkspaceName, breadcrumbTextB);
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"/w/{workspaceBId}"), new PageAssertionsToHaveURLOptions { Timeout = 10000 });
+        await Assertions.Expect(breadcrumb).ToContainTextAsync(repoB.WorkspaceName, new LocatorAssertionsToContainTextOptions { Timeout = 10000 });
+        await Assertions.Expect(wsDropdown).ToHaveValueAsync(workspaceBId.ToString(), new LocatorAssertionsToHaveValueOptions { Timeout = 10000 });
     }
 
     [Fact]
@@ -347,7 +350,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         await PlaywrightWebHostFixture.ClickUntilVisibleAsync(saveOpenBtn, backlogSurface, TimeSpan.FromSeconds(20));
 
         // 6. Verify navigation to backlog URL
-        await _page.WaitForURLAsync(new Regex(@"backlog"), new PageWaitForURLOptions { Timeout = 10000 });
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex(@"backlog"), new PageAssertionsToHaveURLOptions { Timeout = 10000 });
 
         // 7. Verify persisted task in SQLite
         var createdTask = await _fixture.QueryDatabaseAsync(async db =>
@@ -372,7 +375,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         // 9. Click the task card to navigate to TaskDetailPage
         var taskDetailPage = _page.Locator(".task-detail-page");
         await PlaywrightWebHostFixture.ClickUntilVisibleAsync(kanbanCard, taskDetailPage, TimeSpan.FromSeconds(15));
-        await _page.WaitForURLAsync(new Regex($@"tasks/{createdTask.Id}"), new PageWaitForURLOptions { Timeout = 10000 });
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"tasks/{createdTask.Id}"), new PageAssertionsToHaveURLOptions { Timeout = 10000 });
 
         // 10. Verify task title, markdown description, status badge, priority, and history timeline
         var headerTitle = _page.Locator("h1");
@@ -498,7 +501,7 @@ public class CoreBacklogAndNavigationE2ETests : IAsyncLifetime
         // Click the prerequisite link to navigate to Task #1
         var task1Title = _page.Locator("h1:has-text('Database Migration Engine')");
         await PlaywrightWebHostFixture.ClickUntilVisibleAsync(prereqLink, task1Title, TimeSpan.FromSeconds(15));
-        await _page.WaitForURLAsync(new Regex($@"tasks/{task1.Id}"), new PageWaitForURLOptions { Timeout = 10000 });
+        await Assertions.Expect(_page).ToHaveURLAsync(new Regex($@"tasks/{task1.Id}"), new PageAssertionsToHaveURLOptions { Timeout = 10000 });
 
         // Verify on Task #1 detail page
         Assert.Contains("Database Migration Engine", await task1Title.InnerTextAsync());

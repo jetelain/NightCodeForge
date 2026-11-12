@@ -40,7 +40,9 @@
                 {
                     @foreach (var ws in _workspaces)
                     {
-                        <option value="@ws.Id">@(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji)) @ws.Name</option>
+                        <option @key="ws.Id"
+                                value="@ws.Id"
+                                selected="@(WorkspaceState.ActiveWorkspaceId == ws.Id)">@(WorkspacePresentationHelper.ResolveEmoji(ws.Emoji)) @ws.Name</option>
                     }
                 }
             </select>
@@ -240,7 +242,7 @@
         }
     }
 
-    private async Task LoadWorkspacesAsync(bool forceReload = false)
+    private async Task LoadWorkspacesAsync(bool forceReload = false, bool syncFromUrl = true)
     {
         try
         {
@@ -254,7 +256,7 @@
                 WorkspaceState.SetKnownWorkspaces(_workspaces);
             }
 
-            if (WorkspaceUrlHelper.TryExtractWorkspaceId(Navigation.Uri, out var urlWsId, out _, out _))
+            if (syncFromUrl && WorkspaceUrlHelper.TryExtractWorkspaceId(Navigation.Uri, out var urlWsId, out _, out _))
             {
                 var matched = _workspaces.FirstOrDefault(w => w.Id == urlWsId);
                 if (matched != null)
@@ -324,8 +326,10 @@
                 if (_workspaces.Count == 0 ||
                     (WorkspaceState.ActiveWorkspaceId.HasValue && _workspaces.All(w => w.Id != WorkspaceState.ActiveWorkspaceId.Value)))
                 {
-                    await LoadWorkspacesAsync(forceReload: WorkspaceState.KnownWorkspaces.Count == 0 ||
-                        (WorkspaceState.ActiveWorkspaceId.HasValue && WorkspaceState.KnownWorkspaces.All(w => w.Id != WorkspaceState.ActiveWorkspaceId.Value)));
+                    await LoadWorkspacesAsync(
+                        forceReload: WorkspaceState.KnownWorkspaces.Count == 0 ||
+                            (WorkspaceState.ActiveWorkspaceId.HasValue && WorkspaceState.KnownWorkspaces.All(w => w.Id != WorkspaceState.ActiveWorkspaceId.Value)),
+                        syncFromUrl: false);
                 }
                 else if (WorkspaceState.KnownWorkspaces.Count > 0)
                 {

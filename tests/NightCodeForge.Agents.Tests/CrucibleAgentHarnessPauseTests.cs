@@ -758,4 +758,139 @@ public class CrucibleAgentHarnessPauseTests : IDisposable
         Assert.Equal(1, capturedMessages!.Count(m => m.Role == ChatRole.User && m.Text == followUpPrompt));
         Assert.Equal(ChatRole.Tool, capturedMessages[^1].Role);
     }
+
+    [Fact]
+    public async Task RunStageAsync_WhenHostShuttingDownDuringStream_SavesInterruptedStatusAndPreservesTurnsForRecovery()
+    {
+        var repo = new InMemoryTaskRepository();
+        var task = new ForgeTask { Id = 49, Title = "Host Shutdown Task", WorkspaceId = 1 };
+        await repo.CreateAsync(task);
+
+        var cancellationManager = new TaskCancellationManager(Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskCancellationManager>.Instance);
+        var streamer = new RecordingStreamer();
+        using var hostCts = new CancellationTokenSource();
+
+        async IAsyncEnumerable<ChatResponseUpdate> Handler(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            cancellationManager.NotifyHostShuttingDown();
+            hostCts.Cancel();
+            ct.ThrowIfCancellationRequested();
+#pragma warning disable CS0162
+            yield break;
+#pragma warning restore CS0162
+        }
+
+        var client = new ScriptedChatClient(Handler);
+
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            PathResolver = TestPathResolver.Create(),
+            TaskRepository = repo,
+            CancellationManager = cancellationManager,
+            ActivityStreamer = streamer
+        }.Build();
+
+        var context = CreateContext(task);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.RunStageAsync(context, hostCts.Token));
+
+        Assert.Contains(streamer.Events, e => e.Kind == AgentActivityKind.Interrupted && e.Content.Contains("interrupted by host shutdown", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(streamer.Events, e => e.Kind == AgentActivityKind.Error);
+
+        var convs = await repo.GetConversationsAsync(task.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
+        Assert.Contains("interrupted by host shutdown", conv.Summary, StringComparison.OrdinalIgnoreCase);
+
+        var fullConv = await repo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(fullConv);
+        Assert.NotEmpty(fullConv.Turns);
+    }
+
+    private sealed class CancellingOnToolStartedStreamer : IAgentActivityStreamer
+    {
+        private readonly Action _onToolStarted;
+        private readonly List<AgentActivityEvent> _events = new();
+
+        public CancellingOnToolStartedStreamer(Action onToolStarted)
+        {
+            _onToolStarted = onToolStarted;
+        }
+
+        public IReadOnlyList<AgentActivityEvent> Events
+        {
+            get { lock (_events) return _events.ToList(); }
+        }
+
+        public Task BroadcastAsync(AgentActivityEvent activityEvent, CancellationToken cancellationToken = default)
+        {
+            lock (_events) _events.Add(activityEvent);
+            if (activityEvent.Kind == AgentActivityKind.ToolStarted)
+            {
+                _onToolStarted();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            return Task.CompletedTask;
+        }
+
+        public IAsyncEnumerable<AgentActivityEvent> SubscribeAsync(int? taskId = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task RunStageAsync_WhenHostShutdownCancelsDuringProcessUpdateBroadcast_SanitizesTrailingToolTurnAndSavesInterruptedStatus()
+    {
+        var repo = new InMemoryTaskRepository();
+        var task = new ForgeTask { Id = 50, Title = "Host Shutdown Mid-Update Task", WorkspaceId = 1 };
+        await repo.CreateAsync(task);
+
+        var cancellationManager = new TaskCancellationManager(Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskCancellationManager>.Instance);
+        using var hostCts = new CancellationTokenSource();
+
+        var streamer = new CancellingOnToolStartedStreamer(() =>
+        {
+            cancellationManager.NotifyHostShuttingDown();
+            hostCts.Cancel();
+        });
+
+        async IAsyncEnumerable<ChatResponseUpdate> Handler(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options,
+            [EnumeratorCancellation] CancellationToken ct)
+        {
+            await Task.Yield();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, new List<AIContent>
+            {
+                new FunctionCallContent("call_unanswered", CanonicalToolNames.Read, new Dictionary<string, object?> { ["path"] = "README.md" })
+            });
+        }
+
+        var client = new ScriptedChatClient(Handler);
+
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = client,
+            PathResolver = TestPathResolver.Create(),
+            TaskRepository = repo,
+            CancellationManager = cancellationManager,
+            ActivityStreamer = streamer
+        }.Build();
+
+        var context = CreateContext(task);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.RunStageAsync(context, hostCts.Token));
+
+        var convs = await repo.GetConversationsAsync(task.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Interrupted, conv.Status);
+
+        var fullConv = await repo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(fullConv);
+        Assert.DoesNotContain(fullConv.Turns, t => t.Role == StageTurnRole.Tool);
+    }
 }

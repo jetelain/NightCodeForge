@@ -266,6 +266,10 @@ app.UseHangfireDashboard("/hangfire", new DashboardOptions
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
+var appLifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+var cancellationManager = app.Services.GetRequiredService<NightCodeForge.Core.Interfaces.ITaskCancellationManager>();
+appLifetime.ApplicationStopping.Register(() => cancellationManager.NotifyHostShuttingDown());
+
 app.Run();
 
 static void EnsureSqliteDirectoryExists(string? connectionString)

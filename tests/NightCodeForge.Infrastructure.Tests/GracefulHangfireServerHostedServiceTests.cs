@@ -3,6 +3,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Core.Concurrency;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 using Xunit;
 
@@ -11,12 +13,13 @@ namespace NightCodeForge.Infrastructure.Tests;
 public class GracefulHangfireServerHostedServiceTests
 {
     private readonly Mock<IHostedService> _innerMock = new();
+    private readonly Mock<ITaskCancellationManager> _cancellationManagerMock = new();
     private readonly NullLogger<GracefulHangfireServerHostedService> _logger = NullLogger<GracefulHangfireServerHostedService>.Instance;
 
     [Fact]
     public async Task StartAsync_DelegatesToInner()
     {
-        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _logger);
+        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _cancellationManagerMock.Object, _logger);
         using var cts = new CancellationTokenSource();
 
         await wrapper.StartAsync(cts.Token);
@@ -25,13 +28,14 @@ public class GracefulHangfireServerHostedServiceTests
     }
 
     [Fact]
-    public async Task StopAsync_DelegatesToInner()
+    public async Task StopAsync_DelegatesToInner_AndNotifiesShutdown()
     {
-        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _logger);
+        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _cancellationManagerMock.Object, _logger);
         using var cts = new CancellationTokenSource();
 
         await wrapper.StopAsync(cts.Token);
 
+        _cancellationManagerMock.Verify(c => c.NotifyHostShuttingDown(), Times.Once);
         _innerMock.Verify(s => s.StopAsync(cts.Token), Times.Once);
     }
 
@@ -42,7 +46,7 @@ public class GracefulHangfireServerHostedServiceTests
             .Setup(s => s.StopAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException("The operation was canceled."));
 
-        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _logger);
+        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _cancellationManagerMock.Object, _logger);
         using var cts = new CancellationTokenSource();
 
         var exception = await Record.ExceptionAsync(() => wrapper.StopAsync(cts.Token));
@@ -59,7 +63,7 @@ public class GracefulHangfireServerHostedServiceTests
                 new OperationCanceledException("The operation was canceled."),
                 new OperationCanceledException("The operation was canceled.")));
 
-        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _logger);
+        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _cancellationManagerMock.Object, _logger);
         using var cts = new CancellationTokenSource();
 
         var exception = await Record.ExceptionAsync(() => wrapper.StopAsync(cts.Token));
@@ -74,7 +78,7 @@ public class GracefulHangfireServerHostedServiceTests
             .Setup(s => s.StopAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Unexpected failure"));
 
-        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _logger);
+        var wrapper = new GracefulHangfireServerHostedService(_innerMock.Object, _cancellationManagerMock.Object, _logger);
         using var cts = new CancellationTokenSource();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => wrapper.StopAsync(cts.Token));
@@ -86,7 +90,7 @@ public class GracefulHangfireServerHostedServiceTests
         var disposableInnerMock = new Mock<IHostedService>();
         var disposableInterface = disposableInnerMock.As<IDisposable>();
 
-        var wrapper = new GracefulHangfireServerHostedService(disposableInnerMock.Object, _logger);
+        var wrapper = new GracefulHangfireServerHostedService(disposableInnerMock.Object, _cancellationManagerMock.Object, _logger);
         wrapper.Dispose();
 
         disposableInterface.Verify(d => d.Dispose(), Times.Once);
@@ -97,6 +101,7 @@ public class GracefulHangfireServerHostedServiceTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<ITaskCancellationManager, TaskCancellationManager>();
         services.AddNightCodeForgeHangfire("Data Source=:memory:;");
         services.AddNightCodeForgeHangfireServers();
 

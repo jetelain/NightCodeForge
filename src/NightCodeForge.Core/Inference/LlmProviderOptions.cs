@@ -42,7 +42,7 @@ public class LlmProviderOptions : ILlmProviderOptions
 
     public const int DefaultContextWindowTokens = 131072;
     public const int DefaultMaxOutputTokens = 16384;
-    public const double DefaultStreamIdleTimeoutMinutes = 10;
+    public const double DefaultStreamIdleTimeoutMinutes = 15; // Enough for 16384 tokens at ~20 tok/s (minimum recommended)
 
     /// <summary>
     /// Baseline context window in tokens (used as fallback when provider discovery is unavailable).

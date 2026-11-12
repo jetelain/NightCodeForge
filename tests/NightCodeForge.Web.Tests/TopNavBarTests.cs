@@ -204,4 +204,32 @@ public class TopNavBarTests : BunitContext
         var option = cut.Find(".workspace-dropdown option");
         Assert.Contains("🎨 ComicGenCLI", option.TextContent);
     }
+
+    [Fact]
+    public async Task TopNavBar_WhenActiveWorkspaceChangedToNewlyCreatedWorkspace_DoesNotRevertToUrlWorkspace()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "AlphaWorkspace" };
+        await _workspaceRepo.CreateAsync(ws1);
+        _workspaceState.SetKnownWorkspaces(new[] { ws1 });
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var nav = Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+        nav.NavigateTo("/w/1");
+
+        var cut = Render<TopNavBar>();
+        Assert.Equal(1, _workspaceState.ActiveWorkspace?.Id);
+
+        // Simulate creating a second workspace and activating it before NavigationManager URL updates from /w/1 to /w/2
+        var ws2 = new Workspace { Id = 2, Name = "BetaWorkspace" };
+        await _workspaceRepo.CreateAsync(ws2);
+        _workspaceState.SetActiveWorkspace(ws2);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, _workspaceState.ActiveWorkspace?.Id);
+            var selectedOption = cut.Find(".workspace-dropdown option[selected]");
+            Assert.Equal("2", selectedOption.GetAttribute("value"));
+            Assert.Contains("BetaWorkspace", selectedOption.TextContent);
+        });
+    }
 }

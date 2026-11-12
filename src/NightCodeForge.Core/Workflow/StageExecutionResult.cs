@@ -23,7 +23,7 @@ public class StageExecutionResult
         new() { IsSuccess = false, ErrorMessage = errorMessage, TargetRoutingStageId = loopBackStageId, ExecutionRecord = record };
 
     public static StageExecutionResult Cancelled(string? message = null, StageExecutionRecord? record = null) =>
-        new() { IsSuccess = false, IsCancelled = true, ErrorMessage = message ?? "Execution was cancelled.", ExecutionRecord = record };
+        new() { IsSuccess = false, IsCancelled = true, ErrorMessage = message, ExecutionRecord = record };
 
     public static StageExecutionResult QuestionRequired(IReadOnlyList<Question> questions, StageExecutionRecord? record = null)
     {

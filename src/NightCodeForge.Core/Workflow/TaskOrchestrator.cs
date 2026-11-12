@@ -61,7 +61,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
-        if (task.Status == TaskOverallStatus.Cancelled || task.Status == TaskOverallStatus.Closed || task.Status == TaskOverallStatus.Rejected)
+        if (task.Status == TaskOverallStatus.Cancelled || task.Status == TaskOverallStatus.Closed || task.Status == TaskOverallStatus.Rejected || task.Status == TaskOverallStatus.Failed)
         {
             _logger.LogInformation("ForgeTask #{TaskId} is already in {Status} status; aborting execution.", taskId, task.Status);
             return;
@@ -102,6 +102,8 @@ public class TaskOrchestrator : ITaskOrchestrator
             using var lockReleaser = await _workspacePreparer.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
             lockAcquired = true;
 
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Re-read task state after acquiring the lock to guarantee we have the latest persisted state
             var reloadedTask = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
             if (reloadedTask == null)
@@ -110,13 +112,20 @@ public class TaskOrchestrator : ITaskOrchestrator
                 return;
             }
 
-            // The task may have been cancelled, closed, or rejected while waiting for the lock.
-            if (reloadedTask.Status == TaskOverallStatus.Cancelled || reloadedTask.Status == TaskOverallStatus.Closed || reloadedTask.Status == TaskOverallStatus.Rejected)
+            // The task may have been cancelled, closed, rejected, or failed while waiting for the lock.
+            if (reloadedTask.Status == TaskOverallStatus.Cancelled ||
+                reloadedTask.Status == TaskOverallStatus.Closed ||
+                reloadedTask.Status == TaskOverallStatus.Rejected ||
+                reloadedTask.Status == TaskOverallStatus.Failed)
             {
                 _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, reloadedTask.Status);
                 if (reloadedTask.Status == TaskOverallStatus.Cancelled)
                 {
                     cohortExitReason = CohortExitReason.Cancelled;
+                }
+                else if (reloadedTask.Status == TaskOverallStatus.Failed)
+                {
+                    cohortExitReason = CohortExitReason.Failed;
                 }
                 return;
             }
@@ -180,6 +189,8 @@ public class TaskOrchestrator : ITaskOrchestrator
 
             if (bareHostExecutionLock != null)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var reloadedAfterBareHost = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
                 if (reloadedAfterBareHost == null)
                 {
@@ -189,12 +200,17 @@ public class TaskOrchestrator : ITaskOrchestrator
 
                 if (reloadedAfterBareHost.Status == TaskOverallStatus.Cancelled ||
                     reloadedAfterBareHost.Status == TaskOverallStatus.Closed ||
-                    reloadedAfterBareHost.Status == TaskOverallStatus.Rejected)
+                    reloadedAfterBareHost.Status == TaskOverallStatus.Rejected ||
+                    reloadedAfterBareHost.Status == TaskOverallStatus.Failed)
                 {
                     _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status after acquiring BareHost workspace lock; aborting execution.", taskId, reloadedAfterBareHost.Status);
                     if (reloadedAfterBareHost.Status == TaskOverallStatus.Cancelled)
                     {
                         cohortExitReason = CohortExitReason.Cancelled;
+                    }
+                    else if (reloadedAfterBareHost.Status == TaskOverallStatus.Failed)
+                    {
+                        cohortExitReason = CohortExitReason.Failed;
                     }
                     return;
                 }
@@ -306,6 +322,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                 }, cancellationToken);
                 return;
             }
+
+            currentExecutingStage = stage;
 
             bool isResumedRun = task.IsWaitingForHuman || !string.IsNullOrWhiteSpace(task.InterruptedStageId);
             string? activeInterruptedStageId = task.InterruptedStageId ?? (task.IsWaitingForHuman ? task.CurrentStageId : null);
@@ -791,7 +809,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                               _operationsControlService.IsPaused)
                     {
                         _logger.LogInformation(ocex, "Stage '{StageId}' for task #{TaskId} was cancelled.", stage.StageId, taskId);
-                        result = StageExecutionResult.Cancelled("Stage execution was cancelled.");
+                        result = StageExecutionResult.Cancelled();
                     }
                     catch (MergeConflictException mex)
                     {
@@ -1331,28 +1349,42 @@ public class TaskOrchestrator : ITaskOrchestrator
                         return;
                     }
 
+                    var cancellationReason = !string.IsNullOrWhiteSpace(result.ErrorMessage)
+                        ? result.ErrorMessage
+                        : (_lifecycleMutationCoordinator.IsHostShuttingDown
+                            ? $"Stage '{stage.StageId}' execution interrupted by application shutdown."
+                            : (_lifecycleMutationCoordinator.IsCancelRequested(task.Id)
+                                ? $"Stage '{stage.StageId}' was cancelled by user."
+                                : $"Stage '{stage.StageId}' execution was cancelled."));
+
+                    var isExplicitUserCancel = _lifecycleMutationCoordinator.IsCancelRequested(task.Id);
+                    var targetConvStatus = (_lifecycleMutationCoordinator.IsHostShuttingDown && !isExplicitUserCancel)
+                        ? StageExecutionStatus.Interrupted
+                        : StageExecutionStatus.Cancelled;
+
                     try
                     {
                         var convs = await _taskRepository.GetConversationsAsync(task.Id, ct);
+
                         var activeConvs = convs.Where(c =>
                             c.Status == StageExecutionStatus.Running ||
-                            c.Status == StageExecutionStatus.WaitingForHuman ||
-                            c.Status == StageExecutionStatus.Interrupted).ToList();
+                            (targetConvStatus != StageExecutionStatus.Interrupted &&
+                             (c.Status == StageExecutionStatus.WaitingForHuman || c.Status == StageExecutionStatus.Interrupted))).ToList();
                         foreach (var activeConv in activeConvs)
                         {
                             await _taskRepository.CompleteConversationAsync(
                                 activeConv.Id,
-                                StageExecutionStatus.Cancelled,
-                                summary: "Execution was cancelled.",
+                                targetConvStatus,
+                                summary: cancellationReason,
                                 cancellationToken: ct);
                         }
                     }
                     catch (Exception cex)
                     {
-                        _logger.LogWarning(cex, "Failed to mark active conversation as Cancelled for task #{TaskId}", task.Id);
+                        _logger.LogWarning(cex, "Failed to mark active conversation as {TargetStatus} for task #{TaskId}", targetConvStatus, task.Id);
                     }
 
-                    // Only an explicit cancel request is terminal; a parent cancellation (e.g. shutdown) must leave the task recoverable.
+                    // Only an explicit cancel request is terminal; host shutdown leaves the task recoverable for startup recovery.
                     if (_lifecycleMutationCoordinator.IsCancelRequested(task.Id))
                     {
                         var persistedTask = await _taskRepository.GetByIdAsync(task.Id, ct);
@@ -1372,29 +1404,77 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 task,
                                 dependsOn: null,
                                 changedBy: AuditActors.User,
-                                reason: $"Stage '{stage.StageId}' was cancelled.",
+                                reason: cancellationReason,
                                 cancellationToken: ct);
                             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, ct);
                             await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, ct);
                         }
+
+                        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                        {
+                            TaskId = task.Id,
+                            Level = LogLevel.Information,
+                            Message = cancellationReason,
+                            Timestamp = DateTime.UtcNow
+                        }, ct);
+
+                        cohortExitReason = CohortExitReason.Cancelled;
+                        return;
+                    }
+                    else if (_lifecycleMutationCoordinator.IsHostShuttingDown)
+                    {
+                        _logger.LogInformation("Task #{TaskId} execution interrupted by host application shutdown at stage '{StageId}'.", task.Id, stage.StageId);
+                        var persistedTask = await _taskRepository.GetByIdAsync(task.Id, ct);
+                        if (persistedTask != null &&
+                            persistedTask.Status != TaskOverallStatus.Closed &&
+                            persistedTask.Status != TaskOverallStatus.Rejected &&
+                            persistedTask.Status != TaskOverallStatus.Cancelled &&
+                            persistedTask.Status != TaskOverallStatus.Failed)
+                        {
+                            task.InterruptedStageId = stage.StageId;
+                            task.InterruptedAgentProfileId = profile?.Id ?? task.InterruptedAgentProfileId;
+                            pipelineContext.SyncDataBagToTask();
+                            await _taskRepository.UpdateAsync(task, cancellationToken: ct);
+                            await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, ct);
+                        }
+
+                        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                        {
+                            TaskId = task.Id,
+                            Level = LogLevel.Information,
+                            Message = cancellationReason,
+                            Timestamp = DateTime.UtcNow
+                        }, ct);
+
+                        cohortExitReason = CohortExitReason.Cancelled;
+                        return;
                     }
                     else
                     {
-                        pipelineContext.SyncDataBagToTask();
-                        await _taskRepository.UpdateAsync(task, cancellationToken: ct);
-                        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, ct);
+                        _logger.LogInformation("Task #{TaskId} stage '{StageId}' cancelled: {Reason}", task.Id, stage.StageId, cancellationReason);
+                        var persistedTask = await _taskRepository.GetByIdAsync(task.Id, ct);
+                        if (persistedTask != null &&
+                            persistedTask.Status != TaskOverallStatus.Closed &&
+                            persistedTask.Status != TaskOverallStatus.Rejected &&
+                            persistedTask.Status != TaskOverallStatus.Cancelled &&
+                            persistedTask.Status != TaskOverallStatus.Failed)
+                        {
+                            pipelineContext.SyncDataBagToTask();
+                            await _taskRepository.UpdateAsync(task, cancellationToken: ct);
+                            await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, ct);
+                        }
+
+                        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                        {
+                            TaskId = task.Id,
+                            Level = LogLevel.Information,
+                            Message = cancellationReason,
+                            Timestamp = DateTime.UtcNow
+                        }, ct);
+
+                        cohortExitReason = CohortExitReason.Cancelled;
+                        return;
                     }
-
-                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
-                    {
-                        TaskId = task.Id,
-                        Level = LogLevel.Information,
-                        Message = $"Stage '{stage.StageId}' was cancelled.",
-                        Timestamp = DateTime.UtcNow
-                    }, ct);
-
-                    cohortExitReason = CohortExitReason.Cancelled;
-                    return;
                 }
 
                 if (result.NeedsClarification)
@@ -1663,6 +1743,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                     if (nextStage != null)
                     {
                         task.CurrentStageId = nextStage.StageId;
+                        currentExecutingStage = nextStage;
+                        currentExecutingProfile = null;
 
                         if (string.Equals(nextStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) ||
                             string.Equals(nextStage.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase))
@@ -1735,6 +1817,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                                     if (targetStage != null && IsSameCohort(stage.QueueTier, targetStage.QueueTier))
                                     {
                                         await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, reverifyRetries, reverifyMaxRetries, reverifyResult, reverifyDurationMs, cancellationToken);
+                                        currentExecutingStage = targetStage;
+                                        currentExecutingProfile = null;
                                         stage = targetStage;
                                         continue;
                                     }
@@ -1816,6 +1900,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         // IN-PROCESS LOOPBACK
                         await PrepareInProcessLoopBackAsync(task, workspace, pipelineContext, stage, targetStage, retries, effectiveMaxRetries, result, durationMs, cancellationToken);
+                        currentExecutingStage = targetStage;
+                        currentExecutingProfile = null;
                         stage = targetStage;
                         continue;
                     }
@@ -1905,9 +1991,49 @@ public class TaskOrchestrator : ITaskOrchestrator
                     return;
                 }
 
+                var isHostShuttingDown = _lifecycleMutationCoordinator.IsHostShuttingDown;
+                var cancellationReason = isHostShuttingDown
+                    ? "Execution interrupted by application shutdown."
+                    : (_lifecycleMutationCoordinator.IsCancelRequested(taskId)
+                        ? "Execution was cancelled by user."
+                        : $"Execution interrupted by cancellation: {ocex.Message}");
+
                 cohortExitReason = CohortExitReason.Cancelled;
-                // Parent cancellation (e.g. shutdown or external token): close conversations as Cancelled and leave status untouched
-                await CloseActiveConversationsAsync(taskId, StageExecutionStatus.Cancelled, "Execution interrupted by application shutdown or cancellation token.", ct);
+                _logger.LogInformation("Task #{TaskId} execution cancelled or interrupted. Reason: {Reason}", taskId, cancellationReason);
+                await CloseActiveConversationsAsync(
+                    taskId,
+                    isHostShuttingDown ? StageExecutionStatus.Interrupted : StageExecutionStatus.Cancelled,
+                    cancellationReason,
+                    ct);
+
+                if (isHostShuttingDown)
+                {
+                    var currentTask = await _taskRepository.GetByIdAsync(taskId, ct);
+                    if (currentTask != null &&
+                        currentTask.Status != TaskOverallStatus.Closed &&
+                        currentTask.Status != TaskOverallStatus.Rejected &&
+                        currentTask.Status != TaskOverallStatus.Cancelled &&
+                        currentTask.Status != TaskOverallStatus.Failed)
+                    {
+                        if (pipelineContext != null)
+                        {
+                            pipelineContext.SyncDataBagToTask();
+                            currentTask.PipelineDataJson = task.PipelineDataJson;
+                        }
+                        currentTask.InterruptedStageId = currentExecutingStage?.StageId ?? currentTask.InterruptedStageId ?? currentTask.CurrentStageId;
+                        currentTask.InterruptedAgentProfileId = currentExecutingProfile?.Id ?? currentTask.InterruptedAgentProfileId;
+                        await _taskRepository.UpdateAsync(currentTask, cancellationToken: ct);
+                        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(taskId, currentTask.Status, ct);
+                    }
+                }
+
+                await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                {
+                    TaskId = taskId,
+                    Level = LogLevel.Information,
+                    Message = cancellationReason,
+                    Timestamp = DateTime.UtcNow
+                }, ct);
             }
             catch (Exception cex)
             {
@@ -2511,7 +2637,7 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         if (runResult.Status == AgentRunStatus.Cancelled)
         {
-            return StageExecutionResult.Cancelled(runResult.Error ?? "Agent execution cancelled.", record);
+            return StageExecutionResult.Cancelled(runResult.Error, record);
         }
 
         if (runResult.Status == AgentRunStatus.WaitingForHuman)

@@ -13,6 +13,7 @@ public interface ITaskLifecycleMutationCoordinator
     void UnregisterExecutionCancellation(int taskId, CancellationTokenSource cts);
     bool IsCancelRequested(int taskId);
     bool IsPauseRequested(int taskId);
+    bool IsHostShuttingDown { get; }
     bool CanRestoreCheckpointMemory(IEnumerable<Conversation>? conversations, StageCheckpoint? checkpoint, string? stageId);
 
     Task SubmitHumanAnswerAsync(int questionId, string answer, CancellationToken cancellationToken = default);

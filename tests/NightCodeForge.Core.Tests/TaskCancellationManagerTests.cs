@@ -50,4 +50,47 @@ public class TaskCancellationManagerTests
     {
         Assert.False(_manager.Cancel(99));
     }
+
+    [Fact]
+    public void NotifyHostShuttingDown_SetsIsHostShuttingDownTrue()
+    {
+        Assert.False(_manager.IsHostShuttingDown);
+
+        _manager.NotifyHostShuttingDown();
+
+        Assert.True(_manager.IsHostShuttingDown);
+    }
+
+    [Fact]
+    public void Register_WithPreCancelledParentToken_DoesNotFalseFlagIsHostShuttingDown()
+    {
+        using var parentCts = new CancellationTokenSource();
+        parentCts.Cancel();
+
+        using var cts = _manager.Register(10, parentCts.Token);
+
+        Assert.True(cts.IsCancellationRequested);
+        Assert.False(_manager.IsHostShuttingDown);
+    }
+
+    [Fact]
+    public void NotifyHostShuttingDown_WhenCalledMultipleTimes_LogsOnlyOnce()
+    {
+        var loggerMock = new Moq.Mock<Microsoft.Extensions.Logging.ILogger<TaskCancellationManager>>();
+        var manager = new TaskCancellationManager(loggerMock.Object);
+
+        manager.NotifyHostShuttingDown();
+        manager.NotifyHostShuttingDown();
+        manager.NotifyHostShuttingDown();
+
+        Assert.True(manager.IsHostShuttingDown);
+        loggerMock.Verify(
+            l => l.Log(
+                Microsoft.Extensions.Logging.LogLevel.Information,
+                Moq.It.IsAny<Microsoft.Extensions.Logging.EventId>(),
+                Moq.It.Is<Moq.It.IsAnyType>((v, _) => v.ToString()!.Contains("Host shutdown notification received")),
+                Moq.It.IsAny<Exception?>(),
+                Moq.It.IsAny<Func<Moq.It.IsAnyType, Exception?, string>>()),
+            Moq.Times.Once);
+    }
 }

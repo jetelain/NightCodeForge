@@ -56,10 +56,10 @@ public class HangfireQueuePriorityTests
     }
 
     [Fact]
-    public void StorageOptions_InvisibilityTimeout_IsAtLeastFourHours()
+    public void StorageOptions_InvisibilityTimeout_IsAtLeastTwelveHours()
     {
         var options = HangfireConfigurationExtensions.CreateDefaultStorageOptions();
-        Assert.True(options.InvisibilityTimeout >= TimeSpan.FromHours(4));
+        Assert.True(options.InvisibilityTimeout >= TimeSpan.FromHours(12));
     }
 
     [Fact]
