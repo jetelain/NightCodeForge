@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 2 of 4 — Outbound Pull Request Delivery & Review Room Integration)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)  
+> *Prerequisite Step:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)  
 > *Companion Steps:* [Step 12.11C: Untrusted Issue Intake & Triage](STEP_12_11C_GITHUB_UNTRUSTED_ISSUE_INTAKE_AND_TRIAGE.md) | [Step 12.11D: Bi-Directional Task Mirroring & Multi-User Claiming](STEP_12_11D_GITHUB_TASK_MIRRORING_AND_MULTI_USER_CLAIMING.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure/Git`, `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -13,7 +13,7 @@
 
 ## 1. Executive Objective
 
-Building on `IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`, and `GitHubIntegrationSettings` from [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md), this step (Part 2 of Step 12.11) implements outbound **Pull Request Delivery Mode (`MergeMode.ExternalPullRequest`)** with multi-user NightCodeForge collaboration safeguards:
+Building on `IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`, and `GitHubIntegrationSettings` from [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md), this step (Part 2 of Step 12.11) implements outbound **Pull Request Delivery Mode (`MergeMode.ExternalPullRequest`)** with multi-user NightCodeForge collaboration safeguards:
 
 1. **Pull Request Delivery Mode via `MergeMode.ExternalPullRequest`:**
    - Provide a third task delivery mode alongside `MergeMode.Automatic` and `MergeMode.ManualReviewRequired`: deliver completed tasks via **GitHub Pull Requests**.

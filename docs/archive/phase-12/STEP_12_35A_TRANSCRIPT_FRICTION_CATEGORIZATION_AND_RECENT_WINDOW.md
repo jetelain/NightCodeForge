@@ -1,11 +1,11 @@
 # 📊 Step 12.35A: Deterministic Transcript Friction Categorization, Actionable Breakdowns & Recent-Session Windowing
 
 > **Feature & Diagnostics Specification (Part 1 of 2 — Deterministic Friction Engine & UI/CLI Windowing)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Companion Step:* [Step 12.35B: Idle-GPU Nightwatch Deep Transcript & Workspace Analysis (Replacing Legacy AI Diagnostics)](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)  
-> *Related Steps:* [Step 12.34C: Nightwatch Telemetry UI & Harness Issue Ledger](STEP_12_34C_NIGHTWATCH_TELEMETRY_HARNESS_ISSUES_UI_AND_SELF_HEALING_BACKLOG.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md) | [docs/ARCHITECTURE.md](../ARCHITECTURE.md)  
-> *Target Projects:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `src/NightCodeForge.Cli`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Cli.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
+> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
+> *Companion Step:* [Step 12.35B: Idle-GPU Nightwatch Deep Transcript & Workspace Analysis (Replacing Legacy AI Diagnostics)](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)  
+> *Related Steps:* [Step 12.34C: Nightwatch Telemetry UI & Harness Issue Ledger](../../features/STEP_12_34C_NIGHTWATCH_TELEMETRY_HARNESS_ISSUES_UI_AND_SELF_HEALING_BACKLOG.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md) | [docs/ARCHITECTURE.md](../../ARCHITECTURE.md)  
+> *Target Projects:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `src/NightCodeForge.Cli`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Cli.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -129,7 +129,7 @@ Extend `TranscriptAnalysis` with deterministic, structured breakdown collections
    - Expose `GetWorkspaceFrictionHotspotsAsync(string workspacePath, int? maxTranscripts = TranscriptAnalysisDefaults.DefaultRecentLimit, CancellationToken cancellationToken = default)` on `ITranscriptAnalysisService` returning a `WorkspaceFrictionHotspots` record (containing top `IsSplitCandidate` files, top recurring `CompilerErrorEntry` items, recurring failing tests, and a compact `FormatPromptDigest()` / `<workspace_friction_hotspots>` XML builder that returns `string.Empty` when no hotspots exist).
    - Register `services.TryAddSingleton<ITranscriptAnalysisService, TranscriptAnalysisService>();` in `AddNightCodeForgeAgents` (`src/NightCodeForge.Agents/ServiceCollectionExtensions.cs`).
    - **Constructor Ceiling Guard (`AGENTS.md` $\le 10$ Parameters):** Because `IdeationService` currently has **10** constructor parameters (`ConstructorParameterCeilingTests.MaxConstructorParameters = 10`), do **not** add `ITranscriptAnalysisService` directly to `IdeationService`'s constructor. Instead, inject `ITranscriptAnalysisService` into `AgentWorkspaceContextService` (increasing its constructor from 6 to 7 parameters), expose `BuildFrictionHotspotsDigestAsync(string repoPath, CancellationToken cancellationToken = default)` on `IAgentWorkspaceContextService` (or include it in `IdeationService` / future `IIdeationConversationCoordinator` via `_workspaceContext`), and append the `<workspace_friction_hotspots>` section to the Ideation system prompt when non-empty so the Ideation Agent knows which files are experiencing high edit churn or split-candidate pressure when planning tasks.
-   - **Nightwatch Readiness ([Step 12.34A](STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) & [Step 12.35B](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)):** `GetWorkspaceFrictionHotspotsAsync` and `AnalyzeDirectoryWindowAsync` provide the deterministic friction digest consumed by `NightwatchService` during reactive stage failure triage and by `INightwatchIdleAnalysisService` during idle deep analysis.
+   - **Nightwatch Readiness ([Step 12.34A](../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) & [Step 12.35B](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)):** `GetWorkspaceFrictionHotspotsAsync` and `AnalyzeDirectoryWindowAsync` provide the deterministic friction digest consumed by `NightwatchService` during reactive stage failure triage and by `INightwatchIdleAnalysisService` during idle deep analysis.
 
 ---
 

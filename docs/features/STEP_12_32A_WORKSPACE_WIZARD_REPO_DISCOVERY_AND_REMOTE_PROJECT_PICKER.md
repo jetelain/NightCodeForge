@@ -3,7 +3,7 @@
 > **Feature Implementation Step (Part 1 of 2 — Existing Repository Discovery, Remote Forge Browser & Auto-Completion)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Companion Step:* [Step 12.32B: From-Scratch Workspace Templates & Remote Forge Publishing](STEP_12_32B_WORKSPACE_TEMPLATES_NATIVE_CLI_SCAFFOLDING_AND_REMOTE_PUBLISH.md)  
-> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](../archive/phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
+> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](../archive/phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
@@ -20,7 +20,7 @@ This step (Part 1 of Step 12.32) eliminates onboarding friction for existing rep
 1. **Local Repository Auto-Discovery (`ILocalRepositoryDiscoveryService`):** Proactively scan standard developer workspace directories across Windows, Linux, and WSL2 (`%USERPROFILE%\source\repos`, `~/repos`, `~/projects`, `~/Development`, etc.) for Git repositories (`.git` directories or worktree pointers).
 2. **Searchable Autocomplete & Quick-Picker (`WizardStep1PathProbe.razor`):** Provide a responsive, filtered dropdown/datalist in Step 1 of the wizard displaying discovered repositories (with friendly name, relative folder, detected branch, and last modified date) while preserving free-form manual path entry.
 3. **Provider-Agnostic Remote Forge Abstraction (`IVcsHostingProvider`, `IVcsHostingProviderRegistry`):** Define a clean provider contract for remote Git hosting services (supporting GitHub, GitLab, Gitea, Bitbucket) without vendor lock-in.
-4. **Remote Project Browser & Quick Clone:** When a remote forge (e.g. GitHub via [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is connected and active:
+4. **Remote Project Browser & Quick Clone:** When a remote forge (e.g. GitHub via [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is connected and active:
    - Query and display accessible remote repositories in the wizard.
    - If the remote repository is already cloned locally, automatically resolve and select the local path.
    - If not yet cloned locally, allow 1-click cloning into the developer's default repository directory (`git clone`) and proceed directly to branch and environment configuration.
@@ -178,7 +178,7 @@ public interface IVcsHostingProviderRegistry
 
 ### 2.4 GitHub Provider Implementation
 
-- Implements `IVcsHostingProvider` using the GitHub App Device Flow infrastructure from [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) (`IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`).
+- Implements `IVcsHostingProvider` using the GitHub App Device Flow infrastructure from [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) (`IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`).
 - When tokens are present and valid, `IsAuthenticatedAsync()` returns `true` and `ListRepositoriesAsync()` queries the authenticated user's accessible repositories via `GET /user/repos?sort=updated&per_page=100` (using refresh-aware tokens from `IGitHubDeviceAuthService.GetValidAccessTokenAsync`).
 - **GitHub App Permission Requirement for `CreateRepositoryAsync`:** Creating a remote repository via `POST /user/repos` with a GitHub App user-to-server token (`ghu_...`) requires the NightCodeForge GitHub App registration to include **`Administration: Read & write`** repository permission. If the GitHub API returns `403 Forbidden` (e.g., the app installation is restricted to selected repositories and does not permit user-level repository creation), `CreateRepositoryAsync` throws a clear `VcsHostingProviderException` explaining the required GitHub App installation/permission setting.
 - Extensible design: adding GitLab in the future only requires implementing `IVcsHostingProvider` and registering it in `IVcsHostingProviderRegistry`.

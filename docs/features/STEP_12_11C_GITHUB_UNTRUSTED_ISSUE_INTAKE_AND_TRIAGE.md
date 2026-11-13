@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 3 of 4 — Untrusted Issue Intake & `RestrictedReadOnly` Triage)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Steps:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md)  
+> *Prerequisite Steps:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md)  
 > *Companion Step:* [Step 12.11D: Bi-Directional Task Mirroring & Multi-User Claiming](STEP_12_11D_GITHUB_TASK_MIRRORING_AND_MULTI_USER_CLAIMING.md)  
 > *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Agents/Triage`, `src/NightCodeForge.Core/Workflow`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
@@ -13,7 +13,7 @@
 
 ## 1. Executive Objective
 
-Building on `IGitHubClientService`, `IGitHubDeviceAuthService`, and `GitHubIntegrationSettings` from [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) and the external provenance fields (`ExternalSource`, `ExternalReferenceId`) from [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md), this step (Part 3 of Step 12.11) implements inbound **Untrusted Issue Intake & Automated Triage (`GitHubIssueSyncService`)**—completely isolated from [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs):
+Building on `IGitHubClientService`, `IGitHubDeviceAuthService`, and `GitHubIntegrationSettings` from [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) and the external provenance fields (`ExternalSource`, `ExternalReferenceId`) from [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md), this step (Part 3 of Step 12.11) implements inbound **Untrusted Issue Intake & Automated Triage (`GitHubIssueSyncService`)**—completely isolated from [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs):
 
 1. **Untrusted Issue Intake & Automated Triage (`GitHubIssueSyncService`):**
    - GitHub issues from external contributors or bug reports are treated as **untrusted external inputs**.

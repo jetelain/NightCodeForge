@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Part 4 of 4 — Bi-Directional Task Mirroring, Pre-Flight Claiming & PR-Merge Closure)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Steps:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.11C: Untrusted Issue Intake & Triage](STEP_12_11C_GITHUB_UNTRUSTED_ISSUE_INTAKE_AND_TRIAGE.md)  
+> *Prerequisite Steps:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.11C: Untrusted Issue Intake & Triage](STEP_12_11C_GITHUB_UNTRUSTED_ISSUE_INTAKE_AND_TRIAGE.md)  
 > *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Core/Workflow`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Core.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
@@ -12,7 +12,7 @@
 
 ## 1. Executive Objective
 
-Building on [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md), [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md), and [Step 12.11C](STEP_12_11C_GITHUB_UNTRUSTED_ISSUE_INTAKE_AND_TRIAGE.md), this final part of Step 12.11 implements **Bi-Directional Task Mirroring, Multi-User Pre-Flight Issue Claiming, and Pull Request Merge Closure (`GitHubTaskMirrorService`)**:
+Building on [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md), [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md), and [Step 12.11C](STEP_12_11C_GITHUB_UNTRUSTED_ISSUE_INTAKE_AND_TRIAGE.md), this final part of Step 12.11 implements **Bi-Directional Task Mirroring, Multi-User Pre-Flight Issue Claiming, and Pull Request Merge Closure (`GitHubTaskMirrorService`)**:
 
 1. **Multi-User Pre-Flight Claiming & Conflict Prevention (`TryClaimIssueForExecutionAsync`):**
    - Before Stage 1 (`StandardStageIds.TaskReview`) begins on a GitHub-linked task, verify the live GitHub Issue is not already closed or claimed by another teammate's NCF instance, transitioning deterministically to `Cancelled` (if closed externally) or suspending with `IsWaitingForHuman = true` (if claimed by another user), and automatically assigning the issue to `AuthenticatedUserLogin` when `AutoAssignIssueOnStart` is enabled.
