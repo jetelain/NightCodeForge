@@ -273,7 +273,14 @@ public class TranscriptComponentTests : BunitContext
             TopEditedFiles: new List<KeyValuePair<string, int>> { new("App.cs", 2) },
             HighChurnFiles: new List<KeyValuePair<string, int>> { new("App.cs", 2) },
             FrictionPoints: new[] { "Edit mismatch detected on App.cs" },
-            Recommendations: new[] { "Use search-and-replace instead of full file rewrite" });
+            Recommendations: new[]
+            {
+                new NightCodeForge.Core.Services.FrictionRecommendation(
+                    NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+                    NightCodeForge.Core.Services.FrictionCategory.Tooling,
+                    "Use search-and-replace instead of full file rewrite",
+                    "Read target context carefully before applying edits.")
+            });
 
         var cut = Render<TranscriptAnalysisViewer>(p => p.Add(x => x.Analysis, analysis));
 
@@ -312,7 +319,7 @@ public class TranscriptComponentTests : BunitContext
             TopEditedFiles: new List<KeyValuePair<string, int>>(),
             HighChurnFiles: new List<KeyValuePair<string, int>>(),
             FrictionPoints: Array.Empty<string>(),
-            Recommendations: Array.Empty<string>());
+            Recommendations: Array.Empty<NightCodeForge.Core.Services.FrictionRecommendation>());
 
         var cut = Render<TranscriptAnalysisViewer>(p => p.Add(x => x.Analysis, cleanAnalysis));
 
@@ -354,7 +361,14 @@ public class TranscriptComponentTests : BunitContext
                 TopEditedFiles: new List<KeyValuePair<string, int>>(),
                 HighChurnFiles: new List<KeyValuePair<string, int>>(),
                 FrictionPoints: new[] { "Edit mismatch" },
-                Recommendations: new[] { "Check indentation" })
+                Recommendations: new[]
+                {
+                    new NightCodeForge.Core.Services.FrictionRecommendation(
+                        NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+                        NightCodeForge.Core.Services.FrictionCategory.Tooling,
+                        "Check indentation",
+                        "Verify block whitespace before editing.")
+                })
         };
 
         string selectedFileName = string.Empty;
@@ -410,7 +424,7 @@ public class TranscriptComponentTests : BunitContext
                 TopEditedFiles: new List<KeyValuePair<string, int>>(),
                 HighChurnFiles: new List<KeyValuePair<string, int>>(),
                 FrictionPoints: Array.Empty<string>(),
-                Recommendations: Array.Empty<string>())
+                Recommendations: Array.Empty<NightCodeForge.Core.Services.FrictionRecommendation>())
         };
 
         var cut = Render<FleetAnalysisDashboard>(p => p.Add(x => x.Fleet, fleet));
@@ -434,8 +448,230 @@ public class TranscriptComponentTests : BunitContext
         Assert.Contains("Analysis data is not available for this transcript.", cut.Markup);
     }
 
+    [Fact]
+    public void TranscriptPresentationHelper_FormatsAndAggregatesFleetDeterministically()
+    {
+        Assert.Equal(
+            "Showing latest 50 of 120 transcripts",
+            TranscriptPresentationHelper.FormatWindowBadge(50, 120, 50));
+        Assert.Equal(
+            "Compiler Diagnostic",
+            TranscriptPresentationHelper.FormatCategoryBadge(NightCodeForge.Core.Services.FrictionCategory.CompilerDiagnostic));
+
+        var userRec = new NightCodeForge.Core.Services.FrictionRecommendation(
+            NightCodeForge.Core.Services.RecommendationTarget.UserCodebase,
+            NightCodeForge.Core.Services.FrictionCategory.FileArchitecture,
+            "Split LargeService.cs",
+            "LargeService.cs experienced high edit churn.",
+            "src/LargeService.cs");
+        var ncfRec = new NightCodeForge.Core.Services.FrictionRecommendation(
+            NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+            NightCodeForge.Core.Services.FrictionCategory.Tooling,
+            "Truncate grep output",
+            "Oversized grep output caused token bloat.",
+            "grep");
+
+        var session1 = new NightCodeForge.Core.Services.TranscriptAnalysis(
+            FilePath: "s1.md",
+            FileName: "s1.md",
+            Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter { TaskId = 1, StageId = "impl", DurationMs = 2000, Status = "Failed" },
+            TotalTurns: 2,
+            UserTurns: 1,
+            AssistantTurns: 1,
+            ToolTurns: 0,
+            ThinkingTurns: 0,
+            ToolUsage: new Dictionary<string, int>(),
+            BashErrors: 1,
+            EditFailures: 0,
+            ToolErrors: 0,
+            CompilerErrors: 2,
+            TestFailures: 0,
+            CompactionEvents: 0,
+            HistoryRewrites: 0,
+            TopReadFiles: new List<KeyValuePair<string, int>>(),
+            TopEditedFiles: new List<KeyValuePair<string, int>>(),
+            HighChurnFiles: new List<KeyValuePair<string, int>>(),
+            FrictionPoints: new[] { "Churn" },
+            Recommendations: new[] { userRec, ncfRec },
+            FileFriction: new[] { new NightCodeForge.Core.Services.FileFrictionEntry("src/LargeService.cs", 2, 4, 1) },
+            ToolFriction: new[] { new NightCodeForge.Core.Services.ToolFrictionEntry("grep", 3, 0, 0.0, 1) },
+            BashCommandFriction: new[]
+            {
+                new NightCodeForge.Core.Services.BashCommandFrictionEntry("dotnet build", 2, 1, 0, 0, 1),
+                new NightCodeForge.Core.Services.BashCommandFrictionEntry("git status", 4, 0, 0, 0, 0)
+            },
+            CompilerErrorBreakdown: new[] { new NightCodeForge.Core.Services.CompilerErrorEntry("CS0103", 2, "Missing Foo") });
+
+        var aggregated = TranscriptPresentationHelper.AggregateFleet(new[] { session1, session1 });
+        var userAgg = Assert.Single(aggregated.UserCodebaseRecommendations);
+        Assert.Equal(2, userAgg.SessionCount);
+        var ncfAgg = Assert.Single(aggregated.NightCodeForgeRecommendations);
+        Assert.Equal(2, ncfAgg.SessionCount);
+        Assert.Single(aggregated.FileFriction);
+        Assert.Equal(8, aggregated.FileFriction[0].EditCount);
+        Assert.Single(aggregated.ToolFriction);
+        Assert.Equal(2, aggregated.ToolFriction[0].OversizedOutputCount);
+        var singleBash = Assert.Single(aggregated.BashCommandFriction);
+        Assert.Equal("dotnet build", singleBash.CommandPattern);
+        Assert.Equal(2, singleBash.FailureCount);
+        Assert.Single(aggregated.CompilerErrorBreakdown);
+        Assert.Equal(4, aggregated.CompilerErrorBreakdown[0].Count);
+    }
+
+    [Fact]
+    public void TranscriptAnalysisViewer_RendersCategorizedRecommendationsAndBreakdownPanels()
+    {
+        var analysis = new NightCodeForge.Core.Services.TranscriptAnalysis(
+            FilePath: "path/to/test.md",
+            FileName: "test.md",
+            Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter { TaskId = 1, StageId = "impl", DurationMs = 5000 },
+            TotalTurns: 6,
+            UserTurns: 1,
+            AssistantTurns: 3,
+            ToolTurns: 2,
+            ThinkingTurns: 0,
+            ToolUsage: new Dictionary<string, int> { ["edit"] = 4 },
+            BashErrors: 1,
+            EditFailures: 1,
+            ToolErrors: 0,
+            CompilerErrors: 1,
+            TestFailures: 0,
+            CompactionEvents: 0,
+            HistoryRewrites: 0,
+            TopReadFiles: new List<KeyValuePair<string, int>>(),
+            TopEditedFiles: new List<KeyValuePair<string, int>>(),
+            HighChurnFiles: new List<KeyValuePair<string, int>>(),
+            FrictionPoints: new[] { "CS0103 detected" },
+            Recommendations: new[]
+            {
+                new NightCodeForge.Core.Services.FrictionRecommendation(
+                    NightCodeForge.Core.Services.RecommendationTarget.UserCodebase,
+                    NightCodeForge.Core.Services.FrictionCategory.FileArchitecture,
+                    "Split CoreService.cs",
+                    "High churn on CoreService.cs"),
+                new NightCodeForge.Core.Services.FrictionRecommendation(
+                    NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+                    NightCodeForge.Core.Services.FrictionCategory.PromptOrStage,
+                    "Tighten loop breaker",
+                    "Repeated identical reads detected")
+            },
+            FileFriction: new[] { new NightCodeForge.Core.Services.FileFrictionEntry("src/CoreService.cs", 4, 4, 1, 1, 3) },
+            ToolFriction: new[] { new NightCodeForge.Core.Services.ToolFrictionEntry("bash", 2, 1, 50.0, 1, "Exit Code: 1") },
+            BashCommandFriction: new[] { new NightCodeForge.Core.Services.BashCommandFrictionEntry("dotnet build", 2, 1, 1, 0, 1) },
+            CompilerErrorBreakdown: new[] { new NightCodeForge.Core.Services.CompilerErrorEntry("CS0103", 3, "Undefined identifier") },
+            BehavioralSignals: new NightCodeForge.Core.Services.TranscriptBehavioralSignals(
+                RepeatedToolLoops: new[] { new NightCodeForge.Core.Services.RepeatedToolLoopEntry("read", "CoreService.cs", 3) },
+                DeadEndSearchCount: 2,
+                TestRunCycles: 1,
+                FailingTests: Array.Empty<string>(),
+                HasTestOscillation: false,
+                SelfRevertCount: 1,
+                MalformedOrTruncatedToolCount: 1,
+                SlowToolExecutions: new[] { new NightCodeForge.Core.Services.SlowTurnEntry("00:10", "01:25", "bash", 75) },
+                SlowLlmTurns: Array.Empty<NightCodeForge.Core.Services.SlowTurnEntry>()));
+
+        var cut = Render<TranscriptAnalysisViewer>(p => p.Add(x => x.Analysis, analysis));
+
+        Assert.Contains("User Codebase Recommendations", cut.Markup);
+        Assert.Contains("NightCodeForge Harness &amp; Prompt Recommendations", cut.Markup);
+        Assert.Contains("Split CoreService.cs", cut.Markup);
+        Assert.Contains("Tighten loop breaker", cut.Markup);
+        Assert.Contains("High-Friction Files", cut.Markup);
+        Assert.Contains("src/CoreService.cs", cut.Markup);
+        Assert.Contains("Tool Friction &amp; Output Bloat", cut.Markup);
+        Assert.Contains("Failing &amp; Hanging Bash Commands", cut.Markup);
+        Assert.Contains("Top Compiler Errors", cut.Markup);
+        Assert.Contains("CS0103", cut.Markup);
+        Assert.Contains("Loops, Dead-End Searches &amp; Latency Spikes", cut.Markup);
+    }
+
+    [Fact]
+    public void TranscriptsPage_ChangingSidebarWindowSelect_ReloadsWithSelectedLimit()
+    {
+        var cut = Render<Transcripts>();
+
+        Assert.Contains("Showing latest 1 of 1 transcripts", cut.Markup);
+        Assert.Contains(50, _browserService.RequestedLimits);
+
+        var windowSelect = cut.Find("#sidebar-window-select");
+        windowSelect.Change("25");
+        Assert.Contains(25, _browserService.RequestedLimits);
+
+        windowSelect = cut.Find("#sidebar-window-select");
+        windowSelect.Change(string.Empty);
+        Assert.Contains((int?)null, _browserService.RequestedLimits);
+    }
+
+    [Fact]
+    public void FleetAnalysisDashboard_RendersWindowBadgeSplitRecommendationsAndHandlesWindowChange()
+    {
+        var fleet = new List<NightCodeForge.Core.Services.TranscriptAnalysis>
+        {
+            new(
+                FilePath: "s1.md",
+                FileName: "2026-11-01-task-99-impl.md",
+                Frontmatter: new NightCodeForge.Core.Services.TranscriptFrontmatter { TaskId = 99, StageId = "impl", DurationMs = 3000, Status = "Failed" },
+                TotalTurns: 4,
+                UserTurns: 1,
+                AssistantTurns: 2,
+                ToolTurns: 1,
+                ThinkingTurns: 0,
+                ToolUsage: new Dictionary<string, int> { ["edit"] = 4 },
+                BashErrors: 1,
+                EditFailures: 1,
+                ToolErrors: 0,
+                CompilerErrors: 2,
+                TestFailures: 0,
+                CompactionEvents: 0,
+                HistoryRewrites: 0,
+                TopReadFiles: new List<KeyValuePair<string, int>>(),
+                TopEditedFiles: new List<KeyValuePair<string, int>>(),
+                HighChurnFiles: new List<KeyValuePair<string, int>>(),
+                FrictionPoints: new[] { "CS0103" },
+                Recommendations: new[]
+                {
+                    new NightCodeForge.Core.Services.FrictionRecommendation(
+                        NightCodeForge.Core.Services.RecommendationTarget.UserCodebase,
+                        NightCodeForge.Core.Services.FrictionCategory.CompilerDiagnostic,
+                        "Resolve CS0103 in Foo.cs",
+                        "Missing using directive."),
+                    new NightCodeForge.Core.Services.FrictionRecommendation(
+                        NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+                        NightCodeForge.Core.Services.FrictionCategory.ShellCommand,
+                        "Guard long-running commands",
+                        "Pass explicit timeouts.")
+                },
+                FileFriction: new[] { new NightCodeForge.Core.Services.FileFrictionEntry("src/Foo.cs", 2, 4, 1) },
+                ToolFriction: new[] { new NightCodeForge.Core.Services.ToolFrictionEntry("bash", 2, 1, 50.0, 0) },
+                BashCommandFriction: new[] { new NightCodeForge.Core.Services.BashCommandFrictionEntry("dotnet build", 2, 1, 0, 0, 1) },
+                CompilerErrorBreakdown: new[] { new NightCodeForge.Core.Services.CompilerErrorEntry("CS0103", 2, "Missing Foo") })
+        };
+
+        int? callbackLimit = -1;
+        var cut = Render<FleetAnalysisDashboard>(p => p
+            .Add(x => x.Fleet, fleet)
+            .Add(x => x.TotalAvailableCount, 120)
+            .Add(x => x.WindowLimit, 50)
+            .Add(x => x.OnWindowLimitChanged, EventCallback.Factory.Create<int?>(this, v => callbackLimit = v)));
+
+        Assert.Contains("Showing latest 1 of 120 transcripts", cut.Markup);
+        Assert.Contains("User Codebase Recommendations (1)", cut.Markup);
+        Assert.Contains("NightCodeForge Harness &amp; Prompt Recommendations (1)", cut.Markup);
+        Assert.Contains("Resolve CS0103 in Foo.cs", cut.Markup);
+        Assert.Contains("Guard long-running commands", cut.Markup);
+        Assert.Contains("src/Foo.cs", cut.Markup);
+        Assert.Contains("CS0103", cut.Markup);
+
+        cut.Find("#fleet-window-select").Change("25");
+        Assert.Equal(25, callbackLimit);
+
+        cut.Find("#fleet-window-select").Change(string.Empty);
+        Assert.Null(callbackLimit);
+    }
+
     private class FakeTranscriptBrowserService : ITranscriptBrowserService
     {
+        public List<int?> RequestedLimits { get; } = new();
         public bool RemediationApplied { get; private set; }
         public DiagnosticReport? CustomReport { get; set; }
         public bool ReturnNullAnalysis { get; set; }
@@ -487,11 +723,38 @@ public class TranscriptComponentTests : BunitContext
             TopEditedFiles: new List<KeyValuePair<string, int>> { new("UserProfile.cs", 2) },
             HighChurnFiles: new List<KeyValuePair<string, int>> { new("UserProfile.cs", 2) },
             FrictionPoints: new[] { "Edit mismatch detected on UserProfile.cs", "Compiler error CS0117" },
-            Recommendations: new[] { "Enable Deterministic Symbol Map" });
+            Recommendations: new[]
+            {
+                new NightCodeForge.Core.Services.FrictionRecommendation(
+                    NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+                    NightCodeForge.Core.Services.FrictionCategory.ContextAndCache,
+                    "Enable Deterministic Symbol Map",
+                    "Inject symbol map to prevent CS0117 guesswork.")
+            });
 
         public Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<TranscriptSummary>>(new[] { _sampleSummary });
+        }
+
+        public Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath, int? maxTranscripts, CancellationToken cancellationToken = default)
+        {
+            var items = maxTranscripts.HasValue && maxTranscripts.Value > 0
+                ? new[] { _sampleSummary }.Take(maxTranscripts.Value).ToList()
+                : new List<TranscriptSummary> { _sampleSummary };
+            return Task.FromResult<IReadOnlyList<TranscriptSummary>>(items);
+        }
+
+        public Task<NightCodeForge.Core.Services.TranscriptWindowResult<TranscriptSummary>> GetTranscriptsWindowAsync(
+            string? workspacePath = null,
+            int? maxTranscripts = NightCodeForge.Core.Services.TranscriptAnalysisDefaults.DefaultRecentLimit,
+            CancellationToken cancellationToken = default)
+        {
+            RequestedLimits.Add(maxTranscripts);
+            var items = maxTranscripts.HasValue && maxTranscripts.Value > 0
+                ? new[] { _sampleSummary }.Take(maxTranscripts.Value).ToList()
+                : new List<TranscriptSummary> { _sampleSummary };
+            return Task.FromResult(new NightCodeForge.Core.Services.TranscriptWindowResult<TranscriptSummary>(items, 1, maxTranscripts));
         }
 
         public Task<ParsedTranscriptDetail?> GetTranscriptDetailAsync(string filePath, CancellationToken cancellationToken = default)
@@ -560,6 +823,25 @@ public class TranscriptComponentTests : BunitContext
         public Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
         {
             return Task.FromResult<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>>(new[] { _sampleAnalysis });
+        }
+
+        public Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath, int? maxTranscripts, CancellationToken cancellationToken = default)
+        {
+            var items = maxTranscripts.HasValue && maxTranscripts.Value > 0
+                ? new[] { _sampleAnalysis }.Take(maxTranscripts.Value).ToList()
+                : new List<NightCodeForge.Core.Services.TranscriptAnalysis> { _sampleAnalysis };
+            return Task.FromResult<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>>(items);
+        }
+
+        public Task<NightCodeForge.Core.Services.TranscriptWindowResult<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisWindowAsync(
+            string? workspacePath = null,
+            int? maxTranscripts = NightCodeForge.Core.Services.TranscriptAnalysisDefaults.DefaultRecentLimit,
+            CancellationToken cancellationToken = default)
+        {
+            var items = maxTranscripts.HasValue && maxTranscripts.Value > 0
+                ? new[] { _sampleAnalysis }.Take(maxTranscripts.Value).ToList()
+                : new List<NightCodeForge.Core.Services.TranscriptAnalysis> { _sampleAnalysis };
+            return Task.FromResult(new NightCodeForge.Core.Services.TranscriptWindowResult<NightCodeForge.Core.Services.TranscriptAnalysis>(items, 1, maxTranscripts));
         }
     }
 }

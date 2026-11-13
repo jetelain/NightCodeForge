@@ -216,6 +216,33 @@ public static class Program
             {
                 options.Json = true;
             }
+            else if (arg.Equals("--limit", StringComparison.OrdinalIgnoreCase) ||
+                     arg.StartsWith("--limit=", StringComparison.OrdinalIgnoreCase))
+            {
+                string rawLimit;
+                if (arg.StartsWith("--limit=", StringComparison.OrdinalIgnoreCase))
+                {
+                    rawLimit = arg["--limit=".Length..];
+                }
+                else
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        error = "Missing value for '--limit'. Expected a non-negative integer (0 for all).";
+                        return null;
+                    }
+                    rawLimit = args[++i];
+                }
+
+                if (!int.TryParse(rawLimit, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedLimit) ||
+                    parsedLimit < 0)
+                {
+                    error = $"Invalid value '{rawLimit}' for '--limit'. Expected a non-negative integer (0 for all).";
+                    return null;
+                }
+
+                options.Limit = parsedLimit == 0 ? null : parsedLimit;
+            }
             else if (arg.StartsWith("-"))
             {
                 error = $"Unrecognized option '{arg}'.";
@@ -257,6 +284,7 @@ TRANSCRIPT OPTIONS:
   [path]                           Path to transcript markdown file or directory (default: current directory)
   --verbose, -v                    Display detailed breakdowns including top read files and turn details
   --json                           Output analysis in machine-readable JSON format
+  --limit <N>                      Analyze at most the N most recent transcripts (default: 50; 0 for all)
 
 AUDIT EXIT CODES:
   0                                🟢 Healthy — all 5 pillars passed verification

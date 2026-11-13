@@ -29,7 +29,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
     [GeneratedRegex(@"^---\r?\n(?<frontmatter>[\s\S]*?)\r?\n---\r?\n?", RegexOptions.Multiline)]
     private static partial Regex FrontmatterRegex();
 
-    [GeneratedRegex(@"^###\s+\[\s*(?<offset>[0-9:]+)\s*\]\s+(?:(?<icon>[^\s\w]+)\s+)?(?<role>[A-Za-z0-9_]+)", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^###\s+\[\s*(?<offset>[0-9:]+)\s*\]\s+(?:(?<icon>[^\sA-Za-z0-9_*]+)\s+)?(?:\*\*)?(?<role>[A-Za-z0-9_]+)(?:\*\*)?", RegexOptions.Multiline)]
     private static partial Regex TurnHeaderRegex();
 
     [GeneratedRegex(@"(?:\d{4}-\d{2}-\d{2}-)?task-(?<taskId>\d+)-(?<stage>[A-Za-z0-9_\-]+)-(?<status>[A-Za-z0-9_\-]+)\.md", RegexOptions.IgnoreCase)]
@@ -58,49 +58,68 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public async Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath = null, CancellationToken cancellationToken = default) =>
+        GetTranscriptsAsync(workspacePath, NightCodeForge.Core.Services.TranscriptAnalysisDefaults.DefaultRecentLimit, cancellationToken);
+
+    public async Task<IReadOnlyList<TranscriptSummary>> GetTranscriptsAsync(string? workspacePath, int? maxTranscripts, CancellationToken cancellationToken = default)
+    {
+        var window = await GetTranscriptsWindowAsync(workspacePath, maxTranscripts, cancellationToken).ConfigureAwait(false);
+        return window.Items;
+    }
+
+    public async Task<NightCodeForge.Core.Services.TranscriptWindowResult<TranscriptSummary>> GetTranscriptsWindowAsync(
+        string? workspacePath = null,
+        int? maxTranscripts = NightCodeForge.Core.Services.TranscriptAnalysisDefaults.DefaultRecentLimit,
+        CancellationToken cancellationToken = default)
     {
         var directoriesToSearch = GetCandidateDirectories(workspacePath);
+        var orderedFiles = NightCodeForge.Core.Services.TranscriptAnalysisService.DiscoverOrderedTranscriptFiles(directoriesToSearch);
+        int? appliedLimit = maxTranscripts is > 0 ? maxTranscripts : null;
+
         var summaries = new List<TranscriptSummary>();
-        var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int invalidSkippedCount = 0;
 
-        foreach (var dir in directoriesToSearch)
+        foreach (var file in orderedFiles)
         {
-            if (!Directory.Exists(dir)) continue;
-
-            var files = Directory.GetFiles(dir, "*.md", SearchOption.TopDirectoryOnly);
-            foreach (var file in files)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (appliedLimit.HasValue && summaries.Count >= appliedLimit.Value)
             {
-                var fileName = Path.GetFileName(file);
-                if (seenFiles.Contains(fileName)) continue;
-                seenFiles.Add(fileName);
+                break;
+            }
 
-                try
+            try
+            {
+                var summary = await ParseSummaryFromFileAsync(file, cancellationToken).ConfigureAwait(false);
+                if (summary != null)
                 {
-                    var summary = await ParseSummaryFromFileAsync(file, cancellationToken);
-                    if (summary != null)
-                    {
-                        summaries.Add(summary);
-                    }
+                    summaries.Add(summary);
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger?.LogWarning(ex, "Failed to parse transcript summary for {FilePath}", file);
+                    invalidSkippedCount++;
                 }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                invalidSkippedCount++;
+                _logger?.LogWarning(ex, "Failed to parse transcript summary for {FilePath}", file);
             }
         }
 
-        return summaries
-            .OrderByDescending(s => s.Timestamp)
+        int totalAvailable = Math.Max(summaries.Count, orderedFiles.Count - invalidSkippedCount);
+        var sorted = summaries
+            .OrderByDescending(s => s.Timestamp.Date)
             .ThenByDescending(s => s.TaskId)
             .ToList();
+
+        return new NightCodeForge.Core.Services.TranscriptWindowResult<TranscriptSummary>(sorted, totalAvailable, appliedLimit);
     }
 
     public async Task<ParsedTranscriptDetail?> GetTranscriptDetailAsync(string filePath, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(filePath)) return null;
 
-        var content = await File.ReadAllTextAsync(filePath, cancellationToken);
+        var content = await NightCodeForge.Core.Services.TranscriptAnalysisService.ReadAllTextSharedAsync(filePath, cancellationToken);
         var fileName = Path.GetFileName(filePath);
         var analysis = _analysisService.Analyze(content, fileName, filePath);
 
@@ -118,29 +137,60 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         return await _analysisService.AnalyzeFileAsync(filePath, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath = null, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath = null, CancellationToken cancellationToken = default) =>
+        GetFleetAnalysisAsync(workspacePath, NightCodeForge.Core.Services.TranscriptAnalysisDefaults.DefaultRecentLimit, cancellationToken);
+
+    public async Task<IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisAsync(string? workspacePath, int? maxTranscripts, CancellationToken cancellationToken = default)
+    {
+        var window = await GetFleetAnalysisWindowAsync(workspacePath, maxTranscripts, cancellationToken).ConfigureAwait(false);
+        return window.Items;
+    }
+
+    public async Task<NightCodeForge.Core.Services.TranscriptWindowResult<NightCodeForge.Core.Services.TranscriptAnalysis>> GetFleetAnalysisWindowAsync(
+        string? workspacePath = null,
+        int? maxTranscripts = NightCodeForge.Core.Services.TranscriptAnalysisDefaults.DefaultRecentLimit,
+        CancellationToken cancellationToken = default)
     {
         var directoriesToSearch = GetCandidateDirectories(workspacePath);
+        var orderedFiles = NightCodeForge.Core.Services.TranscriptAnalysisService.DiscoverOrderedTranscriptFiles(directoriesToSearch);
+        int? appliedLimit = maxTranscripts is > 0 ? maxTranscripts : null;
+
         var results = new List<NightCodeForge.Core.Services.TranscriptAnalysis>();
-        var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int invalidSkippedCount = 0;
 
-        foreach (var dir in directoriesToSearch)
+        foreach (var file in orderedFiles)
         {
-            if (!Directory.Exists(dir)) continue;
-
-            var dirAnalyses = await _analysisService.AnalyzeDirectoryAsync(dir, cancellationToken);
-            foreach (var analysis in dirAnalyses)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (appliedLimit.HasValue && results.Count >= appliedLimit.Value)
             {
-                if (seenFiles.Contains(analysis.FileName)) continue;
-                seenFiles.Add(analysis.FileName);
+                break;
+            }
+
+            try
+            {
+                var analysis = await _analysisService.AnalyzeFileAsync(file, cancellationToken).ConfigureAwait(false);
+                if (analysis.Frontmatter == null &&
+                    analysis.TotalTurns == 0 &&
+                    !FilenameRegex().IsMatch(analysis.FileName))
+                {
+                    invalidSkippedCount++;
+                    continue;
+                }
+
                 results.Add(analysis);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                invalidSkippedCount++;
+                _logger?.LogWarning(ex, "Failed to analyze transcript for fleet view: {FilePath}", file);
             }
         }
 
-        return results
-            .OrderByDescending(r => r.Frontmatter?.TaskId ?? 0)
-            .ThenBy(r => r.Frontmatter?.StageId ?? string.Empty)
-            .ToList();
+        int totalAvailable = Math.Max(results.Count, orderedFiles.Count - invalidSkippedCount);
+        return new NightCodeForge.Core.Services.TranscriptWindowResult<NightCodeForge.Core.Services.TranscriptAnalysis>(
+            results,
+            totalAvailable,
+            appliedLimit);
     }
 
     public async Task<ParsedTranscriptDetail?> GetTranscriptDetailByNameAsync(string fileName, string? workspacePath = null, CancellationToken cancellationToken = default)
@@ -402,14 +452,15 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             });
     }
 
-    private IReadOnlyList<string> GetCandidateDirectories(string? workspacePath)
+    internal IReadOnlyList<string> GetCandidateDirectories(string? workspacePath)
     {
-        var dirs = new List<string>();
-
         if (!string.IsNullOrWhiteSpace(workspacePath))
         {
-            dirs.Add(Path.Combine(workspacePath, "docs", "transcripts"));
-            dirs.Add(Path.Combine(workspacePath, ".nightcodeforge", "transcripts"));
+            var workspaceDirs = new List<string>
+            {
+                Path.Combine(workspacePath, "docs", "transcripts"),
+                Path.Combine(workspacePath, ".nightcodeforge", "transcripts")
+            };
 
             // Check any active or existing worktrees under .nightcodeforge/worktrees
             var worktreesRoot = Path.Combine(workspacePath, ".nightcodeforge", "worktrees");
@@ -422,7 +473,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                         var wtTranscripts = Path.Combine(wt, "docs", "transcripts");
                         if (Directory.Exists(wtTranscripts))
                         {
-                            dirs.Add(wtTranscripts);
+                            workspaceDirs.Add(wtTranscripts);
                         }
                     }
                 }
@@ -431,13 +482,20 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                     _logger.LogDebug(ex, "Failed to scan worktrees for transcripts under {WorktreesRoot}", worktreesRoot);
                 }
             }
+
+            var existingWorkspaceDirs = workspaceDirs.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (existingWorkspaceDirs.Count > 0)
+            {
+                return existingWorkspaceDirs;
+            }
         }
 
+        var fallbackDirs = new List<string>();
         var cwd = Directory.GetCurrentDirectory();
-        dirs.Add(Path.Combine(cwd, "docs", "transcripts"));
+        fallbackDirs.Add(Path.Combine(cwd, "docs", "transcripts"));
 
         var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        dirs.Add(Path.Combine(baseDir, "docs", "transcripts"));
+        fallbackDirs.Add(Path.Combine(baseDir, "docs", "transcripts"));
 
         // If running in src/NightCodeForge.Web, also check solution root docs/transcripts
         try
@@ -445,7 +503,7 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             var parent = Directory.GetParent(cwd)?.Parent?.FullName;
             if (parent != null)
             {
-                dirs.Add(Path.Combine(parent, "docs", "transcripts"));
+                fallbackDirs.Add(Path.Combine(parent, "docs", "transcripts"));
             }
         }
         catch (Exception ex)
@@ -453,13 +511,13 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             _logger.LogDebug(ex, "Failed to resolve solution root docs/transcripts from CWD '{Cwd}'", cwd);
         }
 
-        return dirs.Distinct().ToList();
+        return fallbackDirs.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private async Task<TranscriptSummary?> ParseSummaryFromFileAsync(string filePath, CancellationToken ct)
     {
         // Read file header or full file
-        var content = await File.ReadAllTextAsync(filePath, ct);
+        var content = await NightCodeForge.Core.Services.TranscriptAnalysisService.ReadAllTextSharedAsync(filePath, ct);
         return ParseSummaryFromContent(filePath, content, _analysisService);
     }
 
@@ -639,9 +697,30 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
         var envIdx = body.IndexOf("### Environment", StringComparison.OrdinalIgnoreCase);
         if (envIdx >= 0)
         {
-            var nextSectionIdx = body.IndexOf("### [", envIdx, StringComparison.OrdinalIgnoreCase);
-            var envText = nextSectionIdx >= 0
-                ? body.Substring(envIdx, nextSectionIdx - envIdx)
+            int envSearchStart = envIdx;
+            var promptMarkerIdx = body.IndexOf("**System prompt**", envIdx, StringComparison.OrdinalIgnoreCase);
+            if (promptMarkerIdx >= 0)
+            {
+                var fenceOpen = body.IndexOf("````", promptMarkerIdx + 17, StringComparison.OrdinalIgnoreCase);
+                if (fenceOpen >= 0)
+                {
+                    var fenceClose = body.IndexOf("````", fenceOpen + 4, StringComparison.OrdinalIgnoreCase);
+                    if (fenceClose >= 0)
+                    {
+                        systemPrompt = body.Substring(fenceOpen + 4, fenceClose - (fenceOpen + 4)).Trim();
+                        envSearchStart = fenceClose + 4;
+                    }
+                }
+            }
+
+            var nextTurnIdx = body.IndexOf("### [", envSearchStart, StringComparison.OrdinalIgnoreCase);
+            var mafSectionIdx = body.IndexOf("### MAF Pipeline Configuration", envSearchStart, StringComparison.OrdinalIgnoreCase);
+            var envEndIdx = mafSectionIdx >= 0 && (nextTurnIdx < 0 || mafSectionIdx < nextTurnIdx)
+                ? mafSectionIdx
+                : nextTurnIdx;
+
+            var envText = envEndIdx >= 0
+                ? body.Substring(envIdx, envEndIdx - envIdx)
                 : body.Substring(envIdx);
 
             // Extract tools
@@ -674,26 +753,13 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                 }
             }
 
-            // Extract system prompt
-            var promptIdx = envText.IndexOf("**System prompt**", StringComparison.OrdinalIgnoreCase);
-            if (promptIdx >= 0)
+            if (nextTurnIdx >= 0)
             {
-                var promptSnippet = envText.Substring(promptIdx + 17);
-                var fenceStart = promptSnippet.IndexOf("````", StringComparison.OrdinalIgnoreCase);
-                if (fenceStart >= 0)
-                {
-                    var afterStart = promptSnippet.Substring(fenceStart + 4);
-                    var fenceEnd = afterStart.IndexOf("````", StringComparison.OrdinalIgnoreCase);
-                    if (fenceEnd >= 0)
-                    {
-                        systemPrompt = afterStart.Substring(0, fenceEnd).Trim();
-                    }
-                }
+                body = body.Substring(nextTurnIdx);
             }
-
-            if (nextSectionIdx >= 0)
+            else if (envEndIdx >= 0)
             {
-                body = body.Substring(nextSectionIdx);
+                body = body.Substring(envEndIdx);
             }
         }
 

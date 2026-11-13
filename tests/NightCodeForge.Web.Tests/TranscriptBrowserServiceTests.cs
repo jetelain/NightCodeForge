@@ -516,7 +516,14 @@ status: Completed
                 TopEditedFiles: new List<KeyValuePair<string, int>>(),
                 HighChurnFiles: new List<KeyValuePair<string, int>>(),
                 FrictionPoints: new[] { "Mocked friction point" },
-                Recommendations: new[] { "Mocked recommendation" });
+                Recommendations: new[]
+                {
+                    new NightCodeForge.Core.Services.FrictionRecommendation(
+                        NightCodeForge.Core.Services.RecommendationTarget.NightCodeForge,
+                        NightCodeForge.Core.Services.FrictionCategory.Tooling,
+                        "Mocked recommendation",
+                        "Mocked detail")
+                });
 
             mockAnalysisService.Setup(s => s.Analyze(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
                 .Returns(expectedAnalysis);
@@ -580,7 +587,7 @@ status: Failed
             TopEditedFiles: new List<KeyValuePair<string, int>>(),
             HighChurnFiles: new List<KeyValuePair<string, int>>(),
             FrictionPoints: new[] { "Some error" },
-            Recommendations: Array.Empty<string>());
+            Recommendations: Array.Empty<NightCodeForge.Core.Services.FrictionRecommendation>());
 
         mockAnalysisService.Setup(s => s.Analyze(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(fakeAnalysis);
@@ -590,6 +597,110 @@ status: Failed
         Assert.NotNull(summary);
         Assert.True(summary.HasFriction);
         Assert.Equal(6, summary.TotalErrors); // 1 + 1 + 2 + 1 + 1 = 6
+    }
+
+    [Fact]
+    public async Task GetTranscriptsWindowAsync_AndGetFleetAnalysisWindowAsync_LimitAndScopeToWorkspace()
+    {
+        var tempWs = Path.Combine(Path.GetTempPath(), "ncf_browser_win_" + Guid.NewGuid().ToString("N"));
+        var transcriptsDir = Path.Combine(tempWs, "docs", "transcripts");
+        Directory.CreateDirectory(transcriptsDir);
+        try
+        {
+            var files = new[]
+            {
+                "2026-10-01-task-1-impl.md",
+                "2026-10-02-task-2-impl.md",
+                "2026-10-03-task-3-impl.md",
+                "2026-10-03-task-4-impl.md"
+            };
+
+            foreach (var f in files)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Combine(transcriptsDir, f),
+                    "---\ntask_id: 1\nstage_id: impl\nstatus: Completed\n---\n### [ 00:00 ] 👤 USER\nHi\n");
+            }
+
+            var service = CreateService();
+            var window = await service.GetTranscriptsWindowAsync(tempWs, maxTranscripts: 2);
+            Assert.Equal(4, window.TotalAvailableCount);
+            Assert.Equal(2, window.Items.Count);
+            Assert.Equal("2026-10-03-task-4-impl.md", window.Items[0].FileName);
+            Assert.Equal("2026-10-03-task-3-impl.md", window.Items[1].FileName);
+            Assert.All(window.Items, item => Assert.StartsWith(tempWs, item.FilePath, StringComparison.OrdinalIgnoreCase));
+
+            var fleetWindow = await service.GetFleetAnalysisWindowAsync(tempWs, maxTranscripts: 2);
+            Assert.Equal(4, fleetWindow.TotalAvailableCount);
+            Assert.Equal(2, fleetWindow.Items.Count);
+            Assert.Equal("2026-10-03-task-4-impl.md", fleetWindow.Items[0].FileName);
+
+            var allWindow = await service.GetTranscriptsWindowAsync(tempWs, maxTranscripts: null);
+            Assert.Equal(4, allWindow.TotalAvailableCount);
+            Assert.Equal(4, allWindow.Items.Count);
+        }
+        finally
+        {
+            if (Directory.Exists(tempWs)) Directory.Delete(tempWs, true);
+        }
+    }
+
+    [Fact]
+    public async Task GetFleetAnalysisWindowAsync_SkipsNonTranscriptMarkdownFiles_AndParseDetailHandlesFencedTurnHeadersInSystemPrompt()
+    {
+        var tempWs = Path.Combine(Path.GetTempPath(), "ncf_browser_fleet_skip_" + Guid.NewGuid().ToString("N"));
+        var transcriptsDir = Path.Combine(tempWs, "docs", "transcripts");
+        Directory.CreateDirectory(transcriptsDir);
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(transcriptsDir, "notes.md"),
+                "# Scratch Notes\nJust plain markdown notes without frontmatter or turns.");
+            await File.WriteAllTextAsync(
+                Path.Combine(transcriptsDir, "2026-10-05-task-9-impl-completed.md"),
+                @"---
+task_id: 9
+stage_id: impl
+status: Completed
+---
+### Environment
+
+**Available tools**
+- read
+
+**System prompt**
+````
+Follow rules.
+### [ 00:00 ] 🤖 ASSISTANT
+Example turn inside system prompt fence.
+````
+
+### MAF Pipeline Configuration
+- MaxIterations: 20
+
+### [ 00:01 ] 👤 USER
+Hello
+### [ 00:02 ] 🤖 ASSISTANT
+Done
+");
+
+            var service = CreateService();
+            var fleetWindow = await service.GetFleetAnalysisWindowAsync(tempWs, maxTranscripts: 50);
+            Assert.Equal(1, fleetWindow.TotalAvailableCount);
+            var single = Assert.Single(fleetWindow.Items);
+            Assert.Equal("2026-10-05-task-9-impl-completed.md", single.FileName);
+
+            var detail = await service.GetTranscriptDetailByNameAsync("2026-10-05-task-9-impl-completed.md", tempWs);
+            Assert.NotNull(detail);
+            Assert.Contains("Example turn inside system prompt fence.", detail.SystemPrompt);
+            Assert.Equal(2, detail.Turns.Count);
+            Assert.Equal("USER", detail.Turns[0].Role);
+            Assert.Equal("ASSISTANT", detail.Turns[1].Role);
+        }
+        finally
+        {
+            if (Directory.Exists(tempWs)) Directory.Delete(tempWs, true);
+        }
     }
 
     private class FakeGlobalOptService : IGlobalOptimizationSettingsService

@@ -701,6 +701,7 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
                 new Mock<IWorkspaceSymbolService>().Object,
                 new Mock<ITaskMarkdownSyncService>().Object,
                 backlogContext,
+                new TranscriptAnalysisService(),
                 NullLogger<AgentWorkspaceContextService>.Instance),
             new HarnessAgentFactory(
                 new TestCrucibleHarnessBuilder.TestSingleChatClientFactory(mockClient.Object),

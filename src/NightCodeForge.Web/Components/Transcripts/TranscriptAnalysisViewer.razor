@@ -1,5 +1,7 @@
 @namespace NightCodeForge.Web.Components.Transcripts
+@using System.Globalization
 @using NightCodeForge.Core.Services
+@using NightCodeForge.Web.Services
 
 <div class="transcript-analysis-viewer" style="display: flex; flex-direction: column; gap: 1.5rem;">
     <!-- 1. Hero Friction Banner -->
@@ -10,39 +12,83 @@
                 <span style="font-size: 1.5rem;">⚠️</span>
                 <div>
                     <h4 style="margin: 0; font-weight: 700; color: #fca5a5; font-size: 1.1rem;">
-                        Execution Friction Detected (@Analysis.FrictionPoints.Count pattern@(Analysis.FrictionPoints.Count > 1 ? "s" : ""))
+                        Execution Friction Detected@(Analysis.FrictionPoints.Count > 0 ? $" ({Analysis.FrictionPoints.Count} pattern{(Analysis.FrictionPoints.Count == 1 ? "" : "s")})" : "")
                     </h4>
                     <p style="margin: 0; font-size: 0.85rem; color: var(--text-secondary);">
-                        This session encountered compiler errors, tool failures, edit mismatches, or context saturation.
+                        This session encountered compiler errors, tool failures, edit mismatches, behavioral loops, or context saturation.
                     </p>
                 </div>
             </div>
 
             <!-- Friction Points List -->
-            <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.25rem;">
-                @foreach (var fp in Analysis.FrictionPoints)
-                {
-                    <div style="display: flex; align-items: flex-start; gap: 0.5rem; background: rgba(0, 0, 0, 0.25); padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border-left: 3px solid #ef4444; font-size: 0.88rem; color: var(--text-primary);">
-                        <span>⚠️</span>
-                        <span>@fp</span>
-                    </div>
-                }
-            </div>
+            @if (Analysis.FrictionPoints.Count > 0)
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1.25rem;">
+                    @foreach (var fp in Analysis.FrictionPoints)
+                    {
+                        <div style="display: flex; align-items: flex-start; gap: 0.5rem; background: rgba(0, 0, 0, 0.25); padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border-left: 3px solid #ef4444; font-size: 0.88rem; color: var(--text-primary);">
+                            <span>⚠️</span>
+                            <span>@fp</span>
+                        </div>
+                    }
+                </div>
+            }
 
-            <!-- Actionable Recommendations -->
+            <!-- Categorized Actionable Recommendations -->
             @if (Analysis.Recommendations.Count > 0)
             {
-                <div style="border-top: 1px solid rgba(239, 68, 68, 0.2); padding-top: 1rem;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                        <span>💡</span>
-                        <strong style="color: #fde047; font-size: 0.9rem;">Actionable Recommendations:</strong>
-                    </div>
-                    <ul style="margin: 0; padding-left: 1.5rem; color: var(--text-primary); font-size: 0.88rem; line-height: 1.6;">
-                        @foreach (var rec in Analysis.Recommendations)
+                <div style="border-top: 1px solid rgba(239, 68, 68, 0.2); padding-top: 1rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+                    <div class="rec-group-panel">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
+                            <span>🏗️</span>
+                            <strong style="color: #93c5fd; font-size: 0.9rem;">User Codebase Recommendations (@UserRecommendations.Count)</strong>
+                        </div>
+                        @if (UserRecommendations.Count == 0)
                         {
-                            <li style="margin-bottom: 0.35rem;">@rec</li>
+                            <p class="text-muted" style="font-size: 0.82rem; margin: 0;">No target codebase refactoring recommendations.</p>
                         }
-                    </ul>
+                        else
+                        {
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                @foreach (var rec in UserRecommendations)
+                                {
+                                    <div class="rec-item rec-user">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem;">
+                                            <strong style="font-size: 0.86rem; color: var(--text-primary);">@rec.Title</strong>
+                                            <span class="forge-badge badge-indigo" style="font-size: 0.68rem;">@TranscriptPresentationHelper.FormatCategoryBadge(rec.Category)</span>
+                                        </div>
+                                        <div style="font-size: 0.82rem; color: var(--text-secondary);">@rec.ActionableDetail</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <div class="rec-group-panel">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
+                            <span>⚙️</span>
+                            <strong style="color: #fde047; font-size: 0.9rem;">NightCodeForge Harness &amp; Prompt Recommendations (@NightCodeForgeRecommendations.Count)</strong>
+                        </div>
+                        @if (NightCodeForgeRecommendations.Count == 0)
+                        {
+                            <p class="text-muted" style="font-size: 0.82rem; margin: 0;">No harness or prompt tuning recommendations.</p>
+                        }
+                        else
+                        {
+                            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                @foreach (var rec in NightCodeForgeRecommendations)
+                                {
+                                    <div class="rec-item rec-ncf">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem;">
+                                            <strong style="font-size: 0.86rem; color: var(--text-primary);">@rec.Title</strong>
+                                            <span class="forge-badge badge-amber" style="font-size: 0.68rem;">@TranscriptPresentationHelper.FormatCategoryBadge(rec.Category)</span>
+                                        </div>
+                                        <div style="font-size: 0.82rem; color: var(--text-secondary);">@rec.ActionableDetail</div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
                 </div>
             }
         </div>
@@ -126,30 +172,225 @@
         </div>
     </div>
 
-    <!-- 3. High-Churn Files (if any) -->
-    @if (Analysis.HighChurnFiles.Count > 0)
+    <!-- 3. High-Friction Files -->
+    @if (Analysis.FileFriction.Count > 0 || Analysis.HighChurnFiles.Count > 0)
     {
         <div class="card-surface p-4" style="background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-lg); padding: 1.25rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
-                <span>⚠️</span>
-                <strong style="color: #fbbf24; font-size: 0.95rem;">High-Churn Files Detected (≥ 3 edits)</strong>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                    <span>📁</span>
+                    <strong style="color: #fbbf24; font-size: 0.95rem;">
+                        @(Analysis.HighChurnFiles.Count > 0 ? "High-Friction & High-Churn Files Detected" : "High-Friction Files")
+                    </strong>
+                </div>
+                <span class="forge-badge badge-amber font-mono">@(Analysis.FileFriction.Count > 0 ? Analysis.FileFriction.Count : Analysis.HighChurnFiles.Count) file(s)</span>
             </div>
-            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-                Files undergoing repetitive edit cycles often indicate imprecise indentation, ambiguous task specifications, or missing helper abstractions.
-            </p>
-            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                @foreach (var churn in Analysis.HighChurnFiles)
-                {
-                    <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 0.5rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.88rem;">
-                        <span class="font-mono text-primary">@churn.Key</span>
-                        <span class="forge-badge badge-amber font-mono">@churn.Value edits</span>
-                    </div>
-                }
-            </div>
+            @if (Analysis.FileFriction.Count > 0)
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    @foreach (var file in Analysis.FileFriction)
+                    {
+                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 0.55rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.85rem;">
+                            <span class="font-mono text-primary">@file.FilePath</span>
+                            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                                <span class="forge-badge badge-teal font-mono">@file.ReadCount reads</span>
+                                <span class="forge-badge badge-indigo font-mono">@file.EditCount edits</span>
+                                @if (file.EditFailureCount > 0)
+                                {
+                                    <span class="forge-badge badge-crimson font-mono">@file.EditFailureCount fail</span>
+                                }
+                                @if (file.EditedWithoutReadCount > 0)
+                                {
+                                    <span class="forge-badge badge-crimson">Edited Without Read (@file.EditedWithoutReadCount)</span>
+                                }
+                                @if (file.IsSplitCandidate)
+                                {
+                                    <span class="forge-badge badge-amber">Split Candidate</span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    @foreach (var churn in Analysis.HighChurnFiles)
+                    {
+                        <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-surface); border: 1px solid var(--border-subtle); padding: 0.5rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.88rem;">
+                            <span class="font-mono text-primary">@churn.Key</span>
+                            <span class="forge-badge badge-amber font-mono">@churn.Value edits</span>
+                        </div>
+                    }
+                </div>
+            }
         </div>
     }
 
-    <!-- 4. Tool Invocations & File Activity Grid -->
+    <!-- 4. Tool Friction & Output Bloat + Bash Command Friction -->
+    @if (Analysis.ToolFriction.Count > 0 || ProblematicBashCommands.Count > 0)
+    {
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+            @if (Analysis.ToolFriction.Count > 0)
+            {
+                <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+                    <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 0.95rem;">
+                        🔧 Tool Friction &amp; Output Bloat
+                    </h4>
+                    <div style="display: flex; flex-direction: column; gap: 0.55rem;">
+                        @foreach (var tool in Analysis.ToolFriction)
+                        {
+                            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.55rem 0.8rem; font-size: 0.83rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                                    <strong class="font-mono text-primary">@tool.ToolName</strong>
+                                    <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                                        <span class="forge-badge badge-indigo font-mono">@tool.InvocationCount call(s)</span>
+                                        @if (tool.FailureCount > 0)
+                                        {
+                                            <span class="forge-badge badge-crimson font-mono">@tool.FailureCount fail (@tool.FailureRatePercent.ToString("F0", CultureInfo.InvariantCulture)%)</span>
+                                        }
+                                        @if (tool.OversizedOutputCount > 0)
+                                        {
+                                            <span class="forge-badge badge-amber font-mono">@tool.OversizedOutputCount oversized</span>
+                                        }
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(tool.SampleError))
+                                {
+                                    <div class="font-mono text-muted" style="font-size: 0.76rem; margin-top: 0.3rem; word-break: break-word;">@tool.SampleError</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (ProblematicBashCommands.Count > 0)
+            {
+                <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+                    <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 0.95rem;">
+                        💻 Failing &amp; Hanging Bash Commands
+                    </h4>
+                    <div style="display: flex; flex-direction: column; gap: 0.55rem;">
+                        @foreach (var bash in ProblematicBashCommands)
+                        {
+                            <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.55rem 0.8rem; font-size: 0.83rem;">
+                                <span class="font-mono text-primary">@bash.CommandPattern</span>
+                                <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                                    <span class="forge-badge badge-indigo font-mono">@bash.ExecutionCount run(s)</span>
+                                    @if (bash.FailureCount > 0)
+                                    {
+                                        <span class="forge-badge badge-crimson font-mono">@bash.FailureCount fail</span>
+                                    }
+                                    @if (bash.HangOrTimeoutCount > 0)
+                                    {
+                                        <span class="forge-badge badge-crimson font-mono">@bash.HangOrTimeoutCount hang/timeout</span>
+                                    }
+                                    @if (bash.OversizedOutputCount > 0)
+                                    {
+                                        <span class="forge-badge badge-amber font-mono">@bash.OversizedOutputCount oversized</span>
+                                    }
+                                    @if (bash.LastExitCode.HasValue && bash.LastExitCode.Value != 0)
+                                    {
+                                        <span class="forge-badge badge-crimson font-mono">exit @bash.LastExitCode</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <!-- 5. Top Compiler Errors & Behavioral/Latency Signals -->
+    @if (Analysis.CompilerErrorBreakdown.Count > 0 || Analysis.BehavioralSignals.HasAnySignal)
+    {
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+            @if (Analysis.CompilerErrorBreakdown.Count > 0)
+            {
+                <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+                    <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 0.95rem;">
+                        🛠️ Top Compiler Errors
+                    </h4>
+                    <div style="display: flex; flex-direction: column; gap: 0.55rem;">
+                        @foreach (var err in Analysis.CompilerErrorBreakdown)
+                        {
+                            <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.55rem 0.8rem; font-size: 0.83rem;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
+                                    <span class="forge-badge badge-crimson font-mono">@err.DiagnosticCode</span>
+                                    <span class="forge-badge badge-amber font-mono">@err.Count occurrence(s)</span>
+                                </div>
+                                <div style="margin-top: 0.3rem; color: var(--text-primary);">@err.SampleMessage</div>
+                                @if (!string.IsNullOrWhiteSpace(err.SampleFilePath))
+                                {
+                                    <div class="font-mono text-muted" style="font-size: 0.76rem; margin-top: 0.2rem;">@err.SampleFilePath</div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (Analysis.BehavioralSignals.HasAnySignal)
+            {
+                var sig = Analysis.BehavioralSignals;
+                <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
+                    <h4 style="font-weight: 700; margin-bottom: 0.75rem; color: var(--text-primary); font-size: 0.95rem;">
+                        🔁 Loops, Dead-End Searches &amp; Latency Spikes
+                    </h4>
+                    <div style="display: flex; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.75rem;">
+                        @if (sig.DeadEndSearchCount > 0)
+                        {
+                            <span class="forge-badge badge-amber font-mono">Dead-End Searches: @sig.DeadEndSearchCount</span>
+                        }
+                        @if (sig.HasTestOscillation)
+                        {
+                            <span class="forge-badge badge-crimson font-mono">Test Oscillation (@sig.TestRunCycles runs)</span>
+                        }
+                        @if (sig.SelfRevertCount > 0)
+                        {
+                            <span class="forge-badge badge-amber font-mono">Self-Reverts: @sig.SelfRevertCount</span>
+                        }
+                        @if (sig.MalformedOrTruncatedToolCount > 0)
+                        {
+                            <span class="forge-badge badge-crimson font-mono">Malformed Tools: @sig.MalformedOrTruncatedToolCount</span>
+                        }
+                    </div>
+
+                    @if (sig.RepeatedToolLoops.Count > 0)
+                    {
+                        <div style="margin-bottom: 0.65rem;">
+                            <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.3rem;">Repeated Identical Tool Calls</div>
+                            @foreach (var loop in sig.RepeatedToolLoops)
+                            {
+                                <div style="display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; padding: 0.35rem 0.55rem; background: var(--bg-surface); border-radius: var(--radius-sm); margin-bottom: 0.25rem;">
+                                    <span class="font-mono text-primary text-truncate">@loop.ToolName (@loop.NormalizedArgsSummary)</span>
+                                    <span class="forge-badge badge-crimson font-mono">@loop.RepeatCount x</span>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (sig.SlowToolExecutions.Count > 0 || sig.SlowLlmTurns.Count > 0)
+                    {
+                        <div>
+                            <div style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.3rem;">Latency Spikes</div>
+                            @foreach (var slow in sig.SlowToolExecutions.Concat(sig.SlowLlmTurns).OrderByDescending(s => s.DurationSeconds))
+                            {
+                                <div style="display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; padding: 0.35rem 0.55rem; background: var(--bg-surface); border-radius: var(--radius-sm); margin-bottom: 0.25rem;">
+                                    <span class="font-mono text-primary">[ @slow.StartOffset → @slow.EndOffset ] @slow.Label</span>
+                                    <span class="forge-badge badge-amber font-mono">@(slow.DurationSeconds)s</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <!-- 6. Tool Invocations & File Activity Grid -->
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
         <!-- Left: Tool Usage Breakdown -->
         <div class="card-surface p-4" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.25rem;">
@@ -170,7 +411,7 @@
                         <div>
                             <div style="display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.25rem;">
                                 <span class="font-mono text-primary">@kvp.Key</span>
-                                <span class="font-mono text-muted">@kvp.Value call(s) (@pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)%)</span>
+                                <span class="font-mono text-muted">@kvp.Value call(s) (@pct.ToString("F0", CultureInfo.InvariantCulture)%)</span>
                             </div>
                             <div style="height: 6px; background: var(--bg-input); border-radius: 3px; overflow: hidden;">
                                 <div style="height: 100%; width: @(roundedPct)%; background: var(--accent-indigo); border-radius: 3px;"></div>
@@ -219,7 +460,7 @@
         </div>
     </div>
 
-    <!-- 5. Top Read & Edited Files -->
+    <!-- 7. Top Read & Edited Files -->
     @if (Analysis.TopReadFiles.Count > 0 || Analysis.TopEditedFiles.Count > 0)
     {
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
@@ -271,6 +512,23 @@
 </div>
 
 <style>
+    .rec-group-panel {
+        background: rgba(0, 0, 0, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: var(--radius-md);
+        padding: 0.9rem;
+    }
+    .rec-item {
+        background: rgba(15, 23, 42, 0.55);
+        border-radius: var(--radius-sm);
+        padding: 0.55rem 0.75rem;
+    }
+    .rec-user {
+        border-left: 3px solid #60a5fa;
+    }
+    .rec-ncf {
+        border-left: 3px solid #f59e0b;
+    }
     .stat-card {
         display: flex;
         align-items: center;
@@ -331,4 +589,8 @@
     [Parameter, EditorRequired] public TranscriptAnalysis Analysis { get; set; } = null!;
 
     private int TotalToolCalls => Analysis.ToolUsage.Count > 0 ? Analysis.ToolUsage.Values.Sum() : Analysis.ToolTurns;
+    private IReadOnlyList<FrictionRecommendation> UserRecommendations => Analysis.UserCodebaseRecommendations;
+    private IReadOnlyList<FrictionRecommendation> NightCodeForgeRecommendations => Analysis.NightCodeForgeRecommendations;
+    private IReadOnlyList<BashCommandFrictionEntry> ProblematicBashCommands =>
+        Analysis.BashCommandFriction.Where(b => b.FailureCount > 0 || b.HangOrTimeoutCount > 0 || b.OversizedOutputCount > 0).ToList();
 }

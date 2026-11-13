@@ -25,7 +25,10 @@ public class AgentWorkspaceContextServiceTests : IDisposable
         }
     }
 
-    private AgentWorkspaceContextService CreateContextService(ITaskMarkdownSyncService? sync = null, IWorkspaceSymbolService? symbols = null)
+    private AgentWorkspaceContextService CreateContextService(
+        ITaskMarkdownSyncService? sync = null,
+        IWorkspaceSymbolService? symbols = null,
+        ITranscriptAnalysisService? transcriptAnalysis = null)
     {
         var resolver = new Mock<IWorkspacePathResolver>();
         resolver.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
@@ -36,6 +39,7 @@ public class AgentWorkspaceContextServiceTests : IDisposable
             symbols ?? new Mock<IWorkspaceSymbolService>().Object,
             sync ?? new Mock<ITaskMarkdownSyncService>().Object,
             TestBacklogContext.CreateDefault(),
+            transcriptAnalysis ?? new TranscriptAnalysisService(),
             NullLogger<AgentWorkspaceContextService>.Instance);
     }
 
@@ -148,7 +152,7 @@ public class AgentWorkspaceContextServiceTests : IDisposable
         backlog.Setup(b => b.BuildBacklogDigestAsync(5, 9, It.IsAny<CancellationToken>())).ReturnsAsync("<digest/>");
         var service = new AgentWorkspaceContextService(
             new Mock<IWorkspacePathResolver>().Object, new AgentsMdService(), new Mock<IWorkspaceSymbolService>().Object,
-            new Mock<ITaskMarkdownSyncService>().Object, backlog.Object, NullLogger<AgentWorkspaceContextService>.Instance);
+            new Mock<ITaskMarkdownSyncService>().Object, backlog.Object, new TranscriptAnalysisService(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         Assert.Equal("<digest/>", await service.BuildBacklogDigestAsync(5, 9, CancellationToken.None));
     }
@@ -197,6 +201,48 @@ public class AgentWorkspaceContextServiceTests : IDisposable
     {
         Assert.Throws<ArgumentNullException>(() => new AgentWorkspaceContextService(
             null!, new AgentsMdService(), new Mock<IWorkspaceSymbolService>().Object,
-            new Mock<ITaskMarkdownSyncService>().Object, TestBacklogContext.CreateDefault(), NullLogger<AgentWorkspaceContextService>.Instance));
+            new Mock<ITaskMarkdownSyncService>().Object, TestBacklogContext.CreateDefault(), new TranscriptAnalysisService(), NullLogger<AgentWorkspaceContextService>.Instance));
+    }
+
+    [Fact]
+    public async Task BuildFrictionHotspotsDigestAsync_ReturnsEmptyWhenCleanAndDigestWhenFrictionPresent()
+    {
+        var service = CreateContextService();
+        Assert.Equal(string.Empty, await service.BuildFrictionHotspotsDigestAsync(string.Empty));
+        Assert.Equal(string.Empty, await service.BuildFrictionHotspotsDigestAsync(_tempDir));
+
+        var transcriptDir = Path.Combine(_tempDir, "docs", "transcripts");
+        Directory.CreateDirectory(transcriptDir);
+        await File.WriteAllTextAsync(Path.Combine(transcriptDir, "2026-11-01-task-1-impl.md"), @"---
+task_id: 1
+stage_id: impl
+status: Failed
+---
+### [ 00:00 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/Heavy.cs"" }
+```
+### [ 00:01 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/Heavy.cs"" }
+```
+### [ 00:02 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/Heavy.cs"" }
+```
+### [ 00:03 ] 🔧 TOOL
+**Tool Invocation:** `bash`
+**Tool Output:**
+Exit Code: 1
+src/Heavy.cs(5,1): error CS0246: Missing type
+");
+
+        var digest = await service.BuildFrictionHotspotsDigestAsync(_tempDir);
+        Assert.Contains("<workspace_friction_hotspots", digest);
+        Assert.Contains("src/Heavy.cs", digest);
+        Assert.Contains("CS0246", digest);
     }
 }

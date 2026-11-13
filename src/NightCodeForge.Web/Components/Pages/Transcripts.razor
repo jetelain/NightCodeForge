@@ -2,6 +2,8 @@
 @page "/transcripts/{FileName}"
 @page "/w/{WorkspaceId:int}/transcripts"
 @page "/w/{WorkspaceId:int}/transcripts/{FileName}"
+@using System.Globalization
+@using NightCodeForge.Core.Services
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @inject ITranscriptBrowserService BrowserService
@@ -33,7 +35,7 @@
                 </button>
             </div>
 
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                     <span style="font-size: 1.25rem;">📜</span>
                     <h4 style="margin: 0; font-weight: 700; font-size: 1.1rem; color: var(--text-primary);">
@@ -41,6 +43,27 @@
                     </h4>
                 </div>
                 <span class="forge-badge badge-indigo">@_filteredTranscripts.Count</span>
+            </div>
+
+            <!-- Recent Window Selector & Coverage Badge -->
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap;">
+                <span class="forge-badge" data-testid="sidebar-window-badge" style="font-size: 0.72rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); color: var(--text-secondary);">
+                    @SidebarWindowBadgeText
+                </span>
+                <div style="display: flex; align-items: center; gap: 0.35rem;">
+                    <label for="sidebar-window-select" style="font-size: 0.74rem; color: var(--text-muted);">Window:</label>
+                    <select id="sidebar-window-select"
+                            class="forge-input"
+                            style="min-height: 28px; padding: 0.15rem 0.45rem; font-size: 0.76rem; width: auto;"
+                            value="@WindowSelectValue"
+                            @onchange="HandleSidebarWindowSelectChanged">
+                        @foreach (var preset in TranscriptAnalysisDefaults.WindowPresets)
+                        {
+                            <option value="@preset.ToString(CultureInfo.InvariantCulture)">Latest @preset</option>
+                        }
+                        <option value="">All</option>
+                    </select>
+                </div>
             </div>
 
             <!-- Search Filter -->
@@ -131,7 +154,11 @@
         <div class="transcript-main">
             @if (_viewMode == "Fleet")
             {
-                <FleetAnalysisDashboard Fleet="_fleetAnalyses" OnSelectTranscript="HandleSelectTranscriptByName" />
+                <FleetAnalysisDashboard Fleet="_fleetAnalyses"
+                                        TotalAvailableCount="_totalAvailableFleetCount"
+                                        WindowLimit="_selectedWindowLimit"
+                                        OnWindowLimitChanged="HandleWindowLimitChangedAsync"
+                                        OnSelectTranscript="HandleSelectTranscriptByName" />
             }
             else if (_selectedTranscriptDetail != null)
             {
@@ -358,11 +385,22 @@
     private string _searchTerm = string.Empty;
     private string _selectedFilter = "All";
     private string _viewMode = "Sessions";
+    private int? _selectedWindowLimit = TranscriptAnalysisDefaults.DefaultRecentLimit;
+    private int _totalAvailableTranscripts;
+    private int _totalAvailableFleetCount;
 
     private IReadOnlyList<TranscriptSummary> _transcripts = Array.Empty<TranscriptSummary>();
     private IReadOnlyList<NightCodeForge.Core.Services.TranscriptAnalysis> _fleetAnalyses = Array.Empty<NightCodeForge.Core.Services.TranscriptAnalysis>();
     private TranscriptSummary? _selectedTranscriptSummary;
     private ParsedTranscriptDetail? _selectedTranscriptDetail;
+
+    private string SidebarWindowBadgeText =>
+        TranscriptPresentationHelper.FormatWindowBadge(_transcripts.Count, _totalAvailableTranscripts, _selectedWindowLimit);
+
+    private string WindowSelectValue =>
+        _selectedWindowLimit.HasValue && _selectedWindowLimit.Value > 0
+            ? _selectedWindowLimit.Value.ToString(CultureInfo.InvariantCulture)
+            : string.Empty;
 
     protected override async Task OnInitializedAsync()
     {
@@ -426,8 +464,12 @@
         try
         {
             var repoPath = WorkspaceState.ActiveWorkspace?.RepositoryPath;
-            _transcripts = await BrowserService.GetTranscriptsAsync(repoPath);
-            _fleetAnalyses = await BrowserService.GetFleetAnalysisAsync(repoPath);
+            var transcriptWindow = await BrowserService.GetTranscriptsWindowAsync(repoPath, _selectedWindowLimit);
+            var fleetWindow = await BrowserService.GetFleetAnalysisWindowAsync(repoPath, _selectedWindowLimit);
+            _transcripts = transcriptWindow.Items;
+            _totalAvailableTranscripts = transcriptWindow.TotalAvailableCount;
+            _fleetAnalyses = fleetWindow.Items;
+            _totalAvailableFleetCount = fleetWindow.TotalAvailableCount;
 
             if (!string.IsNullOrWhiteSpace(FileName))
             {
@@ -491,34 +533,23 @@
         _selectedFilter = filter;
     }
 
-    private IReadOnlyList<TranscriptSummary> _filteredTranscripts
+    private async Task HandleSidebarWindowSelectChanged(ChangeEventArgs e)
     {
-        get
-        {
-            var list = _transcripts.AsEnumerable();
-
-            if (!string.IsNullOrWhiteSpace(_searchTerm))
-            {
-                var term = _searchTerm.Trim();
-                list = list.Where(t => 
-                    t.FileName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                    t.StageId.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                    t.ModelName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                    t.TaskId.ToString().Contains(term));
-            }
-
-            if (_selectedFilter == "Friction")
-            {
-                list = list.Where(t => t.HasFriction);
-            }
-            else if (_selectedFilter != "All")
-            {
-                list = list.Where(t => t.Status.Contains(_selectedFilter, StringComparison.OrdinalIgnoreCase));
-            }
-
-            return list.ToList();
-        }
+        var raw = e.Value?.ToString();
+        int? nextLimit = int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+            ? parsed
+            : null;
+        await HandleWindowLimitChangedAsync(nextLimit);
     }
+
+    private async Task HandleWindowLimitChangedAsync(int? nextLimit)
+    {
+        _selectedWindowLimit = nextLimit.HasValue && nextLimit.Value > 0 ? nextLimit.Value : null;
+        await LoadTranscriptsAsync();
+    }
+
+    private IReadOnlyList<TranscriptSummary> _filteredTranscripts =>
+        TranscriptPresentationHelper.FilterTranscripts(_transcripts, _searchTerm, _selectedFilter);
 
     private void OpenDiagnosticsModal()
     {

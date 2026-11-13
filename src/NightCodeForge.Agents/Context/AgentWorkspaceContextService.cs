@@ -46,6 +46,9 @@ public interface IAgentWorkspaceContextService
 
     /// <summary>Builds the existing backlog digest (empty when the backlog has no active task).</summary>
     Task<string> BuildBacklogDigestAsync(int workspaceId, int? excludeTaskId, CancellationToken cancellationToken);
+
+    /// <summary>Builds a bounded recent transcript friction hotspot digest (empty when no friction exists).</summary>
+    Task<string> BuildFrictionHotspotsDigestAsync(string repoPath, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -61,6 +64,7 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
     private readonly IWorkspaceSymbolService _symbolService;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IBacklogPlanningContext _backlogContext;
+    private readonly ITranscriptAnalysisService _transcriptAnalysisService;
     private readonly ILogger<AgentWorkspaceContextService> _logger;
 
     public AgentWorkspaceContextService(
@@ -69,6 +73,7 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
         IWorkspaceSymbolService symbolService,
         ITaskMarkdownSyncService markdownSyncService,
         IBacklogPlanningContext backlogContext,
+        ITranscriptAnalysisService transcriptAnalysisService,
         ILogger<AgentWorkspaceContextService> logger)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
@@ -76,6 +81,7 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
         _symbolService = symbolService ?? throw new ArgumentNullException(nameof(symbolService));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _backlogContext = backlogContext ?? throw new ArgumentNullException(nameof(backlogContext));
+        _transcriptAnalysisService = transcriptAnalysisService ?? throw new ArgumentNullException(nameof(transcriptAnalysisService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -235,5 +241,20 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
 
     public Task<string> BuildBacklogDigestAsync(int workspaceId, int? excludeTaskId, CancellationToken cancellationToken) =>
         _backlogContext.BuildBacklogDigestAsync(workspaceId, excludeTaskId, cancellationToken);
+
+    public async Task<string> BuildFrictionHotspotsDigestAsync(string repoPath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoPath))
+        {
+            return string.Empty;
+        }
+
+        var hotspots = await _transcriptAnalysisService.GetWorkspaceFrictionHotspotsAsync(
+            repoPath,
+            TranscriptAnalysisDefaults.DefaultRecentLimit,
+            cancellationToken);
+
+        return hotspots.FormatPromptDigest();
+    }
 }
 

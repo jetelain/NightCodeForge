@@ -107,6 +107,7 @@ public class TestCrucibleHarnessBuilder
             SymbolService,
             new Mock<ITaskMarkdownSyncService>().Object,
             BacklogContext,
+            new TranscriptAnalysisService(),
             NullLogger<AgentWorkspaceContextService>.Instance);
 
         var agentFactory = new HarnessAgentFactory(

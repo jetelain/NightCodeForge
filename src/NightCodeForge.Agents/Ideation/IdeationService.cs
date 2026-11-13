@@ -333,11 +333,13 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
 
         var backlogDigest = await _workspaceContext.BuildBacklogDigestAsync(workspace.Id, null, cancellationToken);
         var backlogSection = string.IsNullOrWhiteSpace(backlogDigest) ? string.Empty : backlogDigest + "\n\n";
+        var hotspotsDigest = await _workspaceContext.BuildFrictionHotspotsDigestAsync(repoPath, cancellationToken);
+        var hotspotsSection = string.IsNullOrWhiteSpace(hotspotsDigest) ? string.Empty : hotspotsDigest + "\n\n";
         var systemPrompt = $@"{basePersona}
 {environmentSection.ToString().TrimEnd()}
 {promptContext.ProjectContext}{skillsSection}
 
-{backlogSection}{taskGuidance}";
+{backlogSection}{hotspotsSection}{taskGuidance}";
 
         // The system prompt is supplied to HarnessAgent as HarnessInstructions (ChatOptions.Instructions);
         // adding it as a System message too would send it to the model twice.

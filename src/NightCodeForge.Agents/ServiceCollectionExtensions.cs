@@ -61,6 +61,7 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IBacklogPlanningContext, BacklogPlanningContext>();
 
         // 3. Transcripts & Diagnostics
+        services.TryAddSingleton<ITranscriptAnalysisService, TranscriptAnalysisService>();
         services.TryAddSingleton<SessionTranscriptService>();
         services.TryAddSingleton<ISessionTranscriptService>(sp => sp.GetRequiredService<SessionTranscriptService>());
         services.TryAddScoped<TranscriptDiagnosticService>();

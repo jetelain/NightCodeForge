@@ -1048,6 +1048,108 @@ Let me know what you think!";
         Assert.NotNull(result);
         mockGateway.Verify(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    private sealed class PromptCapturingChatClient : IChatClient
+    {
+        public List<IReadOnlyList<ChatMessage>> CapturedConversations { get; } = new();
+        public List<string?> CapturedInstructions { get; } = new();
+        public ChatClientMetadata Metadata => new("PromptCapturingClient");
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> chatMessages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            CapturedConversations.Add(chatMessages.ToList());
+            CapturedInstructions.Add(options?.Instructions);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Noted.")));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            CapturedConversations.Add(chatMessages.ToList());
+            CapturedInstructions.Add(options?.Instructions);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Noted.");
+            await Task.CompletedTask;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task ConverseAsync_WhenWorkspaceHasTranscriptFriction_InjectsHotspotsIntoSystemPrompt()
+    {
+        var tempWs = Path.Combine(Path.GetTempPath(), "ncf_ideation_hotspots_" + Guid.NewGuid().ToString("N"));
+        var transcriptsDir = Path.Combine(tempWs, "docs", "transcripts");
+        Directory.CreateDirectory(transcriptsDir);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(transcriptsDir, "2026-11-01-task-55-impl.md"), @"---
+task_id: 55
+stage_id: impl
+status: Failed
+---
+### [ 00:00 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/HotspotService.cs"" }
+```
+### [ 00:01 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/HotspotService.cs"" }
+```
+### [ 00:02 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/HotspotService.cs"" }
+```
+### [ 00:03 ] 🔧 TOOL
+**Tool Invocation:** `bash`
+**Tool Output:**
+Exit Code: 1
+src/HotspotService.cs(10,5): error CS1061: Missing member
+");
+
+            var capturingClient = new PromptCapturingChatClient();
+            var service = CreateService(capturingClient);
+            var workspace = CreateWorkspace(201, path: tempWs);
+
+            await service.ConverseAsync(workspace, "What refactoring tasks should we prioritize?");
+
+            var systemPrompt = Assert.Single(capturingClient.CapturedInstructions) ?? string.Empty;
+            Assert.Contains("<workspace_friction_hotspots", systemPrompt);
+            Assert.Contains("src/HotspotService.cs", systemPrompt);
+            Assert.Contains("CS1061", systemPrompt);
+        }
+        finally
+        {
+            if (Directory.Exists(tempWs)) Directory.Delete(tempWs, true);
+        }
+    }
+
+    [Fact]
+    public async Task ConverseAsync_WhenWorkspaceHasNoTranscriptFriction_DoesNotInjectHotspotsTag()
+    {
+        var tempWs = Path.Combine(Path.GetTempPath(), "ncf_ideation_clean_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempWs);
+        try
+        {
+            var capturingClient = new PromptCapturingChatClient();
+            var service = CreateService(capturingClient);
+            var workspace = CreateWorkspace(202, path: tempWs);
+
+            await service.ConverseAsync(workspace, "Propose next feature");
+
+            var systemPrompt = Assert.Single(capturingClient.CapturedInstructions) ?? string.Empty;
+            Assert.DoesNotContain("<workspace_friction_hotspots", systemPrompt);
+        }
+        finally
+        {
+            if (Directory.Exists(tempWs)) Directory.Delete(tempWs, true);
+        }
+    }
 }
 
 

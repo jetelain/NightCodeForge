@@ -199,7 +199,7 @@ error CS0103: The name 'Foo' does not exist in the current context
             TopEditedFiles: new List<KeyValuePair<string, int>>(),
             HighChurnFiles: new List<KeyValuePair<string, int>>(),
             FrictionPoints: Array.Empty<string>(),
-            Recommendations: Array.Empty<string>());
+            Recommendations: Array.Empty<FrictionRecommendation>());
 
         mockService.Setup(s => s.AnalyzeFileAsync(filePath, It.IsAny<CancellationToken>()))
             .ReturnsAsync(fakeAnalysis);
@@ -209,5 +209,109 @@ error CS0103: The name 'Foo' does not exist in the current context
 
         Assert.Equal(0, exitCode);
         mockService.Verify(s => s.AnalyzeFileAsync(filePath, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public void ParseTranscriptOptions_WithLimitFlag_ParsesSpaceEqualsAndZero()
+    {
+        var defaults = Program.ParseTranscriptOptions(Array.Empty<string>(), out var defaultError);
+        Assert.NotNull(defaults);
+        Assert.Null(defaultError);
+        Assert.Equal(TranscriptAnalysisDefaults.DefaultRecentLimit, defaults.Limit);
+
+        var spaced = Program.ParseTranscriptOptions(new[] { "docs", "--limit", "25" }, out var spacedError);
+        Assert.NotNull(spaced);
+        Assert.Null(spacedError);
+        Assert.Equal("docs", spaced.TargetPath);
+        Assert.Equal(25, spaced.Limit);
+
+        var all = Program.ParseTranscriptOptions(new[] { "--limit=0" }, out var allError);
+        Assert.NotNull(all);
+        Assert.Null(allError);
+        Assert.Null(all.Limit);
+    }
+
+    [Theory]
+    [InlineData("--limit", "-1")]
+    [InlineData("--limit", "abc")]
+    [InlineData("--limit")]
+    public void ParseTranscriptOptions_WithInvalidLimit_ReturnsError(params string[] args)
+    {
+        var options = Program.ParseTranscriptOptions(args, out var error);
+        Assert.Null(options);
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithDirectoryWindow_RendersWindowBannerAndCategorizedRecommendations()
+    {
+        var names = new[]
+        {
+            "2026-10-01-task-1-impl.md",
+            "2026-10-02-task-2-impl.md",
+            "2026-10-03-task-3-impl.md"
+        };
+
+        await File.WriteAllTextAsync(Path.Combine(_testDir, names[0]), "---\ntask_id: 1\nstage_id: impl\nstatus: Completed\n---\n### [ 00:00 ] 👤 USER\nOk\n");
+        await File.WriteAllTextAsync(Path.Combine(_testDir, names[1]), "---\ntask_id: 2\nstage_id: impl\nstatus: Completed\n---\n### [ 00:00 ] 👤 USER\nOk\n");
+        await File.WriteAllTextAsync(Path.Combine(_testDir, names[2]), @"---
+task_id: 3
+stage_id: impl
+status: Failed
+---
+### [ 00:00 ] 👤 USER
+Work
+### [ 00:01 ] 🤖 ASSISTANT
+**Tool Invocation:** `edit`
+```json
+{ ""path"": ""src/Big.cs"" }
+```
+### [ 00:02 ] 🔧 TOOL
+**Tool Invocation:** `edit`
+**Tool Output:**
+Error: Edit #1 failed
+### [ 00:03 ] 🤖 ASSISTANT
+**Tool Invocation:** `bash`
+```json
+{ ""command"": ""dotnet build"" }
+```
+### [ 00:04 ] 🔧 TOOL
+**Tool Invocation:** `bash`
+**Tool Output:**
+Exit Code: 1
+src/Big.cs(1,1): error CS0103: Missing symbol
+");
+
+        var logged = new List<string>();
+        var command = new TranscriptCommand(new TranscriptAnalysisService());
+        var exitCode = await command.ExecuteAsync(new TranscriptOptions { TargetPath = _testDir, Limit = 2 }, logged.Add);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(logged, l => l.Contains("Showing latest 2 of 3 transcript(s)"));
+        Assert.Contains(logged, l => l.Contains("--- Tool Friction & Output Bloat Across Fleet ---"));
+        Assert.Contains(logged, l => l.Contains("[User Codebase]"));
+        Assert.Contains(logged, l => l.Contains("[NightCodeForge]"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithRepoRootContainingReadmeAndAgentsMd_PrefersDocsTranscriptsSubdirectory()
+    {
+        var repoRoot = Path.Combine(_testDir, "repo_root_" + Guid.NewGuid().ToString("N"));
+        var docsTranscripts = Path.Combine(repoRoot, "docs", "transcripts");
+        Directory.CreateDirectory(docsTranscripts);
+
+        await File.WriteAllTextAsync(Path.Combine(repoRoot, "README.md"), "# Sample Repo");
+        await File.WriteAllTextAsync(Path.Combine(repoRoot, "AGENTS.md"), "# Agent Rules");
+        await File.WriteAllTextAsync(
+            Path.Combine(docsTranscripts, "2026-11-05-task-42-impl-completed.md"),
+            "---\ntask_id: 42\nstage_id: impl\nstatus: Completed\nduration_ms: 1000\n---\n### [ 00:00 ] 👤 USER\nRun\n");
+
+        var logged = new List<string>();
+        var command = new TranscriptCommand(new TranscriptAnalysisService());
+        var exitCode = await command.ExecuteAsync(new TranscriptOptions { TargetPath = repoRoot }, logged.Add);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(logged, l => l.Contains("Found 1 transcript(s)"));
+        Assert.Contains(logged, l => l.Contains("42"));
     }
 }

@@ -37,6 +37,7 @@ public class TestTriageServiceBuilder
             new Mock<IWorkspaceSymbolService>().Object,
             MarkdownSyncService,
             TestBacklogContext.CreateDefault(),
+            new TranscriptAnalysisService(),
             NullLogger<AgentWorkspaceContextService>.Instance);
 
         return new TriageService(

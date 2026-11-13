@@ -49,6 +49,7 @@ public class TestIdeationServiceBuilder
     public IMcpClientManager McpManager { get; set; } = CreateDefaultMcpManager();
     public IWorkspaceSymbolService SymbolService { get; set; } = new Mock<IWorkspaceSymbolService>().Object;
     public IBacklogPlanningContext BacklogContext { get; set; } = TestBacklogContext.CreateDefault();
+    public ITranscriptAnalysisService TranscriptAnalysisService { get; set; } = new TranscriptAnalysisService();
     public ILlmGatewayService GatewayService { get; set; } = CreateDefaultGatewayService();
     public ILlmCapabilityResolver? CapabilityResolver { get; set; }
     public IOptions<LlmProviderOptions> LlmOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new LlmProviderOptions());
@@ -99,6 +100,7 @@ public class TestIdeationServiceBuilder
             SymbolService,
             MarkdownSyncService,
             BacklogContext,
+            TranscriptAnalysisService,
             NullLogger<AgentWorkspaceContextService>.Instance);
 
         var agentFactory = new HarnessAgentFactory(
