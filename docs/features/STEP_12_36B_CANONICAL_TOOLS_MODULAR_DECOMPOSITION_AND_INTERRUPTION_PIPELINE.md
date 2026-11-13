@@ -96,9 +96,9 @@ flowchart TD
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Define `IAgentToolModule` and decompose `CanonicalTools` / `CanonicalAIFunctionFactory` into `WorkspaceFileToolModule`, `SandboxBashToolModule`, `WorkflowInteractionToolModule`, `BacklogManagementToolModule`, and `ResearchAndSkillsToolModule`, ensuring `BacklogManagementToolModule` and `WorkspaceFileToolModule` resolve `ITaskRepository` / `AppDbContext` per tool invocation via `IServiceScopeFactory` so cached toolsets never hold a disposed scope.
-- [ ] Wire `WorkspaceFileToolModule` and `SandboxBashToolModule` to `ISandboxPathResolver` ([Step 12.36A](STEP_12_36A_DECLARATIVE_SANDBOX_MOUNT_TABLE_AND_CONTAINER_LIFECYCLE_REDESIGN.md)) so all path resolution, virtual mounts, and read-only boundary checks go through a single tested component.
-- [ ] Implement `ToolTurnInterruptionController` and refactor `CrucibleAgentHarness` to use it for `ask`, `request_changes`, and future Nightwatch / terminal tool interruptions.
-- [ ] Support `AdditionalModules` in `CanonicalToolsetRequest` / `ICanonicalToolsetFactory` so system agents (Nightwatch) can plug in `NightwatchSystemToolModule` cleanly.
-- [ ] Verify all existing and new unit tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Agents.Tests` pass (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`).
+- [x] Define `IAgentToolModule` and decompose `CanonicalTools` / `CanonicalAIFunctionFactory` into `WorkspaceFileToolModule`, `SandboxBashToolModule`, `WorkflowInteractionToolModule`, `BacklogManagementToolModule`, and `ResearchAndSkillsToolModule`, ensuring `BacklogManagementToolModule` and `WorkspaceFileToolModule` resolve `ITaskRepository` / `AppDbContext` per tool invocation via `IServiceScopeFactory` so cached toolsets never hold a disposed scope.
+- [x] Wire `WorkspaceFileToolModule` and `SandboxBashToolModule` to `ISandboxPathResolver` ([Step 12.36A](STEP_12_36A_DECLARATIVE_SANDBOX_MOUNT_TABLE_AND_CONTAINER_LIFECYCLE_REDESIGN.md)) so all path resolution, virtual mounts, and read-only boundary checks go through a single tested component.
+- [x] Implement `ToolTurnInterruptionController` and refactor `CrucibleAgentHarness` to use it for `ask`, `request_changes`, and future Nightwatch / terminal tool interruptions.
+- [x] Support `AdditionalModules` in `CanonicalToolsetRequest` / `ICanonicalToolsetFactory` so system agents (Nightwatch) can plug in `NightwatchSystemToolModule` cleanly.
+- [x] Verify all existing and new unit tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Agents.Tests` pass (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`).
 

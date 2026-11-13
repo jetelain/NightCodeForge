@@ -21,7 +21,19 @@ public sealed record CanonicalToolScope(
     bool IsReadOnly = false,
     int? MaxReadFileBytes = null,
     SandboxScopeDescriptor? SandboxScope = null,
-    ISandboxPathResolver? SandboxPathResolver = null);
+    ISandboxPathResolver? SandboxPathResolver = null)
+{
+    internal string ResolveNormalizedWorkspaceRoot()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(WorkspaceRoot);
+        return (WorkspaceRoot.StartsWith('/') ||
+                WorkspaceRoot.StartsWith('~') ||
+                WorkspaceRoot.StartsWith(@"\\") ||
+                WorkspaceRoot.StartsWith("//"))
+            ? WorkspaceRoot
+            : Path.GetFullPath(WorkspaceRoot);
+    }
+}
 
 /// <summary>Everything the toolset factory needs to assemble the tools of one agent session.</summary>
 public sealed record CanonicalToolsetRequest(
@@ -32,14 +44,55 @@ public sealed record CanonicalToolsetRequest(
     IReadOnlyList<CustomToolConfig> CustomTools,
     IReadOnlyDictionary<string, string> ToolDirectives,
     bool AttachBacklogMutationService,
-    SandboxScopeDescriptor? SandboxScope = null);
+    SandboxScopeDescriptor? SandboxScope = null,
+    IReadOnlyList<IAgentToolModule>? AdditionalModules = null);
 
 /// <summary>The configured tools of one agent session.</summary>
 public sealed record CanonicalToolsetSession(
     CanonicalTools Tools,
     LenientToolDispatcher Dispatcher,
     IWorkspaceSkillsService SkillsService,
-    IList<AITool> AITools);
+    IList<AITool> AITools,
+    IReadOnlyList<IAgentToolModule>? Modules = null)
+{
+    public List<TaskProposal> PendingProposals => Tools.PendingProposals;
+
+    public IToolTurnInterruptionController? InterruptionController
+    {
+        get => Tools.InterruptionController;
+        set
+        {
+            Tools.InterruptionController = value;
+            foreach (var module in Modules ?? Tools.Modules)
+            {
+                if (module != null)
+                {
+                    module.InterruptionController = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Creates and attaches a <see cref="ToolTurnInterruptionController"/> linked to <paramref name="cancellationToken"/>
+    /// for turn-unwinding tool interruptions in this session. Disposing the returned controller detaches it from the session.
+    /// </summary>
+    public ToolTurnInterruptionController UseInterruptionController(CancellationToken cancellationToken = default)
+    {
+        ToolTurnInterruptionController? controller = null;
+        controller = new ToolTurnInterruptionController(
+            cancellationToken,
+            () =>
+            {
+                if (ReferenceEquals(InterruptionController, controller))
+                {
+                    InterruptionController = null;
+                }
+            });
+        InterruptionController = controller;
+        return controller;
+    }
+}
 
 /// <summary>Builds the <see cref="CanonicalTools"/>, dispatcher, skills service and AI tool list of an agent session.</summary>
 public interface ICanonicalToolsetFactory
@@ -123,15 +176,16 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
             _editorConfigFileApplier,
             _webSearchService,
             skillsService,
-            _backlogContext.CanonicalToolsLogger)
-        {
-            TaskMarkdownValidator = _backlogContext.TaskMarkdownValidator
-        };
+            _backlogContext.CanonicalToolsLogger);
 
-        if (request.AttachBacklogMutationService)
-        {
-            tools.BacklogMutationService = _backlogContext.BacklogMutationService;
-        }
+        tools.FileModule.ConfigureDefaultTaskMarkdownValidator(
+            _backlogContext.TaskMarkdownValidator,
+            _backlogContext.ScopeFactory);
+
+        tools.BacklogModule.ConfigureBacklogMutation(
+            _backlogContext.BacklogMutationService,
+            _backlogContext.ScopeFactory,
+            request.AttachBacklogMutationService);
 
         var dispatcher = NightCodeForgeToolDispatcher.Create(
             tools,
@@ -141,8 +195,19 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         RegisterCustomTools(dispatcher, request.CustomTools);
         await RegisterMcpToolsAsync(dispatcher, scope.WorkspaceRoot, cancellationToken);
 
-        var aiTools = BuildAIFunctionList(tools, request.PermittedTools, dispatcher, request.CustomTools, request.ToolDirectives);
-        return new CanonicalToolsetSession(tools, dispatcher, skillsService, aiTools);
+        var aiTools = BuildAIFunctionList(
+            tools,
+            request.PermittedTools,
+            dispatcher,
+            request.CustomTools,
+            request.ToolDirectives,
+            request.AdditionalModules);
+
+        var allModules = request.AdditionalModules is { Count: > 0 }
+            ? tools.Modules.Concat(request.AdditionalModules.Where(m => m != null)!).ToList()
+            : tools.Modules;
+
+        return new CanonicalToolsetSession(tools, dispatcher, skillsService, aiTools, allModules);
     }
 
     public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken) =>
@@ -193,18 +258,20 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         IReadOnlySet<string> permittedTools,
         LenientToolDispatcher dispatcher,
         IReadOnlyList<CustomToolConfig>? customTools = null,
-        IReadOnlyDictionary<string, string>? toolDirectives = null) =>
-        BuildAIFunctionList(tools, (IReadOnlyList<string>)permittedTools.ToList(), dispatcher, customTools, toolDirectives);
+        IReadOnlyDictionary<string, string>? toolDirectives = null,
+        IReadOnlyList<IAgentToolModule>? additionalModules = null) =>
+        BuildAIFunctionList(tools, (IReadOnlyList<string>)permittedTools.ToList(), dispatcher, customTools, toolDirectives, additionalModules);
 
     public static IList<AITool> BuildAIFunctionList(
         CanonicalTools tools,
         IReadOnlyList<string> permittedTools,
         LenientToolDispatcher dispatcher,
         IReadOnlyList<CustomToolConfig>? customTools = null,
-        IReadOnlyDictionary<string, string>? toolDirectives = null)
+        IReadOnlyDictionary<string, string>? toolDirectives = null,
+        IReadOnlyList<IAgentToolModule>? additionalModules = null)
     {
         var permittedSet = new HashSet<string>(permittedTools, StringComparer.OrdinalIgnoreCase);
-        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedSet, dispatcher).Cast<AIFunction>().ToList();
+        var aiFunctions = CanonicalAIFunctionFactory.CreateTools(tools, permittedSet, dispatcher, additionalModules).Cast<AIFunction>().ToList();
         var knownNames = new HashSet<string>(aiFunctions.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
         foreach (var tool in permittedTools)
         {

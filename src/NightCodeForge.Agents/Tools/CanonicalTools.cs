@@ -1,14 +1,8 @@
-using System.Text;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Services;
-using NightCodeForge.Core.Workflow;
-using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tools;
 
@@ -19,47 +13,77 @@ public record EditChunk(string OldText, string NewText, bool ReplaceAll = false)
 /// </summary>
 public delegate Task<string> AskHandler(IReadOnlyList<QuestionItem> questions, CancellationToken cancellationToken);
 
+/// <summary>
+/// Composition facade over the five modular <see cref="IAgentToolModule"/> implementations:
+/// <see cref="WorkspaceFileToolModule"/>, <see cref="SandboxBashToolModule"/>,
+/// <see cref="WorkflowInteractionToolModule"/>, <see cref="BacklogManagementToolModule"/>,
+/// and <see cref="ResearchAndSkillsToolModule"/>.
+/// </summary>
 public partial class CanonicalTools
 {
-    /// <summary>
-    /// Optional interactive handler for the ask tool. When null (pipeline stages), ask throws
-    /// HumanInterruptionException so the orchestrator can checkpoint the workspace.
-    /// </summary>
-    public AskHandler? AskHandler { get; set; }
+    public static HashSet<string> IndentationSignificantExtensions =>
+        WorkspaceFileToolModule.IndentationSignificantExtensions;
 
-    /// <summary>
-    /// Optional handler for the request_changes tool. When present, invoked before throwing
-    /// RequestChangesException so callers (such as agent harnesses) can intercept the rejection.
-    /// </summary>
-    public Action<string, string?>? RequestChangesHandler { get; set; }
+    private ISandboxPathResolver _sandboxPathResolver;
+    private IToolTurnInterruptionController? _interruptionController;
 
-    /// <summary>
-    /// Optional validator for task specification files (<c>docs/tasks/*.md</c>). When present, write and edit
-    /// reject prospective content that creates a dependency cycle, before anything is written to disk.
-    /// </summary>
-    public ITaskMarkdownValidator? TaskMarkdownValidator { get; set; }
+    public WorkspaceFileToolModule FileModule { get; }
+    public SandboxBashToolModule BashModule { get; }
+    public WorkflowInteractionToolModule InteractionModule { get; }
+    public BacklogManagementToolModule BacklogModule { get; }
+    public ResearchAndSkillsToolModule ResearchAndSkillsModule { get; }
+    public IReadOnlyList<IAgentToolModule> Modules { get; }
 
-    [GeneratedRegex(@"\r\n|\r|\n")]
-    private static partial Regex NewlineRegex();
+    public ISandboxPathResolver SandboxPathResolver
+    {
+        get => _sandboxPathResolver;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _sandboxPathResolver = value;
+            FileModule.SandboxPathResolver = value;
+            BashModule.SandboxPathResolver = value;
+            ResearchAndSkillsModule.SandboxPathResolver = value;
+        }
+    }
 
-    private readonly string _workspaceRoot;
-    private readonly IExecutionEnvironment _executionEnv;
-    private readonly IEditorConfigService _editorConfigService;
-    private readonly IEditorConfigFileApplier _editorConfigFileApplier;
-    private readonly IWebSearchService _webSearchService;
-    private readonly IWorkspacePathResolver _pathResolver;
-    private readonly IWorkspaceSkillsService _skillsService;
-    private readonly int? _workspaceId;
-    private readonly int? _taskId;
+    public AskHandler? AskHandler
+    {
+        get => InteractionModule.AskHandler;
+        set => InteractionModule.AskHandler = value;
+    }
 
-    private readonly int? _buildTimeoutSeconds;
-    private readonly int? _testTimeoutSeconds;
-    private readonly bool _isReadOnly;
-    private readonly int _maxReadFileBytes;
-    private readonly ILogger<CanonicalTools> _logger;
-    private readonly SandboxScopeDescriptor? _sandboxScope;
+    public Action<string, string?>? RequestChangesHandler
+    {
+        get => InteractionModule.RequestChangesHandler;
+        set => InteractionModule.RequestChangesHandler = value;
+    }
 
-    public ISandboxPathResolver? SandboxPathResolver { get; set; }
+    public IToolTurnInterruptionController? InterruptionController
+    {
+        get => _interruptionController;
+        set
+        {
+            _interruptionController = value;
+            foreach (var module in Modules)
+            {
+                module.InterruptionController = value;
+            }
+        }
+    }
+
+    public ITaskMarkdownValidator? TaskMarkdownValidator
+    {
+        get => FileModule.TaskMarkdownValidator;
+        set => FileModule.TaskMarkdownValidator = value;
+    }
+
+    public IWebSearchService WebSearchService => ResearchAndSkillsModule.WebSearchService;
+    public bool IsWebSearchConfigured => ResearchAndSkillsModule.IsWebSearchConfigured;
+    public bool IsWebSearchEnabled => ResearchAndSkillsModule.IsWebSearchEnabled;
+    public IWorkspaceSkillsService SkillsService => ResearchAndSkillsModule.SkillsService;
+    public int MaxReadFileBytes => FileModule.MaxReadFileBytes;
+    public List<TaskProposal> PendingProposals => BacklogModule.PendingProposals;
 
     public CanonicalTools(
         CanonicalToolScope scope,
@@ -72,1219 +96,80 @@ public partial class CanonicalTools
         ILogger<CanonicalTools> logger)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        var workspaceRoot = scope.WorkspaceRoot;
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
-        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
-        _executionEnv = executionEnv ?? throw new ArgumentNullException(nameof(executionEnv));
-        _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
-        _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
-        _webSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
-        _skillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope.WorkspaceRoot);
+        ArgumentNullException.ThrowIfNull(pathResolver);
+        ArgumentNullException.ThrowIfNull(executionEnv);
+        ArgumentNullException.ThrowIfNull(editorConfigService);
+        ArgumentNullException.ThrowIfNull(editorConfigFileApplier);
+        ArgumentNullException.ThrowIfNull(webSearchService);
+        ArgumentNullException.ThrowIfNull(skillsService);
+        ArgumentNullException.ThrowIfNull(logger);
 
-        _workspaceRoot = (workspaceRoot.StartsWith('/') || workspaceRoot.StartsWith('~') || workspaceRoot.StartsWith(@"\\") || workspaceRoot.StartsWith("//"))
-            ? workspaceRoot
-            : Path.GetFullPath(workspaceRoot);
-        _buildTimeoutSeconds = scope.BuildTimeoutSeconds;
-        _testTimeoutSeconds = scope.TestTimeoutSeconds;
-        _workspaceId = scope.WorkspaceId;
-        _taskId = (scope.TaskId.HasValue && scope.TaskId.Value > 0) ? scope.TaskId.Value : null;
-        _isReadOnly = scope.IsReadOnly;
-        _sandboxScope = scope.SandboxScope;
-        if (scope.SandboxPathResolver != null)
-        {
-            SandboxPathResolver = scope.SandboxPathResolver;
-        }
-        else if (_sandboxScope != null)
-        {
-            SandboxPathResolver = new SandboxPathResolver(_sandboxScope);
-        }
-        if (scope.MaxReadFileBytes.HasValue && scope.MaxReadFileBytes.Value <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(scope), scope.MaxReadFileBytes.Value, "MaxReadFileBytes must be greater than zero.");
-        }
-        _maxReadFileBytes = scope.MaxReadFileBytes ?? WorkflowDefaults.MaxReadFileBytes;
+        _sandboxPathResolver = scope.SandboxPathResolver
+            ?? (scope.SandboxScope != null
+                ? new SandboxPathResolver(scope.SandboxScope)
+                : new WorkspacePathResolverSandboxAdapter(scope, pathResolver, logger));
+
+        FileModule = new WorkspaceFileToolModule(
+            scope,
+            _sandboxPathResolver,
+            editorConfigService,
+            editorConfigFileApplier,
+            logger);
+
+        BashModule = new SandboxBashToolModule(
+            scope,
+            _sandboxPathResolver,
+            executionEnv,
+            logger);
+
+        InteractionModule = new WorkflowInteractionToolModule();
+
+        BacklogModule = new BacklogManagementToolModule(scope);
+
+        ResearchAndSkillsModule = new ResearchAndSkillsToolModule(
+            _sandboxPathResolver,
+            webSearchService,
+            skillsService);
+
+        Modules =
+        [
+            FileModule,
+            BashModule,
+            InteractionModule,
+            BacklogModule,
+            ResearchAndSkillsModule
+        ];
     }
 
-    public IWebSearchService WebSearchService => _webSearchService;
-    public bool IsWebSearchConfigured => _webSearchService.IsConfigured;
-    public bool IsWebSearchEnabled => _webSearchService.IsEnabled;
-    public IWorkspaceSkillsService SkillsService => _skillsService;
-    public int MaxReadFileBytes => _maxReadFileBytes;
+    public string ResolveFullPath(string path) => FileModule.ResolveFullPath(path, forWrite: false);
 
-    public string ResolveFullPath(string path) => ResolveFullPath(path, forWrite: false);
+    public string ResolveFullPath(string path, bool forWrite) => FileModule.ResolveFullPath(path, forWrite);
 
-    public string ResolveFullPath(string path, bool forWrite)
-    {
-        if (SandboxPathResolver != null)
-        {
-            return SandboxPathResolver.ResolveHostPath(path, forWrite);
-        }
+    public Task<string> ReadAsync(string path, int? offset = null, int? limit = null, CancellationToken cancellationToken = default) =>
+        FileModule.ReadAsync(path, offset, limit, cancellationToken);
 
-        if (forWrite && !string.IsNullOrWhiteSpace(path))
-        {
-            var norm = path.Trim().Replace('\\', '/');
-            if (norm.Equals("/workspace/skills", StringComparison.OrdinalIgnoreCase) ||
-                norm.StartsWith("/workspace/skills/", StringComparison.OrdinalIgnoreCase) ||
-                norm.Equals("/nightcodeforge", StringComparison.OrdinalIgnoreCase) ||
-                norm.StartsWith("/nightcodeforge/", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new UnauthorizedAccessException($"Access denied: Mount '{path}' is read-only.");
-            }
-        }
+    public Task<string> WriteAsync(string path, string content, CancellationToken cancellationToken = default) =>
+        FileModule.WriteAsync(path, content, cancellationToken);
 
-        if (_workspaceId.HasValue)
-        {
-            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
-            if (Directory.Exists(rootCrucibleDir))
-            {
-                return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
-            }
+    public Task<string> EditAsync(string path, IReadOnlyList<EditChunk> edits, CancellationToken cancellationToken = default) =>
+        FileModule.EditAsync(path, edits, cancellationToken);
 
-            if (WorkspacePathResolver.TryResolveTmpSubPath(path, out _))
-            {
-                var crucibleTmpDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, "/tmp", _taskId);
-                if (Directory.Exists(crucibleTmpDir))
-                {
-                    return _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
-                }
-            }
+    public Task<string> EditAsync(string path, string oldText, string newText, bool replaceAll = false, CancellationToken cancellationToken = default) =>
+        FileModule.EditAsync(path, oldText, newText, replaceAll, cancellationToken);
 
-            var cruciblePath = _pathResolver.ResolveCruciblePath(_workspaceId.Value, path, _taskId);
-            if (File.Exists(cruciblePath) || Directory.Exists(cruciblePath))
-            {
-                return cruciblePath;
-            }
-        }
+    public Task<string> BashAsync(string command, int? timeout = null, string? workingDirectory = null, CancellationToken cancellationToken = default) =>
+        BashModule.BashAsync(command, timeout, workingDirectory, cancellationToken);
 
-        return _pathResolver.ResolveCruciblePath(_workspaceRoot, path, _taskId);
-    }
+    public Task<string> AskAsync(IReadOnlyList<QuestionItem>? questions, CancellationToken cancellationToken = default) =>
+        InteractionModule.AskAsync(questions, cancellationToken);
 
-    private void ValidateWithinWorkspace(string fullPath, string requestedPath)
-    {
-        if (string.IsNullOrWhiteSpace(fullPath))
-        {
-            throw new UnauthorizedAccessException("Access denied: Empty path.");
-        }
+    public string RequestChanges(string feedback, string? reason = null) =>
+        InteractionModule.RequestChanges(feedback, reason);
 
-        if (SandboxPathResolver != null)
-        {
-            return;
-        }
+    public Task<string> WebSearchAsync(string query, int? maxResults = null, CancellationToken cancellationToken = default) =>
+        ResearchAndSkillsModule.WebSearchAsync(query, maxResults, cancellationToken);
 
-        var reqNorm = (requestedPath ?? string.Empty).Trim().Replace('\\', '/');
-        if ((reqNorm.Equals("/tmp", StringComparison.OrdinalIgnoreCase) ||
-             reqNorm.StartsWith("/tmp/", StringComparison.OrdinalIgnoreCase)) &&
-            !WorkspacePathResolver.TryResolveTmpSubPath(requestedPath, out _))
-        {
-            _logger?.LogWarning("CanonicalTools: Path traversal outside /tmp sandbox detected: '{Path}' (resolved: '{FullPath}')", requestedPath, fullPath);
-            throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' resolves outside the allowed workspace sandbox.");
-        }
-
-        var allowedRoots = new List<string>();
-        if (!string.IsNullOrWhiteSpace(_workspaceRoot))
-        {
-            allowedRoots.Add(_workspaceRoot);
-            var workspaceTmpRoot = _pathResolver.ResolveCruciblePath(_workspaceRoot, "/tmp", _taskId);
-            if (!string.IsNullOrWhiteSpace(workspaceTmpRoot))
-            {
-                allowedRoots.Add(workspaceTmpRoot);
-            }
-        }
-
-        if (_workspaceId.HasValue)
-        {
-            var crucibleRoot = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
-            if (!string.IsNullOrWhiteSpace(crucibleRoot))
-            {
-                allowedRoots.Add(crucibleRoot);
-            }
-
-            var crucibleTmpRoot = _pathResolver.ResolveCruciblePath(_workspaceId.Value, "/tmp", _taskId);
-            if (!string.IsNullOrWhiteSpace(crucibleTmpRoot))
-            {
-                allowedRoots.Add(crucibleTmpRoot);
-            }
-        }
-
-        var normFullPath = NormalizeForSandbox(fullPath);
-
-        bool isAllowed = false;
-        foreach (var root in allowedRoots)
-        {
-            var normRoot = NormalizeForSandbox(root);
-            if (normFullPath.Equals(normRoot, StringComparison.OrdinalIgnoreCase) ||
-                normFullPath.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                isAllowed = true;
-                break;
-            }
-        }
-
-        if (!isAllowed)
-        {
-            _logger?.LogWarning("CanonicalTools: Path traversal outside workspace boundary detected: '{Path}' (resolved: '{FullPath}')", requestedPath, fullPath);
-            throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' resolves outside the allowed workspace sandbox.");
-        }
-    }
-
-    private static string NormalizeForSandbox(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
-        var normalized = path.Replace('\\', '/').TrimEnd('/');
-        if (Path.IsPathRooted(path) && !normalized.StartsWith("//") && !normalized.StartsWith(@"\\") &&
-            !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("/tmp", StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                normalized = Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
-            }
-            catch
-            {
-                // In case of non-standard path format, retain normalized string
-            }
-        }
-        return normalized;
-    }
-
-    /// <summary>
-    /// read: Read file contents with line slicing via 1-indexed offset and limit.
-    /// Output is capped to <see cref="MaxReadFileBytes"/> to avoid overflowing context.
-    /// </summary>
-    public async Task<string> ReadAsync(string path, int? offset = null, int? limit = null, CancellationToken cancellationToken = default)
-    {
-        string fullPath;
-        try
-        {
-            fullPath = ResolveFullPath(path);
-            ValidateWithinWorkspace(fullPath, path);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return $"Error: {ex.Message}";
-        }
-
-        if (!File.Exists(fullPath))
-        {
-            _logger?.LogWarning("CanonicalTools.read: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
-            return $"Error: File not found: '{path}'";
-        }
-
-        var lines = await File.ReadAllLinesAsync(fullPath, cancellationToken);
-        int startLine = Math.Max(1, offset ?? 1);
-        int startIndex = startLine - 1;
-
-        if (startIndex >= lines.Length)
-        {
-            return $"[File has {lines.Length} lines. Requested offset {startLine} is beyond end of file.]";
-        }
-
-        int count = limit.HasValue ? Math.Max(1, limit.Value) : lines.Length - startIndex;
-        var selectedLines = lines.Skip(startIndex).Take(count).ToList();
-
-        return ReadOutputFormatter.FormatCapped(selectedLines, startLine, lines.Length, _maxReadFileBytes);
-    }
-
-    /// <summary>
-    /// write: Create a brand-new file or full overwrite enforcing EditorConfig.
-    /// </summary>
-    public async Task<string> WriteAsync(string path, string content, CancellationToken cancellationToken = default)
-    {
-        if (_isReadOnly)
-        {
-            throw new InvalidOperationException("Write operations are not permitted in read-only mode.");
-        }
-
-        string fullPath;
-        try
-        {
-            fullPath = ResolveFullPath(path, forWrite: true);
-            ValidateWithinWorkspace(fullPath, path);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return $"Error: {ex.Message}";
-        }
-
-        var rejection = await ValidateTaskSpecificationAsync(path, content, cancellationToken);
-        if (rejection != null)
-        {
-            return rejection;
-        }
-
-        var dir = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-        {
-            Directory.CreateDirectory(dir);
-        }
-
-        var editorConfig = await _editorConfigService.GetSettingsForPathAsync(fullPath, cancellationToken);
-        string? existing = File.Exists(fullPath) ? await File.ReadAllTextAsync(fullPath, cancellationToken) : null;
-        var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing, fullPath);
-
-        await File.WriteAllBytesAsync(fullPath, bytes, cancellationToken);
-        return $"Successfully wrote {bytes.Length} bytes to '{path}'.";
-    }
-
-    /// <summary>
-    /// Returns a model-visible error when the prospective task specification content is rejected by the
-    /// <see cref="TaskMarkdownValidator"/>, or null when the write may proceed.
-    /// </summary>
-    private async Task<string?> ValidateTaskSpecificationAsync(string path, string prospectiveContent, CancellationToken cancellationToken)
-    {
-        if (TaskMarkdownValidator == null || !_workspaceId.HasValue || !TaskMarkdownValidator.IsTaskSpecificationPath(path))
-        {
-            return null;
-        }
-
-        var result = await TaskMarkdownValidator.ValidateAsync(_workspaceId.Value, _taskId, path, prospectiveContent, cancellationToken);
-        return result.IsValid ? null : result.ErrorMessage;
-    }
-
-    /// <summary>
-    /// edit: Precision search-and-replace chunk editing supporting multi-disjoint edits, indentation tolerance, and multi-match replacement.
-    /// </summary>
-    public async Task<string> EditAsync(string path, IReadOnlyList<EditChunk> edits, CancellationToken cancellationToken = default)
-    {
-        if (_isReadOnly)
-        {
-            throw new InvalidOperationException("Edit operations are not permitted in read-only mode.");
-        }
-
-        if (edits == null || edits.Count == 0)
-        {
-            return "Error: At least one edit chunk must be provided.";
-        }
-
-        string fullPath;
-        try
-        {
-            fullPath = ResolveFullPath(path, forWrite: true);
-            ValidateWithinWorkspace(fullPath, path);
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return $"Error: {ex.Message}";
-        }
-
-        if (!File.Exists(fullPath))
-        {
-            _logger?.LogWarning("CanonicalTools.edit: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
-            return $"Error: File not found for edit: '{path}'";
-        }
-
-        var originalContent = await File.ReadAllTextAsync(fullPath, cancellationToken);
-        var currentContent = originalContent;
-        var ext = Path.GetExtension(fullPath).ToLowerInvariant();
-        bool isStrictWhitespace = IsIndentationSignificant(ext);
-        int totalOccurrencesReplaced = 0;
-
-        try
-        {
-            for (int i = 0; i < edits.Count; i++)
-            {
-                var edit = edits[i];
-                var (updatedContent, occurrences) = ApplySingleEdit(currentContent, edit.OldText, edit.NewText, edit.ReplaceAll, isStrictWhitespace, path, i + 1);
-                currentContent = updatedContent;
-                totalOccurrencesReplaced += occurrences;
-            }
-        }
-        catch (InvalidOperationException ex)
-        {
-            return $"Error: {ex.Message}";
-        }
-
-        var rejection = await ValidateTaskSpecificationAsync(path, currentContent, cancellationToken);
-        if (rejection != null)
-        {
-            return rejection;
-        }
-
-        // Apply EditorConfig compliance
-        var editorConfig = await _editorConfigService.GetSettingsForPathAsync(fullPath, cancellationToken);
-        var formattedBytes = _editorConfigFileApplier.ApplyFormattingAndEncode(currentContent, editorConfig, originalContent, fullPath);
-
-        await File.WriteAllBytesAsync(fullPath, formattedBytes, cancellationToken);
-        return $"Successfully applied {edits.Count} edit(s) ({totalOccurrencesReplaced} occurrence(s) replaced) to '{path}'.";
-    }
-
-    /// <summary>
-    /// edit: Precision search-and-replace for a single chunk.
-    /// </summary>
-    public Task<string> EditAsync(string path, string oldText, string newText, bool replaceAll = false, CancellationToken cancellationToken = default)
-    {
-        return EditAsync(path, new[] { new EditChunk(oldText, newText, replaceAll) }, cancellationToken);
-    }
-
-    private (string Content, int Occurrences) ApplySingleEdit(string source, string oldText, string newText, bool replaceAll, bool isStrictWhitespace, string path, int editIndex)
-    {
-        if (replaceAll)
-        {
-            if (string.IsNullOrEmpty(oldText))
-            {
-                throw new InvalidOperationException($"Edit #{editIndex} failed: oldText cannot be empty.");
-            }
-
-            string effectiveOldText = oldText;
-            string effectiveNewText = newText ?? string.Empty;
-            if (effectiveOldText.Contains('\n') && source.IndexOf(effectiveOldText, StringComparison.Ordinal) == -1)
-            {
-                if (source.Contains("\r\n") && !effectiveOldText.Contains("\r\n"))
-                {
-                    effectiveOldText = effectiveOldText.Replace("\n", "\r\n");
-                    effectiveNewText = effectiveNewText.Replace("\n", "\r\n");
-                }
-                else if (!source.Contains("\r\n") && effectiveOldText.Contains("\r\n"))
-                {
-                    effectiveOldText = effectiveOldText.Replace("\r\n", "\n");
-                    effectiveNewText = effectiveNewText.Replace("\r\n", "\n");
-                }
-            }
-
-            int count = 0;
-            int searchIdx = 0;
-            while ((searchIdx = source.IndexOf(effectiveOldText, searchIdx, StringComparison.Ordinal)) != -1)
-            {
-                count++;
-                searchIdx += effectiveOldText.Length;
-            }
-
-            if (count == 0)
-            {
-                throw new InvalidOperationException($"Edit #{editIndex} failed: could not locate target chunk in '{path}'.");
-            }
-
-            var replaced = source.Replace(effectiveOldText, effectiveNewText, StringComparison.Ordinal);
-            return (replaced, count);
-        }
-
-        // Pass 1: Exact substring match
-        int matchIndex = source.IndexOf(oldText, StringComparison.Ordinal);
-        if (matchIndex >= 0)
-        {
-            // Verify uniqueness
-            int nextMatch = source.IndexOf(oldText, matchIndex + oldText.Length, StringComparison.Ordinal);
-            if (nextMatch >= 0)
-            {
-                throw new InvalidOperationException($"Edit #{editIndex} failed: oldText matches multiple locations in '{path}'. Please provide more surrounding context to disambiguate or use replaceAll: true.");
-            }
-
-            return (source.Substring(0, matchIndex) + newText + source.Substring(matchIndex + oldText.Length), 1);
-        }
-
-        // If language has significant indentation (e.g. Python, YAML), reject non-exact match
-        if (isStrictWhitespace)
-        {
-            throw new InvalidOperationException($"Edit #{editIndex} failed: exact oldText not found in whitespace-sensitive file '{path}'. Exact indentation is required.");
-        }
-
-        // Pass 2: Fuzzy Indentation-Tolerant Matching
-        return (ApplyIndentationTolerantEdit(source, oldText, newText, path, editIndex), 1);
-    }
-
-    private string ApplyIndentationTolerantEdit(string source, string oldText, string newText, string path, int editIndex)
-    {
-        var sourceLines = NewlineRegex().Split(source);
-        var oldLines = NewlineRegex().Split(oldText);
-        var trimmedOldLines = oldLines.Select(l => l.Trim()).ToArray();
-
-        // Remove empty leading/trailing lines from pattern
-        int patternStart = 0;
-        while (patternStart < trimmedOldLines.Length && string.IsNullOrWhiteSpace(trimmedOldLines[patternStart]))
-            patternStart++;
-
-        int patternEnd = trimmedOldLines.Length - 1;
-        while (patternEnd >= patternStart && string.IsNullOrWhiteSpace(trimmedOldLines[patternEnd]))
-            patternEnd--;
-
-        if (patternStart > patternEnd)
-        {
-            throw new InvalidOperationException($"Edit #{editIndex} failed: oldText is empty or whitespace-only.");
-        }
-
-        var activePattern = trimmedOldLines[patternStart..(patternEnd + 1)];
-        int matchLineStart = -1;
-        int matchesFound = 0;
-
-        for (int i = 0; i <= sourceLines.Length - activePattern.Length; i++)
-        {
-            bool match = true;
-            for (int j = 0; j < activePattern.Length; j++)
-            {
-                if (sourceLines[i + j].Trim() != activePattern[j])
-                {
-                    match = false;
-                    break;
-                }
-            }
-
-            if (match)
-            {
-                matchLineStart = i;
-                matchesFound++;
-            }
-        }
-
-        if (matchesFound == 0)
-        {
-            throw new InvalidOperationException($"Edit #{editIndex} failed: could not locate target chunk in '{path}'. Neither exact nor fuzzy indentation match succeeded.");
-        }
-
-        if (matchesFound > 1)
-        {
-            throw new InvalidOperationException($"Edit #{editIndex} failed: fuzzy indentation match found {matchesFound} matching blocks in '{path}'. Please include more unique surrounding lines.");
-        }
-
-        // Measure base indentation of target file vs oldText
-        string fileBaseIndent = GetLeadingWhitespace(sourceLines[matchLineStart]);
-        string oldBaseIndent = GetLeadingWhitespace(oldLines[patternStart]);
-
-        // Re-indent newText
-        var newLines = NewlineRegex().Split(newText);
-        var reindentedNewLines = new List<string>(newLines.Length);
-
-        foreach (var nl in newLines)
-        {
-            if (string.IsNullOrWhiteSpace(nl))
-            {
-                reindentedNewLines.Add(string.Empty);
-                continue;
-            }
-
-            string nlIndent = GetLeadingWhitespace(nl);
-            string trimmedContent = nl.Substring(nlIndent.Length);
-
-            int delta = Math.Max(0, nlIndent.Length - oldBaseIndent.Length);
-            string adjustedIndent = fileBaseIndent + new string(' ', delta);
-            reindentedNewLines.Add(adjustedIndent + trimmedContent);
-        }
-
-        // Detect dominant EOL in source
-        string eol = source.Contains("\r\n") ? "\r\n" : "\n";
-        var finalLines = new List<string>();
-        for (int i = 0; i < matchLineStart; i++) finalLines.Add(sourceLines[i]);
-        finalLines.AddRange(reindentedNewLines);
-        for (int i = matchLineStart + activePattern.Length; i < sourceLines.Length; i++) finalLines.Add(sourceLines[i]);
-
-        return string.Join(eol, finalLines);
-    }
-
-    private static string GetLeadingWhitespace(string line)
-    {
-        int count = 0;
-        while (count < line.Length && (line[count] == ' ' || line[count] == '\t'))
-        {
-            count++;
-        }
-        return line.Substring(0, count);
-    }
-
-    public static readonly HashSet<string> IndentationSignificantExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".py", ".yaml", ".yml", ".nim", ".pug", "makefile"
-    };
-
-    private static bool IsIndentationSignificant(string extension)
-    {
-        return IndentationSignificantExtensions.Contains(extension);
-    }
-
-    /// <summary>
-    /// bash: Execute shell commands in the execution environment with timeout governance.
-    /// </summary>
-    public async Task<string> BashAsync(string command, int? timeout = null, string? workingDirectory = null, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(command))
-        {
-            return "[Empty bash command]";
-        }
-
-        if (_isReadOnly)
-        {
-            var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
-            if (!isAllowed)
-            {
-                _logger?.LogWarning("CanonicalTools.bash: Read-only command violation: '{Command}'. Reason: {Error}", command, errorMsg);
-                return $"[READ-ONLY VIOLATION]: {errorMsg}";
-            }
-        }
-
-        string? workDir = null;
-        if (SandboxPathResolver != null && _executionEnv != null)
-        {
-            try
-            {
-                workDir = SandboxPathResolver.ResolveBashWorkingDirectory(workingDirectory, _executionEnv.Tier);
-                command = SandboxPathResolver.TranslateBashCommand(command, _executionEnv.Tier);
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                return $"Error: {ex.Message}";
-            }
-        }
-        else if (!string.IsNullOrEmpty(workingDirectory))
-        {
-            if (_executionEnv != null && _executionEnv.Tier != ExecutionTier.BareHost &&
-                (workingDirectory.StartsWith('/') || workingDirectory.StartsWith('.') || !Path.IsPathRooted(workingDirectory)))
-            {
-                workDir = workingDirectory;
-            }
-            else
-            {
-                workDir = ResolveFullPath(workingDirectory);
-                try
-                {
-                    ValidateWithinWorkspace(workDir, workingDirectory);
-                }
-                catch (UnauthorizedAccessException ex)
-                {
-                    return $"Error: {ex.Message}";
-                }
-            }
-        }
-        else if (_executionEnv == null || _executionEnv.Tier == ExecutionTier.BareHost)
-        {
-            workDir = _workspaceRoot;
-        }
-
-        int configuredBuildTimeout = _buildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
-        int configuredTestTimeout = _testTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
-        int combinedSuiteTimeout = Math.Max(WorkflowDefaults.MinimumBashToolTimeoutSeconds, configuredBuildTimeout + configuredTestTimeout);
-
-        int effectiveTimeout;
-        if (timeout.HasValue && timeout.Value > 0)
-        {
-            effectiveTimeout = Math.Max(timeout.Value, combinedSuiteTimeout);
-        }
-        else
-        {
-            effectiveTimeout = combinedSuiteTimeout;
-        }
-
-        if (_executionEnv != null)
-        {
-            NightCodeForge.Core.Interfaces.CommandResult res;
-            try
-            {
-                res = await _executionEnv.ExecuteAsync(command, workDir, effectiveTimeout, null, cancellationToken);
-            }
-            catch (TimeoutException)
-            {
-                _logger?.LogWarning("CanonicalTools.bash: Command timed out after {Timeout}s: '{Command}' in '{WorkDir}'", effectiveTimeout, command, workDir);
-                return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "CanonicalTools.bash: Execution failed for '{Command}' in '{WorkDir}'", command, workDir);
-                return $"Error: Command execution failed: {ex.Message}";
-            }
-
-            var output = string.IsNullOrWhiteSpace(res.StandardOutput) ? res.StandardError : res.StandardOutput;
-            if (!string.IsNullOrWhiteSpace(res.StandardError) && !string.IsNullOrWhiteSpace(res.StandardOutput))
-            {
-                output = res.StandardOutput + "\n[STDERR]\n" + res.StandardError;
-            }
-
-            bool isTimeout = res.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode ||
-                             res.Truncated && (res.StandardError.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
-                                               res.StandardOutput.Contains("timed out", StringComparison.OrdinalIgnoreCase));
-
-            if (isTimeout)
-            {
-                _logger?.LogWarning("CanonicalTools.bash: Command timed out (detected exit code {ExitCode} or buffer): '{Command}'", WorkflowDefaults.ProcessTimeoutExitCode, command);
-                return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
-            }
-
-            if (res.ExitCode != 0)
-            {
-                _logger?.LogWarning("CanonicalTools.bash: Command returned exit code {ExitCode}: '{Command}'. Output summary: {Output}",
-                    res.ExitCode, command, output.Length > WorkflowDefaults.DefaultOutputSummaryTruncationLength ? output[..WorkflowDefaults.DefaultOutputSummaryTruncationLength] + "..." : output);
-            }
-
-            if (command.Contains("build", StringComparison.OrdinalIgnoreCase) || command.Contains("test", StringComparison.OrdinalIgnoreCase))
-            {
-                var extractor = new Optimizations.StructuredDiagnosticExtractor();
-                var diag = extractor.ExtractDiagnostics(output);
-                if (diag.CompilerErrors.Count > 0 || diag.TestFailures.Count > 0)
-                {
-                    output = $"{output}\n\n[Structured Diagnostics Extracted]:\n{diag.FormattedMarkdown}";
-                }
-            }
-
-            if (output.Length > WorkflowDefaults.MaxStageOutputChars)
-            {
-                output = WorkflowDefaults.TruncateStageOutput(output);
-            }
-
-            return $"Exit Code: {res.ExitCode}\n{output}".TrimEnd();
-        }
-
-        _logger?.LogError("CanonicalTools.bash: No execution environment configured for command '{Command}'", command);
-        throw new InvalidOperationException("No execution environment configured for bash tool.");
-    }
-
-    /// <summary>
-    /// ask: Asynchronous human clarification tool accepting a batched list of structured questions.
-    /// Returns model-visible validation errors when inputs are invalid.
-    /// When an AskHandler is present (ideation), awaits answers and returns numbered Q&A pairs.
-    /// Otherwise, throws HumanInterruptionException carrying the full collection.
-    /// </summary>
-    public async Task<string> AskAsync(IReadOnlyList<QuestionItem>? questions, CancellationToken cancellationToken = default)
-    {
-        var effectiveQuestions = QuestionItemParser.Normalize(questions);
-
-        if (effectiveQuestions == null || effectiveQuestions.Count == 0)
-        {
-            return "Error: At least one question must be provided in 'questions'. Consolidate all clarifying questions into a list.";
-        }
-
-        for (int i = 0; i < effectiveQuestions.Count; i++)
-        {
-            var q = effectiveQuestions[i];
-            if (string.IsNullOrWhiteSpace(q.Prompt))
-            {
-                return $"Error: Question at index {i} has a blank or empty prompt.";
-            }
-        }
-
-        if (AskHandler == null)
-        {
-            throw new HumanInterruptionException(effectiveQuestions);
-        }
-
-        return await AskHandler(effectiveQuestions, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// web_search: Pluggable web search tool.
-    /// </summary>
-    public async Task<string> WebSearchAsync(string query, int? maxResults = null, CancellationToken cancellationToken = default)
-    {
-        if (!_webSearchService.IsEnabled && (_webSearchService.IsConfigured || _webSearchService.DisabledReason?.Contains("Air-Gapped", StringComparison.OrdinalIgnoreCase) == true))
-        {
-            return WebSearchConstants.AirGappedToolErrorMessage;
-        }
-
-        if (!_webSearchService.IsConfigured)
-        {
-            return WebSearchConstants.UnconfiguredToolErrorMessage;
-        }
-
-        WebSearchResponse response;
-        try
-        {
-            response = await _webSearchService.SearchAsync(query, maxResults ?? WebSearchSettings.DefaultMaxResultsCount, cancellationToken);
-        }
-        catch (AirGappedOperationException)
-        {
-            return WebSearchConstants.AirGappedToolErrorMessage;
-        }
-        if (response.Results.Count == 0)
-        {
-            return $"No web search results found for: '{query}'.";
-        }
-
-        bool anyItemExceedsInlineCap = false;
-        var sb = new StringBuilder();
-        sb.AppendLine($"Web search results for: '{query}' ({response.Results.Count} items):");
-        for (int i = 0; i < response.Results.Count; i++)
-        {
-            var r = response.Results[i];
-            var content = r.Content ?? string.Empty;
-            if (content.Length > WorkflowDefaults.MaxWebSearchResultInlineChars)
-            {
-                anyItemExceedsInlineCap = true;
-            }
-            sb.AppendLine($"[{i + 1}] {r.Title} ({r.Url})");
-            sb.AppendLine($"    {content}");
-        }
-
-        var standardOutput = sb.ToString().TrimEnd();
-        if (!anyItemExceedsInlineCap && standardOutput.Length <= WorkflowDefaults.MaxWebSearchTotalInlineChars)
-        {
-            return standardOutput;
-        }
-
-        // Truncation required: format full untruncated content to /tmp file and cap inline output
-        var fileLines = new List<string>();
-        fileLines.Add($"# Web Search Results for: '{query}' ({response.Results.Count} items)");
-        fileLines.Add(string.Empty);
-
-        var lineRanges = new (int startLine, int endLine)[response.Results.Count];
-        int totalContentChars = 0;
-
-        for (int i = 0; i < response.Results.Count; i++)
-        {
-            var r = response.Results[i];
-            var content = r.Content ?? string.Empty;
-            totalContentChars += content.Length;
-
-            int startLine = fileLines.Count + 1; // 1-indexed
-            fileLines.Add($"## [{i + 1}] {r.Title} ({r.Url})");
-            fileLines.Add(string.Empty);
-
-            var contentLines = NewlineRegex().Split(content);
-            fileLines.AddRange(contentLines);
-            fileLines.Add(string.Empty);
-            int endLine = fileLines.Count; // 1-indexed
-            lineRanges[i] = (startLine, endLine);
-        }
-
-        var fullMarkdown = string.Join("\n", fileLines);
-        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss");
-        var shortId = Guid.NewGuid().ToString("N")[..8];
-        var virtualTmpPath = $"/tmp/web-search-{timestamp}-{shortId}.md";
-
-        var fullPath = ResolveFullPath(virtualTmpPath);
-        ValidateWithinWorkspace(fullPath, virtualTmpPath);
-
-        var parentDir = Path.GetDirectoryName(fullPath);
-        if (!string.IsNullOrEmpty(parentDir) && !Directory.Exists(parentDir))
-        {
-            Directory.CreateDirectory(parentDir);
-        }
-
-        await File.WriteAllTextAsync(fullPath, fullMarkdown, cancellationToken);
-
-        var footer = $"[Full untruncated web search results ({totalContentChars:N0} chars across {response.Results.Count} items) saved to '{virtualTmpPath}'. Use 'read' (with offset/limit) or 'bash' (e.g. grep/rg) on '{virtualTmpPath}' to inspect specific sections without flooding context.]";
-
-        var sbTrunc = new StringBuilder();
-        sbTrunc.AppendLine($"Web search results for: '{query}' ({response.Results.Count} items):");
-
-        for (int i = 0; i < response.Results.Count; i++)
-        {
-            var r = response.Results[i];
-            var content = r.Content ?? string.Empty;
-            var (startLine, endLine) = lineRanges[i];
-
-            var header = $"[{i + 1}] {r.Title} ({r.Url}) [full content: {virtualTmpPath} lines {startLine}-{endLine}, {content.Length:N0} chars]";
-
-            string snippet;
-            if (content.Length > WorkflowDefaults.MaxWebSearchResultInlineChars)
-            {
-                snippet = content[..WorkflowDefaults.MaxWebSearchResultInlineChars] + "... [truncated inline]";
-            }
-            else
-            {
-                snippet = content;
-            }
-
-            var itemWithSnippet = $"{header}\n    {snippet}\n";
-            var headerOnly = $"{header}\n";
-
-            if (sbTrunc.Length + itemWithSnippet.Length + footer.Length + 2 <= WorkflowDefaults.MaxWebSearchTotalInlineChars)
-            {
-                sbTrunc.Append(itemWithSnippet);
-            }
-            else if (sbTrunc.Length + headerOnly.Length + footer.Length + 2 <= WorkflowDefaults.MaxWebSearchTotalInlineChars)
-            {
-                sbTrunc.Append(headerOnly);
-            }
-            else
-            {
-                var remainingBudget = WorkflowDefaults.MaxWebSearchTotalInlineChars - (sbTrunc.Length + footer.Length + 2);
-                if (remainingBudget > 20 && headerOnly.Length > remainingBudget)
-                {
-                    sbTrunc.AppendLine(headerOnly[..(remainingBudget - 3)] + "...");
-                }
-                break;
-            }
-        }
-
-        sbTrunc.AppendLine();
-        sbTrunc.Append(footer);
-        var finalResult = sbTrunc.ToString().TrimEnd();
-
-        if (finalResult.Length > WorkflowDefaults.MaxWebSearchTotalInlineChars)
-        {
-            var allowed = WorkflowDefaults.MaxWebSearchTotalInlineChars - footer.Length - 4;
-            if (allowed > 0 && finalResult.Length > allowed)
-            {
-                finalResult = finalResult[..allowed] + "\n\n" + footer;
-            }
-        }
-
-        return finalResult;
-    }
-
-    public List<TaskProposal> PendingProposals { get; } = new();
-
-    /// <summary>
-    /// propose_tasks: Propose structured backlog items for triage/discovery.
-    /// </summary>
-    public string ProposeTasks(IReadOnlyList<TaskProposal> tasks)
-    {
-        return ProposeTasks((object?)tasks, null, null, null, null);
-    }
-
-    /// <summary>
-    /// propose_tasks: Flexible overload that handles JSON collections, single-task parameters, and raw JSON strings.
-    /// </summary>
-    public string ProposeTasks(
-        object? tasks = null,
-        string? title = null,
-        string? description = null,
-        int? priority = null)
-    {
-        return ProposeTasks(tasks, title, description, priority, null);
-    }
-
-    public string ProposeTasks(
-        object? tasks = null,
-        string? title = null,
-        string? description = null,
-        int? priority = null,
-        IReadOnlyList<int>? dependsOnIds = null)
-    {
-        return ProposeTasksAsync(tasks, title, description, priority, dependsOnIds).GetAwaiter().GetResult();
-    }
-
-    public async Task<string> ProposeTasksAsync(
-        object? tasks = null,
-        string? title = null,
-        string? description = null,
-        int? priority = null,
-        IReadOnlyList<int>? dependsOnIds = null,
-        CancellationToken cancellationToken = default)
-    {
-        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds);
-        if (discovered.Count == 0)
-        {
-            return "No tasks proposed.";
-        }
-
-        for (int i = 0; i < discovered.Count; i++)
-        {
-            var task = discovered[i];
-            var deps = task.DependsOnTitles?.ToList() ?? new List<string>();
-            if (deps.Count == 0 && (task.DependsOnIds == null || task.DependsOnIds.Count == 0) && i > 0 && discovered.Count > 1)
-            {
-                deps.Add(discovered[i - 1].Title);
-            }
-            discovered[i] = task with { DependsOnTitles = deps };
-        }
-
-        if (BacklogMutationService != null && _workspaceId.HasValue)
-        {
-            var (service, scope) = RequireBacklogScope(CanonicalToolNames.ProposeTasks);
-            return await ExecuteBacklogActionAsync(async () =>
-            {
-                var result = await service.ProposeTasksAsync(scope, discovered, cancellationToken);
-                if (string.IsNullOrWhiteSpace(result))
-                {
-                    PendingProposals.AddRange(discovered);
-                    return JsonSerializer.Serialize(discovered);
-                }
-
-                try
-                {
-                    using var doc = JsonDocument.Parse(result);
-                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                    {
-                        var id = TryReadIntProperty(doc.RootElement, "id");
-                        var prereqs = TryReadIntArrayProperty(doc.RootElement, "prerequisites") ?? discovered[0].DependsOnIds;
-                        PendingProposals.Add(discovered[0] with { TaskId = id, DependsOnIds = prereqs });
-                    }
-                    else if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                    {
-                        var arr = doc.RootElement.EnumerateArray().ToList();
-                        for (int i = 0; i < discovered.Count; i++)
-                        {
-                            int? id = null;
-                            IReadOnlyList<int>? prereqs = discovered[i].DependsOnIds;
-                            if (i < arr.Count && arr[i].ValueKind == JsonValueKind.Object)
-                            {
-                                id = TryReadIntProperty(arr[i], "id");
-                                prereqs = TryReadIntArrayProperty(arr[i], "prerequisites") ?? prereqs;
-                            }
-                            PendingProposals.Add(discovered[i] with { TaskId = id, DependsOnIds = prereqs });
-                        }
-                    }
-                    else
-                    {
-                        PendingProposals.AddRange(discovered);
-                    }
-                }
-                catch (JsonException)
-                {
-                    // Fallback when a stubbed or custom service returns a non-JSON payload.
-                    PendingProposals.AddRange(discovered);
-                }
-
-                return result;
-            });
-        }
-
-        for (int i = 0; i < discovered.Count; i++)
-        {
-            PendingProposals.Add(discovered[i]);
-        }
-
-        if (discovered.Count == 1)
-        {
-            return JsonSerializer.Serialize(PendingProposals.Last(), new JsonSerializerOptions { WriteIndented = true });
-        }
-
-        var json = JsonSerializer.Serialize(PendingProposals, new JsonSerializerOptions { WriteIndented = true });
-        return $"Proposed {discovered.Count} backlog task(s):\n{json}";
-    }
-
-    private static List<TaskProposal> ExtractTaskProposals(
-        object? tasks = null,
-        string? title = null,
-        string? description = null,
-        int? priority = null,
-        IReadOnlyList<int>? dependsOnIds = null)
-    {
-        var discovered = new List<TaskProposal>();
-
-        if (!string.IsNullOrWhiteSpace(title) || !string.IsNullOrWhiteSpace(description))
-        {
-            var effectiveTitle = !string.IsNullOrWhiteSpace(title) && !string.Equals(title.Trim(), "Task", StringComparison.OrdinalIgnoreCase)
-                ? title.Trim()
-                : DeriveTitleFromDescription(description);
-            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds));
-        }
-
-        if (tasks != null)
-        {
-            if (tasks is IEnumerable<TaskProposal> enumProposals)
-            {
-                discovered.AddRange(enumProposals);
-            }
-            else if (tasks is JsonElement je)
-            {
-                discovered.AddRange(ParseJsonElementTasks(je));
-            }
-            else if (tasks is string str)
-            {
-                if (!string.IsNullOrWhiteSpace(str))
-                {
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(str);
-                        discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
-                    }
-                    catch (JsonException)
-                    {
-                        // Ignore non-JSON string input
-                    }
-                }
-            }
-            else
-            {
-                try
-                {
-                    var jsonStr = JsonSerializer.Serialize(tasks);
-                    using var doc = JsonDocument.Parse(jsonStr);
-                    discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
-                }
-                catch (JsonException)
-                {
-                    // Ignore non-JSON serialized input
-                }
-            }
-        }
-
-        return discovered;
-    }
-
-    private static List<TaskProposal> ParseJsonElementTasks(JsonElement element)
-    {
-        var list = new List<TaskProposal>();
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                var p = ParseSingleTaskElement(item);
-                if (p != null) list.Add(p);
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.Object)
-        {
-            if (element.TryGetProperty("tasks", out var tasksProp))
-            {
-                list.AddRange(ParseJsonElementTasks(tasksProp));
-            }
-            else
-            {
-                var p = ParseSingleTaskElement(element);
-                if (p != null) list.Add(p);
-            }
-        }
-        else if (element.ValueKind == JsonValueKind.String)
-        {
-            var str = element.GetString();
-            if (!string.IsNullOrWhiteSpace(str) && str.TrimStart().StartsWith("["))
-            {
-                try
-                {
-                    using var innerDoc = JsonDocument.Parse(str);
-                    list.AddRange(ParseJsonElementTasks(innerDoc.RootElement));
-                }
-                catch (JsonException)
-                {
-                    // String starting with '[' was not valid JSON; fallback to other parsing heuristics
-                }
-            }
-        }
-        return list;
-    }
-
-    private static TaskProposal? ParseSingleTaskElement(JsonElement item)
-    {
-        if (item.ValueKind != JsonValueKind.Object) return null;
-
-        string title = string.Empty;
-        if (item.TryGetProperty("title", out var t) || item.TryGetProperty("name", out t))
-        {
-            title = t.GetString() ?? string.Empty;
-        }
-
-        string desc = string.Empty;
-        if (item.TryGetProperty("description", out var d) || item.TryGetProperty("desc", out d))
-        {
-            desc = d.GetString() ?? string.Empty;
-        }
-
-        if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(desc)) return null;
-
-        if (string.IsNullOrWhiteSpace(title) || string.Equals(title.Trim(), "Task", StringComparison.OrdinalIgnoreCase))
-        {
-            title = DeriveTitleFromDescription(desc);
-        }
-
-        int priority = TaskPriority.Normal;
-        if (item.TryGetProperty("priority", out var p) && p.TryGetInt32(out var pVal))
-        {
-            priority = pVal;
-        }
-
-        List<string>? deps = null;
-        if (item.TryGetProperty("dependsOnTitles", out var depsProp) && depsProp.ValueKind == JsonValueKind.Array)
-        {
-            deps = new List<string>();
-            foreach (var dep in depsProp.EnumerateArray())
-            {
-                if (dep.ValueKind == JsonValueKind.String)
-                {
-                    var depStr = dep.GetString();
-                    if (!string.IsNullOrWhiteSpace(depStr)) deps.Add(depStr.Trim());
-                }
-                else if (dep.ValueKind == JsonValueKind.Number && dep.TryGetInt32(out var depNum))
-                {
-                    deps.Add(depNum.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                }
-            }
-        }
-
-        List<int>? depIds = null;
-        if ((item.TryGetProperty("depends_on_ids", out var depIdsProp) || item.TryGetProperty("dependsOnIds", out depIdsProp)) && depIdsProp.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var dep in depIdsProp.EnumerateArray())
-            {
-                if (dep.ValueKind == JsonValueKind.Number && dep.TryGetInt32(out var parsedId))
-                {
-                    depIds ??= new List<int>();
-                    depIds.Add(parsedId);
-                }
-                else if (dep.ValueKind == JsonValueKind.String)
-                {
-                    var raw = dep.GetString()?.Trim();
-                    if (int.TryParse(raw?.TrimStart('#'), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var parsedStrId))
-                    {
-                        depIds ??= new List<int>();
-                        depIds.Add(parsedStrId);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(raw))
-                    {
-                        deps ??= new List<string>();
-                        if (!deps.Contains(raw, StringComparer.OrdinalIgnoreCase))
-                        {
-                            deps.Add(raw);
-                        }
-                    }
-                }
-            }
-        }
-
-        string type = "feature";
-        if (item.TryGetProperty("type", out var ty))
-        {
-            type = ty.GetString() ?? "feature";
-        }
-
-        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds);
-    }
-
-    private static int? TryReadIntProperty(JsonElement obj, string propertyName)
-    {
-        return obj.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var val)
-            ? val
-            : null;
-    }
-
-    private static IReadOnlyList<int>? TryReadIntArrayProperty(JsonElement obj, string propertyName)
-    {
-        if (!obj.TryGetProperty(propertyName, out var prop) || prop.ValueKind != JsonValueKind.Array)
-        {
-            return null;
-        }
-
-        var list = new List<int>();
-        foreach (var el in prop.EnumerateArray())
-        {
-            if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var id))
-            {
-                list.Add(id);
-            }
-        }
-
-        return list.Count > 0 ? list : null;
-    }
-
-    private static string DeriveTitleFromDescription(string? description)
-    {
-        if (string.IsNullOrWhiteSpace(description)) return "Task";
-        var firstLine = description.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? "Task";
-        firstLine = firstLine.TrimStart('#', ' ', '-', '*', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ':');
-        if (firstLine.Length > 80)
-        {
-            var truncated = firstLine[..80];
-            var lastSpace = truncated.LastIndexOf(' ');
-            if (lastSpace > 30) truncated = truncated[..lastSpace];
-            return truncated;
-        }
-        return string.IsNullOrWhiteSpace(firstLine) ? "Task" : firstLine;
-    }
-
-    /// <summary>
-    /// request_changes: Reject implementation and send task back to the implementation agent with detailed feedback.
-    /// </summary>
-    public string RequestChanges(string feedback, string? reason = null)
-    {
-        RequestChangesHandler?.Invoke(feedback, reason);
-        throw new RequestChangesException(feedback, reason);
-    }
-
-    /// <summary>
-    /// load_skill: Loads full instructions and reference documentation for a modular skill on demand.
-    /// </summary>
-    public async Task<string> LoadSkillAsync(string skillName, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(skillName))
-        {
-            return "Error: skill_name parameter is required.";
-        }
-
-
-        return await _skillsService.LoadSkillAsync(skillName, cancellationToken);
-    }
+    public Task<string> LoadSkillAsync(string skillName, CancellationToken cancellationToken = default) =>
+        ResearchAndSkillsModule.LoadSkillAsync(skillName, cancellationToken);
 }
-

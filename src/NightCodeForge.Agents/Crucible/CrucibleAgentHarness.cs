@@ -133,22 +133,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var canonicalTools = toolset.Tools;
         var dispatcher = toolset.Dispatcher;
 
-        using var interruptionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        NightCodeForge.Core.Workflow.HumanInterruptionException? capturedInterruption = null;
-        canonicalTools.AskHandler = (questions, ct) =>
-        {
-            capturedInterruption = new NightCodeForge.Core.Workflow.HumanInterruptionException(questions);
-            interruptionCts.Cancel();
-            throw new OperationCanceledException(interruptionCts.Token);
-        };
-
-        NightCodeForge.Core.Workflow.RequestChangesException? capturedRequestChanges = null;
-        canonicalTools.RequestChangesHandler = (feedback, reason) =>
-        {
-            capturedRequestChanges = new NightCodeForge.Core.Workflow.RequestChangesException(feedback, reason);
-            interruptionCts.Cancel();
-            throw new OperationCanceledException(interruptionCts.Token);
-        };
+        using var interruptionController = toolset.UseInterruptionController(cancellationToken);
 
         // Rehydrate any pending proposals previously recorded in DataBag
         var existingProposals = context.PipelineContext?.DataBag.Get<List<TaskProposal>>(PipelineDataBagKeys.PendingProposals);
@@ -495,6 +480,25 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 summary: "Crucible paused awaiting human clarification");
         }
 
+        Task<AgentRunResult>? TryCompleteWithCapturedInterruptionAsync() =>
+            interruptionController.CapturedInterruption switch
+            {
+                null => null,
+                HumanClarificationInterruption human => CompleteWithInterruptionAsync(new HumanInterruptionException(human.Questions)),
+                ReviewerChangesRequestedInterruption reqChange => CompleteWithRequestChangesAsync(new RequestChangesException(reqChange.Feedback, reqChange.Reason, reqChange.TargetStageId)),
+                var unhandled => FailUnhandledInterruptionAsync(unhandled)
+            };
+
+        Task<AgentRunResult> FailUnhandledInterruptionAsync(ToolTurnInterruption unhandled)
+        {
+            var errorMsg = $"Unhandled terminal tool interruption '{unhandled.GetType().Name}'.";
+            _logger.LogError(
+                "Crucible stage for task #{TaskId} received unhandled terminal tool interruption: {InterruptionType}",
+                context.ForgeTask.Id,
+                unhandled.GetType().FullName);
+            return FailAsync(errorMsg);
+        }
+
         async Task<AgentRunResult> FailAsync(string errorMsg)
         {
             stopwatch.Stop();
@@ -509,14 +513,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             // The caller's token is already cancelled: close the conversation with a token that still works,
             // otherwise the stage conversation would stay "Running" forever.
             stopwatch.Stop();
-            try
-            {
-                interruptionCts.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Justification: CTS was already disposed upon stream completion
-            }
+            interruptionController.Cancel();
             var isShutdown = _cancellationManager.IsHostShuttingDown && !_cancellationManager.IsCancelRequested(context.ForgeTask.Id);
             if (isShutdown)
             {
@@ -541,14 +538,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         async Task SuspendOnPauseAsync()
         {
             stopwatch.Stop();
-            try
-            {
-                interruptionCts.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Justification: CTS was already disposed upon stream completion
-            }
+            interruptionController.Cancel();
             SanitizeInFlightTurns(chatHistory);
             latestSerializedState = SerializeSession(chatHistory);
             using var timeoutCts = new CancellationTokenSource(PauseAbortTimeout);
@@ -572,7 +562,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         async Task WaitRetryBackoffAsync(TimeSpan delay)
         {
-            using var pauseCts = CancellationTokenSource.CreateLinkedTokenSource(interruptionCts.Token);
+            using var pauseCts = CancellationTokenSource.CreateLinkedTokenSource(interruptionController.InterruptionToken);
             void OnStateChanged(bool isPaused)
             {
                 if (isPaused)
@@ -799,8 +789,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 long? streamOutageStartTimestamp = null;
                 var recoveryState = new TurnRecoveryState();
 
-                IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionCts.Token)
-                    .GetAsyncEnumerator(interruptionCts.Token);
+                IAsyncEnumerator<AgentResponseUpdate>? enumerator = agent.RunStreamingAsync(historySnapshot.ToList(), session, cancellationToken: interruptionController.InterruptionToken)
+                    .GetAsyncEnumerator(interruptionController.InterruptionToken);
                 try
                 {
                     while (true)
@@ -823,20 +813,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             streamingFailed = true;
                             break;
                         }
-                        catch (OperationCanceledException) when (capturedInterruption != null ||
-                                                               capturedRequestChanges != null ||
-                                                               interruptionCts.IsCancellationRequested ||
+                        catch (OperationCanceledException) when (interruptionController.HasInterruption ||
+                                                               interruptionController.InterruptionToken.IsCancellationRequested ||
                                                                cancellationToken.IsCancellationRequested ||
                                                                _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
                                                                _operationsControlService.IsPaused)
                         {
-                            if (capturedInterruption != null)
+                            if (TryCompleteWithCapturedInterruptionAsync() is { } interruptionTask)
                             {
-                                return await CompleteWithInterruptionAsync(capturedInterruption);
-                            }
-                            if (capturedRequestChanges != null)
-                            {
-                                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                                return await interruptionTask;
                             }
                             var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
                             if (isPause)
@@ -895,8 +880,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                                         streamOutageStartTimestamp = null;
 
                                         session = await agent.CreateSessionAsync(cancellationToken);
-                                        enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
-                                            .GetAsyncEnumerator(interruptionCts.Token);
+                                        enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionController.InterruptionToken)
+                                            .GetAsyncEnumerator(interruptionController.InterruptionToken);
                                         continue;
                                     }
                                     latestSerializedState = SerializeSession(chatHistory);
@@ -974,12 +959,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
                             SanitizeInFlightTurns(chatHistory);
 
                             session = await agent.CreateSessionAsync(cancellationToken);
-                            enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token)
-                                .GetAsyncEnumerator(interruptionCts.Token);
+                            enumerator = agent.RunStreamingAsync(chatHistory.ToList(), session, cancellationToken: interruptionController.InterruptionToken)
+                                .GetAsyncEnumerator(interruptionController.InterruptionToken);
                             continue;
                         }
                         catch (Exception ex)
                         {
+                            if (TryCompleteWithCapturedInterruptionAsync() is { } capturedStreamInterruptionTask)
+                            {
+                                return await capturedStreamInterruptionTask;
+                            }
                             var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                             _logger.LogError(ex, "Error during Crucible streaming LLM invocation: {ErrorMessage}", errorMsg);
                             return await FailAsync(errorMsg);
@@ -1012,13 +1001,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     }
                 }
 
-                if (capturedInterruption != null)
+                if (TryCompleteWithCapturedInterruptionAsync() is { } postStreamInterruptionTask)
                 {
-                    return await CompleteWithInterruptionAsync(capturedInterruption);
-                }
-                if (capturedRequestChanges != null)
-                {
-                    return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                    return await postStreamInterruptionTask;
                 }
 
                 if (streamingFailed)
@@ -1036,7 +1021,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     {
                         try
                         {
-                            var response = await agent.RunAsync(chatHistory.ToList(), session, cancellationToken: interruptionCts.Token);
+                            var response = await agent.RunAsync(chatHistory.ToList(), session, cancellationToken: interruptionController.InterruptionToken);
                             foreach (var update in response.ToAgentResponseUpdates())
                             {
                                 await ProcessUpdateAsync(update, streaming: false);
@@ -1051,20 +1036,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         {
                             return await CompleteWithInterruptionAsync(interruption);
                         }
-                        catch (OperationCanceledException) when (capturedInterruption != null ||
-                                                               capturedRequestChanges != null ||
-                                                               interruptionCts.IsCancellationRequested ||
+                        catch (OperationCanceledException) when (interruptionController.HasInterruption ||
+                                                               interruptionController.InterruptionToken.IsCancellationRequested ||
                                                                cancellationToken.IsCancellationRequested ||
                                                                _cancellationManager.IsPauseRequested(context.ForgeTask.Id) ||
                                                                _operationsControlService.IsPaused)
                         {
-                            if (capturedInterruption != null)
+                            if (TryCompleteWithCapturedInterruptionAsync() is { } nonStreamInterruptionTask)
                             {
-                                return await CompleteWithInterruptionAsync(capturedInterruption);
-                            }
-                            if (capturedRequestChanges != null)
-                            {
-                                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                                return await nonStreamInterruptionTask;
                             }
                             var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
                             if (isPause)
@@ -1183,19 +1163,19 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         }
                         catch (Exception ex)
                         {
+                            if (TryCompleteWithCapturedInterruptionAsync() is { } capturedNonStreamInterruptionTask)
+                            {
+                                return await capturedNonStreamInterruptionTask;
+                            }
                             var errorMsg = HttpErrorDetailHelper.FormatLlmInvocationError(ex);
                             _logger.LogError(ex, "Error during Crucible non-streaming LLM invocation: {ErrorMessage}", errorMsg);
                             return await FailAsync(errorMsg);
                         }
                     }
 
-                    if (capturedInterruption != null)
+                    if (TryCompleteWithCapturedInterruptionAsync() is { } postNonStreamInterruptionTask)
                     {
-                        return await CompleteWithInterruptionAsync(capturedInterruption);
-                    }
-                    if (capturedRequestChanges != null)
-                    {
-                        return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                        return await postNonStreamInterruptionTask;
                     }
                 }
 
@@ -1249,13 +1229,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
         catch (OperationCanceledException) when (!conversationClosed)
         {
-            if (capturedInterruption != null)
+            if (TryCompleteWithCapturedInterruptionAsync() is { } outerInterruptionTask)
             {
-                return await CompleteWithInterruptionAsync(capturedInterruption);
-            }
-            if (capturedRequestChanges != null)
-            {
-                return await CompleteWithRequestChangesAsync(capturedRequestChanges);
+                return await outerInterruptionTask;
             }
             var isPause = _cancellationManager.IsPauseRequested(context.ForgeTask.Id) || _operationsControlService.IsPaused;
             if (isPause)
