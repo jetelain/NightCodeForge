@@ -24,6 +24,11 @@ public static partial class WslPathConverter
             return path;
         }
 
+        if (TryExtractWslUnc(path, out _, out var wslLinuxPath))
+        {
+            return wslLinuxPath;
+        }
+
         var match = WindowsDriveRegex().Match(path);
         if (match.Success)
         {

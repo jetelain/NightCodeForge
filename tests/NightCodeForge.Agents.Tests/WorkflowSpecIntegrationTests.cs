@@ -312,8 +312,8 @@ public class WorkflowSpecIntegrationTests
             });
 
         var envProviderMock = new Mock<IExecutionEnvironmentProvider>();
-        envProviderMock.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-            .Returns(mockEnv.Object);
+        envProviderMock.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(mockEnv.Object);
 
         // Git Workspace Manager
         var gitManager = gitManagerOverride;

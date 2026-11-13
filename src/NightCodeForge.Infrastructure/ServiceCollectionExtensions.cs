@@ -99,7 +99,7 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<Execution.WslExecutionEnvironment>();
         services.TryAddTransient<Execution.NightCodeForgeContainerExecutor>();
         services.TryAddSingleton<Execution.IContainerEnvironmentFactory, Execution.ContainerEnvironmentFactory>();
-        services.TryAddScoped<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
+        services.TryAddSingleton<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
         // 7. LLM inference services are provider-specific: see AddNightCodeForgeInference.
 

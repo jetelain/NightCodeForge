@@ -220,7 +220,7 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     {
         var workspacePath = !string.IsNullOrEmpty(context.WorkspacePath)
             ? context.WorkspacePath
-            : (context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
+            : (context.SandboxScope?.DefaultWorkingDirectory ?? context.Workspace?.RepositoryPath ?? Directory.GetCurrentDirectory());
 
         var localWorkspaceRoot = workspacePath;
         if (IsForeignPath(localWorkspaceRoot))
@@ -228,6 +228,11 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
             if (context.Workspace != null)
             {
                 localWorkspaceRoot = _pathResolver.ResolveCruciblePath(context.Workspace.Id, string.Empty, context.ForgeTask.Id);
+            }
+            else if (context.SandboxScope != null)
+            {
+                var resolver = new SandboxPathResolver(context.SandboxScope);
+                localWorkspaceRoot = resolver.ResolveBashWorkingDirectory(null, ExecutionTier.BareHost);
             }
             else if (!string.IsNullOrEmpty(context.Workspace?.RepositoryPath))
             {

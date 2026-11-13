@@ -74,7 +74,17 @@ public class WslExecutionEnvironment : IExecutionEnvironment
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             var wslTargetDir = WslPathConverter.ToWslPath(targetDir);
-            var wslCmd = $"cd \"{wslTargetDir}\" && {command}";
+            string wslCmd;
+            if (wslTargetDir == "~" || wslTargetDir.StartsWith("~/", StringComparison.Ordinal))
+            {
+                var homeSub = wslTargetDir.Length > 1 ? wslTargetDir[2..] : string.Empty;
+                var homeTarget = string.IsNullOrEmpty(homeSub) ? "$HOME" : $"$HOME/{homeSub}";
+                wslCmd = $"mkdir -p \"{homeTarget}\" && cd \"{homeTarget}\" && {command}";
+            }
+            else
+            {
+                wslCmd = $"cd \"{wslTargetDir}\" && {command}";
+            }
 
             var args = new List<string>();
             if (!string.IsNullOrWhiteSpace(_distribution))
@@ -97,6 +107,23 @@ public class WslExecutionEnvironment : IExecutionEnvironment
         }
         else
         {
+            if (targetDir == "~" || targetDir.StartsWith("~/", StringComparison.Ordinal))
+            {
+                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (!string.IsNullOrWhiteSpace(profile))
+                {
+                    targetDir = targetDir.Length > 1 ? Path.Combine(profile, targetDir[2..]) : profile;
+                    try
+                    {
+                        Directory.CreateDirectory(targetDir);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Best-effort creation of WSL marker working directory '{TargetDir}' failed", targetDir);
+                    }
+                }
+            }
+
             var unixCmd = $"cd \"{targetDir}\" && {command}";
             spec = new ProcessStartSpec
             {

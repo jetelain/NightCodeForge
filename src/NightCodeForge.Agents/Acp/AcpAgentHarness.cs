@@ -76,7 +76,10 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         long promptTokens = 0;
         long completionTokens = 0;
         var (workspacePath, localWorkspaceRoot) = ResolveWorkspacePaths(context);
-        var hostContext = new AcpHostRpcContext(sessionId, context, workspacePath, localWorkspaceRoot);
+        var sandboxPathResolver = context.SandboxScope != null
+            ? new SandboxPathResolver(context.SandboxScope)
+            : null;
+        var hostContext = new AcpHostRpcContext(sessionId, context, workspacePath, localWorkspaceRoot, sandboxPathResolver);
 
         try
         {

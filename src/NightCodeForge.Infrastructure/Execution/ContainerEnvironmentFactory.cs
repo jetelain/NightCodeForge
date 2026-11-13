@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,6 +23,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly ICompanionToolInstaller _companionToolInstaller;
     private readonly ILogger<NightCodeForgeContainerExecutor> _containerLogger;
+    private readonly ConcurrentDictionary<(string Stack, bool UseWsl, string Distro), bool> _verifiedCompanionToolStacks = new();
+    private readonly SemaphoreSlim _companionToolLock = new(1, 1);
 
     public ContainerEnvironmentFactory(
         IProcessRunner processRunner,
@@ -45,20 +48,320 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
 
     public string? DefaultWslDistribution => _options.DefaultWslDistribution;
 
-    public IExecutionEnvironment CreateContainerEnvironment(
+    public SandboxScopeDescriptor BuildWorkspaceScope(
         Workspace workspace,
-        SandboxSecurityTier securityTier,
-        int? effectiveTaskId)
+        SandboxSecurityTier securityTier = SandboxSecurityTier.Standard,
+        int? effectiveTaskId = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        var useWsl = ShouldUseWslForContainers(workspace);
+        var normalizedTaskId = effectiveTaskId is > 0 ? effectiveTaskId : null;
+        var isReadOnly = securityTier == SandboxSecurityTier.RestrictedReadOnly;
+        var (rawPath, hostWorkspacePath, canonicalClonePath) = ResolveWorkspaceHostPaths(workspace);
+        var hostSkillsDir = EnsureHostSkillsDirectory();
+
+        string? rawTmpDir = null;
+        if (!isReadOnly && !string.IsNullOrWhiteSpace(hostWorkspacePath))
+        {
+            rawTmpDir = EnsureHostTmpDirectory(hostWorkspacePath);
+        }
+
+        string? rawTaskWorktreePath = null;
+        if (normalizedTaskId.HasValue && !string.IsNullOrWhiteSpace(hostWorkspacePath))
+        {
+            rawTaskWorktreePath = $"{hostWorkspacePath.TrimEnd('/', '\\')}/task-{normalizedTaskId.Value}";
+        }
+
+        var rawRoot = !string.IsNullOrWhiteSpace(hostWorkspacePath)
+            ? hostWorkspacePath
+            : (rawPath ?? string.Empty);
+
+        var rawWorkingDir = normalizedTaskId.HasValue && !string.IsNullOrWhiteSpace(rawTaskWorktreePath)
+            ? rawTaskWorktreePath
+            : (!string.IsNullOrWhiteSpace(canonicalClonePath) ? canonicalClonePath : rawRoot);
+
+        var additionalEntries = new List<VirtualMountEntry>();
+        if (!string.IsNullOrWhiteSpace(hostSkillsDir))
+        {
+            additionalEntries.Add(new VirtualMountEntry(
+                virtualSubPath: "skills",
+                virtualMountPath: $"{SandboxMountTable.WorkspaceVirtualRoot}/skills",
+                hostDirectoryPath: ResolveHostAccessiblePath(hostSkillsDir),
+                wslTargetDirectoryPath: Git.WslPathConverter.ToWslPath(hostSkillsDir),
+                isReadOnly: true));
+        }
+
+        var mountTable = SandboxMountTable.ForWorkspace(
+            hostWorkingDirectory: ResolveHostAccessiblePath(rawWorkingDir),
+            wslWorkingDirectory: Git.WslPathConverter.ToWslPath(rawWorkingDir),
+            isReadOnly: isReadOnly,
+            taskId: normalizedTaskId,
+            hostCloneDirectory: !string.IsNullOrWhiteSpace(canonicalClonePath) ? ResolveHostAccessiblePath(canonicalClonePath) : null,
+            wslCloneDirectory: !string.IsNullOrWhiteSpace(canonicalClonePath) ? Git.WslPathConverter.ToWslPath(canonicalClonePath) : null,
+            hostTmpDirectory: !string.IsNullOrWhiteSpace(rawTmpDir) ? ResolveHostAccessiblePath(rawTmpDir) : null,
+            wslTmpDirectory: !string.IsNullOrWhiteSpace(rawTmpDir) ? Git.WslPathConverter.ToWslPath(rawTmpDir) : null,
+            additionalEntries: additionalEntries);
+
+        var defaultWorkDir = normalizedTaskId.HasValue
+            ? $"{SandboxMountTable.WorkspaceVirtualRoot}/task-{normalizedTaskId.Value}"
+            : (!string.IsNullOrWhiteSpace(canonicalClonePath)
+                ? $"{SandboxMountTable.WorkspaceVirtualRoot}/clone"
+                : SandboxMountTable.WorkspaceVirtualRoot);
+
+        var scope = SandboxScopeDescriptor.ForWorkspace(
+            workspace,
+            securityTier,
+            normalizedTaskId,
+            mountTable,
+            defaultWorkingDirectory: defaultWorkDir,
+            hostWorkspacePath: hostWorkspacePath,
+            canonicalClonePath: canonicalClonePath);
+
+        return scope with { ContainerName = ResolveBaseContainerName(workspace) };
+    }
+
+    public async Task<IExecutionEnvironment> CreateContainerEnvironmentAsync(
+        SandboxScopeDescriptor scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+
+        var useWsl = ShouldUseWslForScope(scope);
+        var targetDistro = scope.WslDistribution ?? _options.DefaultWslDistribution;
+        var containerName = ContainerMountAndDriftBuilder.ResolveContainerName(scope);
+        var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
+
+        var rawPath = !string.IsNullOrWhiteSpace(scope.Ext4MirrorPath)
+            ? scope.Ext4MirrorPath
+            : scope.RepositoryPath;
+        var detectedStack = !string.IsNullOrWhiteSpace(rawPath)
+            ? CodeStackPresets.Detect(rawPath)?.Name ?? CodeStack.DotNet
+            : CodeStack.DotNet;
+
+        await EnsureCompanionToolsOnceAsync(detectedStack, useWsl, targetDistro, cancellationToken);
+
+        var additionalMounts = new List<ContainerVolumeMount>();
+
+        if (scope.ScopeKind != SandboxScopeKind.SystemNightwatch)
+        {
+            var hostSkillsDir = EnsureHostSkillsDirectory();
+            additionalMounts.Add(new(
+                hostPath: hostSkillsDir,
+                containerPath: "/workspace/skills",
+                isReadOnly: true));
+        }
+
+        var hostToolsSource = useWsl
+            ? "~/.dotnet/tools"
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools");
+        if (useWsl || Directory.Exists(hostToolsSource))
+        {
+            additionalMounts.Add(new(
+                hostPath: hostToolsSource,
+                containerPath: ContainerExecutorOptions.HostDotnetToolsContainerPath,
+                isReadOnly: true));
+        }
+
+        if (scope.SecurityTier != SandboxSecurityTier.RestrictedReadOnly &&
+            scope.MountTable.SandboxTmpMount != null)
+        {
+            var tmpMount = scope.MountTable.SandboxTmpMount;
+            var tmpSource = !string.IsNullOrWhiteSpace(tmpMount.WslTargetDirectoryPath)
+                ? tmpMount.WslTargetDirectoryPath
+                : tmpMount.HostDirectoryPath;
+            if (!string.IsNullOrWhiteSpace(tmpSource))
+            {
+                additionalMounts.Add(new(
+                    hostPath: tmpSource,
+                    containerPath: "/tmp",
+                    isReadOnly: false));
+            }
+        }
+
+        var options = new ContainerExecutorOptions
+        {
+            Scope = scope,
+            MountTable = scope.MountTable,
+            ContainerNameOrId = containerName,
+            ContainerImage = ResolveContainerImageName(scope.ContainerImage),
+            HostWorkspacePath = scope.HostWorkspacePath,
+            CanonicalClonePath = scope.CanonicalClonePath,
+            ContainerWorkspacePath = scope.VirtualRootPath,
+            DefaultWorkingDirectory = scope.DefaultWorkingDirectory,
+            MountPackageCaches = true,
+            MountHostSdks = true,
+            SdkMountPaths = sdkMountPaths?.ToList() ?? new List<string>(),
+            AdditionalVolumeMounts = additionalMounts,
+            AutoStartContainer = true,
+            IsRestrictedReadOnly = scope.SecurityTier == SandboxSecurityTier.RestrictedReadOnly,
+            UseWsl = useWsl,
+            WslDistribution = targetDistro,
+            WslExecutable = _options.WslExecutable,
+            WslUserName = _pathResolver.GetWslUserName(),
+            ExpandTildeInMounts = true,
+            ProtectCloneWorkingTree = scope.ScopeKind != SandboxScopeKind.SystemNightwatch,
+            UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
+        };
+
+        return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger, _userIdentityResolver, _telemetryService);
+    }
+
+    public Task<IExecutionEnvironment> CreateContainerEnvironmentAsync(
+        Workspace workspace,
+        SandboxSecurityTier securityTier,
+        int? effectiveTaskId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        var scope = BuildWorkspaceScope(workspace, securityTier, effectiveTaskId);
+        return CreateContainerEnvironmentAsync(scope, cancellationToken);
+    }
+
+    public async Task RemoveContainerAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (scope.ExecutionMode != ExecutionMode.ContainerSandbox)
+        {
+            return;
+        }
+
+        var containerName = ContainerMountAndDriftBuilder.ResolveContainerName(scope);
+        var targetOptions = new ContainerExecutorOptions
+        {
+            UseWsl = ShouldUseWslForScope(scope),
+            WslDistribution = scope.WslDistribution ?? _options.DefaultWslDistribution,
+            WslExecutable = _options.WslExecutable
+        };
+
+        await RemoveContainerByTargetOptionsAsync(targetOptions, containerName, cancellationToken);
+    }
+
+    public async Task RemoveTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox || taskId <= 0)
+        {
+            return;
+        }
+
+        var containerName = TaskContainerName(ResolveBaseContainerName(workspace), taskId);
+        var roContainerName = ContainerMountAndDriftBuilder.ApplySecurityTierSuffix(containerName, SandboxSecurityTier.RestrictedReadOnly);
+        await RemoveContainerAsync(workspace, containerName, cancellationToken);
+        await RemoveContainerAsync(workspace, roContainerName, cancellationToken);
+    }
+
+    public async Task RemoveBaseContainerAsync(Workspace workspace, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
+        {
+            return;
+        }
+
         var baseContainerName = ResolveBaseContainerName(workspace);
+        var roBaseContainerName = ContainerMountAndDriftBuilder.ApplySecurityTierSuffix(baseContainerName, SandboxSecurityTier.RestrictedReadOnly);
+        await RemoveContainerAsync(workspace, baseContainerName, cancellationToken);
+        await RemoveContainerAsync(workspace, roBaseContainerName, cancellationToken);
+    }
 
-        var containerName = effectiveTaskId.HasValue
-            ? TaskContainerName(baseContainerName, effectiveTaskId.Value)
-            : baseContainerName;
+    public async Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
+        {
+            return [];
+        }
 
+        var prefix = ResolveBaseContainerName(workspace) + TaskContainerInfix;
+        var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
+            BuildDockerTargetOptions(workspace),
+            ["ps", "-a", "--filter", $"name={prefix}", "--format", "{{.Names}}"],
+            timeoutSeconds: 10);
+
+        ProcessExecutionResult result;
+        try
+        {
+            result = await _processRunner.RunAsync(spec, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _containerLogger.LogWarning(ex, "Failed to list task containers with prefix '{Prefix}' for Workspace #{WorkspaceId}", prefix, workspace.Id);
+            return [];
+        }
+
+        if (result.ExitCode != 0)
+        {
+            _containerLogger.LogWarning("Listing task containers with prefix '{Prefix}' failed (exit code {ExitCode}): {Error}",
+                prefix, result.ExitCode, result.StandardError);
+            return [];
+        }
+
+        var ids = new HashSet<int>();
+        foreach (var rawName in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var name = rawName.TrimStart('/');
+            if (!name.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var suffix = name[prefix.Length..];
+            if (suffix.EndsWith(ContainerMountAndDriftBuilder.ReadOnlyContainerSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                suffix = suffix[..^ContainerMountAndDriftBuilder.ReadOnlyContainerSuffix.Length];
+            }
+
+            if (int.TryParse(suffix, out var taskId) && taskId > 0)
+            {
+                ids.Add(taskId);
+            }
+        }
+
+        return ids.ToList();
+    }
+
+    private async Task EnsureCompanionToolsOnceAsync(
+        string detectedStack,
+        bool useWsl,
+        string? targetDistro,
+        CancellationToken cancellationToken)
+    {
+        var key = (detectedStack.ToLowerInvariant(), useWsl, (targetDistro ?? string.Empty).ToLowerInvariant());
+        if (_verifiedCompanionToolStacks.ContainsKey(key))
+        {
+            return;
+        }
+
+        await _companionToolLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_verifiedCompanionToolStacks.ContainsKey(key))
+            {
+                return;
+            }
+
+            try
+            {
+                await _companionToolInstaller.EnsureToolsInstalledAsync(detectedStack, useWsl, targetDistro, cancellationToken);
+                _verifiedCompanionToolStacks[key] = true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _containerLogger.LogWarning(ex, "Failed to auto-install companion tools for stack {Stack}", detectedStack);
+            }
+        }
+        finally
+        {
+            _companionToolLock.Release();
+        }
+    }
+
+    private (string? RawPath, string? HostWorkspacePath, string? CanonicalClonePath) ResolveWorkspaceHostPaths(Workspace workspace)
+    {
         var rawPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
             ? workspace.Ext4MirrorPath
             : (!string.IsNullOrWhiteSpace(workspace.RepositoryPath)
@@ -68,7 +371,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         if (string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && workspace.Id > 0)
         {
             var resolvedClone = _pathResolver.ResolveCruciblePath(workspace.Id, string.Empty);
-            if (Directory.Exists(resolvedClone))
+            if (!string.IsNullOrWhiteSpace(resolvedClone) && Directory.Exists(resolvedClone))
             {
                 rawPath = _pathResolver.GetAgentWorkingClonePath(workspace.Id);
             }
@@ -109,30 +412,26 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
                 if (cloneDir != null && normRaw.StartsWith('/') && !cloneDir.StartsWith('/')) cloneDir = "/" + cloneDir;
             }
 
-            // In container, agent has "/workspace/clone" and "/workspace/task-nnn" (when working on task) if cloneDir is present.
-            // If no clone subdirectory exists, the host workspace root (parentDir) is mounted directly to /workspace.
             hostWorkspacePath = parentDir;
             canonicalClonePath = cloneDir;
         }
 
-        // When working on a task PWD should be "/workspace/task-nnn", and "/workspace/clone" if clone subdirectory exists, or "/workspace".
-        var defaultWorkingDir = effectiveTaskId.HasValue
-            ? $"/workspace/task-{effectiveTaskId.Value}"
-            : (!string.IsNullOrEmpty(canonicalClonePath) ? "/workspace/clone" : "/workspace");
+        return (rawPath, hostWorkspacePath, canonicalClonePath);
+    }
 
-        var targetDistro = workspace.WslDistribution ?? _options.DefaultWslDistribution;
-        var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
-
-        var detectedStack = !string.IsNullOrWhiteSpace(rawPath) ? CodeStackPresets.Detect(rawPath)?.Name ?? CodeStack.DotNet : CodeStack.DotNet;
-        try
+    private string ResolveHostAccessiblePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
         {
-            Task.Run(() => _companionToolInstaller.EnsureToolsInstalledAsync(detectedStack, useWsl, targetDistro)).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _containerLogger.LogWarning(ex, "Failed to auto-install companion tools for stack {Stack}", detectedStack);
+            return string.Empty;
         }
 
+        var resolved = _pathResolver.ToHostPath(path);
+        return !string.IsNullOrWhiteSpace(resolved) ? resolved : path;
+    }
+
+    private string EnsureHostSkillsDirectory()
+    {
         var hostSkillsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nightcodeforge", "skills");
         if (!Directory.Exists(hostSkillsDir))
         {
@@ -146,151 +445,43 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             }
         }
 
-        var additionalMounts = new List<ContainerVolumeMount>
-        {
-            new(
-                hostPath: hostSkillsDir,
-                containerPath: "/workspace/skills",
-                isReadOnly: true)
-        };
+        return hostSkillsDir;
+    }
 
-        var hostToolsSource = useWsl ? "~/.dotnet/tools" : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools");
-        if (useWsl || Directory.Exists(hostToolsSource))
+    private string EnsureHostTmpDirectory(string hostWorkspacePath)
+    {
+        var hostTmpDir = $"{hostWorkspacePath.TrimEnd('/', '\\').Replace('\\', '/')}/tmp";
+        var hostAccessibleWorkspaceDir = _pathResolver.ToHostPath(hostWorkspacePath);
+        if (!string.IsNullOrWhiteSpace(hostAccessibleWorkspaceDir) && Directory.Exists(hostAccessibleWorkspaceDir))
         {
-            additionalMounts.Add(new(
-                hostPath: hostToolsSource,
-                containerPath: ContainerExecutorOptions.HostDotnetToolsContainerPath,
-                isReadOnly: true));
-        }
-
-        if (securityTier != SandboxSecurityTier.RestrictedReadOnly && !string.IsNullOrWhiteSpace(hostWorkspacePath))
-        {
-            var hostTmpDir = $"{hostWorkspacePath.TrimEnd('/', '\\').Replace('\\', '/')}/tmp";
-            var hostAccessibleWorkspaceDir = _pathResolver.ToHostPath(hostWorkspacePath);
-            if (Directory.Exists(hostAccessibleWorkspaceDir))
+            var hostAccessibleTmpDir = _pathResolver.ToHostPath(hostTmpDir);
+            if (!string.IsNullOrWhiteSpace(hostAccessibleTmpDir) && !Directory.Exists(hostAccessibleTmpDir))
             {
-                var hostAccessibleTmpDir = _pathResolver.ToHostPath(hostTmpDir);
-                if (!Directory.Exists(hostAccessibleTmpDir))
+                try
                 {
-                    try
-                    {
-                        Directory.CreateDirectory(hostAccessibleTmpDir);
-                    }
-                    catch (Exception ex)
-                    {
-                        _containerLogger.LogWarning(ex, "Failed to create host tmp directory at {HostTmpDir}", hostAccessibleTmpDir);
-                    }
+                    Directory.CreateDirectory(hostAccessibleTmpDir);
+                }
+                catch (Exception ex)
+                {
+                    _containerLogger.LogWarning(ex, "Failed to create host tmp directory at {HostTmpDir}", hostAccessibleTmpDir);
                 }
             }
-
-            additionalMounts.Add(new(
-                hostPath: hostTmpDir,
-                containerPath: "/tmp",
-                isReadOnly: false));
         }
 
-        var options = new ContainerExecutorOptions
-        {
-            ContainerNameOrId = containerName,
-            ContainerImage = ResolveContainerImage(workspace),
-            HostWorkspacePath = hostWorkspacePath,
-            CanonicalClonePath = canonicalClonePath,
-            ContainerWorkspacePath = "/workspace",
-            DefaultWorkingDirectory = defaultWorkingDir,
-            MountPackageCaches = true,
-            MountHostSdks = true,
-            SdkMountPaths = sdkMountPaths?.ToList() ?? new List<string>(),
-            AdditionalVolumeMounts = additionalMounts,
-            AutoStartContainer = true,
-            IsRestrictedReadOnly = securityTier == SandboxSecurityTier.RestrictedReadOnly,
-            UseWsl = useWsl,
-            WslDistribution = targetDistro,
-            WslExecutable = _options.WslExecutable,
-            WslUserName = _pathResolver.GetWslUserName(),
-            ExpandTildeInMounts = true,
-            ProtectCloneWorkingTree = true,
-            UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
-        };
-
-        return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger, _userIdentityResolver, _telemetryService);
-    }
-
-    public async Task RemoveTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(workspace);
-        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox || taskId <= 0)
-        {
-            return;
-        }
-
-        var containerName = TaskContainerName(ResolveBaseContainerName(workspace), taskId);
-        await RemoveContainerAsync(workspace, containerName, cancellationToken);
-    }
-
-    public async Task RemoveBaseContainerAsync(Workspace workspace, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(workspace);
-        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
-        {
-            return;
-        }
-
-        var baseContainerName = ResolveBaseContainerName(workspace);
-        await RemoveContainerAsync(workspace, baseContainerName, cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(workspace);
-        if (workspace.ExecutionMode != ExecutionMode.ContainerSandbox)
-        {
-            return [];
-        }
-
-        var prefix = ResolveBaseContainerName(workspace) + TaskContainerInfix;
-        var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
-            BuildDockerTargetOptions(workspace),
-            ["ps", "-a", "--filter", $"name={prefix}", "--format", "{{.Names}}"],
-            timeoutSeconds: 10);
-
-        ProcessExecutionResult result;
-        try
-        {
-            result = await _processRunner.RunAsync(spec, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _containerLogger.LogWarning(ex, "Failed to list task containers with prefix '{Prefix}' for Workspace #{WorkspaceId}", prefix, workspace.Id);
-            return [];
-        }
-
-        if (result.ExitCode != 0)
-        {
-            _containerLogger.LogWarning("Listing task containers with prefix '{Prefix}' failed (exit code {ExitCode}): {Error}",
-                prefix, result.ExitCode, result.StandardError);
-            return [];
-        }
-
-        var ids = new HashSet<int>();
-        foreach (var rawName in result.StandardOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var name = rawName.TrimStart('/');
-            // Docker name filters are substring matches: keep only exact '{prefix}{taskId}' names.
-            if (name.StartsWith(prefix, StringComparison.Ordinal) &&
-                int.TryParse(name[prefix.Length..], out var taskId) && taskId > 0)
-            {
-                ids.Add(taskId);
-            }
-        }
-
-        return ids.ToList();
+        return hostTmpDir;
     }
 
     private bool ShouldUseWslForContainers(Workspace workspace) =>
         workspace.UseWslForContainers ||
         !string.IsNullOrWhiteSpace(workspace.WslDistribution) ||
         _options.UseWslForContainers ||
-        (_options.AutoDetectWsl && ShouldAutoUseWslForContainers(workspace));
+        (_options.AutoDetectWsl && ShouldAutoUseWslForContainers(workspace.Ext4MirrorPath));
+
+    private bool ShouldUseWslForScope(SandboxScopeDescriptor scope) =>
+        scope.UseWslForContainers ||
+        !string.IsNullOrWhiteSpace(scope.WslDistribution) ||
+        _options.UseWslForContainers ||
+        (_options.AutoDetectWsl && ShouldAutoUseWslForContainers(scope.Ext4MirrorPath));
 
     private static string ResolveBaseContainerName(Workspace workspace) =>
         !string.IsNullOrWhiteSpace(workspace.ContainerName)
@@ -301,14 +492,17 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
                     : workspace.ContainerImage)
                 : "ncf-sandbox");
 
-    private static string ResolveContainerImage(Workspace workspace)
+    private static string ResolveContainerImage(Workspace workspace) =>
+        ResolveContainerImageName(workspace.ContainerImage);
+
+    private static string ResolveContainerImageName(string? containerImage)
     {
-        if (string.IsNullOrWhiteSpace(workspace.ContainerImage))
+        if (string.IsNullOrWhiteSpace(containerImage))
         {
             return ContainerExecutorOptions.DefaultAgentBaseImage;
         }
 
-        var trimmed = workspace.ContainerImage.Trim();
+        var trimmed = containerImage.Trim();
         if (trimmed.Equals("ncf-agent-base", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("ncf-agent-base:latest", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("ncf-agent-base:v1", StringComparison.OrdinalIgnoreCase) ||
@@ -336,10 +530,16 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         WslExecutable = _options.WslExecutable
     };
 
-    private async Task RemoveContainerAsync(Workspace workspace, string containerName, CancellationToken cancellationToken)
+    private Task RemoveContainerAsync(Workspace workspace, string containerName, CancellationToken cancellationToken) =>
+        RemoveContainerByTargetOptionsAsync(BuildDockerTargetOptions(workspace), containerName, cancellationToken);
+
+    private async Task RemoveContainerByTargetOptionsAsync(
+        ContainerExecutorOptions targetOptions,
+        string containerName,
+        CancellationToken cancellationToken)
     {
         var spec = NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
-            BuildDockerTargetOptions(workspace),
+            targetOptions,
             ["rm", "-f", containerName],
             timeoutSeconds: 10);
 
@@ -364,7 +564,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         }
     }
 
-    private static bool ShouldAutoUseWslForContainers(Workspace workspace)
+    private static bool ShouldAutoUseWslForContainers(string? ext4MirrorPath)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -379,7 +579,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             return true;
         }
 
-        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        if (!string.IsNullOrWhiteSpace(ext4MirrorPath))
         {
             return true;
         }
@@ -415,4 +615,3 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         return false;
     }
 }
-

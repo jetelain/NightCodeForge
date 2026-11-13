@@ -38,6 +38,6 @@ public interface IWorkspaceSkillsService
 
 public interface IWorkspaceSkillsServiceFactory
 {
-    IWorkspaceSkillsService Create(Workspace workspace, string workspacePath, int? taskId = null);
+    IWorkspaceSkillsService Create(Workspace? workspace, string workspacePath, int? taskId = null);
 }
 

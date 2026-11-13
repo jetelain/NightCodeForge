@@ -9,7 +9,7 @@ namespace NightCodeForge.Infrastructure.Tests;
 public class ExecutionEnvironmentProviderTests
 {
     [Fact]
-    public void GetEnvironment_BareHost_ReturnsBareHostExecutionEnvironment()
+    public async Task GetEnvironmentAsync_BareHost_ReturnsBareHostExecutionEnvironment()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -22,13 +22,13 @@ public class ExecutionEnvironmentProviderTests
             ExecutionMode = ExecutionMode.BareHost
         };
 
-        var env = envProvider.GetEnvironment(workspace);
+        var env = await envProvider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<BareHostExecutionEnvironment>(env);
     }
 
     [Fact]
-    public void GetEnvironment_WslDirect_ReturnsWslExecutionEnvironment()
+    public async Task GetEnvironmentAsync_WslDirect_ReturnsWslExecutionEnvironment()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -42,13 +42,13 @@ public class ExecutionEnvironmentProviderTests
             Ext4MirrorPath = "/mnt/wsl/repo"
         };
 
-        var env = envProvider.GetEnvironment(workspace);
+        var env = await envProvider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<WslExecutionEnvironment>(env);
     }
 
     [Fact]
-    public void GetEnvironment_ContainerSandbox_ReturnsContainerExecutor()
+    public async Task GetEnvironmentAsync_ContainerSandbox_ReturnsContainerExecutor()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -62,13 +62,13 @@ public class ExecutionEnvironmentProviderTests
             ContainerImage = "mcr.microsoft.com/dotnet/sdk:10.0"
         };
 
-        var env = envProvider.GetEnvironment(workspace);
+        var env = await envProvider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }
 
     [Fact]
-    public void GetEnvironment_ContainerSandbox_CachesDistinctInstancesBySecurityTier()
+    public async Task GetEnvironmentAsync_ContainerSandbox_CachesDistinctInstancesBySecurityTier()
     {
         var envProvider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
@@ -78,16 +78,16 @@ public class ExecutionEnvironmentProviderTests
             ContainerImage = "alpine:latest"
         };
 
-        var standardEnv = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
-        var readOnlyEnv = envProvider.GetEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly);
-        var standardEnv2 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
+        var standardEnv = await envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard);
+        var readOnlyEnv = await envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.RestrictedReadOnly);
+        var standardEnv2 = await envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard);
 
         Assert.NotSame(standardEnv, readOnlyEnv);
         Assert.Same(standardEnv, standardEnv2);
     }
 
     [Fact]
-    public void GetEnvironment_ContainerSandbox_UsesHostSdkDiscoveryServiceWhenAvailable()
+    public async Task GetEnvironmentAsync_ContainerSandbox_UsesHostSdkDiscoveryServiceWhenAvailable()
     {
         var mockDiscovery = new FakeHostSdkDiscoveryService(new[] { "/opt/discovered-dotnet", "/opt/discovered-java" });
         var envProvider = new TestExecutionEnvironmentProviderBuilder { SdkDiscoveryService = mockDiscovery }.Build();
@@ -98,7 +98,7 @@ public class ExecutionEnvironmentProviderTests
             ContainerImage = "alpine:latest"
         };
 
-        var env = envProvider.GetEnvironment(workspace);
+        var env = await envProvider.GetEnvironmentAsync(workspace);
         var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
 
         Assert.Contains("/opt/discovered-dotnet", containerExecutor.Options.SdkMountPaths);
@@ -106,7 +106,7 @@ public class ExecutionEnvironmentProviderTests
     }
 
     [Fact]
-    public void GetEnvironment_ContainerSandbox_WithTaskId_ConfiguresIsolatedWorktreeAndSeparateContainers()
+    public async Task GetEnvironmentAsync_ContainerSandbox_WithTaskId_ConfiguresIsolatedWorktreeAndSeparateContainers()
     {
         var envProvider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
@@ -117,9 +117,9 @@ public class ExecutionEnvironmentProviderTests
             ContainerName = "ncf-sandbox-55"
         };
 
-        var envTask1 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: 1);
-        var envTask2 = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: 2);
-        var envNoTask = envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard);
+        var envTask1 = await envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 1);
+        var envTask2 = await envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 2);
+        var envNoTask = await envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard);
 
         Assert.NotSame(envTask1, envTask2);
         Assert.NotSame(envTask1, envNoTask);

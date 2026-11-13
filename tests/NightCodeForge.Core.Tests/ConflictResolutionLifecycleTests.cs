@@ -40,8 +40,8 @@ public class ConflictResolutionLifecycleTests
         env.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.Zero));
         var envProvider = new Mock<IExecutionEnvironmentProvider>();
-        envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-            .Returns(env.Object);
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(env.Object);
         return envProvider.Object;
     }
 
@@ -1517,8 +1517,8 @@ Some resolved documentation.
                 .ReturnsAsync(new CommandResult(1, longDiagnostics, "", TimeSpan.FromSeconds(2)));
 
             var envProvider = new Mock<IExecutionEnvironmentProvider>();
-            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-                .Returns(env.Object);
+            envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(env.Object);
 
             var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
@@ -1578,8 +1578,8 @@ Some resolved documentation.
                 .ThrowsAsync(new TimeoutException("Operation timed out after 30 seconds"));
 
             var envProvider = new Mock<IExecutionEnvironmentProvider>();
-            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-                .Returns(env.Object);
+            envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(env.Object);
 
             var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
@@ -1640,8 +1640,8 @@ Some resolved documentation.
                 .ReturnsAsync(new CommandResult(0, "Build succeeded. 0 Warning(s) 0 Error(s)", "", TimeSpan.FromSeconds(3)));
 
             var envProvider = new Mock<IExecutionEnvironmentProvider>();
-            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-                .Returns(env.Object);
+            envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(env.Object);
 
             var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
@@ -1712,8 +1712,8 @@ Some resolved documentation.
                 .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.FromSeconds(1)));
 
             var envProvider = new Mock<IExecutionEnvironmentProvider>();
-            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-                .Returns(env.Object);
+            envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(env.Object);
 
             var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
@@ -1777,8 +1777,8 @@ Some resolved documentation.
                 .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.FromSeconds(1)));
 
             var envProvider = new Mock<IExecutionEnvironmentProvider>();
-            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-                .Returns(env.Object);
+            envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(env.Object);
 
             var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, CreateMockPathResolver(), NullLogger<ConflictResolutionVerifier>.Instance);
 
@@ -2226,8 +2226,8 @@ Some resolved documentation.
                 .ReturnsAsync(new CommandResult(0, "Build succeeded", "", TimeSpan.FromSeconds(1)));
 
             var envProvider = new Mock<IExecutionEnvironmentProvider>();
-            envProvider.Setup(p => p.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-                .Returns(env.Object);
+            envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(env.Object);
 
             var verifier = new ConflictResolutionVerifier(gitRunner.Object, gitWorkspaceManager.Object, envProvider.Object, pathResolver.Object, NullLogger<ConflictResolutionVerifier>.Instance);
 

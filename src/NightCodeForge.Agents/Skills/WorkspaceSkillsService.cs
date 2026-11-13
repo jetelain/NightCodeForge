@@ -9,7 +9,7 @@ namespace NightCodeForge.Agents.Skills;
 
 public class WorkspaceSkillsService : IWorkspaceSkillsService
 {
-    private readonly Workspace _workspace;
+    private readonly Workspace? _workspace;
     private readonly string _workspacePath;
     private readonly int? _taskId;
     private readonly ISkillsService _skillsService;
@@ -17,14 +17,14 @@ public class WorkspaceSkillsService : IWorkspaceSkillsService
     private readonly ILogger<WorkspaceSkillsService> _logger;
 
     public WorkspaceSkillsService(
-        Workspace workspace,
+        Workspace? workspace,
         string workspacePath,
         int? taskId,
         ISkillsService skillsService,
         IBundledSkillsProvider bundledSkillsProvider,
         ILogger<WorkspaceSkillsService> logger)
     {
-        _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
+        _workspace = workspace;
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
         _workspacePath = workspacePath;
         _taskId = taskId;
@@ -284,9 +284,8 @@ public class WorkspaceSkillsServiceFactory : IWorkspaceSkillsServiceFactory
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    public IWorkspaceSkillsService Create(Workspace workspace, string workspacePath, int? taskId = null)
+    public IWorkspaceSkillsService Create(Workspace? workspace, string workspacePath, int? taskId = null)
     {
-        ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
 
         return new WorkspaceSkillsService(

@@ -161,7 +161,7 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_ConfiguresWslForContainers_WhenExplicitlySetOnWorkspace()
+    public async Task ExecutionEnvironmentProvider_ConfiguresWslForContainers_WhenExplicitlySetOnWorkspace()
     {
         var provider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
@@ -173,13 +173,13 @@ public class WslDockerExecutionTests
             WslDistribution = "Ubuntu"
         };
 
-        var env = provider.GetEnvironment(workspace);
+        var env = await provider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_UsesDefaultWslDistribution_WhenProviderOptionsConfigured()
+    public async Task ExecutionEnvironmentProvider_UsesDefaultWslDistribution_WhenProviderOptionsConfigured()
     {
         var providerOptions = new ExecutionEnvironmentProviderOptions
         {
@@ -195,13 +195,13 @@ public class WslDockerExecutionTests
             ContainerName = "debian-sandbox"
         };
 
-        var env = provider.GetEnvironment(workspace);
+        var env = await provider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_WslDirect_AppliesWorkspaceWslDistribution()
+    public async Task ExecutionEnvironmentProvider_WslDirect_AppliesWorkspaceWslDistribution()
     {
         var provider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
@@ -212,13 +212,13 @@ public class WslDockerExecutionTests
             Ext4MirrorPath = "/home/user/repo"
         };
 
-        var env = provider.GetEnvironment(workspace);
+        var env = await provider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<WslExecutionEnvironment>(env);
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_AutoDetectsWsl_WhenEnvVarSet()
+    public async Task ExecutionEnvironmentProvider_AutoDetectsWsl_WhenEnvVarSet()
     {
         Environment.SetEnvironmentVariable("NCF_USE_WSL_DOCKER", "true");
         try
@@ -231,7 +231,7 @@ public class WslDockerExecutionTests
                 ContainerName = "autodetect-sandbox"
             };
 
-            var env = provider.GetEnvironment(workspace);
+            var env = await provider.GetEnvironmentAsync(workspace);
             Assert.NotNull(env);
             Assert.IsType<NightCodeForgeContainerExecutor>(env);
         }
@@ -242,7 +242,7 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_AutoDetectsWsl_WhenExt4MirrorPathSet()
+    public async Task ExecutionEnvironmentProvider_AutoDetectsWsl_WhenExt4MirrorPathSet()
     {
         var provider = new TestExecutionEnvironmentProviderBuilder().Build();
         var workspace = new Workspace
@@ -253,7 +253,7 @@ public class WslDockerExecutionTests
             Ext4MirrorPath = "/mnt/wsl/ext4/myrepo"
         };
 
-        var env = provider.GetEnvironment(workspace);
+        var env = await provider.GetEnvironmentAsync(workspace);
         Assert.NotNull(env);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }

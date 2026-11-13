@@ -57,6 +57,9 @@ public partial class CanonicalTools
     private readonly bool _isReadOnly;
     private readonly int _maxReadFileBytes;
     private readonly ILogger<CanonicalTools> _logger;
+    private readonly SandboxScopeDescriptor? _sandboxScope;
+
+    public ISandboxPathResolver? SandboxPathResolver { get; set; }
 
     public CanonicalTools(
         CanonicalToolScope scope,
@@ -87,6 +90,15 @@ public partial class CanonicalTools
         _workspaceId = scope.WorkspaceId;
         _taskId = (scope.TaskId.HasValue && scope.TaskId.Value > 0) ? scope.TaskId.Value : null;
         _isReadOnly = scope.IsReadOnly;
+        _sandboxScope = scope.SandboxScope;
+        if (scope.SandboxPathResolver != null)
+        {
+            SandboxPathResolver = scope.SandboxPathResolver;
+        }
+        else if (_sandboxScope != null)
+        {
+            SandboxPathResolver = new SandboxPathResolver(_sandboxScope);
+        }
         if (scope.MaxReadFileBytes.HasValue && scope.MaxReadFileBytes.Value <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(scope), scope.MaxReadFileBytes.Value, "MaxReadFileBytes must be greater than zero.");
@@ -100,8 +112,27 @@ public partial class CanonicalTools
     public IWorkspaceSkillsService SkillsService => _skillsService;
     public int MaxReadFileBytes => _maxReadFileBytes;
 
-    public string ResolveFullPath(string path)
+    public string ResolveFullPath(string path) => ResolveFullPath(path, forWrite: false);
+
+    public string ResolveFullPath(string path, bool forWrite)
     {
+        if (SandboxPathResolver != null)
+        {
+            return SandboxPathResolver.ResolveHostPath(path, forWrite);
+        }
+
+        if (forWrite && !string.IsNullOrWhiteSpace(path))
+        {
+            var norm = path.Trim().Replace('\\', '/');
+            if (norm.Equals("/workspace/skills", StringComparison.OrdinalIgnoreCase) ||
+                norm.StartsWith("/workspace/skills/", StringComparison.OrdinalIgnoreCase) ||
+                norm.Equals("/nightcodeforge", StringComparison.OrdinalIgnoreCase) ||
+                norm.StartsWith("/nightcodeforge/", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new UnauthorizedAccessException($"Access denied: Mount '{path}' is read-only.");
+            }
+        }
+
         if (_workspaceId.HasValue)
         {
             var rootCrucibleDir = _pathResolver.ResolveCruciblePath(_workspaceId.Value, string.Empty, _taskId);
@@ -134,6 +165,11 @@ public partial class CanonicalTools
         if (string.IsNullOrWhiteSpace(fullPath))
         {
             throw new UnauthorizedAccessException("Access denied: Empty path.");
+        }
+
+        if (SandboxPathResolver != null)
+        {
+            return;
         }
 
         var reqNorm = (requestedPath ?? string.Empty).Trim().Replace('\\', '/');
@@ -264,7 +300,7 @@ public partial class CanonicalTools
         string fullPath;
         try
         {
-            fullPath = ResolveFullPath(path);
+            fullPath = ResolveFullPath(path, forWrite: true);
             ValidateWithinWorkspace(fullPath, path);
         }
         catch (UnauthorizedAccessException ex)
@@ -325,7 +361,7 @@ public partial class CanonicalTools
         string fullPath;
         try
         {
-            fullPath = ResolveFullPath(path);
+            fullPath = ResolveFullPath(path, forWrite: true);
             ValidateWithinWorkspace(fullPath, path);
         }
         catch (UnauthorizedAccessException ex)
@@ -576,7 +612,19 @@ public partial class CanonicalTools
         }
 
         string? workDir = null;
-        if (!string.IsNullOrEmpty(workingDirectory))
+        if (SandboxPathResolver != null && _executionEnv != null)
+        {
+            try
+            {
+                workDir = SandboxPathResolver.ResolveBashWorkingDirectory(workingDirectory, _executionEnv.Tier);
+                command = SandboxPathResolver.TranslateBashCommand(command, _executionEnv.Tier);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+        else if (!string.IsNullOrEmpty(workingDirectory))
         {
             if (_executionEnv != null && _executionEnv.Tier != ExecutionTier.BareHost &&
                 (workingDirectory.StartsWith('/') || workingDirectory.StartsWith('.') || !Path.IsPathRooted(workingDirectory)))

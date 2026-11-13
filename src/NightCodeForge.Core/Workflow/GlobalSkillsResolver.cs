@@ -27,18 +27,17 @@ public record GlobalSkillsResolutionResult(
 public static class GlobalSkillsResolver
 {
     public static GlobalSkillsResolutionResult Resolve(
-        Workspace workspace,
+        Workspace? workspace,
         WorkspaceProjectConfig? projectConfig,
         IReadOnlyList<string> candidateSkillNames)
     {
-        ArgumentNullException.ThrowIfNull(workspace);
         candidateSkillNames ??= Array.Empty<string>();
 
         // 1. Evaluate Master Enablement
         bool isEnabled;
         SkillsResolutionSource source;
 
-        if (workspace.GlobalSkillsInjectionMode == GlobalSkillsInjectionMode.ForceDisabled)
+        if (workspace?.GlobalSkillsInjectionMode == GlobalSkillsInjectionMode.ForceDisabled)
         {
             return new GlobalSkillsResolutionResult(
                 false,
@@ -47,12 +46,12 @@ public static class GlobalSkillsResolver
                 Array.Empty<string>());
         }
 
-        if (workspace.GlobalSkillsInjectionMode == GlobalSkillsInjectionMode.ForceEnabled)
+        if (workspace?.GlobalSkillsInjectionMode == GlobalSkillsInjectionMode.ForceEnabled)
         {
             isEnabled = true;
             source = SkillsResolutionSource.LocalDatabaseOverride;
         }
-        else // Inherit
+        else // Inherit (or system scope without a Workspace entity)
         {
             if (projectConfig?.Skills?.Enabled.HasValue == true)
             {
@@ -88,7 +87,7 @@ public static class GlobalSkillsResolver
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(workspace.DisabledGlobalSkillsJson))
+        if (!string.IsNullOrWhiteSpace(workspace?.DisabledGlobalSkillsJson))
         {
             try
             {

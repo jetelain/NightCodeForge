@@ -17,14 +17,29 @@ public class SingleExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         _environment = environment;
     }
 
-    public IExecutionEnvironment GetEnvironment(
+    public Task<IExecutionEnvironment> GetEnvironmentAsync(
+        SandboxScopeDescriptor scope,
+        CancellationToken cancellationToken = default) => Task.FromResult(_environment);
+
+    public Task<IExecutionEnvironment> GetEnvironmentAsync(
         Workspace workspace,
         SandboxSecurityTier securityTier = SandboxSecurityTier.Standard,
-        int? taskId = null) => _environment;
+        int? taskId = null,
+        CancellationToken cancellationToken = default) => Task.FromResult(_environment);
 
     public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
     public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(
+        SandboxScopeDescriptor scope,
+        CancellationToken cancellationToken = default) => Task.FromResult(_environment);
+
+    public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(
+        Workspace workspace,
+        SandboxSecurityTier securityTier = SandboxSecurityTier.Standard,
+        int? taskId = null,
+        CancellationToken cancellationToken = default) => Task.FromResult(_environment);
 
     public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<int>>([]);

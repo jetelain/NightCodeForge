@@ -10,7 +10,12 @@ using NightCodeForge.Core.Workflow;
 namespace NightCodeForge.Agents.Acp;
 
 /// <summary>Context of the ACP session on whose behalf a host-side RPC callback is executed.</summary>
-public sealed record AcpHostRpcContext(string SessionId, AgentSessionContext Session, string WorkspacePath, string LocalWorkspaceRoot);
+public sealed record AcpHostRpcContext(
+    string SessionId,
+    AgentSessionContext Session,
+    string WorkspacePath,
+    string LocalWorkspaceRoot,
+    ISandboxPathResolver? SandboxPathResolver = null);
 
 /// <summary>Outcome of a host RPC callback: either a result payload or an error message.</summary>
 public sealed record AcpHostRpcResult(object? Result, string? ErrorMessage)
@@ -131,14 +136,46 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
     private async Task<AcpHostRpcResult> RunTerminalAsync(JsonNode? parameters, AcpHostRpcContext context, CancellationToken cancellationToken)
     {
         var session = context.Session;
-        var workspace = session.Workspace ?? throw new InvalidOperationException("Workspace is required for ACP harness execution.");
-        var env = _envProvider.GetEnvironment(workspace, session.Profile.SecurityTier, session.ForgeTask.Id)
-            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
+        IExecutionEnvironment env;
+        if (context.SandboxPathResolver != null)
+        {
+            env = await _envProvider.GetEnvironmentAsync(context.SandboxPathResolver.Scope, cancellationToken)
+                ?? throw new InvalidOperationException($"No execution environment could be resolved for scope '{context.SandboxPathResolver.Scope.ScopeCacheKey}'.");
+        }
+        else
+        {
+            var workspace = session.Workspace ?? throw new InvalidOperationException("Workspace is required for ACP harness execution.");
+            env = await _envProvider.GetEnvironmentAsync(workspace, session.Profile.SecurityTier, session.ForgeTask.Id, cancellationToken)
+                ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
+        }
 
         var cmd = parameters?["command"]?.ToString() ?? "";
+        if (IsReadOnlySession(context) && !string.IsNullOrWhiteSpace(cmd))
+        {
+            var (isAllowed, errorMsg) = Tools.ReadOnlyCommandValidator.ValidateCommand(cmd);
+            if (!isAllowed)
+            {
+                _logger.LogWarning("ACP terminal/run blocked in read-only session '{SessionId}': '{Command}'. Reason: {Error}",
+                    context.SessionId, cmd, errorMsg);
+                return AcpHostRpcResult.Error($"[READ-ONLY VIOLATION]: {errorMsg}");
+            }
+        }
+
         var rawCwd = parameters?["cwd"]?.ToString();
         string cwd;
-        if (string.IsNullOrWhiteSpace(rawCwd) ||
+        if (context.SandboxPathResolver != null)
+        {
+            try
+            {
+                cwd = context.SandboxPathResolver.ResolveBashWorkingDirectory(rawCwd, env.Tier);
+                cmd = context.SandboxPathResolver.TranslateBashCommand(cmd, env.Tier);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return AcpHostRpcResult.Error(ex.Message);
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(rawCwd) ||
             string.Equals(rawCwd, WorkspaceRoot, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(rawCwd, WorkspaceName, StringComparison.OrdinalIgnoreCase))
         {
@@ -167,6 +204,12 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         return AcpHostRpcResult.Success(new { terminalId, exitCode, output });
     }
 
+    private static bool IsReadOnlySession(AcpHostRpcContext context) =>
+        context.SandboxPathResolver?.Scope.IsReadOnly == true ||
+        context.Session.Profile.Mode == AgentMode.ReadOnly ||
+        context.Session.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly ||
+        context.Session.RequiredMode == AgentMode.ReadOnly;
+
     private static (string SessionId, string TerminalId) TerminalKey(string sessionId, JsonNode? parameters)
         => (sessionId, (parameters?["terminalId"]?.ToString() ?? "").ToUpperInvariant());
 
@@ -177,7 +220,7 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         {
             int? offset = parameters?["offset"]?.GetValue<int?>();
             int? limit = parameters?["limit"]?.GetValue<int?>();
-            var content = ReadWorkspaceFile(context.LocalWorkspaceRoot, filePath, offset, limit, context.Session.Workspace?.Id, context.Session.ForgeTask.Id);
+            var content = ReadWorkspaceFile(context.LocalWorkspaceRoot, filePath, offset, limit, context.Session.Workspace?.Id, context.Session.ForgeTask.Id, context.SandboxPathResolver);
             return AcpHostRpcResult.Success(new { content });
         }
         catch (Exception ex)
@@ -189,11 +232,16 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
 
     private async Task<AcpHostRpcResult> WriteFileAsync(JsonNode? parameters, AcpHostRpcContext context, CancellationToken cancellationToken)
     {
+        if (IsReadOnlySession(context))
+        {
+            return AcpHostRpcResult.Error("Access denied: Write operations are not permitted in a read-only agent session.");
+        }
+
         var filePath = parameters?["path"]?.ToString() ?? "";
         var content = parameters?["content"]?.ToString() ?? "";
         try
         {
-            await WriteWorkspaceFileAsync(context.LocalWorkspaceRoot, filePath, content, context.Session.Workspace?.Id, context.Session.ForgeTask.Id, cancellationToken);
+            await WriteWorkspaceFileAsync(context.LocalWorkspaceRoot, filePath, content, context.Session.Workspace?.Id, context.Session.ForgeTask.Id, context.SandboxPathResolver, cancellationToken);
             return AcpHostRpcResult.Success(new { });
         }
         catch (Exception ex)
@@ -203,8 +251,13 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         }
     }
 
-    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? taskId)
+    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? taskId, ISandboxPathResolver? sandboxPathResolver = null, bool forWrite = false)
     {
+        if (sandboxPathResolver != null)
+        {
+            return sandboxPathResolver.ResolveHostPath(filePath, forWrite);
+        }
+
         if (string.IsNullOrWhiteSpace(filePath))
         {
             return workspaceId.HasValue
@@ -219,7 +272,11 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
 
         if (workspaceId.HasValue)
         {
-            return _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, taskId);
+            var cruciblePath = _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, taskId);
+            if (!string.IsNullOrWhiteSpace(cruciblePath))
+            {
+                return cruciblePath;
+            }
         }
 
         var normalized = filePath.Replace('\\', '/');
@@ -242,9 +299,9 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
             : Path.GetFullPath(Path.Combine(workspacePath, filePath));
     }
 
-    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId)
+    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId, ISandboxPathResolver? sandboxPathResolver = null)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, sandboxPathResolver, forWrite: false);
         if (!File.Exists(resolvedPath))
         {
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
@@ -261,9 +318,9 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         return string.Join(Environment.NewLine, lines.Skip(skip).Take(take));
     }
 
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, CancellationToken ct)
+    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, ISandboxPathResolver? sandboxPathResolver, CancellationToken ct)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, sandboxPathResolver, forWrite: true);
         var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {

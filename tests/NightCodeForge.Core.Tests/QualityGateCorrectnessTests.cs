@@ -20,7 +20,10 @@ public class QualityGateCorrectnessTests
         public string? LastCommand { get; private set; }
         public string? LastWorkingDir { get; private set; }
 
-        public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null) => this;
+        public Task<IExecutionEnvironment> GetEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> GetEnvironmentAsync(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
         public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);
@@ -395,7 +398,10 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         public ExecutionTier Tier => ExecutionTier.BareHost;
         public List<string> Commands { get; } = new();
 
-        public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null) => this;
+        public Task<IExecutionEnvironment> GetEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> GetEnvironmentAsync(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
         public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);

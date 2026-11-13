@@ -163,9 +163,64 @@ public class AutonomousFeatureLifecycleTests : IAsyncLifetime
         await _page.FillAsync("textarea.chat-textarea", prompt);
         await _page.ClickAsync("button.send-btn");
 
-        // Wait up to 15 minutes (matching OllamaHttpConstants.DefaultTimeout) for proposal card to appear in right panel when model is cold
+        // Wait up to 15 minutes (matching OllamaHttpConstants.DefaultTimeout) for proposal card to appear in right panel,
+        // answering any interactive 'ask' clarification questions surfaced by the Ideation agent along the way.
         var proposalCard = _page.Locator(".proposal-card:has-text('Multiply'), .ideation-proposal-card:has-text('Multiply')");
-        await proposalCard.First.WaitForAsync(new LocatorWaitForOptions { Timeout = 900_000 });
+        var ideationTimeout = TimeSpan.FromMinutes(15);
+        var ideationSw = Stopwatch.StartNew();
+        int plainTextFollowUps = 0;
+        const int maxPlainTextFollowUps = 2;
+        const string clarificationAnswer =
+            "Use standard unchecked int multiplication (a * b) consistent with Add and Subtract, document overflow wraparound in XML remarks, and invoke propose_tasks now.";
+
+        await _page.WaitForTimeoutAsync(1500);
+
+        bool proposalFound = false;
+        while (ideationSw.Elapsed < ideationTimeout)
+        {
+            if (await proposalCard.CountAsync() > 0 && await proposalCard.First.IsVisibleAsync())
+            {
+                proposalFound = true;
+                break;
+            }
+
+            var waitingQuestionCard = _page.Locator(".agent-question-turn-card.waiting");
+            if (await waitingQuestionCard.CountAsync() > 0 && await waitingQuestionCard.First.IsVisibleAsync())
+            {
+                var card = waitingQuestionCard.First;
+                var textareas = card.Locator("textarea.question-textarea");
+                var textareaCount = await textareas.CountAsync();
+                for (int i = 0; i < textareaCount; i++)
+                {
+                    await textareas.Nth(i).FillAsync(clarificationAnswer);
+                }
+
+                var submitBtn = card.Locator("button.submit-answer-btn:not([disabled])");
+                await submitBtn.First.WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Visible, Timeout = 5000 });
+                await submitBtn.First.ClickAsync();
+                _output.WriteLine($"[{ideationSw.Elapsed:mm\\:ss}] Answered Ideation clarification card ({textareaCount} question(s)); resuming deliberation...");
+                await _page.WaitForTimeoutAsync(2000);
+                continue;
+            }
+
+            var sendBtn = _page.Locator("button.send-btn");
+            if (plainTextFollowUps < maxPlainTextFollowUps &&
+                ideationSw.Elapsed > TimeSpan.FromSeconds(5) &&
+                await sendBtn.CountAsync() > 0 &&
+                await sendBtn.First.IsVisibleAsync())
+            {
+                plainTextFollowUps++;
+                _output.WriteLine($"[{ideationSw.Elapsed:mm\\:ss}] Ideation turn ended without proposal; sending follow-up #{plainTextFollowUps}...");
+                await _page.FillAsync("textarea.chat-textarea", clarificationAnswer);
+                await sendBtn.First.ClickAsync();
+                await _page.WaitForTimeoutAsync(2000);
+                continue;
+            }
+
+            await Task.Delay(2000);
+        }
+
+        Assert.True(proposalFound, $"Ideation proposal card for 'Multiply' did not appear within {ideationTimeout.TotalMinutes} minutes.");
 
         // Ingest proposal into backlog
         var addBtn = proposalCard.First.Locator("button:has-text('Add to Backlog'), button.add-backlog-btn");

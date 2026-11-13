@@ -19,17 +19,20 @@ public sealed record CanonicalToolScope(
     int? BuildTimeoutSeconds = null,
     int? TestTimeoutSeconds = null,
     bool IsReadOnly = false,
-    int? MaxReadFileBytes = null);
+    int? MaxReadFileBytes = null,
+    SandboxScopeDescriptor? SandboxScope = null,
+    ISandboxPathResolver? SandboxPathResolver = null);
 
 /// <summary>Everything the toolset factory needs to assemble the tools of one agent session.</summary>
 public sealed record CanonicalToolsetRequest(
-    Workspace Workspace,
+    Workspace? Workspace,
     AgentProfile Profile,
     CanonicalToolScope Scope,
     IReadOnlyList<string> PermittedTools,
     IReadOnlyList<CustomToolConfig> CustomTools,
     IReadOnlyDictionary<string, string> ToolDirectives,
-    bool AttachBacklogMutationService);
+    bool AttachBacklogMutationService,
+    SandboxScopeDescriptor? SandboxScope = null);
 
 /// <summary>The configured tools of one agent session.</summary>
 public sealed record CanonicalToolsetSession(
@@ -91,13 +94,29 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         var scope = request.Scope;
         var taskId = scope.TaskId is > 0 ? scope.TaskId : null;
 
-        var effectiveEnv = _envProvider.GetEnvironment(workspace, request.Profile.SecurityTier, taskId)
-            ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
+        var sandboxScope = request.SandboxScope ?? scope.SandboxScope;
+        var effectiveScope = sandboxScope != null && scope.SandboxScope == null
+            ? scope with { SandboxScope = sandboxScope }
+            : scope;
 
-        var skillsService = _skillsServiceFactory.Create(workspace, scope.WorkspaceRoot, taskId);
+        IExecutionEnvironment effectiveEnv;
+        if (sandboxScope != null)
+        {
+            effectiveEnv = await _envProvider.GetEnvironmentAsync(sandboxScope, cancellationToken)
+                ?? throw new InvalidOperationException($"No execution environment could be resolved for scope '{sandboxScope.ScopeCacheKey}'.");
+        }
+        else
+        {
+            var requiredWorkspace = workspace
+                ?? throw new InvalidOperationException("Either Workspace or SandboxScope is required to create a canonical toolset.");
+            effectiveEnv = await _envProvider.GetEnvironmentAsync(requiredWorkspace, request.Profile.SecurityTier, taskId, cancellationToken)
+                ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{requiredWorkspace.Id}.");
+        }
+
+        var skillsService = _skillsServiceFactory.Create(workspace, effectiveScope.WorkspaceRoot, taskId);
 
         var tools = new CanonicalTools(
-            scope,
+            effectiveScope,
             _pathResolver,
             effectiveEnv,
             _editorConfigService,

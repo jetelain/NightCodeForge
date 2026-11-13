@@ -421,8 +421,8 @@ public class Step1140BashTimeoutAndEscalationLadderTests
             _userIdentityMock.Object,
             _telemetryMock.Object);
 
-        factoryMock.Setup(f => f.CreateContainerEnvironment(workspace, SandboxSecurityTier.Standard, null))
-            .Returns(executor);
+        factoryMock.Setup(f => f.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(executor);
 
         var provider = new ExecutionEnvironmentProvider(
             new BareHostExecutionEnvironment(runnerMock.Object, pathResolverMock.Object),
@@ -432,7 +432,7 @@ public class Step1140BashTimeoutAndEscalationLadderTests
             NullLogger<ExecutionEnvironmentProvider>.Instance);
 
         // 1. Get environment (caches it)
-        var env = provider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: null);
+        var env = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: null);
         Assert.Same(executor, env);
 
         // 2. Not idle long enough (TimeSpan.FromHours(1)) -> 0 evicted
@@ -467,8 +467,8 @@ public class Step1140BashTimeoutAndEscalationLadderTests
             _userIdentityMock.Object,
             _telemetryMock.Object);
 
-        factoryMock.Setup(f => f.CreateContainerEnvironment(workspace, SandboxSecurityTier.Standard, null))
-            .Returns(standardExecutor);
+        factoryMock.Setup(f => f.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(standardExecutor);
 
         var provider = new ExecutionEnvironmentProvider(
             new BareHostExecutionEnvironment(runnerMock.Object, pathResolverMock.Object),
@@ -478,21 +478,21 @@ public class Step1140BashTimeoutAndEscalationLadderTests
             NullLogger<ExecutionEnvironmentProvider>.Instance);
 
         // Cache Standard tier first and backdate its LastExecutionTimestampUtc by 10 minutes
-        _ = provider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId: null);
+        _ = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: null);
         typeof(NightCodeForgeContainerExecutor)
             .GetProperty(nameof(NightCodeForgeContainerExecutor.LastExecutionTimestampUtc))!
             .SetValue(standardExecutor, DateTime.UtcNow.AddMinutes(-10));
 
         // Create and cache RestrictedReadOnly tier with a fresh timestamp (now)
         var restrictedExecutor = new NightCodeForgeContainerExecutor(
-            new ContainerExecutorOptions { ContainerNameOrId = "ncf-sandbox-77", IsRestrictedReadOnly = true, AutoStartContainer = false },
+            new ContainerExecutorOptions { ContainerNameOrId = "ncf-sandbox-77-ro", IsRestrictedReadOnly = true, AutoStartContainer = false },
             runnerMock.Object,
             NullLogger<NightCodeForgeContainerExecutor>.Instance,
             _userIdentityMock.Object,
             _telemetryMock.Object);
-        factoryMock.Setup(f => f.CreateContainerEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly, null))
-            .Returns(restrictedExecutor);
-        _ = provider.GetEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly, taskId: null);
+        factoryMock.Setup(f => f.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.RestrictedReadOnly, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(restrictedExecutor);
+        _ = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.RestrictedReadOnly, taskId: null);
 
         // Standard tier is idle for 10 minutes (> 5m threshold), but RestrictedReadOnly tier was just created (< 5m) -> must NOT evict shared base container
         var evictedPartial = await provider.EvictIdleWorkspaceContainersAsync(workspace, TimeSpan.FromMinutes(5));

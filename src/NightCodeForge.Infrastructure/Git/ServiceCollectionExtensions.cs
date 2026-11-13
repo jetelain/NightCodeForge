@@ -15,9 +15,9 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddGitInfrastructure(this IServiceCollection services)
     {
         services.TryAddSingleton<IGitCliRunner, GitCliRunner>();
-        services.TryAddScoped<IGitWorkspaceManager, GitWorkspaceManager>();
-        services.TryAddScoped<IGitMirrorSyncService, GitMirrorSyncService>();
-        services.TryAddScoped<IGitAlertNotifier, LoggingGitAlertNotifier>();
+        services.TryAddSingleton<IGitWorkspaceManager, GitWorkspaceManager>();
+        services.TryAddSingleton<IGitMirrorSyncService, GitMirrorSyncService>();
+        services.TryAddSingleton<IGitAlertNotifier, LoggingGitAlertNotifier>();
         return services;
     }
 }

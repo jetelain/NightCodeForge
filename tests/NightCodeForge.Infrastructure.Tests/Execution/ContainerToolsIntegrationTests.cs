@@ -233,7 +233,7 @@ public class ContainerToolsIntegrationTests : IDisposable
             UserIdentityResolver = identityResolver
         }.Build();
 
-        var env = provider.GetEnvironment(workspace, SandboxSecurityTier.Standard, null);
+        var env = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, null);
 
         // 1. Verify container is responsive and standard utilities work
         var unameResult = await env.ExecuteAsync("uname -s");

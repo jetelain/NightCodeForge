@@ -66,7 +66,7 @@ public class ContainerEnvironmentFactoryTests
     }
 
     [Fact]
-    public void CreateContainerEnvironment_WithTaskId_ConstructsExecutorWithTaskSpecificNameWorkingDirAndWritableTmpMount()
+    public async Task CreateContainerEnvironmentAsync_WithTaskId_ConstructsExecutorWithTaskSpecificNameWorkingDirAndWritableTmpMount()
     {
         var sut = CreateSut();
         var workspace = new Workspace
@@ -79,7 +79,7 @@ public class ContainerEnvironmentFactoryTests
             ExecutionMode = ExecutionMode.ContainerSandbox
         };
 
-        var env = sut.CreateContainerEnvironment(workspace, SandboxSecurityTier.Standard, effectiveTaskId: 99);
+        var env = await sut.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, effectiveTaskId: 99);
 
         var executor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
         Assert.Equal("ncf-sandbox-wks-1-task-99", executor.Options.ContainerNameOrId);
@@ -95,7 +95,7 @@ public class ContainerEnvironmentFactoryTests
     }
 
     [Fact]
-    public void CreateContainerEnvironment_RestrictedReadOnlyWithoutTaskId_UsesBaseContainerNameAndOmitsTmpMount()
+    public async Task CreateContainerEnvironmentAsync_RestrictedReadOnlyWithoutTaskId_UsesRoSuffixContainerNameAndOmitsTmpMount()
     {
         var sut = CreateSut();
         var workspace = new Workspace
@@ -107,10 +107,10 @@ public class ContainerEnvironmentFactoryTests
             ExecutionMode = ExecutionMode.ContainerSandbox
         };
 
-        var env = sut.CreateContainerEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly, effectiveTaskId: null);
+        var env = await sut.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.RestrictedReadOnly, effectiveTaskId: null);
 
         var executor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
-        Assert.Equal("ncf-sandbox-2", executor.Options.ContainerNameOrId);
+        Assert.Equal("ncf-sandbox-2-ro", executor.Options.ContainerNameOrId);
         Assert.Equal(ContainerExecutorOptions.DefaultAgentBaseImage, executor.Options.ContainerImage);
         Assert.Equal("/workspace/clone", executor.Options.DefaultWorkingDirectory);
         Assert.True(executor.Options.IsRestrictedReadOnly);
@@ -118,7 +118,7 @@ public class ContainerEnvironmentFactoryTests
     }
 
     [Fact]
-    public void CreateContainerEnvironment_WhenCompanionToolInstallerThrows_SwallowsAndStillConstructsExecutor()
+    public async Task CreateContainerEnvironmentAsync_WhenCompanionToolInstallerThrows_SwallowsAndStillConstructsExecutor()
     {
         _companionInstallerMock
             .Setup(c => c.EnsureToolsInstalledAsync(It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
@@ -133,7 +133,7 @@ public class ContainerEnvironmentFactoryTests
             ExecutionMode = ExecutionMode.ContainerSandbox
         };
 
-        var env = sut.CreateContainerEnvironment(workspace, SandboxSecurityTier.Standard, effectiveTaskId: 1);
+        var env = await sut.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, effectiveTaskId: 1);
         Assert.IsType<NightCodeForgeContainerExecutor>(env);
     }
 
@@ -161,9 +161,11 @@ public class ContainerEnvironmentFactoryTests
         await sut.RemoveTaskContainerAsync(containerWorkspace, 42);
         await sut.RemoveBaseContainerAsync(containerWorkspace);
 
-        Assert.Equal(2, executedSpecs.Count);
-        Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).Contains("ncf-wks-3-task-42"));
+        Assert.Equal(4, executedSpecs.Count);
+        Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-task-42"));
+        Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-task-42-ro"));
         Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3"));
+        Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-ro"));
     }
 
     [Fact]

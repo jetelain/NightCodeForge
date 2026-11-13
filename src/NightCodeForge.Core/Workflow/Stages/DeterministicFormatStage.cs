@@ -100,7 +100,7 @@ public class DeterministicFormatStage : IWorkflowStage
             return StageExecutionResult.Success();
         }
 
-        var effectiveEnv = _envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
+        var effectiveEnv = await _envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id, cancellationToken)
             ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         var timeout = WorkflowDefaults.DefaultFormatTimeoutSeconds;

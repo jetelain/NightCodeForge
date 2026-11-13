@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -104,6 +103,21 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
     public int IdleContainerTimeoutMinutes { get; set; } = DefaultIdleContainerTimeoutMinutes;
 
     /// <summary>
+    /// Grace window in milliseconds to wait for sentinel output after sending <c>\x03</c> (<c>SIGINT</c>) on cancellation.
+    /// </summary>
+    public int SigIntDrainTimeoutMs { get; set; } = 200;
+
+    /// <summary>
+    /// Optional declarative sandbox scope descriptor backing this container environment.
+    /// </summary>
+    public SandboxScopeDescriptor? Scope { get; set; }
+
+    /// <summary>
+    /// Optional declarative mount table specifying virtual subpaths and their backing host/WSL directories.
+    /// </summary>
+    public SandboxMountTable? MountTable { get; set; }
+
+    /// <summary>
     /// Target container user identity formatted as 'uid:gid' (e.g. '1000:1000').
     /// When null or empty, NightCodeForgeContainerExecutor discovers and captures the host/WSL identity once.
     /// </summary>
@@ -136,8 +150,6 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
 
     /// <summary>
     /// Host path to the canonical clone (~/.nightcodeforge/wks/{workspaceId}/clone) mapped to /clone.
-    /// When specified alongside HostWorkspacePath (which points to a task worktree), the task worktree
-    /// is mounted at /workspace and the canonical clone is mounted at /clone:ro with .git at /clone/.git:rw.
     /// </summary>
     public string? CanonicalClonePath { get; set; }
 
@@ -164,45 +176,15 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
         new("PLAYWRIGHT_BROWSERS_PATH", "/cache/ms-playwright"),
     ];
 
-    /// <summary>
-    /// Host path to NuGet global packages cache (defaults to "~/.nuget/packages").
-    /// </summary>
     public string? NugetPackageCachePath { get; set; } = "~/.nuget/packages";
-
-    /// <summary>
-    /// Host path to npm cache (defaults to "~/.npm").
-    /// </summary>
     public string? NpmCachePath { get; set; } = "~/.npm";
-
-    /// <summary>
-    /// Host path to pnpm global store (defaults to "~/.local/share/pnpm/store").
-    /// </summary>
     public string? PnpmCachePath { get; set; } = "~/.local/share/pnpm/store";
-
-    /// <summary>
-    /// Host path to uv / Python cache (defaults to "~/.cache/uv").
-    /// </summary>
     public string? UvCachePath { get; set; } = "~/.cache/uv";
-
-    /// <summary>
-    /// Host path to Maven / Gradle repository cache (defaults to "~/.m2/repository").
-    /// </summary>
     public string? MavenCachePath { get; set; } = "~/.m2/repository";
-
-    /// <summary>
-    /// Host path to Playwright browser binaries cache (defaults to "~/.cache/ms-playwright").
-    /// </summary>
     public string? PlaywrightCachePath { get; set; } = "~/.cache/ms-playwright";
 
-    /// <summary>
-    /// If true, host toolchain SDK directories are mounted read-only into the container.
-    /// </summary>
     public bool MountHostSdks { get; set; } = true;
 
-    /// <summary>
-    /// <summary>
-    /// Default list of host SDK directories mounted read-only (:ro) into the container.
-    /// </summary>
     public static readonly IReadOnlyList<string> DefaultSdkMountPaths = new[]
     {
         "/usr/share/dotnet",
@@ -215,65 +197,43 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
         "/usr/share/fonts"
     };
 
-    /// <summary>
-    /// List of host SDK directories mounted read-only (:ro) into the container.
-    /// Defaults to .NET (/usr/share/dotnet, /usr/lib/dotnet), JVM (/usr/lib/jvm), and Android SDK (/opt/android-sdk).
-    /// </summary>
     public IList<string> SdkMountPaths { get; set; } = new List<string>(DefaultSdkMountPaths);
-
-    /// <summary>
-    /// Additional custom volume mounts to include when starting the container.
-    /// </summary>
     public IList<ContainerVolumeMount> AdditionalVolumeMounts { get; set; } = new List<ContainerVolumeMount>();
-
-    /// <summary>
-    /// Additional directories to prepend to the container PATH environment variable.
-    /// </summary>
     public IList<string> ExtraPathDirectories { get; set; } = new List<string>();
-
-    /// <summary>
-    /// Whether to automatically expand '~' in mount host paths to the user's home directory.
-    /// </summary>
     public bool ExpandTildeInMounts { get; set; } = false;
-
-    /// <summary>
-    /// If true, NightCodeForgeContainerExecutor checks if the container is running and starts it via docker run if not.
-    /// </summary>
     public bool AutoStartContainer { get; set; } = false;
-
-    /// <summary>
-    /// When true and workspace is not restricted read-only, adds layered mounts for the canonical
-    /// clone (/workspace/clone as read-only, and /workspace/clone/.git as read-write) to protect
-    /// the canonical repository working tree from inadvertent modification by container processes.
-    /// </summary>
     public bool ProtectCloneWorkingTree { get; set; } = true;
 }
 
 /// <summary>
 /// Persistent REPL execution environment inside a container or interactive shell using cryptographic sentinels.
 /// </summary>
-public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IAsyncDisposable, IDisposable
+public class NightCodeForgeContainerExecutor : IExecutionEnvironment, IAsyncDisposable, IDisposable
 {
-    [GeneratedRegex(@"^\s*(-?\d+)")]
-    private static partial Regex SentinelExitCodeRegex();
+    public const int TimeoutExitCode = 124;
+    private const string ProbeSentinel = "__NCF_PROBE_OK__";
+    private const int LivenessProbeTimeoutSeconds = 5;
+    private const int ProcessReaperTimeoutSeconds = 10;
+    private const int ContainerRemoveTimeoutSeconds = 10;
+    private const int DockerInfoTimeoutSeconds = 10;
+    private const int WslShutdownTimeoutSeconds = 120;
+    private const int DockerDaemonStartTimeoutSeconds = 15;
+    private const int WslRecoveryProbeTimeoutSeconds = 30;
 
     private readonly ContainerExecutorOptions _options;
     private readonly IProcessRunner _processRunner;
     private readonly ILogger<NightCodeForgeContainerExecutor> _logger;
     private readonly IHostUserIdentityResolver _userIdentityResolver;
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly PersistentContainerShellSession _shellSession;
     private readonly SemaphoreSlim _execLock = new(1, 1);
     private bool _isExecuting;
+    private bool _isDisposed;
 
     public ContainerExecutorOptions Options => _options;
     public bool IsExecuting => _isExecuting;
     public DateTime LastExecutionTimestampUtc { get; private set; } = DateTime.UtcNow;
-
-    private IProcessStreamSession? _shellSession;
-    private Process? _shellProcess;
-    private StreamWriter? _stdin;
-    private StreamReader? _stdout;
-    private bool _isDisposed;
+    public PersistentContainerShellSession ShellSession => _shellSession;
 
     public ExecutionTier Tier => ExecutionTier.ContainerSandbox;
 
@@ -300,6 +260,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _shellSession = new PersistentContainerShellSession(_options, _processRunner, _telemetryService, _logger);
 
         if (string.IsNullOrWhiteSpace(_options.UserUidGid))
         {
@@ -315,62 +276,19 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         CancellationToken cancellationToken = default)
     {
         await _execLock.WaitAsync(cancellationToken);
-        _isExecuting = true;
-        var buffer = new HeadTailBuffer(_options.MaxBufferBytes);
         var stopwatch = Stopwatch.StartNew();
         ShellCommandRecord? runningRecord = null;
         try
         {
+            _isExecuting = true;
+            var buffer = new HeadTailBuffer(_options.MaxBufferBytes);
             EnsureShellProcessRunning();
 
             var timeout = timeoutSeconds ?? _options.DefaultTimeoutSeconds;
             var sentinel = $"__NCF_SENTINEL_{Guid.NewGuid():N}__";
             var workDir = ResolveContainerWorkingDirectory(workingDirectory, _options);
 
-            // Export computed PATH ensuring toolchains and standard utilities are smoothly accessible
-            var computedPath = ComputePathEnvironmentVariable(_options);
-            var hasCustomPath = environmentVariables != null && environmentVariables.ContainsKey("PATH");
-            if (!hasCustomPath)
-            {
-                await _stdin!.WriteLineAsync($"export PATH=\"{computedPath}\"");
-            }
-            await _stdin!.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0");
-            await _stdin!.WriteLineAsync("export LANG=en_US.UTF-8");
-            await _stdin!.WriteLineAsync("export LC_ALL=en_US.UTF-8");
-            await _stdin!.WriteLineAsync($"mkdir -p {ContainerExecutorOptions.ContainerHomePath}/.dotnet 2>/dev/null || true");
-            await _stdin!.WriteLineAsync($"if [ ! -w {ContainerExecutorOptions.ContainerHomePath} ] || [ ! -w {ContainerExecutorOptions.ContainerHomePath}/.dotnet ]; then export HOME=\"/tmp/ncf-home-$(id -u)\"; mkdir -p \"$HOME/.dotnet\" 2>/dev/null || true; else export HOME=\"{ContainerExecutorOptions.ContainerHomePath}\"; fi");
-            await _stdin!.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
-
-            if (_options.MountPackageCaches)
-            {
-                foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
-                {
-                    await _stdin!.WriteLineAsync($"export {name}=\"{value}\"");
-                }
-            }
-
-            // Set environment variables if any (scrub secrets if RestrictedReadOnly)
-            if (environmentVariables != null && environmentVariables.Count > 0)
-            {
-                foreach (var (k, v) in environmentVariables)
-                {
-                    if (!ShellQuoting.IsValidVariableName(k))
-                    {
-                        _logger.LogWarning("Skipping environment variable with invalid name '{Key}'", k);
-                        continue;
-                    }
-                    if (_options.IsRestrictedReadOnly && IsSensitiveEnvVar(k))
-                    {
-                        continue;
-                    }
-                    await _stdin!.WriteLineAsync($"export {k}={ShellQuoting.QuotePosix(v)}");
-                }
-            }
-
-            if (_options.IsRestrictedReadOnly)
-            {
-                await _stdin!.WriteLineAsync("export HTTP_PROXY=\"\" HTTPS_PROXY=\"\" ALL_PROXY=\"\"");
-            }
+            await _shellSession.WriteEnvironmentPreambleAsync(environmentVariables);
 
             var cleanCommand = command.Replace("\r", "").Trim();
             var commandId = Guid.NewGuid().ToString("N");
@@ -389,11 +307,16 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
 
             try
             {
-                await _stdin!.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null 2>&1");
-                await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
-                await _stdin.FlushAsync();
+                var exitCode = await _shellSession.ExecuteFramedCommandAsync(
+                    workDir,
+                    cleanCommand,
+                    sentinel,
+                    timeout,
+                    commandId,
+                    buffer,
+                    stopwatch,
+                    cancellationToken);
 
-                var exitCode = await ReadUntilSentinelAsync(sentinel, timeout, commandId, buffer, cancellationToken);
                 stopwatch.Stop();
                 var completedRecord = runningRecord with
                 {
@@ -408,7 +331,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             catch (TimeoutException)
             {
                 _logger.LogWarning("Command execution timed out after {Timeout}s. Terminating shell session and executing escalation ladder.", timeout);
-                TerminateShellSession();
+                _shellSession.Terminate();
 
                 var stage = await RunTimeoutEscalationLadderAsync();
                 stopwatch.Stop();
@@ -435,22 +358,30 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogInformation("Command execution was canceled by caller while in-flight. Terminating shell session and sweeping processes.");
-                TerminateShellSession();
-                try
+                if (_shellSession.WasDrainedOnLastCancel)
                 {
-                    await RunInContainerProcessSweepAsync();
+                    _logger.LogInformation("Command execution was canceled by caller and cleanly drained via SIGINT.");
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.LogDebug(ex, "In-container process sweep on cancellation encountered an exception");
+                    _logger.LogInformation("Command execution was canceled by caller while in-flight. Terminating shell session and sweeping processes.");
+                    _shellSession.Terminate();
+
+                    try
+                    {
+                        await RunInContainerProcessSweepAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "In-container process sweep on cancellation encountered an exception");
+                    }
                 }
 
                 stopwatch.Stop();
                 var cancelledRecord = runningRecord with
                 {
                     DurationMs = stopwatch.Elapsed.TotalMilliseconds,
-                    ExitCode = -1,
+                    ExitCode = _shellSession.WasDrainedOnLastCancel ? PersistentContainerShellSession.SigIntExitCode : -1,
                     OutputPreview = buffer.GetFormattedString(),
                     ErrorPreview = "Command execution was canceled by caller.",
                     Status = ShellCommandStatus.Failed
@@ -460,6 +391,8 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             }
             catch (Exception ex)
             {
+                _logger.LogWarning(ex, "Container shell session encountered an error during command execution; terminating session so next command starts cleanly.");
+                _shellSession.Terminate();
                 stopwatch.Stop();
                 var failedRecord = runningRecord with
                 {
@@ -475,6 +408,7 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
         }
         catch (Exception ex) when (runningRecord == null)
         {
+            _shellSession.Terminate();
             stopwatch.Stop();
             _logger.LogError(ex, "Failed before command could be sent to container shell process");
             throw;
@@ -484,197 +418,6 @@ public partial class NightCodeForgeContainerExecutor : IExecutionEnvironment, IA
             _isExecuting = false;
             LastExecutionTimestampUtc = DateTime.UtcNow;
             _execLock.Release();
-        }
-    }
-
-    private async Task<int> ReadUntilSentinelAsync(
-        string sentinel,
-        int timeoutSeconds,
-        string commandId,
-        HeadTailBuffer buffer,
-        CancellationToken cancellationToken)
-    {
-        if (_stdout == null)
-        {
-            throw new InvalidOperationException("Container shell process stdout is not available.");
-        }
-
-        var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
-
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var remaining = deadline - DateTime.UtcNow;
-            if (remaining <= TimeSpan.Zero)
-            {
-                throw new TimeoutException($"Timed out waiting for sentinel '{sentinel}' after {timeoutSeconds}s.");
-            }
-
-            var readLineTask = _stdout.ReadLineAsync(linkedCts.Token).AsTask();
-            var delayTask = Task.Delay(remaining, linkedCts.Token);
-
-            var completedTask = await Task.WhenAny(readLineTask, delayTask);
-            if (completedTask == delayTask)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                throw new TimeoutException($"Timed out waiting for sentinel '{sentinel}' after {timeoutSeconds}s.");
-            }
-
-            var line = await readLineTask;
-
-            if (line == null)
-            {
-                throw new InvalidOperationException("Container shell process terminated unexpectedly (stdout closed).");
-            }
-
-            var sentinelIdx = line.IndexOf(sentinel, StringComparison.Ordinal);
-            if (sentinelIdx >= 0)
-            {
-                var suffix = line[(sentinelIdx + sentinel.Length)..];
-                var match = SentinelExitCodeRegex().Match(suffix);
-                if (match.Success && int.TryParse(match.Groups[1].Value, out var exitCode))
-                {
-                    var prefix = line[..sentinelIdx];
-                    if (!string.IsNullOrEmpty(prefix))
-                    {
-                        _telemetryService.UpdateShellCommandOutput(commandId, prefix + "\n", false);
-                        buffer.Append(prefix + "\n");
-                    }
-
-                    linkedCts.Cancel();
-                    return exitCode;
-                }
-            }
-
-            _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", false);
-            buffer.Append(line + "\n");
-        }
-    }
-
-    public const int TimeoutExitCode = 124;
-    private const string ProbeSentinel = "__NCF_PROBE_OK__";
-    private const int LivenessProbeTimeoutSeconds = 5;
-    private const int ProcessReaperTimeoutSeconds = 10;
-    private const int ContainerRemoveTimeoutSeconds = 10;
-    private const int DockerInfoTimeoutSeconds = 10;
-    private const int WslShutdownTimeoutSeconds = 120;
-    private const int DockerDaemonStartTimeoutSeconds = 15;
-    private const int WslRecoveryProbeTimeoutSeconds = 30;
-
-    public static string BuildInContainerReaperScript(IEnumerable<string>? processWhitelist = null)
-    {
-        var whitelistTokens = (processWhitelist ?? ContainerExecutorOptions.DefaultProcessKillWhitelist)
-            .Where(w => !string.IsNullOrWhiteSpace(w))
-            .Select(w => ShellQuoting.QuotePosix(w.Trim()))
-            .Distinct()
-            .ToList();
-
-        var whitelistCheck = whitelistTokens.Count > 0
-            ? $$"""
-                for w in {{string.Join(" ", whitelistTokens)}}; do
-                  if [[ "$comm" == *"$w"* ]] || [[ "$cmdline" == *"$w"* ]]; then
-                    whitelisted=1
-                    break
-                  fi
-                done
-            """
-            : string.Empty;
-
-        return $$"""
-get_targets() {
-  local targets=()
-  for p in /proc/[0-9]*; do
-    [ -d "$p" ] || continue
-    local pid="${p##*/}"
-    [ "$pid" = "1" ] && continue
-    [ "$pid" = "$$" ] && continue
-    [ "$pid" = "$BASHPID" ] && continue
-    [ "$pid" = "$PPID" ] && continue
-
-    local stat_line state
-    if read -r stat_line < "$p/stat" 2>/dev/null; then
-      state="${stat_line##*) }"
-      state="${state%% *}"
-      if [ "$state" = "Z" ] || [ "$state" = "X" ]; then
-        continue
-      fi
-    fi
-
-    local comm cmdline
-    comm=$(cat "$p/comm" 2>/dev/null || true)
-    cmdline=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null || true)
-
-    if [[ "$comm" == "tail" ]] && [[ "$cmdline" == *"tail"*"/dev/null"* ]]; then
-      continue
-    fi
-
-    local whitelisted=0
-    {{whitelistCheck}}
-    [ $whitelisted -eq 1 ] && continue
-
-    targets+=("$pid")
-  done
-  echo "${targets[@]}"
-}
-
-targets=($(get_targets))
-if [ ${#targets[@]} -gt 0 ]; then
-  kill -15 "${targets[@]}" 2>/dev/null || true
-  for i in {1..25}; do
-    alive=0
-    for pid in "${targets[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        if read -r stat_line < "/proc/$pid/stat" 2>/dev/null; then
-          state="${stat_line##*) }"
-          state="${state%% *}"
-          if [ "$state" = "Z" ] || [ "$state" = "X" ]; then
-            continue
-          fi
-        fi
-        alive=1
-        break
-      fi
-    done
-    [ $alive -eq 0 ] && break
-    sleep 0.2
-  done
-
-  survivors=($(get_targets))
-  if [ ${#survivors[@]} -gt 0 ]; then
-    kill -9 "${survivors[@]}" 2>/dev/null || true
-  fi
-fi
-""";
-    }
-
-    private void TerminateShellSession()
-    {
-        try
-        {
-            if (_shellSession != null && !_shellSession.HasExited)
-            {
-                _shellSession.Kill();
-            }
-            else if (_shellProcess != null && !_shellProcess.HasExited)
-            {
-                _shellProcess.Kill(entireProcessTree: true);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Exception while terminating shell session");
-        }
-        finally
-        {
-            _shellSession?.Dispose();
-            _shellSession = null;
-            _shellProcess?.Dispose();
-            _shellProcess = null;
-            _stdin = null;
-            _stdout = null;
         }
     }
 
@@ -717,20 +460,6 @@ fi
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Container liveness probe failed for container {Container}", _options.ContainerNameOrId);
-            return false;
-        }
-    }
-
-    private bool TryStartShellProcess()
-    {
-        try
-        {
-            StartShellProcess();
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to start interactive shell session for container {Container} after recovery probe", _options.ContainerNameOrId);
             return false;
         }
     }
@@ -811,7 +540,7 @@ fi
             ForceRecycleContainer();
 
             var probe30 = await RunLivenessProbeAsync(timeoutSeconds: WslRecoveryProbeTimeoutSeconds);
-            if (probe30 && TryStartShellProcess())
+            if (probe30 && _shellSession.TryStart())
             {
                 return ContainerRecoveryStage.WslShutdownRecovered;
             }
@@ -826,25 +555,20 @@ fi
 
     private async Task<ContainerRecoveryStage> RunTimeoutEscalationLadderAsync()
     {
-        // Step 1: In-container process reaper
         await RunInContainerProcessSweepAsync();
 
-        // Step 2A: Initial Liveness Probe (5s)
-        if (await RunLivenessProbeAsync(timeoutSeconds: LivenessProbeTimeoutSeconds) && TryStartShellProcess())
+        if (await RunLivenessProbeAsync(timeoutSeconds: LivenessProbeTimeoutSeconds) && _shellSession.TryStart())
         {
             return ContainerRecoveryStage.ProcessSweepSucceeded;
         }
 
-        // Step 2B: Force-kill and recreate container
         ForceRecycleContainer();
 
-        // Step 2C: Retry liveness probe (5s)
-        if (await RunLivenessProbeAsync(timeoutSeconds: LivenessProbeTimeoutSeconds) && TryStartShellProcess())
+        if (await RunLivenessProbeAsync(timeoutSeconds: LivenessProbeTimeoutSeconds) && _shellSession.TryStart())
         {
             return ContainerRecoveryStage.ContainerRecreated;
         }
 
-        // Step 3: Windows + WSL?
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && _options.UseWsl)
         {
             return await ExecuteWslRecoveryAsync();
@@ -856,18 +580,13 @@ fi
 
     private void EnsureShellProcessRunning()
     {
-        if (_shellSession != null && !_shellSession.HasExited)
-        {
-            return;
-        }
-
-        if (_shellProcess != null && !_shellProcess.HasExited)
+        if (_shellSession.IsRunning)
         {
             return;
         }
 
         EnsureContainerRunning();
-        StartShellProcess();
+        _shellSession.Start();
     }
 
     /// <summary>
@@ -921,22 +640,8 @@ fi
                         _logger.LogWarning("Recreating container {Container} due to configuration drift. {Drift}",
                             _options.ContainerNameOrId, drift);
                     }
-                    try
-                    {
-                        _shellSession?.Kill();
-                        if (_shellProcess != null && !_shellProcess.HasExited)
-                        {
-                            _shellProcess.Kill(entireProcessTree: true);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "Best-effort shell process termination before container recreation");
-                    }
-                    _shellSession?.Dispose();
-                    _shellSession = null;
-                    _shellProcess?.Dispose();
-                    _shellProcess = null;
+
+                    _shellSession.Terminate();
 
                     var rmSpec = BuildDockerProcessSpec(_options, ["rm", "-f", _options.ContainerNameOrId], timeoutSeconds: 10);
                     _processRunner.Run(rmSpec);
@@ -995,1135 +700,78 @@ fi
         }
     }
 
-    private const string MountInspectFormat = "{{range .Mounts}}{{.Destination}}={{.Source}}={{.RW}};{{end}}";
-    private const string ImageInspectFormat = "{{.Config.Image}}";
-    private const string UserInspectFormat = "{{.Config.User}}";
+    public string? DetectContainerDrift() =>
+        ContainerMountAndDriftBuilder.DetectContainerDrift(_processRunner, _options);
 
-    private static string NormalizeContainerPath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
-        var trimmed = path.Trim().Replace('\\', '/');
-        return trimmed.Length > 1 ? trimmed.TrimEnd('/') : trimmed;
-    }
+    public Task<string?> DetectContainerDriftAsync(CancellationToken cancellationToken = default) =>
+        ContainerMountAndDriftBuilder.DetectContainerDriftAsync(_processRunner, _options, cancellationToken);
 
-    /// <summary>
-    /// Compares the existing container's mounts and image with the current expected configuration.
-    /// Returns a description of the drift, or null when the container can be safely reused.
-    /// </summary>
-    private string? DetectContainerDrift()
-    {
-        var mountResult = _processRunner.Run(BuildDockerProcessSpec(
-            _options,
-            ["inspect", "-f", MountInspectFormat, _options.ContainerNameOrId],
-            timeoutSeconds: 5));
-        if (mountResult.ExitCode != 0)
-        {
-            return $"Failed to inspect mounts of container (exit code {mountResult.ExitCode}): {mountResult.StandardError}";
-        }
+    public void EnsureImageReady() =>
+        ContainerMountAndDriftBuilder.EnsureImageReady(_processRunner, _options, _logger);
 
-        var actual = new Dictionary<string, (string Source, bool IsRw)>(StringComparer.OrdinalIgnoreCase);
-        foreach (var entry in mountResult.StandardOutput.Trim().Split(';', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = entry.Trim().Split('=');
-            if (parts.Length < 3) continue;
-            var isRw = bool.TryParse(parts[^1].Trim(), out var rw) && rw;
-            var destination = NormalizeContainerPath(parts[0]);
-            var source = string.Join('=', parts[1..^1]).Trim();
-            actual[destination] = (NormalizeMountSourcePath(source), isRw);
-        }
-
-        var expectedMounts = BuildVolumeMounts(_options);
-        var problems = new List<string>();
-        foreach (var expected in expectedMounts)
-        {
-            var expectedDest = NormalizeContainerPath(expected.ContainerPath);
-            if (!actual.TryGetValue(expectedDest, out var current))
-            {
-                problems.Add($"{expected.ContainerPath} (missing)");
-                continue;
-            }
-
-            var expectedRw = !expected.IsReadOnly;
-            if (current.IsRw != expectedRw)
-            {
-                problems.Add($"{expected.ContainerPath} (expected {(expected.IsReadOnly ? "ro" : "rw")})");
-            }
-        }
-
-        // Verify /clone presence matches expectation (e.g. absent when not expected)
-        var normClone = NormalizeContainerPath("/clone");
-        var expectedHasClone = expectedMounts.Any(m => string.Equals(NormalizeContainerPath(m.ContainerPath), normClone, StringComparison.OrdinalIgnoreCase));
-        if (!expectedHasClone && (actual.ContainsKey(normClone) || actual.ContainsKey(NormalizeContainerPath("/clone/.git"))))
-        {
-            problems.Add("/clone (expected absent)");
-        }
-
-        var containerWks = !string.IsNullOrWhiteSpace(_options.ContainerWorkspacePath)
-            ? _options.ContainerWorkspacePath
-            : "/workspace";
-        var normWks = NormalizeContainerPath(containerWks);
-
-        if (!string.IsNullOrWhiteSpace(_options.HostWorkspacePath) &&
-            actual.TryGetValue(normWks, out var wks))
-        {
-            var expectedSource = NormalizeMountSourcePath(ResolveHostPath(_options.HostWorkspacePath, _options));
-            if (!string.Equals(wks.Source, expectedSource, StringComparison.OrdinalIgnoreCase))
-            {
-                problems.Add($"{containerWks} (source '{wks.Source}' vs '{expectedSource}')");
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(_options.CanonicalClonePath) &&
-            actual.TryGetValue(normClone, out var cloneMount))
-        {
-            var expectedCloneSource = NormalizeMountSourcePath(ResolveHostPath(_options.CanonicalClonePath, _options));
-            if (!string.Equals(cloneMount.Source, expectedCloneSource, StringComparison.OrdinalIgnoreCase))
-            {
-                problems.Add($"/clone (source '{cloneMount.Source}' vs '{expectedCloneSource}')");
-            }
-        }
-
-        if (problems.Count > 0)
-        {
-            return $"Missing/Mismatched mounts: {string.Join(", ", problems)}";
-        }
-
-        var expectedImage = !string.IsNullOrWhiteSpace(_options.ContainerImage)
-            ? _options.ContainerImage
-            : ContainerExecutorOptions.DefaultAgentBaseImage;
-        var imageResult = _processRunner.Run(BuildDockerProcessSpec(
-            _options,
-            ["inspect", "-f", ImageInspectFormat, _options.ContainerNameOrId],
-            timeoutSeconds: 5));
-        if (imageResult.ExitCode != 0)
-        {
-            return $"Failed to inspect image of container (exit code {imageResult.ExitCode}): {imageResult.StandardError}";
-        }
-
-        var actualImage = imageResult.StandardOutput.Trim();
-        if (!IsMatchingImage(actualImage, expectedImage))
-        {
-            return $"Image mismatch: '{actualImage}' vs '{expectedImage}'";
-        }
-
-        var expectedUser = _options.IsRestrictedReadOnly ? "1000:1000" : _options.UserUidGid;
-        if (!string.IsNullOrWhiteSpace(expectedUser))
-        {
-            var userResult = _processRunner.Run(BuildDockerProcessSpec(
-                _options,
-                ["inspect", "-f", UserInspectFormat, _options.ContainerNameOrId],
-                timeoutSeconds: 5));
-            if (userResult.ExitCode != 0)
-            {
-                return $"Failed to inspect user of container (exit code {userResult.ExitCode}): {userResult.StandardError}";
-            }
-
-            var actualUser = userResult.StandardOutput.Trim();
-            if (!string.Equals(actualUser, expectedUser, StringComparison.Ordinal))
-            {
-                return $"User mismatch: '{actualUser}' vs '{expectedUser}'";
-            }
-        }
-
-        return null;
-    }
-
-    private static bool IsMatchingImage(string actual, string expected)
-    {
-        if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        // Handle implicit :latest tag equivalence (e.g. "alpine" vs "alpine:latest")
-        if (expected.IndexOf(':') < 0 && string.Equals(actual, expected + ":latest", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (actual.IndexOf(':') < 0 && string.Equals(actual + ":latest", expected, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return false;
-    }
-
-    private static string NormalizeMountSourcePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)) return string.Empty;
-        var norm = path.Replace('\\', '/').TrimEnd('/');
-        if (norm.StartsWith("/host_mnt/", StringComparison.OrdinalIgnoreCase))
-        {
-            norm = "/mnt/" + norm["/host_mnt/".Length..];
-        }
-        else if (norm.StartsWith("/run/desktop/mnt/host/", StringComparison.OrdinalIgnoreCase))
-        {
-            norm = "/mnt/" + norm["/run/desktop/mnt/host/".Length..];
-        }
-        return Git.WslPathConverter.ToWslPath(norm).TrimEnd('/');
-    }
-
-    /// <summary>
-    /// Ensures that the local agent base container image exists and is fresh (&lt; 30 days old).
-    /// If absent or expired, generates it locally via docker build using the embedded DefaultAgentBaseDockerfile.
-    /// </summary>
-    public void EnsureImageReady()
-    {
-        var image = !string.IsNullOrWhiteSpace(_options.ContainerImage)
-            ? _options.ContainerImage
-            : ContainerExecutorOptions.DefaultAgentBaseImage;
-
-        bool isManagedBaseImage =
-            image.StartsWith("ncf-agent-base", StringComparison.OrdinalIgnoreCase) ||
-            image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase);
-
-        if (!isManagedBaseImage)
-        {
-            return;
-        }
-
-        try
-        {
-            if (IsImageFresh(_processRunner, image, _options, TimeSpan.FromDays(30)))
-            {
-                return;
-            }
-
-            // If the alternate image exists and is fresh, tag it
-            var altImage = image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase)
-                ? ContainerExecutorOptions.DefaultAgentBaseImage
-                : ContainerExecutorOptions.AlternateAgentBaseImage;
-
-            if (IsImageFresh(_processRunner, altImage, _options, TimeSpan.FromDays(30)))
-            {
-                var tagSpec = BuildDockerProcessSpec(_options, ["tag", altImage, image], timeoutSeconds: 10);
-                var tagResult = _processRunner.Run(tagSpec);
-                if (tagResult.ExitCode == 0)
-                {
-                    _logger.LogInformation("Tagged existing image {AltImage} as {Image}", altImage, image);
-                    return;
-                }
-            }
-
-            BuildLocalAgentBaseImage(_processRunner, image, _options, _logger);
-        }
-        catch (NotImplementedException)
-        {
-            // Unit test mock runner did not implement Run - ignore
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to ensure container image {Image} is ready; attempting to proceed", image);
-        }
-    }
-
-    /// <summary>
-    /// Checks if a container image exists locally and was created less than maxAge ago.
-    /// </summary>
     public static bool IsImageFresh(
         IProcessRunner processRunner,
         string imageName,
         ContainerExecutorOptions options,
-        TimeSpan maxAge)
-    {
-        try
-        {
-            var inspectSpec = BuildDockerProcessSpec(
-                options,
-                ["image", "inspect", "-f", "{{.Created}}", imageName],
-                timeoutSeconds: 5);
+        TimeSpan maxAge) =>
+        ContainerMountAndDriftBuilder.IsImageFresh(processRunner, imageName, options, maxAge);
 
-            var inspectResult = processRunner.Run(inspectSpec);
-            if (inspectResult.ExitCode == 0)
-            {
-                var createdStr = inspectResult.StandardOutput.Trim();
-                if (DateTime.TryParse(createdStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var createdDate))
-                {
-                    var age = DateTime.UtcNow - createdDate.ToUniversalTime();
-                    return age >= TimeSpan.Zero && age < maxAge;
-                }
-            }
-        }
-        catch
-        {
-            // Fall through to false if inspect fails
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Builds the local agent base image containing git, ripgrep, python3, and essential tools using the embedded Dockerfile.
-    /// </summary>
     public static void BuildLocalAgentBaseImage(
         IProcessRunner processRunner,
         string imageName,
         ContainerExecutorOptions options,
-        ILogger logger)
-    {
-        string? tempDir = null;
-        try
-        {
-            tempDir = Path.Combine(Path.GetTempPath(), $"ncf-build-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(tempDir);
-            var dockerfilePath = Path.Combine(tempDir, "Dockerfile");
-            File.WriteAllText(dockerfilePath, ContainerExecutorOptions.DefaultAgentBaseDockerfile.Replace("\r\n", "\n"));
+        ILogger logger) =>
+        ContainerMountAndDriftBuilder.BuildLocalAgentBaseImage(processRunner, imageName, options, logger);
 
-            var buildContext = options.UseWsl
-                ? Git.WslPathConverter.ToWslPath(tempDir)
-                : tempDir;
+    public static string BuildInContainerReaperScript(IEnumerable<string>? processWhitelist = null) =>
+        PersistentContainerShellSession.BuildInContainerReaperScript(processWhitelist);
 
-            var buildSpec = BuildDockerProcessSpec(
-                options,
-                ["build", "-t", imageName, buildContext],
-                timeoutSeconds: 600);
+    public static ProcessStartSpec BuildProcessStartSpec(ContainerExecutorOptions options) =>
+        PersistentContainerShellSession.BuildProcessStartSpec(options);
 
-            logger.LogInformation("Building local base container image {Image} with git, ripgrep, python3, and nodejs...", imageName);
-            var buildResult = processRunner.Run(buildSpec);
+    public static ProcessStartInfo BuildProcessStartInfo(ContainerExecutorOptions options) =>
+        PersistentContainerShellSession.BuildProcessStartInfo(options);
 
-            if (buildResult.ExitCode != 0)
-            {
-                logger.LogWarning("Failed to build local base image {Image} (exit code {ExitCode}): {Error}",
-                    imageName, buildResult.ExitCode, buildResult.StandardError);
-            }
-            else
-            {
-                logger.LogInformation("Successfully built local base image {Image}.", imageName);
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Exception while building local base container image {Image}", imageName);
-        }
-        finally
-        {
-            if (!string.IsNullOrEmpty(tempDir) && Directory.Exists(tempDir))
-            {
-                try
-                {
-                    Directory.Delete(tempDir, recursive: true);
-                }
-                catch (Exception deleteEx)
-                {
-                    logger.LogWarning(deleteEx, "Failed to clean up temporary container build directory '{TempDir}'", tempDir);
-                }
-            }
-        }
-    }
-
-    private void StartShellProcess()
-    {
-        if (_options.CustomProcessFactory != null)
-        {
-            _shellProcess = _options.CustomProcessFactory();
-            _shellProcess.Start();
-            _stdin = new StreamWriter(_shellProcess.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true, NewLine = "\n" };
-            _stdout = _shellProcess.StandardOutput;
-            return;
-        }
-
-        var spec = BuildProcessStartSpec(_options);
-        _shellSession = _processRunner.StartSession(spec);
-        _stdin = _shellSession.StandardInput;
-        _stdin.NewLine = "\n";
-        _stdout = _shellSession.StandardOutput;
-    }
-
-    /// <summary>
-    /// Builds the structured ProcessStartSpec with ArgumentList avoiding escaping pitfalls for container or WSL execution.
-    /// </summary>
-    public static ProcessStartSpec BuildProcessStartSpec(ContainerExecutorOptions options)
-    {
-        var dockerArgs = new List<string> { "exec", "-i" };
-        var effectiveUser = options.IsRestrictedReadOnly
-            ? "1000:1000"
-            : options.UserUidGid;
-
-        if (!string.IsNullOrWhiteSpace(effectiveUser))
-        {
-            dockerArgs.AddRange(["--user", effectiveUser]);
-        }
-        dockerArgs.Add(options.ContainerNameOrId);
-        dockerArgs.AddRange(["bash", "--noprofile", "--norc"]);
-
-        if (options.UseWsl)
-        {
-            var wslArgs = new List<string>();
-            if (!string.IsNullOrWhiteSpace(options.WslDistribution))
-            {
-                wslArgs.AddRange(["-d", options.WslDistribution]);
-            }
-            wslArgs.AddRange(["--", options.ShellExecutable]);
-            wslArgs.AddRange(dockerArgs);
-
-            return new ProcessStartSpec
-            {
-                FileName = options.WslExecutable,
-                ArgumentList = wslArgs,
-                TimeoutSeconds = options.DefaultTimeoutSeconds
-            };
-        }
-
-        return new ProcessStartSpec
-        {
-            FileName = options.ShellExecutable,
-            ArgumentList = dockerArgs,
-            TimeoutSeconds = options.DefaultTimeoutSeconds
-        };
-    }
-
-    public static ProcessStartInfo BuildProcessStartInfo(ContainerExecutorOptions options)
-    {
-        var effectiveUser = options.IsRestrictedReadOnly
-            ? "1000:1000"
-            : options.UserUidGid;
-        var userArg = !string.IsNullOrWhiteSpace(effectiveUser) ? $"--user {effectiveUser} " : string.Empty;
-        var dockerArgs = $"exec -i {userArg}{options.ContainerNameOrId} bash --noprofile --norc";
-
-        if (options.UseWsl)
-        {
-            var wslArgs = new System.Text.StringBuilder();
-            if (!string.IsNullOrWhiteSpace(options.WslDistribution))
-            {
-                wslArgs.Append($"-d {options.WslDistribution.Trim()} ");
-            }
-            wslArgs.Append($"-- {options.ShellExecutable} {dockerArgs}");
-
-            return new ProcessStartInfo
-            {
-                FileName = options.WslExecutable,
-                Arguments = wslArgs.ToString(),
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-        }
-
-        return new ProcessStartInfo
-        {
-            FileName = options.ShellExecutable,
-            Arguments = dockerArgs,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-    }
-
-    /// <summary>
-    /// Builds a structured ProcessStartSpec with ArgumentList to invoke Docker either directly on the host or inside WSL2 via wsl.exe.
-    /// </summary>
     public static ProcessStartSpec BuildDockerProcessSpec(
         ContainerExecutorOptions options,
         IEnumerable<string> dockerArgs,
         int timeoutSeconds = 10,
-        string? workingDirectory = null)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(dockerArgs);
+        string? workingDirectory = null) =>
+        ContainerMountAndDriftBuilder.BuildDockerProcessSpec(options, dockerArgs, timeoutSeconds, workingDirectory);
 
-        var argsList = dockerArgs.ToList();
-
-        if (options.UseWsl)
-        {
-            var wslArgs = new List<string>();
-            if (!string.IsNullOrWhiteSpace(options.WslDistribution))
-            {
-                wslArgs.AddRange(["-d", options.WslDistribution.Trim()]);
-            }
-            wslArgs.AddRange(["--", options.ShellExecutable]);
-            wslArgs.AddRange(argsList);
-
-            return new ProcessStartSpec
-            {
-                FileName = options.WslExecutable,
-                ArgumentList = wslArgs,
-                WorkingDirectory = workingDirectory,
-                TimeoutSeconds = timeoutSeconds
-            };
-        }
-
-        return new ProcessStartSpec
-        {
-            FileName = options.ShellExecutable,
-            ArgumentList = argsList,
-            WorkingDirectory = workingDirectory,
-            TimeoutSeconds = timeoutSeconds
-        };
-    }
-
-    /// <summary>
-    /// Builds executable and arguments to invoke Docker either directly on the host or inside WSL2 via wsl.exe.
-    /// </summary>
     public static (string Executable, string Arguments) BuildDockerCommand(
         string dockerCommand,
         bool useWsl = false,
         string? wslDistribution = null,
         string shellExecutable = "docker",
-        string wslExecutable = "wsl.exe")
-    {
-        if (useWsl)
-        {
-            var distroArg = !string.IsNullOrWhiteSpace(wslDistribution)
-                ? $"-d {wslDistribution.Trim()} "
-                : string.Empty;
-            return (wslExecutable, $"{distroArg}-- {shellExecutable} {dockerCommand}".Trim());
-        }
+        string wslExecutable = "wsl.exe") =>
+        ContainerMountAndDriftBuilder.BuildDockerCommand(dockerCommand, useWsl, wslDistribution, shellExecutable, wslExecutable);
 
-        return (shellExecutable, dockerCommand);
-    }
+    public static IReadOnlyList<ContainerVolumeMount> BuildVolumeMounts(ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.BuildVolumeMounts(options);
 
-    /// <summary>
-    /// Builds the list of volume bind mounts (workspace, SDKs, package caches, custom) according to options.
-    /// </summary>
-    public static IReadOnlyList<ContainerVolumeMount> BuildVolumeMounts(ContainerExecutorOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-        var mounts = new List<ContainerVolumeMount>();
+    public static string ResolveHostPath(string path, ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.ResolveHostPath(path, options);
 
-        // 1. Workspace mount: HostWorkspacePath -> ContainerWorkspacePath
-        if (!string.IsNullOrWhiteSpace(options.HostWorkspacePath))
-        {
-            var hostWks = ResolveHostPath(options.HostWorkspacePath, options);
-            var containerWks = !string.IsNullOrWhiteSpace(options.ContainerWorkspacePath)
-                ? options.ContainerWorkspacePath
-                : "/workspace";
-            mounts.Add(new ContainerVolumeMount(hostWks, containerWks, isReadOnly: options.IsRestrictedReadOnly));
+    public static string ResolveContainerWorkingDirectory(string? workingDirectory, ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.ResolveContainerWorkingDirectory(workingDirectory, options);
 
-            // Layered protection and isolated task worktree support:
-            var normHost = hostWks.TrimEnd('/', '\\');
-            var normContainer = containerWks.TrimEnd('/', '\\');
+    public static string ComputePathEnvironmentVariable(ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.ComputePathEnvironmentVariable(options);
 
-            if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
-            {
-                var normClone = ResolveHostPath(options.CanonicalClonePath, options).TrimEnd('/', '\\');
-                // Only mount /clone if the clone is NOT already within HostWorkspacePath (e.g. isolated task worktree)
-                if (!normClone.StartsWith(normHost + "/", StringComparison.OrdinalIgnoreCase) &&
-                    !normClone.Equals(normHost, StringComparison.OrdinalIgnoreCase))
-                {
-                    mounts.Add(new ContainerVolumeMount(normClone, "/clone", isReadOnly: true));
-                    mounts.Add(new ContainerVolumeMount($"{normClone}/.git", "/clone/.git", isReadOnly: options.IsRestrictedReadOnly));
-                }
-            }
-            else if (options.ProtectCloneWorkingTree && !options.IsRestrictedReadOnly)
-            {
-                mounts.Add(new ContainerVolumeMount($"{normHost}/clone", $"{normContainer}/clone", isReadOnly: true));
-                mounts.Add(new ContainerVolumeMount($"{normHost}/clone/.git", $"{normContainer}/clone/.git", isReadOnly: false));
-            }
-        }
+    public static List<string> BuildDockerRunArgs(ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.BuildDockerRunArgs(options);
 
-        // 2. Package caches (NuGet, npm, pnpm, uv, Maven)
-        if (options.MountPackageCaches)
-        {
-            if (!string.IsNullOrWhiteSpace(options.NugetPackageCachePath))
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(options.NugetPackageCachePath, options),
-                    "/cache/nuget",
-                    isReadOnly: false));
-            }
+    public static ProcessStartSpec BuildDockerRunProcessSpec(ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.BuildDockerRunProcessSpec(options);
 
-            if (!string.IsNullOrWhiteSpace(options.NpmCachePath))
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(options.NpmCachePath, options),
-                    "/cache/npm",
-                    isReadOnly: false));
-            }
+    public static (string Executable, string Arguments) BuildDockerRunCommand(ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.BuildDockerRunCommand(options);
 
-            if (!string.IsNullOrWhiteSpace(options.PnpmCachePath))
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(options.PnpmCachePath, options),
-                    "/cache/pnpm",
-                    isReadOnly: false));
-            }
+    public static ProcessStartInfo BuildDockerRunProcessStartInfo(ContainerExecutorOptions options) =>
+        ContainerMountAndDriftBuilder.BuildDockerRunProcessStartInfo(options);
 
-            if (!string.IsNullOrWhiteSpace(options.UvCachePath))
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(options.UvCachePath, options),
-                    "/cache/uv",
-                    isReadOnly: false));
-            }
-
-            if (!string.IsNullOrWhiteSpace(options.MavenCachePath))
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(options.MavenCachePath, options),
-                    "/cache/m2",
-                    isReadOnly: false));
-            }
-
-            if (!string.IsNullOrWhiteSpace(options.PlaywrightCachePath))
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(options.PlaywrightCachePath, options),
-                    "/cache/ms-playwright",
-                    isReadOnly: false));
-            }
-        }
-
-        // 3. Heavy SDK mounts (Strategy A: Read-Only Toolchain Mounts, with non-root user ~/.dotnet mapped to ContainerHomePath/.dotnet)
-        if (options.MountHostSdks && options.SdkMountPaths != null)
-        {
-            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
-            var hasMappedHomeDotnet = false;
-            var userDotnetRoots = options.SdkMountPaths
-                .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.TrimEnd('/')))
-                .Select(p => p.TrimEnd('/'))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var sdkPath in options.SdkMountPaths)
-            {
-                if (string.IsNullOrWhiteSpace(sdkPath))
-                {
-                    continue;
-                }
-
-                var trimmedSdk = sdkPath.TrimEnd('/');
-                if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parentDotnet = trimmedSdk[..^"/tools".Length];
-                    if (userDotnetRoots.Contains(parentDotnet))
-                    {
-                        continue;
-                    }
-                }
-
-                var resolvedHostSdk = ResolveHostPath(sdkPath, options);
-                var isUserDotnetRoot = userDotnetRoots.Contains(trimmedSdk);
-
-                if (isUserDotnetRoot)
-                {
-                    // Intentional tradeoff: mount the non-root host user's ~/.dotnet directory read-write directly
-                    // to /ncf-home/.dotnet ($HOME/.dotnet) so user-local .NET workloads (sdk-manifests, packs) are
-                    // visible while allowing the .NET CLI to write sentinel/lock files under $HOME/.dotnet.
-                    // Alternative approaches (read-only mounts or selective symlinks) break either dotnet build
-                    // sentinel creation or workload resolution, and the isolation loss is minimal.
-                    if (!options.IsRestrictedReadOnly && !hasMappedHomeDotnet)
-                    {
-                        mounts.Add(new ContainerVolumeMount(
-                            resolvedHostSdk,
-                            containerHomeDotnet,
-                            isReadOnly: false));
-                        hasMappedHomeDotnet = true;
-                    }
-                    continue;
-                }
-
-                mounts.Add(new ContainerVolumeMount(
-                    resolvedHostSdk,
-                    sdkPath,
-                    isReadOnly: true));
-            }
-        }
-
-        // 4. Additional custom volume mounts
-        if (options.AdditionalVolumeMounts != null)
-        {
-            foreach (var customMount in options.AdditionalVolumeMounts)
-            {
-                mounts.Add(new ContainerVolumeMount(
-                    ResolveHostPath(customMount.HostPath, options),
-                    customMount.ContainerPath,
-                    isReadOnly: customMount.IsReadOnly));
-            }
-        }
-
-        return mounts;
-    }
-
-    private static bool IsNonRootUserDotnetRoot(string trimmedPath)
-    {
-        if (trimmedPath.Equals("~/.dotnet", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return trimmedPath.StartsWith("/home/", StringComparison.OrdinalIgnoreCase) &&
-               trimmedPath.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase) &&
-               !trimmedPath.Equals($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Resolves '~' or relative host paths for volume mounting.
-    /// </summary>
-    public static string ResolveHostPath(string path, ContainerExecutorOptions options)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return path;
-        }
-
-        if (options.UseWsl)
-        {
-            if (path.Contains(":\\") || path.Contains(":/"))
-            {
-                return Git.WslPathConverter.ToWslPath(path);
-            }
-
-            if (path.StartsWith('\\') || path.Contains('\\'))
-            {
-                var norm = path.Replace('\\', '/');
-                if (path.StartsWith('\\') && !norm.StartsWith('/'))
-                {
-                    norm = "/" + norm;
-                }
-                return norm;
-            }
-        }
-
-        if (options.ExpandTildeInMounts && (path == "~" || path.StartsWith("~/") || path.StartsWith("~\\")))
-        {
-            string homeDir;
-            if (options.UseWsl && !string.IsNullOrWhiteSpace(options.WslUserName))
-            {
-                homeDir = $"/home/{options.WslUserName}";
-            }
-            else
-            {
-                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                homeDir = !string.IsNullOrWhiteSpace(profile) ? profile.Replace('\\', '/') : "~";
-            }
-
-            var subPath = path.Length > 1 ? path[1..].TrimStart('/', '\\') : string.Empty;
-            var resolved = string.IsNullOrEmpty(subPath) ? homeDir : $"{homeDir}/{subPath}";
-            if (options.UseWsl && (resolved.Contains(":\\") || resolved.Contains(":/")))
-            {
-                return Git.WslPathConverter.ToWslPath(resolved);
-            }
-            return resolved;
-        }
-
-        return path;
-    }
-
-    /// <summary>
-    /// Remaps a working directory path to the virtual container filesystem (/workspace).
-    /// </summary>
-    public static string ResolveContainerWorkingDirectory(string? workingDirectory, ContainerExecutorOptions options)
-    {
-        var defaultDir = !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
-            ? options.DefaultWorkingDirectory
-            : (!string.IsNullOrWhiteSpace(options.ContainerWorkspacePath) ? options.ContainerWorkspacePath : "/workspace");
-
-        if (string.IsNullOrWhiteSpace(workingDirectory))
-        {
-            return defaultDir;
-        }
-
-        var targetDir = workingDirectory.Trim();
-        if (targetDir == "/workspace" || string.Equals(targetDir, options.ContainerWorkspacePath, StringComparison.OrdinalIgnoreCase))
-        {
-            return defaultDir;
-        }
-
-        if (targetDir == "." || targetDir == "./")
-        {
-            return defaultDir;
-        }
-
-        if (targetDir.Equals("/clone", StringComparison.OrdinalIgnoreCase))
-        {
-            return defaultDir;
-        }
-
-        if (targetDir.StartsWith("/clone/", StringComparison.OrdinalIgnoreCase))
-        {
-            var rel = targetDir[7..].TrimStart('/');
-            return string.IsNullOrEmpty(rel) ? defaultDir : $"{defaultDir}/{rel}";
-        }
-
-        if (targetDir.StartsWith("/workspace/", StringComparison.Ordinal))
-        {
-            return targetDir;
-        }
-
-        if (!Path.IsPathRooted(targetDir) && !targetDir.StartsWith('/') && !targetDir.StartsWith('\\'))
-        {
-            var cleanRel = targetDir.Replace('\\', '/').TrimStart('.', '/');
-            return string.IsNullOrEmpty(cleanRel) ? defaultDir : $"{defaultDir}/{cleanRel}";
-        }
-
-        var containerWks = !string.IsNullOrWhiteSpace(options.ContainerWorkspacePath)
-            ? options.ContainerWorkspacePath
-            : "/workspace";
-
-        var normTarget = targetDir.Replace('\\', '/').TrimEnd('/');
-
-        // 1. Check CanonicalClonePath match/subpath
-        if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
-        {
-            var normClone = options.CanonicalClonePath.Replace('\\', '/').TrimEnd('/');
-            if (normTarget.Equals(normClone, StringComparison.OrdinalIgnoreCase))
-            {
-                return defaultDir;
-            }
-            if (normTarget.StartsWith(normClone + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = normTarget[(normClone.Length + 1)..];
-                return $"{defaultDir}/{rel}";
-            }
-        }
-
-        // 2. Check HostWorkspacePath match/subpath
-        var hostWks = options.HostWorkspacePath;
-        if (!string.IsNullOrWhiteSpace(hostWks))
-        {
-            var normHost = hostWks.Replace('\\', '/').TrimEnd('/');
-            var normHostWsl = Git.WslPathConverter.ToWslPath(hostWks).Replace('\\', '/').TrimEnd('/');
-
-            if (normTarget.Equals(normHost, StringComparison.OrdinalIgnoreCase) ||
-                normTarget.Equals(normHostWsl, StringComparison.OrdinalIgnoreCase))
-            {
-                return defaultDir;
-            }
-
-            if (normTarget.StartsWith(normHost + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = normTarget[(normHost.Length + 1)..];
-                return $"{containerWks}/{rel}";
-            }
-
-            if (normTarget.StartsWith(normHostWsl + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = normTarget[(normHostWsl.Length + 1)..];
-                return $"{containerWks}/{rel}";
-            }
-        }
-
-        if (targetDir.Contains(":\\") || targetDir.Contains(":/") || targetDir.StartsWith("/mnt/") || targetDir.StartsWith("/home/"))
-        {
-            return defaultDir;
-        }
-
-        return targetDir;
-    }
-
-    /// <summary>
-    /// Computes the complete PATH environment variable including mounted SDKs, user package tool directories,
-    /// and standard Unix utility paths provided by Ubuntu.
-    /// </summary>
-    public static string ComputePathEnvironmentVariable(ContainerExecutorOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(options);
-
-        var pathEntries = new List<string>();
-
-        // 1. Extra user-configured directories
-        if (options.ExtraPathDirectories != null)
-        {
-            pathEntries.AddRange(options.ExtraPathDirectories.Where(p => !string.IsNullOrWhiteSpace(p)));
-        }
-
-        // 2. Mounted SDK toolchain bin directories
-        if (options.MountHostSdks && options.SdkMountPaths != null)
-        {
-            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
-            var userDotnetRoots = options.SdkMountPaths
-                .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.Trim().TrimEnd('/')))
-                .Select(p => p.Trim().TrimEnd('/'))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var sdk in options.SdkMountPaths)
-            {
-                if (string.IsNullOrWhiteSpace(sdk)) continue;
-                var trimmedSdk = sdk.Trim().TrimEnd('/');
-                if (string.IsNullOrEmpty(trimmedSdk)) continue;
-
-                // Skip non-executable library/certificate/font/snap directories
-                if (trimmedSdk.StartsWith("/etc/", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.Equals("/etc", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.StartsWith("/usr/share/fonts", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.Equals("/usr/lib/x86_64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.Equals("/usr/lib/aarch64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.Equals("/usr/lib/snapd", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.StartsWith("/snap", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parentDotnet = trimmedSdk[..^"/tools".Length];
-                    if (userDotnetRoots.Contains(parentDotnet))
-                    {
-                        if (!options.IsRestrictedReadOnly)
-                        {
-                            pathEntries.Add($"{containerHomeDotnet}/tools");
-                        }
-                        continue;
-                    }
-                }
-
-                if (trimmedSdk.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (userDotnetRoots.Contains(trimmedSdk))
-                    {
-                        if (!options.IsRestrictedReadOnly)
-                        {
-                            pathEntries.Add($"{containerHomeDotnet}/tools");
-                            pathEntries.Add(containerHomeDotnet);
-                        }
-                    }
-                    else
-                    {
-                        pathEntries.Add($"{trimmedSdk}/tools");
-                        pathEntries.Add(trimmedSdk);
-                    }
-                }
-                else if (trimmedSdk.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || trimmedSdk == "/usr/share/dotnet")
-                {
-                    pathEntries.Add(trimmedSdk);
-                    pathEntries.Add("/root/.dotnet/tools");
-                }
-                else if (trimmedSdk.Contains("jvm", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (trimmedSdk.Equals("/usr/lib/jvm", StringComparison.OrdinalIgnoreCase))
-                    {
-                        pathEntries.Add("/usr/lib/jvm/default-java/bin");
-                    }
-                    else
-                    {
-                        pathEntries.Add($"{trimmedSdk}/bin");
-                    }
-                }
-                else if (trimmedSdk.Contains("android", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (trimmedSdk.EndsWith("/cmdline-tools/latest", StringComparison.OrdinalIgnoreCase))
-                    {
-                        pathEntries.Add($"{trimmedSdk}/bin");
-                    }
-                    else if (trimmedSdk.EndsWith("/platform-tools", StringComparison.OrdinalIgnoreCase))
-                    {
-                        pathEntries.Add(trimmedSdk);
-                    }
-                    else
-                    {
-                        pathEntries.Add($"{trimmedSdk}/platform-tools");
-                        pathEntries.Add($"{trimmedSdk}/cmdline-tools/latest/bin");
-                    }
-                }
-                else if (trimmedSdk.EndsWith("/bin", StringComparison.OrdinalIgnoreCase))
-                {
-                    pathEntries.Add(trimmedSdk);
-                }
-                else if (trimmedSdk.Contains("cargo", StringComparison.OrdinalIgnoreCase) ||
-                         trimmedSdk.Contains("go", StringComparison.OrdinalIgnoreCase) ||
-                         trimmedSdk.Contains("node", StringComparison.OrdinalIgnoreCase) ||
-                         trimmedSdk.Contains("nvm", StringComparison.OrdinalIgnoreCase))
-                {
-                    pathEntries.Add($"{trimmedSdk}/bin");
-                    pathEntries.Add(trimmedSdk);
-                }
-                else
-                {
-                    pathEntries.Add(trimmedSdk);
-                }
-            }
-        }
-        else
-        {
-            pathEntries.Add("/usr/share/dotnet");
-            pathEntries.Add("/root/.dotnet/tools");
-        }
-
-        // 3. User package manager & tool paths
-        pathEntries.Add(ContainerExecutorOptions.HostDotnetToolsContainerPath);
-        pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools");
-        pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.local/bin");
-        pathEntries.Add("/root/.dotnet/tools");
-        pathEntries.Add("/root/.local/bin");
-        pathEntries.Add("/root/.cargo/bin");
-        pathEntries.Add("/root/.npm-global/bin");
-
-        // 4. Standard Unix utility directories provided by Ubuntu
-        pathEntries.Add("/usr/local/sbin");
-        pathEntries.Add("/usr/local/bin");
-        pathEntries.Add("/usr/sbin");
-        pathEntries.Add("/usr/bin");
-        pathEntries.Add("/sbin");
-        pathEntries.Add("/bin");
-
-        // Deduplicate while preserving order
-        var distinct = new List<string>();
-        foreach (var entry in pathEntries)
-        {
-            var trimmed = entry.Trim();
-            if (!string.IsNullOrEmpty(trimmed) && !distinct.Contains(trimmed, StringComparer.Ordinal))
-            {
-                distinct.Add(trimmed);
-            }
-        }
-
-        return string.Join(":", distinct);
-    }
-
-    /// <summary>
-    /// Builds the argument list for a detached container 'docker run' command with volume mappings.
-    /// </summary>
-    public static List<string> BuildDockerRunArgs(ContainerExecutorOptions options)
-    {
-        var args = new List<string> { "run", "-d" };
-
-        if (!string.IsNullOrWhiteSpace(options.ContainerNameOrId))
-        {
-            args.AddRange(["--name", options.ContainerNameOrId]);
-        }
-
-        var computedPath = ComputePathEnvironmentVariable(options);
-        args.AddRange(["-e", $"PATH={computedPath}"]);
-        args.AddRange(["-e", $"HOME={ContainerExecutorOptions.ContainerHomePath}"]);
-        args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
-        args.AddRange(["-e", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"]);
-        args.AddRange(["-e", "LANG=en_US.UTF-8"]);
-        args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
-
-        var dotnetSdkPath = options.SdkMountPaths?
-            .FirstOrDefault(p => p.Equals("/usr/lib/dotnet", StringComparison.OrdinalIgnoreCase))
-            ?? options.SdkMountPaths?
-                .FirstOrDefault(p => p.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || p == "/usr/share/dotnet")
-            ?? (options.SdkMountPaths != null && !options.IsRestrictedReadOnly && options.SdkMountPaths.Any(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.Trim().TrimEnd('/')))
-                ? $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet"
-                : null)
-            ?? "/usr/share/dotnet";
-        args.AddRange(["-e", $"DOTNET_ROOT={dotnetSdkPath}"]);
-
-        if (options.MountPackageCaches)
-        {
-            foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
-            {
-                args.AddRange(["-e", $"{name}={value}"]);
-            }
-        }
-
-        var mounts = BuildVolumeMounts(options);
-        foreach (var mount in mounts)
-        {
-            args.Add("-v");
-            args.Add(mount.ToString());
-        }
-
-        var workDir = !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
-            ? options.DefaultWorkingDirectory
-            : options.ContainerWorkspacePath;
-        if (!string.IsNullOrWhiteSpace(workDir))
-        {
-            args.AddRange(["-w", workDir]);
-        }
-
-        var effectiveUser = options.IsRestrictedReadOnly
-            ? "1000:1000"
-            : options.UserUidGid;
-
-        if (!string.IsNullOrWhiteSpace(effectiveUser))
-        {
-            args.AddRange(["--user", effectiveUser]);
-        }
-
-        if (!string.IsNullOrWhiteSpace(options.SharedMemorySize))
-        {
-            args.AddRange(["--shm-size", options.SharedMemorySize]);
-        }
-
-        args.AddRange(["--ulimit", "core=0"]);
-        args.Add("--init");
-
-        if (options.PidsLimit > 0)
-        {
-            args.AddRange(["--pids-limit", options.PidsLimit.ToString()]);
-        }
-
-        if (options.IsRestrictedReadOnly)
-        {
-            args.AddRange(["--network", "none"]);
-            args.AddRange(["--read-only"]);
-            args.AddRange(["--tmpfs", "/tmp:rw,noexec,nosuid,size=32m"]);
-            args.AddRange(["--tmpfs", $"{ContainerExecutorOptions.ContainerHomePath}:rw,noexec,nosuid,size=16m"]);
-            args.AddRange(["--cap-drop=ALL"]);
-            args.AddRange(["--security-opt", "no-new-privileges:true"]);
-        }
-
-        var image = !string.IsNullOrWhiteSpace(options.ContainerImage)
-            ? options.ContainerImage
-            : ContainerExecutorOptions.DefaultAgentBaseImage;
-        args.Add(image);
-
-        args.AddRange(["tail", "-f", "/dev/null"]);
-        return args;
-    }
-
-    /// <summary>
-    /// Builds the structured ProcessStartSpec for 'docker run' with volume mappings.
-    /// </summary>
-    public static ProcessStartSpec BuildDockerRunProcessSpec(ContainerExecutorOptions options)
-    {
-        var runArgs = BuildDockerRunArgs(options);
-
-        if (options.UseWsl)
-        {
-            var wslArgs = new List<string>();
-            if (!string.IsNullOrWhiteSpace(options.WslDistribution))
-            {
-                wslArgs.AddRange(["-d", options.WslDistribution]);
-            }
-            wslArgs.AddRange(["--", options.ShellExecutable]);
-            wslArgs.AddRange(runArgs);
-
-            return new ProcessStartSpec
-            {
-                FileName = options.WslExecutable,
-                ArgumentList = wslArgs,
-                TimeoutSeconds = options.DefaultTimeoutSeconds
-            };
-        }
-
-        return new ProcessStartSpec
-        {
-            FileName = options.ShellExecutable,
-            ArgumentList = runArgs,
-            TimeoutSeconds = options.DefaultTimeoutSeconds
-        };
-    }
-
-    /// <summary>
-    /// Builds (Executable, Arguments) command string pair for 'docker run' with volume mappings.
-    /// </summary>
-    public static (string Executable, string Arguments) BuildDockerRunCommand(ContainerExecutorOptions options)
-    {
-        var runArgs = BuildDockerRunArgs(options);
-        var formattedArgs = string.Join(" ", runArgs.Select(arg => arg.Contains(' ') ? $"\"{arg}\"" : arg));
-        return BuildDockerCommand(formattedArgs, options.UseWsl, options.WslDistribution, options.ShellExecutable, options.WslExecutable);
-    }
-
-    /// <summary>
-    /// Builds ProcessStartInfo for 'docker run' with volume mappings.
-    /// </summary>
-    public static ProcessStartInfo BuildDockerRunProcessStartInfo(ContainerExecutorOptions options)
-    {
-        var (exe, args) = BuildDockerRunCommand(options);
-        return new ProcessStartInfo
-        {
-            FileName = exe,
-            Arguments = args,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-    }
-
-    public void ForceRestartShellProcess()
-    {
-        TerminateShellSession();
-        StartShellProcess();
-    }
+    public void ForceRestartShellProcess() => _shellSession.ForceRestart();
 
     public void Dispose()
     {
@@ -2132,8 +780,7 @@ fi
 
         try
         {
-            _stdin?.WriteLine("exit");
-            TerminateShellSession();
+            _shellSession.Dispose();
         }
         catch (Exception ex)
         {
@@ -2149,16 +796,5 @@ fi
     {
         Dispose();
         return ValueTask.CompletedTask;
-    }
-
-    private static bool IsSensitiveEnvVar(string key)
-    {
-        var upper = key.ToUpperInvariant();
-        return upper.Contains("KEY") ||
-               upper.Contains("TOKEN") ||
-               upper.Contains("SECRET") ||
-               upper.Contains("PASSWORD") ||
-               upper.Contains("AUTH") ||
-               upper.Contains("CREDENTIAL");
     }
 }

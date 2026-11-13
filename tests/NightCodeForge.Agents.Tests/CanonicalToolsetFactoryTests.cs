@@ -29,8 +29,8 @@ public class CanonicalToolsetFactoryTests : IDisposable
     private static (CanonicalToolsetFactory Factory, Mock<IExecutionEnvironmentProvider> Env, IBacklogPlanningContext Backlog) CreateToolsetFactory(IMcpClientManager? mcp = null)
     {
         var env = new Mock<IExecutionEnvironmentProvider>();
-        env.Setup(e => e.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>()))
-            .Returns(new Mock<IExecutionEnvironment>().Object);
+        env.Setup(e => e.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Mock<IExecutionEnvironment>().Object);
         var mcpManager = mcp ?? new Mock<IMcpClientManager>().Object;
         var backlog = TestBacklogContext.CreateDefault();
         var factory = new CanonicalToolsetFactory(
@@ -67,7 +67,7 @@ public class CanonicalToolsetFactoryTests : IDisposable
         Assert.Null(session.Tools.BacklogMutationService);
         Assert.NotNull(session.SkillsService);
         // A non-positive task id is normalized to "no task".
-        env.Verify(e => e.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), null), Times.Once);
+        env.Verify(e => e.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), null, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public class CanonicalToolsetFactoryTests : IDisposable
     public async Task Create_WithoutExecutionEnvironment_FailsFast()
     {
         var env = new Mock<IExecutionEnvironmentProvider>();
-        env.Setup(e => e.GetEnvironment(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>())).Returns((IExecutionEnvironment)null!);
+        env.Setup(e => e.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>())).ReturnsAsync((IExecutionEnvironment)null!);
         var factory = new CanonicalToolsetFactory(
             TestPathResolver.Create(), env.Object, new EditorConfigService(), new EditorConfigFileApplier(),
             new Mock<IWebSearchService>().Object,
@@ -187,5 +187,42 @@ public class CanonicalToolsetFactoryTests : IDisposable
         Assert.Null(scope.TestTimeoutSeconds);
         Assert.False(scope.IsReadOnly);
         Assert.Equal(scope, new CanonicalToolScope("/repo"));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithSandboxScopeOnRequest_PropagatesSandboxPathResolverToCanonicalTools()
+    {
+        var (factory, env, _) = CreateToolsetFactory();
+        var nwScope = SandboxScopeDescriptor.ForNightwatch(
+            hostNcfLogsPath: _tempDir,
+            wslNcfLogsPath: "/mnt/c/logs",
+            hostSkillsPath: _tempDir,
+            wslSkillsPath: "/mnt/c/skills");
+
+        env.Setup(e => e.GetEnvironmentAsync(nwScope, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Mock<IExecutionEnvironment>().Object);
+
+        var request = new CanonicalToolsetRequest(
+            Workspace: null,
+            new AgentProfile { Id = "nw", Name = "Nightwatch", SecurityTier = SandboxSecurityTier.RestrictedReadOnly },
+            new CanonicalToolScope("/nightcodeforge", IsReadOnly: true),
+            new[] { CanonicalToolNames.Read, CanonicalToolNames.Bash },
+            Array.Empty<CustomToolConfig>(),
+            new Dictionary<string, string>(),
+            AttachBacklogMutationService: false,
+            SandboxScope: nwScope);
+
+        var session = await factory.CreateAsync(request, CancellationToken.None);
+
+        Assert.NotNull(session.Tools.SandboxPathResolver);
+        Assert.Same(nwScope, session.Tools.SandboxPathResolver!.Scope);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(_tempDir, "app.log")),
+            session.Tools.ResolveFullPath("/nightcodeforge/ncf-logs/app.log"));
+        Assert.NotNull(await session.SkillsService.GetActiveSkillsAsync());
+
+        // When both Workspace and SandboxScope are null, CreateAsync fails fast with InvalidOperationException
+        var invalidRequest = request with { SandboxScope = null };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => factory.CreateAsync(invalidRequest, CancellationToken.None));
     }
 }

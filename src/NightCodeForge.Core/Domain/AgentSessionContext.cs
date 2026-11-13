@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Domain;
@@ -9,6 +10,7 @@ public class AgentSessionContext
 {
     public required ForgeTask ForgeTask { get; init; }
     public Workspace? Workspace { get; init; }
+    public SandboxScopeDescriptor? SandboxScope { get; init; }
     public required AgentProfile Profile { get; init; }
     public PipelineContext? PipelineContext { get; init; }
     public LocalOptimizationFlags? OptimizationFlags { get; set; }

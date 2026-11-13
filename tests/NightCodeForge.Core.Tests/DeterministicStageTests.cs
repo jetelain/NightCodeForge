@@ -36,7 +36,10 @@ public class DeterministicStageTests
         public string? LastWorkingDir { get; private set; }
         public int? LastTimeoutSeconds { get; private set; }
 
-        public IExecutionEnvironment GetEnvironment(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null) => this;
+        public Task<IExecutionEnvironment> GetEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> GetEnvironmentAsync(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
+        public Task<IExecutionEnvironment> RecreateEnvironmentContainerAsync(Workspace workspace, SandboxSecurityTier securityTier = SandboxSecurityTier.Standard, int? taskId = null, CancellationToken cancellationToken = default) => Task.FromResult<IExecutionEnvironment>(this);
         public Task CleanupTaskContainerAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);

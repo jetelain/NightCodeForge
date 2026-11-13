@@ -185,7 +185,7 @@ public class ConflictResolutionVerifier : IConflictResolutionVerifier
                 ErrorMessage: noBuildMsg);
         }
 
-        var env = _environmentProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, taskId)
+        var env = await _environmentProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId, cancellationToken)
             ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         var timeoutSeconds = workspace.BuildTimeoutSeconds ?? config.BuildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;

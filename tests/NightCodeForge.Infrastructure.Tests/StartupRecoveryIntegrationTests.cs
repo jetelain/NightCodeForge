@@ -433,7 +433,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
                 containerFactory,
                 NullLogger<ExecutionEnvironmentProvider>.Instance);
 
-            var env = envProvider.GetEnvironment(workspace, taskId: task.Id);
+            var env = await envProvider.GetEnvironmentAsync(workspace, taskId: task.Id);
             Assert.NotNull(env);
         }
         finally

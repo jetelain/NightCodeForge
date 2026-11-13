@@ -706,17 +706,21 @@ public class StreamingIdleWatchdogIntegrationTests
         var timeProvider = new ManualControllableTimeProvider();
         var innerClient = new Mock<IChatClient>();
 
-        var emptyChunkTcs = new TaskCompletionSource<bool>();
-        var stalledTokenTcs = new TaskCompletionSource<bool>();
+        var enteredFirstWaitTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var enteredSecondWaitTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var emptyChunkTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stalledTokenTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         async IAsyncEnumerable<ChatResponseUpdate> StreamWithEmptyChunkThenStall([EnumeratorCancellation] CancellationToken ct)
         {
             using var reg1 = ct.Register(() => emptyChunkTcs.TrySetCanceled(ct));
+            enteredFirstWaitTcs.TrySetResult(true);
             await emptyChunkTcs.Task;
             // Empty role chunk emitted after 4 minutes of prefill
             yield return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [] };
 
             using var reg2 = ct.Register(() => stalledTokenTcs.TrySetCanceled(ct));
+            enteredSecondWaitTcs.TrySetResult(true);
             await stalledTokenTcs.Task;
             yield return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("never_arrives")] };
         }
@@ -743,17 +747,17 @@ public class StreamingIdleWatchdogIntegrationTests
             await foreach (var _ in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")])) { }
         });
 
-        await Task.Delay(25);
+        await enteredFirstWaitTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         // 1. Advance 4 minutes and emit empty role chunk (6 minutes of the 10-minute prefill budget remain)
         timeProvider.Advance(TimeSpan.FromMinutes(4));
         emptyChunkTcs.TrySetResult(true);
-        await Task.Delay(50);
+        await enteredSecondWaitTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         // 2. Advance 6.5 minutes (total 10.5m > 10m FirstTokenTimeout, even though 6.5m < 10m since the empty chunk)
         timeProvider.Advance(TimeSpan.FromMinutes(6.5));
 
-        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(() => enumerationTask);
+        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(() => enumerationTask.WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal(StreamTimeoutPhase.FirstTokenPrefill, ex.Diagnostics.Phase);
         Assert.Equal(0, ex.Diagnostics.GeneratedTokens);
     }
@@ -836,27 +840,40 @@ public class StreamingIdleWatchdogIntegrationTests
 
     private sealed class ManualControllableTimeProvider : TimeProvider
     {
+        private readonly Lock _sync = new();
         private DateTimeOffset _utcNow = new(2026, 11, 10, 8, 0, 0, TimeSpan.Zero);
         private long _timestampTicks;
         private readonly List<ControllableTimer> _timers = new();
 
-        public override DateTimeOffset GetUtcNow() => _utcNow;
-        public override long GetTimestamp() => _timestampTicks;
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_sync) return _utcNow;
+        }
+
+        public override long GetTimestamp()
+        {
+            lock (_sync) return _timestampTicks;
+        }
+
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
         public void Advance(TimeSpan delta)
         {
             if (delta <= TimeSpan.Zero) return;
-            _utcNow = _utcNow.Add(delta);
-            _timestampTicks += delta.Ticks;
 
-            var pending = _timers.ToList();
-            foreach (var timer in pending)
+            List<ControllableTimer> dueTimers;
+            lock (_sync)
             {
-                if (timer.DueTicks <= _timestampTicks && !timer.IsDisposed)
-                {
-                    timer.Fire();
-                }
+                _utcNow = _utcNow.Add(delta);
+                _timestampTicks += delta.Ticks;
+                dueTimers = _timers
+                    .Where(t => t.DueTicks <= _timestampTicks && !t.IsDisposed)
+                    .ToList();
+            }
+
+            foreach (var timer in dueTimers)
+            {
+                timer.Fire();
             }
         }
 
@@ -868,9 +885,12 @@ public class StreamingIdleWatchdogIntegrationTests
                 return new NoOpTimer();
             }
 
-            var timer = new ControllableTimer(this, callback, state, dueTime);
-            _timers.Add(timer);
-            return timer;
+            lock (_sync)
+            {
+                var timer = new ControllableTimer(this, callback, state, dueTime);
+                _timers.Add(timer);
+                return timer;
+            }
         }
 
         private sealed class ControllableTimer : ITimer
@@ -901,10 +921,15 @@ public class StreamingIdleWatchdogIntegrationTests
 
             public bool Change(TimeSpan dueTime, TimeSpan period)
             {
-                DueTicks = dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan
-                    ? _owner._timestampTicks + dueTime.Ticks
-                    : (dueTime == TimeSpan.Zero ? _owner._timestampTicks : long.MaxValue);
-                if (dueTime == TimeSpan.Zero && !IsDisposed)
+                bool fireImmediately = false;
+                lock (_owner._sync)
+                {
+                    DueTicks = dueTime > TimeSpan.Zero && dueTime != Timeout.InfiniteTimeSpan
+                        ? _owner._timestampTicks + dueTime.Ticks
+                        : (dueTime == TimeSpan.Zero ? _owner._timestampTicks : long.MaxValue);
+                    fireImmediately = dueTime == TimeSpan.Zero && !IsDisposed;
+                }
+                if (fireImmediately)
                 {
                     Fire();
                 }
@@ -913,8 +938,11 @@ public class StreamingIdleWatchdogIntegrationTests
 
             public void Dispose()
             {
-                IsDisposed = true;
-                _owner._timers.Remove(this);
+                lock (_owner._sync)
+                {
+                    IsDisposed = true;
+                    _owner._timers.Remove(this);
+                }
             }
 
             public ValueTask DisposeAsync()

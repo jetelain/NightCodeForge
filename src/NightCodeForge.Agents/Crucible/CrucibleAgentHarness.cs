@@ -122,11 +122,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     TaskId: taskId,
                     BuildTimeoutSeconds: buildTimeout,
                     TestTimeoutSeconds: testTimeout,
-                    IsReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly),
+                    IsReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly || context.SandboxScope?.IsReadOnly == true,
+                    SandboxScope: context.SandboxScope),
                 permittedTools,
                 harnessConfig.CustomTools,
                 harnessConfig.ToolDirectives,
-                AttachBacklogMutationService: false),
+                AttachBacklogMutationService: false,
+                SandboxScope: context.SandboxScope),
             cancellationToken);
         var canonicalTools = toolset.Tools;
         var dispatcher = toolset.Dispatcher;

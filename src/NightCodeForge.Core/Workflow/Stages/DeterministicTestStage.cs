@@ -113,7 +113,7 @@ public partial class DeterministicTestStage : IWorkflowStage
             ? (config.CoverageCommand ?? _testCommand)
             : (config.TestCommand ?? _testCommand);
 
-        var effectiveEnv = _envProvider.GetEnvironment(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id)
+        var effectiveEnv = await _envProvider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, context.ForgeTask?.Id, cancellationToken)
             ?? throw new InvalidOperationException($"No execution environment could be resolved for workspace #{workspace.Id}.");
 
         var timeout = workspace.TestTimeoutSeconds ?? config.TestTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;

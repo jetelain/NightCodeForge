@@ -187,7 +187,7 @@ public class ExecutionEnvironmentTests
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_ContainerMode_InjectsResolvedWorkspaceAndCacheMounts()
+    public async Task ExecutionEnvironmentProvider_ContainerMode_InjectsResolvedWorkspaceAndCacheMounts()
     {
         var pathResolver = new FakePathResolver();
         var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
@@ -199,7 +199,7 @@ public class ExecutionEnvironmentTests
             ContainerName = "my-test-container"
         };
 
-        var env = provider.GetEnvironment(workspace);
+        var env = await provider.GetEnvironmentAsync(workspace);
         var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
 
         Assert.Equal("/home/wsluser/.nightcodeforge/wks/42", containerExecutor.Options.HostWorkspacePath);
@@ -221,7 +221,7 @@ public class ExecutionEnvironmentTests
     [InlineData("nightcodeforge-agent:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("alpine:3.19", "alpine:3.19")]
-    public void ExecutionEnvironmentProvider_ContainerMode_UpgradesLegacyManagedBaseImages(string configuredImage, string expectedImage)
+    public async Task ExecutionEnvironmentProvider_ContainerMode_UpgradesLegacyManagedBaseImages(string configuredImage, string expectedImage)
     {
         var pathResolver = new FakePathResolver();
         var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
@@ -233,14 +233,14 @@ public class ExecutionEnvironmentTests
             ContainerImage = configuredImage
         };
 
-        var env = provider.GetEnvironment(workspace);
+        var env = await provider.GetEnvironmentAsync(workspace);
         var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
 
         Assert.Equal(expectedImage, containerExecutor.Options.ContainerImage);
     }
 
     [Fact]
-    public void ExecutionEnvironmentProvider_RestrictedReadOnly_DoesNotBindMountHostTmp()
+    public async Task ExecutionEnvironmentProvider_RestrictedReadOnly_DoesNotBindMountHostTmp()
     {
         var pathResolver = new FakePathResolver();
         var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
@@ -251,7 +251,7 @@ public class ExecutionEnvironmentTests
             ExecutionMode = ExecutionMode.ContainerSandbox
         };
 
-        var env = provider.GetEnvironment(workspace, SandboxSecurityTier.RestrictedReadOnly);
+        var env = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.RestrictedReadOnly);
         var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
 
         Assert.DoesNotContain(containerExecutor.Options.AdditionalVolumeMounts, m => m.ContainerPath == "/tmp");
@@ -941,7 +941,12 @@ public class ExecutionEnvironmentTests
 
         await provider.CleanupTaskContainerAsync(workspace, 5);
 
-        Assert.Equal(["docker rm -f ncf-sandbox-3-task-5"], executed);
+        Assert.Equal(
+            [
+                "docker rm -f ncf-sandbox-3-task-5",
+                "docker rm -f ncf-sandbox-3-task-5-ro"
+            ],
+            executed);
     }
 
     [Fact]
@@ -959,7 +964,12 @@ public class ExecutionEnvironmentTests
 
         await provider.CleanupTaskContainerAsync(workspace, 5);
 
-        Assert.Equal(["wsl.exe -d Ubuntu -- docker rm -f ncf-sandbox-3-task-5"], executed);
+        Assert.Equal(
+            [
+                "wsl.exe -d Ubuntu -- docker rm -f ncf-sandbox-3-task-5",
+                "wsl.exe -d Ubuntu -- docker rm -f ncf-sandbox-3-task-5-ro"
+            ],
+            executed);
     }
 
     [Fact]
@@ -1021,8 +1031,11 @@ public class ExecutionEnvironmentTests
         await provider.CleanupWorkspaceContainersAsync(workspace);
 
         Assert.Contains("docker rm -f ncf-sandbox-3-task-5", executed);
+        Assert.Contains("docker rm -f ncf-sandbox-3-task-5-ro", executed);
         Assert.Contains("docker rm -f ncf-sandbox-3-task-6", executed);
+        Assert.Contains("docker rm -f ncf-sandbox-3-task-6-ro", executed);
         Assert.Contains("docker rm -f ncf-sandbox-3", executed);
+        Assert.Contains("docker rm -f ncf-sandbox-3-ro", executed);
     }
 
     private class MockProcessRunner : IProcessRunner
