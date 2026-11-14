@@ -1,6 +1,6 @@
 # 🧪 Step 12.37: Companion API Key Store (`default-key.dat`) & NightCode Assay Handoff Endpoints (`/api/companion/*`)
 
-> **Feature Implementation Step (Companion Tool Authentication, Configuration Discovery & Ideation Handoff)**  
+> **Feature Implementation Step (Companion Tool Authentication, Configuration Discovery & Triage Handoff)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
@@ -11,7 +11,7 @@
 
 ## 1. Executive Objective
 
-**NightCode Assay** is a lightweight companion desktop application (`C:\Users\Julien\source\repos\jetelain\NightCodeAssay`) designed for manual exploratory testing of software built by **NightCodeForge**. To avoid duplicating LLM configuration or repository settings across both applications while enabling 1-click feedback handoff into NightCodeForge's Ideation chat, this step introduces:
+**NightCode Assay** is a lightweight companion desktop application (`C:\Users\Julien\source\repos\jetelain\NightCodeAssay`) designed for manual exploratory testing of software built by **NightCodeForge**. To avoid duplicating LLM configuration or repository settings across both applications while enabling 1-click feedback handoff into NightCodeForge's Sandboxed Triage portal, this step introduces:
 
 1. **OllamaRouter-Style Local API Key Store (`IApiKeyStore`, `IKeyProtector`, `ApiKeyCrypto`):**
    - Automatically generates and persists a 32-byte (256-bit) base64url default API key in `<ContentRoot>/config/default-key.dat` wrapped at rest via `IKeyProtector` (`DpapiKeyProtector` using Windows DPAPI `DataProtectionScope.CurrentUser` on Windows; `PlainKeyProtector` with `0600` owner-only file permissions on Unix), plus optional operator-created user keys in `<ContentRoot>/config/api-keys.json` (storing SHA-256 hashes only).
@@ -20,8 +20,8 @@
    - Protects all `/api/companion/*` endpoints via constant-time key validation (`Authorization: Bearer <key>` or `X-Api-Key: <key>`), returning `401 Unauthorized` when missing or invalid.
 3. **Companion Configuration & Workspace Discovery Endpoints (`GET /api/companion/config` & `GET /api/companion/workspaces`):**
    - Allows `NightCodeAssay` to discover the active LLM provider (`ProviderType`, `EffectiveEndpoint`, `DefaultModelId`, `ArchitectModelId`, `CoderModelId`, and `OpenAiCompatible` endpoint/API key) and the list of registered workspaces (`Id`, `Name`, `Emoji`, `ColorCode`, `RepositoryPath`, `DefaultBaseBranch`).
-4. **1-Click Exploratory Report $\rightarrow$ Ideation Session Handoff (`POST /api/companion/workspaces/{workspaceId:int}/ideation`):**
-   - Creates a new Ideation `Conversation` for the target workspace pre-seeded with the exploratory test report Markdown, and supports selecting/loading that conversation via `?conversationId={id}` in `Ideation.razor` with the report pre-filled in the prompt box (or auto-dispatched when `autoSend: true`).
+4. **1-Click Exploratory Report $\rightarrow$ Sandboxed Triage Handoff (`POST /api/companion/workspaces/{workspaceId:int}/triage`):**
+   - Stages a new triage draft for the target workspace pre-seeded with the exploratory test report Markdown in `ICompanionTriageDraftStore`, and supports selecting/loading that draft via `?draftId={id}` in `Triage.razor` with the report pre-filled in the **Submit External Report** form.
 
 ---
 
@@ -121,54 +121,49 @@ Queries `IWorkspaceRepository.GetAllAsync()` and returns all registered workspac
 }
 ```
 
-#### 3. `POST /api/companion/workspaces/{workspaceId:int}/ideation`
-Creates a new Ideation session in the specified workspace seeded with an exploratory test report from `NightCodeAssay`:
+#### 3. `POST /api/companion/workspaces/{workspaceId:int}/triage`
+Stages a new Triage submission draft in the specified workspace seeded with an exploratory test report from `NightCodeAssay`:
 
-- **Request Payload (`CreateCompanionIdeationRequest`):**
+- **Request Payload (`CreateCompanionTriageRequest`):**
   ```json
   {
     "title": "Assay Exploratory Report — 2026-11-14 09:05",
     "reportMarkdown": "# Exploratory Test Report — 2026-11-14\n...",
+    "baseBranch": "main",
     "sessionDirectoryPath": "C:\\Users\\Julien\\...\\sessions\\2026-11-14_09-05"
   }
   ```
 - **Validation & Behavior:**
   1. Verify workspace `{workspaceId}` exists via `IWorkspaceRepository.GetByIdAsync(workspaceId)`; return `404 Not Found` if absent.
   2. Validate `reportMarkdown` is non-empty; return `400 Bad Request` if blank.
-  3. Build the conversation title: use `request.Title.Trim()` if provided, otherwise `"Assay Report #{DateTime.UtcNow:MMdd-HHmm}"`.
-  4. Build the seeded ideation prompt instructing the Architect agent to analyze the exploratory testing report, inspect referenced code/logs on the base branch, and propose structured backlog tasks (`propose_tasks`):
-     ```text
-     I just completed an exploratory testing session with NightCode Assay. Please analyze the following findings, correlate them with the codebase, and propose actionable backlog tasks (bugs, UI/UX fixes, or enhancements):
-
-     {reportMarkdown}
-     ```
-  5. Create the `Conversation` via `ITaskRepository.StartIdeationConversationAsync(workspaceId, title)` and store the seeded prompt in `Conversation.Summary` (persisted via `ITaskRepository.UpdateConversationAsync`) so `Ideation.razor` can pre-fill the chat input when the user opens the session URL in their browser.
+  3. Build the report title: use `request.Title.Trim()` if provided, otherwise `"Assay Report #{DateTime.UtcNow:MMdd-HHmm}"`.
+  4. Resolve `baseBranch`: use `request.BaseBranch.Trim()` if provided, otherwise `workspace.DefaultBaseBranch ?? "main"`.
+  5. Store the staged triage draft in a singleton `ICompanionTriageDraftStore` (thread-safe in-memory store keeping recent drafts with a 12-character hex/base64url `draftId` and 24-hour TTL) so the HTTP endpoint responds immediately (`201 Created`) without blocking on a long-running sandboxed agent run.
   6. Return HTTP `201 Created`:
      ```json
      {
-       "conversationId": 42,
+       "draftId": "7f9c2b1e4a8d",
        "workspaceId": 1,
        "title": "Assay Exploratory Report — 2026-11-14 09:05",
-       "ideationUrl": "/w/1/ideation?conversationId=42"
+       "triageUrl": "/w/1/triage?draftId=7f9c2b1e4a8d"
      }
      ```
 
 ---
 
-### 2.4 `Ideation.razor` Deep-Link Support (`?conversationId={id}`)
+### 2.4 `Triage.razor` Deep-Link Support (`?draftId={id}`)
 
-Enhance `Ideation.razor` to support direct deep-linking to a specific Ideation conversation:
-1. Add `[SupplyParameterFromQuery(Name = "conversationId")] public int? ConversationId { get; set; }`.
-2. In `ReloadWorkspaceContextAsync()`, when `ConversationId.HasValue` matches a conversation belonging to the active workspace:
-   - Load that conversation via `TaskRepository.GetConversationWithTurnsAsync(ConversationId.Value)` and call `LoadConversationIntoSession(conv)`.
-   - If the conversation has zero turns (`conv.Turns.Count == 0`) and `!string.IsNullOrWhiteSpace(conv.Summary)`, populate `_userInput = conv.Summary` so the exploratory report is immediately ready in the input box for the maintainer to review and press **Send** (and clear `conv.Summary` once the first turn is dispatched).
+Enhance `Triage.razor` to support direct deep-linking to a staged companion triage draft:
+1. Add `[SupplyParameterFromQuery(Name = "draftId")] public string? DraftId { get; set; }` and `@inject ICompanionTriageDraftStore CompanionTriageDraftStore`.
+2. In `OnInitializedAsync()` / `OnParametersSet()`, when `!string.IsNullOrWhiteSpace(DraftId)` matches a draft in `CompanionTriageDraftStore` belonging to the active workspace:
+   - Pre-fill `_model.Title = draft.Title`, `_model.Description = draft.ReportMarkdown`, and `_model.BaseBranch = draft.BaseBranch` so the exploratory report is immediately loaded in the **Submit External Report** form for the maintainer to review and click **🛡️ Launch Sandboxed Triage ➔**.
 
 ---
 
 ## 3. Implementation Checklist & Deliverables
 
 - [ ] Implement `ApiKeyCrypto`, `IKeyProtector` (`DpapiKeyProtector`, `PlainKeyProtector`), and `IApiKeyStore` (`ApiKeyStore`) writing `<ContentRoot>/config/default-key.dat` and `<ContentRoot>/config/api-keys.json`.
-- [ ] Register `IKeyProtector` and `IApiKeyStore` as singletons in DI (`ServiceCollectionExtensions` / `Program.cs`).
-- [ ] Implement `CompanionEndpoints` (`/api/companion/config`, `/api/companion/workspaces`, `POST /api/companion/workspaces/{workspaceId:int}/ideation`) protected by `CompanionApiKeyEndpointFilter` and map them in `Program.cs`.
-- [ ] Add `?conversationId={id}` query parameter handling and `Conversation.Summary` seed prompt pre-filling in `Ideation.razor`.
-- [ ] Add unit and integration tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Web.Tests` covering `ApiKeyCrypto`, `ApiKeyStore` load/rotation/validation, `401` rejection on unauthenticated `/api/companion/*` requests, config/workspace discovery payloads, ideation session creation, and `?conversationId={id}` deep-link loading in `IdeationPageTests`.
+- [ ] Register `IKeyProtector`, `IApiKeyStore`, and `ICompanionTriageDraftStore` as singletons in DI (`ServiceCollectionExtensions` / `Program.cs`).
+- [ ] Implement `CompanionEndpoints` (`/api/companion/config`, `/api/companion/workspaces`, `POST /api/companion/workspaces/{workspaceId:int}/triage`) protected by `CompanionApiKeyEndpointFilter` and map them in `Program.cs`.
+- [ ] Add `?draftId={id}` query parameter handling and `ICompanionTriageDraftStore` form pre-filling in `Triage.razor`.
+- [ ] Add unit and integration tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Web.Tests` covering `ApiKeyCrypto`, `ApiKeyStore` load/rotation/validation, `401` rejection on unauthenticated `/api/companion/*` requests, config/workspace discovery payloads, triage draft creation, and `?draftId={id}` deep-link loading in `Triage` tests.
