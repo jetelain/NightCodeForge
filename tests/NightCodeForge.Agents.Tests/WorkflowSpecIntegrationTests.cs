@@ -437,6 +437,7 @@ public class WorkflowSpecIntegrationTests
             pathResolver,
             envProviderMock.Object,
             new Mock<IGitHubPullRequestDeliveryService>().Object,
+            new Mock<IGitHubTaskMirrorService>().Object,
             NullLogger<TaskWorkspacePreparer>.Instance);
         var mockTelemetryService = new Mock<IOperationsTelemetryService>();
         var mergeAndCascadeCoordinator = new TaskMergeAndCascadeCoordinator(

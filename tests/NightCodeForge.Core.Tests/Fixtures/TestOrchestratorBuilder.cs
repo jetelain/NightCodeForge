@@ -110,7 +110,20 @@ public class TestOrchestratorBuilder
     public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
     public Mock<IGitHubPullRequestDeliveryService> GitHubPrDeliveryMock { get; } = new();
     public IGitHubPullRequestDeliveryService? GitHubPrDeliveryService { get; set; }
+    public Mock<IGitHubTaskMirrorService> GitHubTaskMirrorMock { get; } = CreateDefaultGitHubTaskMirrorMock();
+    public IGitHubTaskMirrorService? GitHubTaskMirrorService { get; set; }
     public ILogger<TaskOrchestrator> Logger { get; set; } = NullLogger<TaskOrchestrator>.Instance;
+
+    private static Mock<IGitHubTaskMirrorService> CreateDefaultGitHubTaskMirrorMock()
+    {
+        var mock = new Mock<IGitHubTaskMirrorService>();
+        mock.Setup(m => m.TryClaimIssueForExecutionAsync(
+                It.IsAny<ForgeTask>(),
+                It.IsAny<Workspace>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        return mock;
+    }
 
     private static IOperationsControlService CreateDefaultOperationsControlService()
     {
@@ -130,6 +143,7 @@ public class TestOrchestratorBuilder
         PathResolver,
         EnvironmentProvider ?? EnvironmentProviderMock.Object,
         GitHubPrDeliveryService ?? GitHubPrDeliveryMock.Object,
+        GitHubTaskMirrorService ?? GitHubTaskMirrorMock.Object,
         NullLogger<TaskWorkspacePreparer>.Instance);
 
     public TaskMergeAndCascadeCoordinator BuildMergeAndCascadeCoordinator(ITaskWorkspacePreparer? workspacePreparer = null) => new(

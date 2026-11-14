@@ -98,4 +98,13 @@ public class MockTaskOrchestrator : ITaskOrchestrator
         }
         return Task.FromResult(CompleteResult);
     }
+
+    public int? LastSyncMergedPrWorkspaceId { get; private set; }
+    public IReadOnlyList<int> SyncMergedPrResult { get; set; } = Array.Empty<int>();
+
+    public Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        LastSyncMergedPrWorkspaceId = workspaceId;
+        return Task.FromResult(SyncMergedPrResult);
+    }
 }

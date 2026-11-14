@@ -23,6 +23,7 @@ public class TaskWorkspacePreparerTests : IDisposable
     private readonly Mock<IWorkspacePathResolver> _pathResolverMock = new();
     private readonly Mock<IExecutionEnvironmentProvider> _envProviderMock = new();
     private readonly Mock<IGitHubPullRequestDeliveryService> _gitHubPrDeliveryMock = new();
+    private readonly Mock<IGitHubTaskMirrorService> _gitHubTaskMirrorMock = new();
 
     public TaskWorkspacePreparerTests()
     {
@@ -55,21 +56,23 @@ public class TaskWorkspacePreparerTests : IDisposable
         _pathResolverMock.Object,
         _envProviderMock.Object,
         _gitHubPrDeliveryMock.Object,
+        _gitHubTaskMirrorMock.Object,
         NullLogger<TaskWorkspacePreparer>.Instance);
 
     [Fact]
     public void Constructor_WhenAnyDependencyIsNull_ThrowsArgumentNullException()
     {
         var logger = NullLogger<TaskWorkspacePreparer>.Instance;
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(null!, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, null!, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, null!, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, null!, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, null!, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, null!, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, null!, _gitHubPrDeliveryMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, null!, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, null!));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(null!, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, null!, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, null!, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, null!, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, null!, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, null!, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, null!, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, null!, _gitHubTaskMirrorMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, _gitHubTaskMirrorMock.Object, null!));
     }
 
     [Fact]
@@ -483,5 +486,54 @@ public class TaskWorkspacePreparerTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.ArchiveTaskMarkdownSafeAsync(workspace, task, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.PopulateReviewDiffsAsync(workspace, task, pipelineContext, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.GenerateDiffStatSafeAsync(workspace, 26, "main", cts.Token));
+    }
+
+    [Fact]
+    public async Task GitHubTaskMirrorDelegationMethods_ForwardToMirrorService()
+    {
+        var sut = CreateSut();
+        var workspace = await _workspaceRepo.CreateAsync(new Workspace { Name = "ws", RepositoryPath = _tempDir });
+        var task = new ForgeTask { Id = 41, WorkspaceId = workspace.Id, ExternalSource = "GitHub", ExternalReferenceId = "99" };
+        var questions = new List<Question> { new() { Prompt = "Override?", Answer = GitHubClaimConflictConstants.OverrideClaimOption } };
+        Func<int, CancellationToken, Task> callback = (_, _) => Task.CompletedTask;
+
+        _gitHubTaskMirrorMock
+            .Setup(m => m.TryClaimIssueForExecutionAsync(task, workspace, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _gitHubTaskMirrorMock
+            .Setup(m => m.TryHandleClaimConflictAnswerAsync(task, workspace, questions, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _gitHubTaskMirrorMock
+            .Setup(m => m.SyncMergedPullRequestsAsync(workspace, callback, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { 41 });
+
+        Assert.True(await sut.TryClaimIssueForExecutionAsync(task, workspace));
+        Assert.False(await sut.TryHandleClaimConflictAnswerAsync(task, workspace, questions));
+        await sut.MirrorTaskOpenedAsync(task, workspace);
+        await sut.MirrorTaskReviewCompletedAsync(task, workspace, "Approved plan");
+        await sut.MirrorPostImplementationGatesCompletedAsync(task, workspace);
+        await sut.MirrorTaskReadyAsync(task, workspace);
+        await sut.MirrorTaskClosedAsync(task, workspace);
+        var closedIds = await sut.SyncMergedPullRequestsAsync(workspace.Id, callback);
+
+        Assert.Equal(new[] { 41 }, closedIds);
+        _gitHubTaskMirrorMock.Verify(m => m.MirrorTaskOpenedAsync(task, workspace, It.IsAny<CancellationToken>()), Times.Once);
+        _gitHubTaskMirrorMock.Verify(m => m.MirrorTaskReviewCompletedAsync(task, workspace, "Approved plan", It.IsAny<CancellationToken>()), Times.Once);
+        _gitHubTaskMirrorMock.Verify(m => m.MirrorPostImplementationGatesCompletedAsync(task, workspace, It.IsAny<CancellationToken>()), Times.Once);
+        _gitHubTaskMirrorMock.Verify(m => m.MirrorTaskReadyAsync(task, workspace, It.IsAny<CancellationToken>()), Times.Once);
+        _gitHubTaskMirrorMock.Verify(m => m.MirrorTaskClosedAsync(task, workspace, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SyncMergedPullRequestsAsync_WhenWorkspaceDoesNotExist_ReturnsEmptyWithoutCallingMirrorService()
+    {
+        var sut = CreateSut();
+
+        var result = await sut.SyncMergedPullRequestsAsync(99999, (_, _) => Task.CompletedTask);
+
+        Assert.Empty(result);
+        _gitHubTaskMirrorMock.Verify(
+            m => m.SyncMergedPullRequestsAsync(It.IsAny<Workspace>(), It.IsAny<Func<int, CancellationToken, Task>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

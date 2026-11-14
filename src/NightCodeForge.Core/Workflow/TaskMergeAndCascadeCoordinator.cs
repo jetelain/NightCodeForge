@@ -422,6 +422,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
 
         await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
         await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
+        await _workspacePreparer.MirrorTaskClosedAsync(task, workspace, cancellationToken);
 
         return new CompleteTaskResult(CompleteTaskStatus.Completed);
     }
@@ -503,9 +504,15 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
 
         await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
         await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
+        await _workspacePreparer.MirrorTaskClosedAsync(task, workspace, cancellationToken);
 
         return new CompleteTaskResult(CompleteTaskStatus.Completed);
     }
+
+    public Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default) =>
+        _workspacePreparer.SyncMergedPullRequestsAsync(workspaceId, CloseExternallyMergedTaskAsync, cancellationToken);
 
     private async Task CascadeUnblockDependentTasksAsync(ForgeTask task, CancellationToken cancellationToken)
     {

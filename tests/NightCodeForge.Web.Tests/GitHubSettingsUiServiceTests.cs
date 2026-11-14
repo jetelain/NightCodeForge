@@ -1,6 +1,8 @@
 using System.Net;
 using Hangfire;
 using Hangfire.Common;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Domain;
@@ -331,6 +333,142 @@ public class GitHubSettingsUiServiceTests
         await service.SaveSettingsAsync(16, updatedSettings);
 
         Assert.Equal([10, 20, 30], updatedSettings.TriagedIssueNumbers);
+    }
+
+    [Fact]
+    public async Task SaveSettingsAsync_WhenPullRequestDeliveryAndCloseOnMergeEnabled_RegistersPrMergeRecurringJob()
+    {
+        var repoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace { Id = 17, Name = "PR Merge WS" };
+        repoMock.Setup(r => r.GetByIdAsync(17, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var recurringJobMock = new Mock<IRecurringJobManager>();
+        var service = CreateService(workspaceRepository: repoMock.Object, recurringJobManager: recurringJobMock.Object);
+
+        var settings = new GitHubIntegrationSettings
+        {
+            Enabled = true,
+            IssueTriageEnabled = false,
+            PullRequestDeliveryEnabled = true,
+            CloseTaskOnPrMerge = true,
+            RepositoryOwner = "octo-org",
+            RepositoryName = "app",
+            PollingIntervalMinutes = 10
+        };
+
+        await service.SaveSettingsAsync(17, settings);
+
+        recurringJobMock.Verify(
+            m => m.AddOrUpdate(
+                GitHubTaskMirrorService.GetWorkspacePrMergeRecurringJobId(17),
+                It.Is<Job>(j =>
+                    j.Type == typeof(ITaskOrchestrator)
+                    && j.Method.Name == nameof(ITaskOrchestrator.SyncMergedPullRequestsAsync)
+                    && j.Queue == HangfireQueues.Default),
+                "*/10 * * * *",
+                It.IsAny<RecurringJobOptions>()),
+            Times.Once);
+    }
+
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    public async Task SaveSettingsAsync_WhenPrMergePollingDisabled_RemovesPrMergeRecurringJob(
+        bool enabled,
+        bool pullRequestDeliveryEnabled,
+        bool closeTaskOnPrMerge)
+    {
+        var repoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace { Id = 18, Name = "Disabled PR Merge WS" };
+        repoMock.Setup(r => r.GetByIdAsync(18, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var recurringJobMock = new Mock<IRecurringJobManager>();
+        var service = CreateService(workspaceRepository: repoMock.Object, recurringJobManager: recurringJobMock.Object);
+
+        var settings = new GitHubIntegrationSettings
+        {
+            Enabled = enabled,
+            IssueTriageEnabled = false,
+            PullRequestDeliveryEnabled = pullRequestDeliveryEnabled,
+            CloseTaskOnPrMerge = closeTaskOnPrMerge,
+            RepositoryOwner = "octo-org",
+            RepositoryName = "app",
+            PollingIntervalMinutes = 10
+        };
+
+        await service.SaveSettingsAsync(18, settings);
+
+        recurringJobMock.Verify(
+            m => m.RemoveIfExists(GitHubTaskMirrorService.GetWorkspacePrMergeRecurringJobId(18)),
+            Times.Once);
+        recurringJobMock.Verify(
+            m => m.AddOrUpdate(
+                GitHubTaskMirrorService.GetWorkspacePrMergeRecurringJobId(18),
+                It.IsAny<Job>(),
+                It.IsAny<string>(),
+                It.IsAny<RecurringJobOptions>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task MirrorTaskOpenedSafeAsync_MirrorsOpenTaskAndSkipsNonOpenTask()
+    {
+        var mirrorMock = new Mock<IGitHubTaskMirrorService>();
+        var wsRepoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace { Id = 21, Name = "Mirror WS" };
+        wsRepoMock.Setup(r => r.GetByIdAsync(21, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var services = new ServiceCollection()
+            .AddSingleton(mirrorMock.Object)
+            .AddSingleton(wsRepoMock.Object)
+            .BuildServiceProvider();
+
+        var openTask = new ForgeTask { Id = 1, WorkspaceId = 21, Status = TaskOverallStatus.Open };
+        var suggestedTask = new ForgeTask { Id = 2, WorkspaceId = 21, Status = TaskOverallStatus.Suggested };
+
+        await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(services, openTask, 21, NullLogger.Instance);
+        await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(services, suggestedTask, 21, NullLogger.Instance);
+
+        mirrorMock.Verify(m => m.MirrorTaskOpenedAsync(openTask, workspace, It.IsAny<CancellationToken>()), Times.Once);
+        mirrorMock.Verify(m => m.MirrorTaskOpenedAsync(suggestedTask, It.IsAny<Workspace>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MirrorTaskOpenedSafeAsync_SwallowsErrorsWithWarningAndPropagatesCancellation()
+    {
+        var mirrorMock = new Mock<IGitHubTaskMirrorService>();
+        var loggerMock = new Mock<ILogger>();
+        var workspace = new Workspace { Id = 22, Name = "Error WS" };
+        var task = new ForgeTask { Id = 3, WorkspaceId = 22, Status = TaskOverallStatus.Open };
+
+        var services = new ServiceCollection()
+            .AddSingleton(mirrorMock.Object)
+            .BuildServiceProvider();
+
+        mirrorMock
+            .Setup(m => m.MirrorTaskOpenedAsync(task, workspace, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Transient GitHub failure"));
+
+        await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(services, task, workspace, loggerMock.Object);
+
+        loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        mirrorMock
+            .Setup(m => m.MirrorTaskOpenedAsync(task, workspace, cts.Token))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(services, task, workspace, loggerMock.Object, cts.Token));
     }
 
     private static GitHubSettingsUiService CreateService(

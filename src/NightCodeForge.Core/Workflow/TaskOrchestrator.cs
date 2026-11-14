@@ -240,6 +240,25 @@ public class TaskOrchestrator : ITaskOrchestrator
                 }
             }
 
+            var isGitHubLinkedTask = string.Equals(task.ExternalSource, GitHubSyncConstants.ExternalSourceGitHub, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(task.ExternalReferenceId);
+            var canAutoCreateGitHubIssue = workspace.GitHubSettings is { Enabled: true, TaskMirroringEnabled: true, CreateGitHubIssuesForLocalTasks: true }
+                && string.IsNullOrWhiteSpace(task.ExternalReferenceId);
+            if (!task.HasExecutionRun
+                && (string.IsNullOrWhiteSpace(task.CurrentStageId) || string.Equals(task.CurrentStageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
+                && (isGitHubLinkedTask || canAutoCreateGitHubIssue))
+            {
+                var claimAllowed = await _workspacePreparer.TryClaimIssueForExecutionAsync(task, workspace, cancellationToken);
+                if (!claimAllowed)
+                {
+                    await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
+                    cohortExitReason = task.Status == TaskOverallStatus.Cancelled
+                        ? CohortExitReason.Cancelled
+                        : CohortExitReason.WaitingForHuman;
+                    return;
+                }
+            }
+
             // 3. Branch & Environment Setup
             try
             {
@@ -1727,6 +1746,19 @@ public class TaskOrchestrator : ITaskOrchestrator
                     {
                         await _workspacePreparer.PopulateReviewDiffsAsync(workspace, task, pipelineContext, cancellationToken);
                     }
+                    else if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var specificationSummary =
+                            pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.ApprovedPlan)
+                            ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageSummary(StandardStageIds.TaskReview))
+                            ?? task.Description;
+                        await _workspacePreparer.MirrorTaskReviewCompletedAsync(task, workspace, specificationSummary, cancellationToken);
+                    }
+                    else if (string.Equals(stage.StageId, StandardStageIds.PostImplementationGates, StringComparison.OrdinalIgnoreCase))
+                    {
+                        pipelineContext.SyncDataBagToTask();
+                        await _workspacePreparer.MirrorPostImplementationGatesCompletedAsync(task, workspace, cancellationToken);
+                    }
 
                     var nextStageId = result.TargetRoutingStageId;
                     IWorkflowStage? nextStage;
@@ -1904,6 +1936,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 cancellationToken: cancellationToken);
                             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Ready, cancellationToken);
 
+                            await _workspacePreparer.MirrorTaskReadyAsync(task, workspace, cancellationToken);
                             await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
                             await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
                             await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -2174,6 +2207,20 @@ public class TaskOrchestrator : ITaskOrchestrator
         TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
         CancellationToken cancellationToken = default) =>
         _lifecycleMutationCoordinator.RestartTaskPipelineAsync(taskId, gitMode, cancellationToken);
+
+    [Hangfire.DisableConcurrentExecution("github-pr-merge-sync-workspace-{0}", 60)]
+    public Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_operationsControlService.IsPaused)
+        {
+            _logger.LogInformation("GitHub PR merge sync deferred for workspace #{WorkspaceId}: operations are globally paused.", workspaceId);
+            return Task.FromResult<IReadOnlyList<int>>(Array.Empty<int>());
+        }
+
+        return _mergeAndCascadeCoordinator.SyncMergedPullRequestsAsync(workspaceId, cancellationToken);
+    }
 
     private async Task ExecuteGate1BaselineSyncAsync(
         Workspace workspace,

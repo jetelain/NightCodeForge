@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -90,4 +91,77 @@ public static class GitHubPullRequestUiHelper
         !string.IsNullOrWhiteSpace(pullRequestUrl) || pullRequestNumber.HasValue
             ? "Sync Pull Request"
             : "Create GitHub Pull Request";
+
+    public static async Task MirrorTaskOpenedSafeAsync(
+        IServiceProvider serviceProvider,
+        ForgeTask task,
+        int workspaceId,
+        ILogger logger,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (workspaceId <= 0 || task.Status != TaskOverallStatus.Open)
+        {
+            return;
+        }
+
+        var workspace = await ResolveWorkspaceAsync(serviceProvider, workspaceId, cancellationToken);
+        await MirrorTaskOpenedSafeAsync(serviceProvider, task, workspace, logger, cancellationToken);
+    }
+
+    public static async Task MirrorTaskOpenedSafeAsync(
+        IServiceProvider serviceProvider,
+        ForgeTask task,
+        Workspace? workspace,
+        ILogger logger,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(serviceProvider);
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (workspace == null || task.Status != TaskOverallStatus.Open)
+        {
+            return;
+        }
+
+        var mirrorService = serviceProvider.GetService<IGitHubTaskMirrorService>();
+        if (mirrorService == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await mirrorService.MirrorTaskOpenedAsync(task, workspace, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to mirror opened state to GitHub for Task #{TaskId}.", task.Id);
+        }
+    }
+
+    private static async Task<Workspace?> ResolveWorkspaceAsync(
+        IServiceProvider serviceProvider,
+        int workspaceId,
+        CancellationToken cancellationToken)
+    {
+        var workspaceState = serviceProvider.GetService<WorkspaceStateService>();
+        if (workspaceState?.ActiveWorkspace?.Id == workspaceId)
+        {
+            return workspaceState.ActiveWorkspace;
+        }
+
+        var workspaceRepo = serviceProvider.GetService<IWorkspaceRepository>();
+        return workspaceRepo != null
+            ? await workspaceRepo.GetByIdAsync(workspaceId, cancellationToken)
+            : null;
+    }
 }

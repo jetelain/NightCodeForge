@@ -218,6 +218,8 @@
                 createdBy: AuditActors.User,
                 reason: "Initial task creation via modal");
 
+            await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(ServiceProvider, created, WorkspaceId, Logger);
+
             if (MarkdownSync != null && !string.IsNullOrWhiteSpace(RepositoryPath) && Directory.Exists(RepositoryPath))
             {
                 try

@@ -127,6 +127,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IGitHubClientService, GitHub.GitHubClientService>();
         services.TryAddScoped<IGitHubPullRequestDeliveryService, GitHub.GitHubPullRequestDeliveryService>();
         services.TryAddScoped<IGitHubIssueSyncService, GitHub.GitHubIssueSyncService>();
+        services.TryAddScoped<IGitHubTaskMirrorService, GitHub.GitHubTaskMirrorService>();
 
         return services;
     }

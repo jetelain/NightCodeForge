@@ -63,6 +63,10 @@ public interface ITaskMergeAndCascadeCoordinator
         int taskId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default);
+
     Task InitiateConflictResolutionAsync(
         ForgeTask task,
         Workspace workspace,

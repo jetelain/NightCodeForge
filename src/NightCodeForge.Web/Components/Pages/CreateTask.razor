@@ -595,6 +595,8 @@
                 createdBy: AuditActors.User,
                 reason: "Initial task creation via UI");
 
+            await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(ServiceProvider, created, active, Logger);
+
             // Sync markdown to repository path on disk if available
             if (MarkdownSync != null && !string.IsNullOrWhiteSpace(active.RepositoryPath) && Directory.Exists(active.RepositoryPath))
             {

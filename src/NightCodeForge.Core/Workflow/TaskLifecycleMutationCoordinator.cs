@@ -193,6 +193,16 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             .OrderBy(q => q.Id)
             .ToList();
 
+        bool isClaimConflictBatch = batchQuestions.Any(q =>
+            !string.IsNullOrWhiteSpace(q.BatchId) &&
+            q.BatchId.StartsWith(GitHubClaimConflictConstants.ClaimConflictBatchPrefix, StringComparison.OrdinalIgnoreCase));
+
+        if (isClaimConflictBatch)
+        {
+            await HandleClaimConflictSubmissionAsync(task, activeBatchId, batchQuestions, cancellationToken);
+            return;
+        }
+
         var sb = new StringBuilder();
         for (int i = 0; i < batchQuestions.Count; i++)
         {
@@ -278,10 +288,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
         await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
-        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
-        var blockedStage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
-            ?? pipeline.InitialStage
-            ?? throw new WorkflowValidationException($"No active or initial stage found for task #{task.Id}.");
+        var blockedStage = await ResolveBlockedStageAsync(task, cancellationToken);
 
         // Persist ToolResult turn immediately in the waiting conversation so Task Inspector and conversation history
         // reflect the user's answers without having to wait for the worker to schedule and execute the agent.
@@ -365,11 +372,59 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             }
         ), cancellationToken);
 
+        await EnqueueResumedStageAsync(task, blockedStage, activeBatchId, cancellationToken);
+    }
+
+    private async Task HandleClaimConflictSubmissionAsync(
+        ForgeTask task,
+        string? activeBatchId,
+        IReadOnlyList<Question> batchQuestions,
+        CancellationToken cancellationToken)
+    {
+        task.InterruptedStageId = null;
+        task.InterruptedAgentProfileId = null;
+
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
+        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
+
+        var conflictWorkspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
+        if (conflictWorkspace != null &&
+            await _workspacePreparer.TryHandleClaimConflictAnswerAsync(task, conflictWorkspace, batchQuestions, cancellationToken))
+        {
+            await _workspacePreparer.SyncMarkdownTaskSafeAsync(conflictWorkspace, task, cancellationToken);
+            return;
+        }
+
+        var blockedStage = await ResolveBlockedStageAsync(task, cancellationToken);
+        if (conflictWorkspace != null)
+        {
+            await _workspacePreparer.SyncMarkdownTaskSafeAsync(conflictWorkspace, task, cancellationToken);
+        }
+
+        await EnqueueResumedStageAsync(task, blockedStage, activeBatchId, cancellationToken);
+    }
+
+    private async Task<IWorkflowStage> ResolveBlockedStageAsync(ForgeTask task, CancellationToken cancellationToken)
+    {
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        return (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
+            ?? pipeline.InitialStage
+            ?? throw new WorkflowValidationException($"No active or initial stage found for task #{task.Id}.");
+    }
+
+    private async Task EnqueueResumedStageAsync(
+        ForgeTask task,
+        IWorkflowStage blockedStage,
+        string? activeBatchId,
+        CancellationToken cancellationToken)
+    {
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
         {
             TaskId = task.Id,
             Level = LogLevel.Information,
-            Message = $"Human answers submitted for task #{taskId} (batch {activeBatchId ?? "default"} completed); resumed and enqueued to stage queue {blockedStage.QueueTier}",
+            Message = $"Human answers submitted for task #{task.Id} (batch {activeBatchId ?? "default"} completed); resumed and enqueued to stage queue {blockedStage.QueueTier}",
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
 
@@ -462,6 +517,13 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
                 cancellationToken: cancellationToken);
             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
 
+            var workspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
+            if (workspace != null)
+            {
+                await _workspacePreparer.MirrorTaskOpenedAsync(task, workspace, cancellationToken);
+                await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
+            }
+
             var isReady = await _mergeAndCascadeCoordinator.IsReadyForExecutionAsync(task.Id, cancellationToken);
             if (isReady)
             {
@@ -481,12 +543,6 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         else
         {
             throw new ArgumentException($"Invalid target status '{targetStatus}' for promotion of suggested task. Must be Open or Rejected.", nameof(targetStatus));
-        }
-
-        var workspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
-        if (workspace != null)
-        {
-            await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
         }
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog

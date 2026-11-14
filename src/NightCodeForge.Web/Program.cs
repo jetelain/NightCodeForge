@@ -237,6 +237,7 @@ using (var scope = app.Services.CreateScope())
     await TaskDiskSyncCoordinator.SynchronizeWorkspacesOnStartupAsync(workspaces, app.Services, markdownSync, app.Logger);
     var recurringJobManager = scope.ServiceProvider.GetRequiredService<Hangfire.IRecurringJobManager>();
     await NightCodeForge.Infrastructure.GitHub.GitHubIssueSyncService.SynchronizeAllRecurringJobsAsync(recurringJobManager, workspaces);
+    await NightCodeForge.Infrastructure.GitHub.GitHubTaskMirrorService.SynchronizeAllPrMergeRecurringJobsAsync(recurringJobManager, workspaces);
 }
 
 // Configure the HTTP request pipeline.

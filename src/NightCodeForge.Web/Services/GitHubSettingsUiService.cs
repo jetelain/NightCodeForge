@@ -106,6 +106,7 @@ public class GitHubSettingsUiService
         workspace.GitHubSettings = settings;
         await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
         GitHubIssueSyncService.SynchronizeWorkspaceRecurringJob(_recurringJobManager, workspace);
+        GitHubTaskMirrorService.SynchronizeWorkspacePrMergeRecurringJob(_recurringJobManager, workspace);
         _logger.LogInformation("Saved GitHub integration settings for workspace #{WorkspaceId}.", workspaceId);
     }
 

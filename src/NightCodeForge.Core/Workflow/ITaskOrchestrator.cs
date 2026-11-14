@@ -62,4 +62,12 @@ public interface ITaskOrchestrator
         int taskId,
         Domain.TaskRestartGitMode gitMode = Domain.TaskRestartGitMode.PreserveWork,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Polls GitHub Pull Requests for tasks in the workspace when <c>CloseTaskOnPrMerge</c> is enabled
+    /// and closes any task whose Pull Request was merged externally, cascading downstream DAG dependents.
+    /// </summary>
+    Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        CancellationToken cancellationToken = default);
 }

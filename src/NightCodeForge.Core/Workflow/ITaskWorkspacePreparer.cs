@@ -82,6 +82,15 @@ public interface ITaskWorkspacePreparer
     Task<GitHubPullRequest> DeliverPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
     Task<GitHubPullRequest> VerifyAndSyncExternallyMergedPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
 
+    Task<bool> TryClaimIssueForExecutionAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
+    Task<bool> TryHandleClaimConflictAnswerAsync(ForgeTask task, Workspace workspace, IReadOnlyList<Question> answeredQuestions, CancellationToken cancellationToken = default);
+    Task MirrorTaskOpenedAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
+    Task MirrorTaskReviewCompletedAsync(ForgeTask task, Workspace workspace, string? specificationSummary, CancellationToken cancellationToken = default);
+    Task MirrorPostImplementationGatesCompletedAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
+    Task MirrorTaskReadyAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
+    Task MirrorTaskClosedAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(int workspaceId, Func<int, CancellationToken, Task> closeExternallyMergedTaskAsync, CancellationToken cancellationToken = default);
+
     Task MaterializeConflictMarkersForImplementationAsync(Workspace workspace, ForgeTask task, PipelineContext pipelineContext, CancellationToken cancellationToken = default);
     Task PopulateReviewDiffsAsync(Workspace workspace, ForgeTask task, PipelineContext pipelineContext, CancellationToken cancellationToken = default);
     Task<string> GenerateDiffStatSafeAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);

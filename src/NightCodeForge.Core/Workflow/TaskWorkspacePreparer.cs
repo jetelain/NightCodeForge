@@ -22,6 +22,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IExecutionEnvironmentProvider _environmentProvider;
     private readonly IGitHubPullRequestDeliveryService _gitHubPrDeliveryService;
+    private readonly IGitHubTaskMirrorService _gitHubTaskMirrorService;
     private readonly ILogger<TaskWorkspacePreparer> _logger;
 
     public TaskWorkspacePreparer(
@@ -33,6 +34,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         IWorkspacePathResolver pathResolver,
         IExecutionEnvironmentProvider environmentProvider,
         IGitHubPullRequestDeliveryService gitHubPrDeliveryService,
+        IGitHubTaskMirrorService gitHubTaskMirrorService,
         ILogger<TaskWorkspacePreparer> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -43,6 +45,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
         _gitHubPrDeliveryService = gitHubPrDeliveryService ?? throw new ArgumentNullException(nameof(gitHubPrDeliveryService));
+        _gitHubTaskMirrorService = gitHubTaskMirrorService ?? throw new ArgumentNullException(nameof(gitHubTaskMirrorService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -457,6 +460,47 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
 
     public Task<GitHubPullRequest> VerifyAndSyncExternallyMergedPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
         _gitHubPrDeliveryService.VerifyAndSyncExternallyMergedPullRequestAsync(task, workspace, cancellationToken);
+
+    public Task<bool> TryClaimIssueForExecutionAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.TryClaimIssueForExecutionAsync(task, workspace, cancellationToken);
+
+    public Task<bool> TryHandleClaimConflictAnswerAsync(ForgeTask task, Workspace workspace, IReadOnlyList<Question> answeredQuestions, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.TryHandleClaimConflictAnswerAsync(task, workspace, answeredQuestions, cancellationToken);
+
+    public Task MirrorTaskOpenedAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.MirrorTaskOpenedAsync(task, workspace, cancellationToken);
+
+    public Task MirrorTaskReviewCompletedAsync(ForgeTask task, Workspace workspace, string? specificationSummary, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.MirrorTaskReviewCompletedAsync(task, workspace, specificationSummary, cancellationToken);
+
+    public Task MirrorPostImplementationGatesCompletedAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.MirrorPostImplementationGatesCompletedAsync(task, workspace, cancellationToken);
+
+    public Task MirrorTaskReadyAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.MirrorTaskReadyAsync(task, workspace, cancellationToken);
+
+    public Task MirrorTaskClosedAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubTaskMirrorService.MirrorTaskClosedAsync(task, workspace, cancellationToken);
+
+    public async Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        Func<int, CancellationToken, Task> closeExternallyMergedTaskAsync,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(closeExternallyMergedTaskAsync);
+
+        var workspace = await _workspaceRepository.GetByIdAsync(workspaceId, cancellationToken);
+        if (workspace == null)
+        {
+            _logger.LogWarning("Cannot sync merged Pull Requests for unknown workspace #{WorkspaceId}.", workspaceId);
+            return Array.Empty<int>();
+        }
+
+        return await _gitHubTaskMirrorService.SyncMergedPullRequestsAsync(
+            workspace,
+            closeExternallyMergedTaskAsync,
+            cancellationToken);
+    }
 
     public async Task MaterializeConflictMarkersForImplementationAsync(
         Workspace workspace,
