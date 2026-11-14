@@ -2,19 +2,23 @@
 @page "/review/{TaskId:int}"
 @page "/w/{WorkspaceId:int}/review"
 @page "/w/{WorkspaceId:int}/review/{TaskId:int}"
+@using Microsoft.Extensions.Options
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Core.Security
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Review
 @using NightCodeForge.Web.Services
 @inject ITaskOrchestrator TaskOrchestrator
 @inject ITaskRepository TaskRepository
 @inject ITaskReviewService TaskReviewService
+@inject IGitHubPullRequestDeliveryService GitHubPrDeliveryService
+@inject IOptions<SecurityOptions> SecurityOptions
 @inject ReviewCommentStateService CommentState
 @inject ToastService ToastService
 @inject NavigationManager NavigationManager
 @inject WorkspaceStateService WorkspaceState
 @inject WorkerStateService WorkerState
-@inject IServiceProvider ServiceProvider
 @implements IDisposable
 
 <PageTitle>Review Room - NightCodeForge</PageTitle>
@@ -129,7 +133,7 @@
                     }
                     else if (TaskReviewService.IsPendingReview(_snapshot))
                     {
-                        @if (_isPrDeliveryAvailable || _snapshot.MergeMode == MergeMode.ExternalPullRequest)
+                        @if (_isPrDeliveryAvailable)
                         {
                             <button class="btn btn-secondary"
                                     id="btn-create-or-sync-pr"
@@ -137,6 +141,14 @@
                                     disabled="@_isPrActionBusy">
                                 🐙 @GitHubPullRequestUiHelper.GetCreateOrSyncPullRequestLabel(_snapshot.PullRequestUrl, _snapshot.PullRequestNumber)
                             </button>
+                        }
+                        else if (_snapshot.MergeMode == MergeMode.ExternalPullRequest)
+                        {
+                            <span id="badge-pr-delivery-unavailable"
+                                  class="forge-badge badge-amber"
+                                  title="GitHub Pull Request delivery is disabled, unconfigured, or not authenticated.">
+                                GitHub PR Delivery Unavailable
+                            </span>
                         }
                         @if (_snapshot.PullRequestNumber.HasValue)
                         {
@@ -284,7 +296,8 @@
         {
             var workspaceId = WorkspaceState.ActiveWorkspaceId;
             _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(
-                ServiceProvider,
+                SecurityOptions.Value,
+                GitHubPrDeliveryService,
                 WorkspaceState.ActiveWorkspace);
             _pendingReviews = await TaskReviewService.GetPendingReviewsAsync(workspaceId);
 

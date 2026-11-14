@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http;
+using Bunit;
 using Hangfire;
 using Hangfire.Common;
 using Microsoft.Extensions.DependencyInjection;
@@ -471,6 +473,55 @@ public class GitHubSettingsUiServiceTests
             GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(services, task, workspace, loggerMock.Object, cts.Token));
     }
 
+    [Fact]
+    public async Task SaveSettingsAsync_WhenRepositoryChanges_ClearsTriagedIssueNumbers()
+    {
+        var repoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace
+        {
+            Id = 23,
+            Name = "Repo Switch WS",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                RepositoryOwner = "old-org",
+                RepositoryName = "old-repo",
+                TriagedIssueNumbers = [10, 20]
+            }
+        };
+        repoMock.Setup(r => r.GetByIdAsync(23, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var service = CreateService(workspaceRepository: repoMock.Object);
+        var updatedSettings = new GitHubIntegrationSettings
+        {
+            Enabled = true,
+            IssueTriageEnabled = true,
+            RepositoryOwner = "new-org",
+            RepositoryName = "new-repo",
+            TriagedIssueNumbers = [20, 30]
+        };
+
+        await service.SaveSettingsAsync(23, updatedSettings);
+
+        Assert.Empty(updatedSettings.TriagedIssueNumbers);
+    }
+
+    [Fact]
+    public void RemoveWorkspaceRecurringJobs_RemovesBothIssueSyncAndPrMergeJobs()
+    {
+        var recurringJobMock = new Mock<IRecurringJobManager>();
+        var service = CreateService(recurringJobManager: recurringJobMock.Object);
+
+        service.RemoveWorkspaceRecurringJobs(25);
+
+        recurringJobMock.Verify(
+            m => m.RemoveIfExists(GitHubIssueSyncService.GetWorkspaceRecurringJobId(25)),
+            Times.Once);
+        recurringJobMock.Verify(
+            m => m.RemoveIfExists(GitHubTaskMirrorService.GetWorkspacePrMergeRecurringJobId(25)),
+            Times.Once);
+    }
+
     private static GitHubSettingsUiService CreateService(
         IWorkspaceRepository? workspaceRepository = null,
         IGitHubDeviceAuthService? authService = null,
@@ -483,6 +534,134 @@ public class GitHubSettingsUiServiceTests
             clientService ?? Mock.Of<IGitHubClientService>(),
             recurringJobManager ?? Mock.Of<IRecurringJobManager>(),
             NullLogger<GitHubSettingsUiService>.Instance);
+    }
+}
+
+public class GitHubSettingsTabTests : BunitContext
+{
+    [Fact]
+    public async Task GitHubSettingsTab_EditingInputs_DoesNotMutateActiveWorkspaceSettingsBeforeSave()
+    {
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "Tab WS",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = false,
+                RepositoryOwner = "orig-owner",
+                RepositoryName = "orig-repo"
+            }
+        };
+
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(workspace);
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.IsConnectedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        authMock.Setup(a => a.GetAuthenticatedUserAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubUser { Id = 1, Login = "orig-owner" });
+
+        var clientMock = new Mock<IGitHubClientService>();
+        clientMock.Setup(c => c.ListAccessibleRepositoriesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<GitHubRepository>
+            {
+                new() { Id = 1, Owner = "orig-owner", Name = "orig-repo" },
+                new() { Id = 2, Owner = "edited-owner", Name = "edited-repo" }
+            });
+
+        var workspaceState = new WorkspaceStateService();
+        workspaceState.SetActiveWorkspace(workspace);
+        var toastService = TestServices.CreateToastService();
+        var uiService = new GitHubSettingsUiService(
+            workspaceRepo,
+            authMock.Object,
+            clientMock.Object,
+            Mock.Of<IRecurringJobManager>(),
+            NullLogger<GitHubSettingsUiService>.Instance);
+
+        Services.AddSingleton(uiService);
+        Services.AddSingleton(workspaceState);
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new SecurityOptions()));
+        Services.AddSingleton(toastService);
+        Services.AddSingleton<Microsoft.Extensions.Logging.ILogger<NightCodeForge.Web.Components.Settings.GitHubSettingsTab>>(
+            NullLogger<NightCodeForge.Web.Components.Settings.GitHubSettingsTab>.Instance);
+
+        var cut = Render<NightCodeForge.Web.Components.Settings.GitHubSettingsTab>(p => p.Add(c => c.WorkspaceId, 1));
+
+        cut.Find("#github-repo-owner").Change("edited-owner");
+        cut.Find("#enableGitHub").Change(true);
+
+        Assert.Equal("orig-owner", workspace.GitHubSettings.RepositoryOwner);
+        Assert.False(workspace.GitHubSettings.Enabled);
+
+        var saveBtn = cut.FindAll("button")
+            .First(b => b.TextContent.Contains("Save GitHub Settings", StringComparison.Ordinal));
+        saveBtn.Click();
+
+        Assert.Equal("edited-owner", workspaceState.ActiveWorkspace!.GitHubSettings!.RepositoryOwner);
+        Assert.True(workspaceState.ActiveWorkspace.GitHubSettings.Enabled);
+
+        // Editing again after save still does not mutate the saved ActiveWorkspace snapshot
+        cut.Find("#github-repo-owner").Change("orig-owner");
+        Assert.Equal("edited-owner", workspaceState.ActiveWorkspace.GitHubSettings.RepositoryOwner);
+    }
+
+    [Fact]
+    public async Task GitHubSettingsTab_RefreshRepositoriesFailure_ShowsErrorToast()
+    {
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "Refresh WS",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                RepositoryOwner = "octocat",
+                RepositoryName = "demo"
+            }
+        };
+
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        await workspaceRepo.CreateAsync(workspace);
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.IsConnectedAsync(It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        authMock.Setup(a => a.GetAuthenticatedUserAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubUser { Id = 1, Login = "octocat" });
+
+        var clientMock = new Mock<IGitHubClientService>();
+        clientMock.SetupSequence(c => c.ListAccessibleRepositoriesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<GitHubRepository> { new() { Id = 1, Owner = "octocat", Name = "demo" } })
+            .ThrowsAsync(new HttpRequestException("GitHub 503"));
+
+        var workspaceState = new WorkspaceStateService();
+        workspaceState.SetActiveWorkspace(workspace);
+        var toastService = TestServices.CreateToastService();
+        var uiService = new GitHubSettingsUiService(
+            workspaceRepo,
+            authMock.Object,
+            clientMock.Object,
+            Mock.Of<IRecurringJobManager>(),
+            NullLogger<GitHubSettingsUiService>.Instance);
+
+        Services.AddSingleton(uiService);
+        Services.AddSingleton(workspaceState);
+        Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new SecurityOptions()));
+        Services.AddSingleton(toastService);
+        Services.AddSingleton<Microsoft.Extensions.Logging.ILogger<NightCodeForge.Web.Components.Settings.GitHubSettingsTab>>(
+            NullLogger<NightCodeForge.Web.Components.Settings.GitHubSettingsTab>.Instance);
+
+        var cut = Render<NightCodeForge.Web.Components.Settings.GitHubSettingsTab>(p => p.Add(c => c.WorkspaceId, 1));
+        Assert.Contains("demo", cut.Find("#github-repo-name").InnerHtml);
+
+        var refreshBtn = cut.FindAll("button")
+            .First(b => b.TextContent.Contains("Refresh Repositories", StringComparison.Ordinal));
+        refreshBtn.Click();
+
+        Assert.Contains(toastService.Toasts, t => t.Title == "Repository Refresh Failed" && t.Level == ToastLevel.Error);
+        Assert.DoesNotContain(toastService.Toasts, t => t.Title == "Repositories Refreshed");
+        Assert.Contains("demo", cut.Find("#github-repo-name").InnerHtml);
     }
 }
 

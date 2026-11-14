@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -46,6 +47,7 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
         _reviewService = new TaskReviewService(
             _taskRepository,
             _workspaceRepository,
+            new WorkspaceLockProvider(),
             new Mock<IGitWorkspaceManager>().Object,
             _prDeliveryMock.Object,
             _orchestrator,
@@ -81,6 +83,7 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
         Services.AddSingleton(WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
         Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]
@@ -372,5 +375,58 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
         Assert.Equal("#5eead4", MergeModeHelper.GetSvgPillColor(MergeMode.Automatic));
         Assert.Equal("#a5b4fc", MergeModeHelper.GetSvgPillColor(MergeMode.ManualReviewRequired));
         Assert.Equal("#c084fc", MergeModeHelper.GetSvgPillColor(MergeMode.ExternalPullRequest));
+    }
+
+    [Fact]
+    public async Task Review_TaskDetail_And_Drawer_WhenPrDeliveryUnavailable_RenderUnavailableBadgeAndHideCreateOrSyncButton()
+    {
+        var ws = await _workspaceRepository.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "Unavailable PR WS",
+            RepositoryPath = "/repo/gh",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = false,
+                PullRequestDeliveryEnabled = false
+            }
+        });
+        _workspaceState.SetKnownWorkspaces(new[] { ws });
+        _workspaceState.SetActiveWorkspace(ws);
+        _prDeliveryMock.Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.ReviewFiles, new List<FileDiffSummary>
+        {
+            new("src/App.cs", FileChangeType.Modified, 2, 1, "old", "new")
+        });
+
+        var task = await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 460,
+            WorkspaceId = 1,
+            Title = "PR Unavailable Task",
+            Status = TaskOverallStatus.Ready,
+            HasExecutionRun = true,
+            MergeMode = MergeMode.ExternalPullRequest,
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-460",
+            PipelineDataJson = bag.ToJson()
+        });
+
+        var reviewCut = Render<Review>(p => p.Add(r => r.TaskId, 460));
+        Assert.NotNull(reviewCut.Find("#badge-pr-delivery-unavailable"));
+        Assert.Empty(reviewCut.FindAll("#btn-create-or-sync-pr"));
+
+        var detailCut = Render<TaskDetail>(p => p.Add(t => t.TaskId, 460));
+        Assert.NotNull(detailCut.Find("#badge-pr-delivery-unavailable"));
+        Assert.Empty(detailCut.FindAll("#btn-create-or-sync-pr"));
+
+        var drawerCut = Render<TaskDetailDrawer>(p => p
+            .Add(d => d.IsOpen, true)
+            .Add(d => d.Task, task));
+        Assert.NotNull(drawerCut.Find("#badge-pr-delivery-unavailable"));
+        Assert.Empty(drawerCut.FindAll("#btn-drawer-create-or-sync-pr"));
     }
 }

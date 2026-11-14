@@ -246,4 +246,53 @@ public class TelemetryProcessRunnerTests
         Assert.NotSame(innerSession.Object, session);
         _telemetryService.Verify(t => t.RecordShellCommandStarted(It.IsAny<ShellCommandRecord>()), Times.Once);
     }
+
+    [Fact]
+    public async Task RunAsync_RedactsCredentialsAcrossCommandLineStreamingCallbacksAndPreviews()
+    {
+        var spec = new ProcessStartSpec
+        {
+            FileName = "git",
+            Arguments = "-c \"http.extraHeader=Authorization: Bearer secret_arg_token\" fetch https://user:secret_url_pass@gitlab.example.com/org/repo.git",
+            WorkingDirectory = "/repo"
+        };
+
+        var startedRecords = new List<ShellCommandRecord>();
+        var completedRecords = new List<ShellCommandRecord>();
+        var streamedOutputs = new List<(string Chunk, bool IsError)>();
+
+        _telemetryService.Setup(t => t.RecordShellCommandStarted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => startedRecords.Add(r));
+        _telemetryService.Setup(t => t.RecordShellCommandCompleted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => completedRecords.Add(r));
+        _telemetryService.Setup(t => t.UpdateShellCommandOutput(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>()))
+            .Callback<string, string, bool>((_, chunk, isErr) => streamedOutputs.Add((chunk, isErr)));
+
+        _innerRunner
+            .Setup(r => r.RunAsync(spec, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                spec.OnStandardOutput?.Invoke("remote: token ghp_liveStreamSecret01");
+                spec.OnStandardError?.Invoke("fatal: unable to access https://alice:liveErrSecret02@gitlab.example.com/org/repo.git");
+                return new ProcessExecutionResult(1, "stdout ghp_finalOutSecret03", "stderr https://bob:finalErrSecret04@bitbucket.org/org/repo.git");
+            });
+
+        var result = await _runner.RunAsync(spec);
+
+        Assert.Equal(1, result.ExitCode);
+        var started = Assert.Single(startedRecords);
+        Assert.DoesNotContain("secret_arg_token", started.CommandLine);
+        Assert.DoesNotContain("secret_url_pass", started.CommandLine);
+        Assert.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder, started.CommandLine);
+
+        Assert.Contains(streamedOutputs, s => !s.IsError && !s.Chunk.Contains("ghp_liveStreamSecret01") && s.Chunk.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder));
+        Assert.Contains(streamedOutputs, s => s.IsError && !s.Chunk.Contains("liveErrSecret02") && s.Chunk.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder));
+
+        var completed = Assert.Single(completedRecords);
+        Assert.DoesNotContain("secret_arg_token", completed.CommandLine);
+        Assert.DoesNotContain("ghp_finalOutSecret03", completed.OutputPreview);
+        Assert.DoesNotContain("finalErrSecret04", completed.ErrorPreview);
+        Assert.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder, completed.OutputPreview);
+        Assert.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder, completed.ErrorPreview);
+    }
 }

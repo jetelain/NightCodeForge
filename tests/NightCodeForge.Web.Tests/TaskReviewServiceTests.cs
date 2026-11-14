@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -18,10 +19,12 @@ public class TaskReviewServiceTests
         IGitWorkspaceManager gitManager,
         IGitHubPullRequestDeliveryService? prDelivery = null,
         ITaskOrchestrator? orchestrator = null,
-        ITaskMarkdownSyncService? markdownSync = null) =>
+        ITaskMarkdownSyncService? markdownSync = null,
+        IWorkspaceLockProvider? workspaceLockProvider = null) =>
         new(
             taskRepo,
             workspaceRepo,
+            workspaceLockProvider ?? new WorkspaceLockProvider(),
             gitManager,
             prDelivery ?? new Mock<IGitHubPullRequestDeliveryService>().Object,
             orchestrator ?? new MockTaskOrchestrator(),
@@ -1030,6 +1033,109 @@ new file mode 100644
         Assert.Equal(703, orchestrator.LastCloseExternallyMergedTaskId);
         Assert.Equal(CompleteTaskStatus.Completed, result.Status);
         Assert.Equal("merged-sha-999", result.Message);
+    }
+
+    [Theory]
+    [InlineData(TaskOverallStatus.Open)]
+    [InlineData(TaskOverallStatus.Closed)]
+    public async Task CreateOrSyncPullRequestAsync_WhenTaskNotReady_ThrowsTaskCannotBeModifiedException(TaskOverallStatus status)
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var prDeliveryMock = new Mock<IGitHubPullRequestDeliveryService>();
+
+        await workspaceRepo.CreateAsync(new Workspace { Id = 1, Name = "PR Ws", RepositoryPath = "/fake/repo" });
+        await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 709,
+            WorkspaceId = 1,
+            Title = "Non-Ready PR Task",
+            Status = status,
+            MergeMode = MergeMode.ExternalPullRequest
+        });
+
+        var service = CreateService(taskRepo, workspaceRepo, gitManager, prDelivery: prDeliveryMock.Object);
+
+        await Assert.ThrowsAsync<NightCodeForge.Core.Exceptions.TaskCannotBeModifiedException>(
+            () => service.CreateOrSyncPullRequestAsync(709));
+
+        prDeliveryMock.Verify(
+            s => s.DeliverPullRequestAsync(It.IsAny<ForgeTask>(), It.IsAny<Workspace>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateOrSyncPullRequestAsync_RecordsUserHistoryAndSyncsDependenciesToDisk()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"ncf-pr-review-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var taskRepo = new InMemoryTaskRepository();
+            var workspaceRepo = new InMemoryWorkspaceRepository();
+            var gitManager = new TestGitWorkspaceManager();
+            var markdownSyncMock = new Mock<ITaskMarkdownSyncService>();
+            var prDeliveryMock = new Mock<IGitHubPullRequestDeliveryService>();
+            prDeliveryMock
+                .Setup(s => s.DeliverPullRequestAsync(It.IsAny<ForgeTask>(), It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+                .Callback<ForgeTask, Workspace, CancellationToken>((t, _, _) =>
+                {
+                    t.PullRequestNumber = 99;
+                    t.PullRequestUrl = "https://github.com/acme/demo/pull/99";
+                })
+                .ReturnsAsync(new GitHubPullRequest
+                {
+                    Number = 99,
+                    HtmlUrl = "https://github.com/acme/demo/pull/99",
+                    State = "open"
+                });
+
+            await workspaceRepo.CreateAsync(new Workspace { Id = 1, Name = "PR Ws", RepositoryPath = tempDir });
+            await taskRepo.CreateAsync(new ForgeTask { Id = 10, WorkspaceId = 1, Title = "Prereq 10", Status = TaskOverallStatus.Closed });
+            await taskRepo.CreateAsync(new ForgeTask { Id = 20, WorkspaceId = 1, Title = "Prereq 20", Status = TaskOverallStatus.Closed });
+            await taskRepo.CreateWithBaselineAsync(
+                new ForgeTask
+                {
+                    Id = 710,
+                    WorkspaceId = 1,
+                    Title = "PR History & Deps Task",
+                    Status = TaskOverallStatus.Ready,
+                    MergeMode = MergeMode.ExternalPullRequest
+                },
+                dependsOn: new[] { 10, 20 },
+                createdBy: AuditActors.System,
+                reason: "seed");
+
+            var service = CreateService(
+                taskRepo,
+                workspaceRepo,
+                gitManager,
+                prDelivery: prDeliveryMock.Object,
+                markdownSync: markdownSyncMock.Object);
+
+            var pr = await service.CreateOrSyncPullRequestAsync(710);
+
+            Assert.Equal(99, pr.Number);
+            var history = await taskRepo.GetHistoryAsync(710);
+            Assert.Contains(history, h => h.ChangedBy == AuditActors.User && h.PullRequestNumber == 99);
+
+            markdownSyncMock.Verify(
+                m => m.SyncTaskToDiskAsync(
+                    It.Is<ForgeTask>(t => t.Id == 710),
+                    tempDir,
+                    It.Is<IReadOnlyList<int>>(d => d != null && d.OrderBy(x => x).SequenceEqual(new[] { 10, 20 })),
+                    It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()),
+                Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
     }
 
     private class TestGitWorkspaceManager : NightCodeForge.Core.Interfaces.IGitWorkspaceManager

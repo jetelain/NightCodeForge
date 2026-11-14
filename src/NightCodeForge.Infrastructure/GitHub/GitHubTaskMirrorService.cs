@@ -123,6 +123,15 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
     }
 
     /// <summary>
+    /// Removes the recurring Pull Request merge polling Hangfire job for a deleted or decommissioned workspace.
+    /// </summary>
+    public static void RemoveWorkspacePrMergeRecurringJob(IRecurringJobManager recurringJobManager, int workspaceId)
+    {
+        ArgumentNullException.ThrowIfNull(recurringJobManager);
+        recurringJobManager.RemoveIfExists(GetWorkspacePrMergeRecurringJobId(workspaceId));
+    }
+
+    /// <summary>
     /// Synchronizes Hangfire recurring PR merge poll jobs across all provided workspaces.
     /// </summary>
     public static Task SynchronizeAllPrMergeRecurringJobsAsync(
@@ -133,11 +142,18 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
         ArgumentNullException.ThrowIfNull(recurringJobManager);
         ArgumentNullException.ThrowIfNull(workspaces);
 
+        var activeWorkspaceIds = new HashSet<int>();
         foreach (var workspace in workspaces)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            activeWorkspaceIds.Add(workspace.Id);
             SynchronizeWorkspacePrMergeRecurringJob(recurringJobManager, workspace);
         }
+
+        GitHubRecurringJobCleanup.RemoveOrphanedWorkspaceRecurringJobs(
+            recurringJobManager,
+            PrMergeRecurringJobIdPrefix,
+            activeWorkspaceIds);
 
         return Task.CompletedTask;
     }
@@ -151,14 +167,13 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(workspace);
 
-        if (!TryGetConfiguredRepo(workspace, out var settings, out var owner, out var repo))
+        if (!TryGetConfiguredMirroring(workspace, out var settings, out var owner, out var repo))
         {
             return true;
         }
 
         if (!task.HasExecutionRun &&
             string.IsNullOrWhiteSpace(task.ExternalReferenceId) &&
-            settings.TaskMirroringEnabled &&
             settings.CreateGitHubIssuesForLocalTasks)
         {
             await MirrorTaskOpenedAsync(task, workspace, cancellationToken);
@@ -176,6 +191,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
                 task,
                 issueNumber,
                 $"Cancelled task #{task.Id} by maintainer choice after GitHub Issue #{issueNumber} claim conflict.",
+                AuditActors.User,
                 cancellationToken);
             return false;
         }
@@ -225,13 +241,16 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
 
         if (string.Equals(liveIssue.State, ClosedIssueState, StringComparison.OrdinalIgnoreCase))
         {
-            var closedLocallyBySibling = siblings.Any(s => s.Status == TaskOverallStatus.Closed);
+            var closedLocallyBySibling = siblings.Any(s =>
+                s.Status == TaskOverallStatus.Closed ||
+                (s.Status == TaskOverallStatus.Ready && s.PullRequestNumber is > 0));
             if (!closedLocallyBySibling)
             {
                 await CancelTaskForConflictAsync(
                     task,
                     issueNumber,
                     $"Cancelled task #{task.Id} before Stage 1 because linked GitHub Issue #{issueNumber} is already closed on GitHub.",
+                    AuditActors.System,
                     cancellationToken);
                 return false;
             }
@@ -261,19 +280,16 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
             return false;
         }
 
-        if (settings.TaskMirroringEnabled)
-        {
-            await ApplyClaimAndInProgressOnStartAsync(
-                task,
-                settings,
-                owner,
-                repo,
-                issueNumber,
-                liveIssue,
-                authenticatedLogin,
-                isAssignedToCurrentUser,
-                cancellationToken);
-        }
+        await ApplyClaimAndInProgressOnStartAsync(
+            task,
+            settings,
+            owner,
+            repo,
+            issueNumber,
+            liveIssue,
+            authenticatedLogin,
+            isAssignedToCurrentUser,
+            cancellationToken);
 
         return true;
     }
@@ -307,7 +323,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
                 ? $"Cancelled task #{task.Id} by maintainer choice after GitHub Issue #{issueNumber} claim conflict."
                 : $"Cancelled task #{task.Id} by maintainer choice after GitHub Issue claim conflict.";
 
-            await CancelTaskForConflictAsync(task, issueNumber, reason, cancellationToken);
+            await CancelTaskForConflictAsync(task, issueNumber, reason, AuditActors.User, cancellationToken);
             return true;
         }
 
@@ -398,6 +414,23 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
 
         if (settings.SyncStatusLabels && TryGetIssueNumber(task, out var issueNumber))
         {
+            var workspaceTasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken)
+                ?? Array.Empty<ForgeTask>();
+            var hasActiveSibling = workspaceTasks.Any(t =>
+                t.Id != task.Id &&
+                TryGetIssueNumber(t, out var siblingIssueNumber) &&
+                siblingIssueNumber == issueNumber &&
+                (t.Status == TaskOverallStatus.Ready ||
+                 (t.Status == TaskOverallStatus.Open && t.HasExecutionRun)));
+
+            if (hasActiveSibling)
+            {
+                _logger.LogDebug(
+                    "Skipping ncf:backlog status label update on GitHub Issue #{IssueNumber} for opened Task #{TaskId} because an active sibling task already owns a higher lifecycle state.",
+                    issueNumber, task.Id);
+                return;
+            }
+
             await ApplyStatusLabelSafeAsync(
                 task,
                 owner,
@@ -551,17 +584,27 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
 
         var workspaceTasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken)
             ?? Array.Empty<ForgeTask>();
-        var unclosedSiblings = workspaceTasks
+        var matchingSiblings = workspaceTasks
             .Where(t => t.Id != task.Id &&
                         TryGetIssueNumber(t, out var siblingIssueNumber) &&
-                        siblingIssueNumber == issueNumber &&
-                        t.Status is not (TaskOverallStatus.Closed or TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+                        siblingIssueNumber == issueNumber)
             .OrderBy(t => t.Id)
+            .ToList();
+        var unclosedSiblings = matchingSiblings
+            .Where(t => t.Status is not (TaskOverallStatus.Closed or TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
             .ToList();
 
         var allSiblingsClosed = unclosedSiblings.Count == 0;
-
-        if (settings.PostMilestoneComments)
+        var isCancelledOrRejected = task.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected;
+        if (isCancelledOrRejected)
+        {
+            var hasCompletedSibling = matchingSiblings.Any(t => t.Status == TaskOverallStatus.Closed);
+            if (!allSiblingsClosed || !hasCompletedSibling)
+            {
+                return;
+            }
+        }
+        else if (settings.PostMilestoneComments)
         {
             var comment = BuildTaskClosedComment(task, unclosedSiblings);
             await AddIssueCommentSafeAsync(
@@ -642,6 +685,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
         ArgumentNullException.ThrowIfNull(closeExternallyMergedTaskAsync);
 
         if (!TryGetConfiguredRepo(workspace, out var settings, out var owner, out var repo) ||
+            !settings.PullRequestDeliveryEnabled ||
             !settings.CloseTaskOnPrMerge)
         {
             return Array.Empty<int>();
@@ -798,34 +842,17 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
             .FirstOrDefault();
     }
 
-    private static bool IsCancelConflictAnswer(string? answer)
-    {
-        if (string.IsNullOrWhiteSpace(answer))
-        {
-            return false;
-        }
+    private static bool IsCancelConflictAnswer(string? answer) =>
+        GitHubClaimConflictConstants.IsCancelAnswer(answer);
 
-        var trimmed = answer.Trim();
-        return string.Equals(trimmed, GitHubClaimConflictConstants.CancelTaskOption, StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains("Cancel", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsOverrideConflictAnswer(string? answer)
-    {
-        if (string.IsNullOrWhiteSpace(answer))
-        {
-            return false;
-        }
-
-        var trimmed = answer.Trim();
-        return string.Equals(trimmed, GitHubClaimConflictConstants.OverrideClaimOption, StringComparison.OrdinalIgnoreCase) ||
-               trimmed.Contains("Override", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsOverrideConflictAnswer(string? answer) =>
+        GitHubClaimConflictConstants.IsOverrideAnswer(answer);
 
     private async Task CancelTaskForConflictAsync(
         ForgeTask task,
         int issueNumber,
         string reason,
+        string changedBy,
         CancellationToken cancellationToken)
     {
         task.Status = TaskOverallStatus.Cancelled;
@@ -845,7 +872,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
         await _taskRepository.UpdateWithHistoryAsync(
             task,
             dependsOn: null,
-            changedBy: AuditActors.System,
+            changedBy: changedBy,
             reason: reason,
             cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Cancelled, cancellationToken);
@@ -1058,6 +1085,10 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
             var currentIssue = await _gitHubClient.GetIssueAsync(owner, repo, issueNumber, cancellationToken);
             var existingLabels = currentIssue?.Labels ?? Array.Empty<string>();
             var updatedLabels = BuildUpdatedLabels(existingLabels, targetLabel);
+            if (AreLabelSetsEqual(existingLabels, updatedLabels))
+            {
+                return;
+            }
 
             await _gitHubClient.UpdateIssueAsync(
                 owner,
@@ -1083,6 +1114,14 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
                 $"GitHub status label update ('{targetLabel}') failed for Issue #{issueNumber}: {ex.Message}",
                 cancellationToken);
         }
+    }
+
+    private static bool AreLabelSetsEqual(IReadOnlyList<string> existingLabels, IReadOnlyList<string> updatedLabels)
+    {
+        var existingSet = new HashSet<string>(
+            existingLabels.Where(l => !string.IsNullOrWhiteSpace(l)),
+            StringComparer.OrdinalIgnoreCase);
+        return existingSet.SetEquals(updatedLabels);
     }
 
     private async Task AddIssueCommentSafeAsync(

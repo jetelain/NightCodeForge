@@ -14,10 +14,29 @@
 <div id="@ChatPresentationHelper.StageConversationContainerId" class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; min-width: 0; position: relative;">
     @if (Conversation == null && string.IsNullOrEmpty(LiveStreamingThinking) && string.IsNullOrEmpty(LiveStreamingMessage))
     {
-        <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
-            <span style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem;">💬</span>
-            <span>No stage conversation selected. Please choose a stage or run above.</span>
-        </div>
+        var pendingQuestions = Task?.Questions?.Where(q => q.Status == QuestionStatus.Pending).OrderBy(q => q.Id).ToList();
+        if (pendingQuestions is { Count: > 0 })
+        {
+            <AgentQuestionTurnCard Questions="@QuestionItemParser.ToQuestionItems(pendingQuestions)"
+                                   QuestionIds="@pendingQuestions.Select(q => q.Id).ToList()"
+                                   BatchIdentifier="@pendingQuestions[0].BatchId"
+                                   TaskId="@Task!.Id"
+                                   TaskTitle="@Task.Title"
+                                   StageId="@pendingQuestions[0].StageId"
+                                   AgentProfileId="@pendingQuestions[0].AgentProfileId"
+                                   AskedAt="@pendingQuestions[0].AskedAt"
+                                   QuestionId="@pendingQuestions[0].Id"
+                                   IsWaitingForAnswer="true"
+                                   RequireAllAnswers="@(pendingQuestions.Count > 1)"
+                                   OnBatchAnswersSubmitted="@(ans => HandlePreStageAnswersSubmittedAsync(pendingQuestions, ans))" />
+        }
+        else
+        {
+            <div style="text-align: center; color: var(--text-muted); padding: 2rem 0;">
+                <span style="font-size: 1.5rem; display: block; margin-bottom: 0.5rem;">💬</span>
+                <span>No stage conversation selected. Please choose a stage or run above.</span>
+            </div>
+        }
     }
     else
     {
@@ -435,6 +454,37 @@
         catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
         {
             // Circuit may already be disconnected
+        }
+    }
+
+    private async Task HandlePreStageAnswersSubmittedAsync(
+        IReadOnlyList<Question> pendingQuestions,
+        IReadOnlyDictionary<int, string> answersByIndex)
+    {
+        if (Task == null || pendingQuestions.Count == 0 || answersByIndex.Count == 0)
+        {
+            return;
+        }
+
+        var dict = StageConversationParser.MapAnswersToQuestionIds(pendingQuestions, answersByIndex);
+        if (dict.Count > 0)
+        {
+            await TaskOrchestrator.SubmitAnswersAsync(Task.Id, dict);
+            foreach (var question in pendingQuestions)
+            {
+                if (dict.TryGetValue(question.Id, out var answer))
+                {
+                    question.Answer = answer;
+                    question.Status = QuestionStatus.Answered;
+                    question.AnsweredAt = DateTime.UtcNow;
+                }
+            }
+
+            if (OnConversationUpdated.HasDelegate)
+            {
+                await OnConversationUpdated.InvokeAsync();
+            }
+            StateHasChanged();
         }
     }
 

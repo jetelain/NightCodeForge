@@ -35,6 +35,7 @@ public class CreateTaskPageTests : BunitContext
         Services.AddSingleton<ITaskJobQueue>(_jobQueue);
         Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
         Services.AddSingleton(_toastService);
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

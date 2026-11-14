@@ -11,12 +11,9 @@
 @using NightCodeForge.Web.Components.Workspaces
 @using NightCodeForge.Web.Services
 @inject WorkspaceStateService WorkspaceState
-@inject ITaskRepository TaskRepository
-@inject IWorkflowRepository WorkflowRepository
-@inject ITaskJobQueue TaskJobQueue
+@inject ITaskCreationUiService TaskCreationUiService
 @inject ToastService ToastService
 @inject NavigationManager Navigation
-@inject IServiceProvider ServiceProvider
 @inject ILogger<CreateTask> Logger
 @implements IDisposable
 
@@ -423,8 +420,6 @@
     private bool _isPrDeliveryAvailable;
     private bool _disposed;
 
-    private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
-
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
@@ -475,7 +470,7 @@
 
         _selectedPrereqIds.Clear();
         _baseBranch = string.IsNullOrWhiteSpace(active.DefaultBaseBranch) ? "main" : active.DefaultBaseBranch;
-        _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(ServiceProvider, active);
+        _isPrDeliveryAvailable = await TaskCreationUiService.IsPullRequestDeliveryAvailableAsync(active);
         if (!_isPrDeliveryAvailable && _selectedMergeMode == MergeMode.ExternalPullRequest)
         {
             _selectedMergeMode = MergeMode.ManualReviewRequired;
@@ -483,26 +478,12 @@
 
         try
         {
-            var workflowList = await WorkflowRepository.GetWorkflowsAsync(active.Id);
+            var workflowList = await TaskCreationUiService.LoadWorkflowsAsync(active.Id);
             _workflows = workflowList.ToList();
+            _selectedWorkflowId = TaskCreationUiService.ResolveDefaultWorkflowId(_workflows, active.DefaultWorkflowId);
 
-            if (active.DefaultWorkflowId.HasValue && _workflows.Any(w => w.Id == active.DefaultWorkflowId.Value))
-            {
-                _selectedWorkflowId = active.DefaultWorkflowId.Value;
-            }
-            else
-            {
-                var def = _workflows.FirstOrDefault(w => w.IsDefault) ?? _workflows.FirstOrDefault();
-                _selectedWorkflowId = def?.Id;
-            }
-
-            var tasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
-            _availableTasks = tasks
-                .Where(t => t.Status != TaskOverallStatus.Rejected &&
-                            t.Status != TaskOverallStatus.Cancelled &&
-                            t.Status != TaskOverallStatus.Failed)
-                .OrderBy(t => t.Id)
-                .ToList();
+            var tasks = await TaskCreationUiService.LoadSelectablePrerequisitesAsync(active.Id);
+            _availableTasks = tasks.ToList();
         }
         catch (Exception ex)
         {
@@ -522,23 +503,8 @@
         }
     }
 
-    private List<ForgeTask> GetFilteredPrerequisiteTasks()
-    {
-        var q = _availableTasks.AsEnumerable();
-        if (!string.IsNullOrWhiteSpace(_prereqSearch))
-        {
-            var search = _prereqSearch.Trim();
-            if (int.TryParse(search.TrimStart('#'), out var searchId))
-            {
-                q = q.Where(t => t.Id == searchId || t.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
-            }
-            else
-            {
-                q = q.Where(t => t.Title.Contains(search, StringComparison.OrdinalIgnoreCase));
-            }
-        }
-        return q.ToList();
-    }
+    private IReadOnlyList<ForgeTask> GetFilteredPrerequisiteTasks() =>
+        TaskCreationUiService.FilterPrerequisites(_availableTasks, _prereqSearch);
 
     private async Task SaveAsSuggestedAsync()
     {
@@ -574,61 +540,39 @@
         _isSubmitting = true;
         try
         {
-            var newTask = new ForgeTask
+            var result = await TaskCreationUiService.CreateTaskAsync(new TaskCreationRequest(
+                WorkspaceId: active.Id,
+                Workspace: active,
+                RepositoryPath: active.RepositoryPath,
+                Title: _title,
+                Description: _description,
+                WorkflowId: _selectedWorkflowId,
+                Priority: _selectedPriority,
+                MergeMode: _selectedMergeMode,
+                BaseBranch: _baseBranch,
+                FeatureBranch: _featureBranch,
+                InitialStatus: status,
+                PrerequisiteIds: _selectedPrereqIds.ToList(),
+                LaunchImmediately: launchImmediately,
+                AuditReason: "Initial task creation via UI"));
+
+            if (launchImmediately && result.WasDispatched)
             {
-                WorkspaceId = active.Id,
-                WorkflowId = _selectedWorkflowId,
-                Title = _title.Trim(),
-                Description = _description.Trim(),
-                Priority = _selectedPriority,
-                MergeMode = _selectedMergeMode,
-                BaseBranch = string.IsNullOrWhiteSpace(_baseBranch) ? "main" : _baseBranch.Trim(),
-                FeatureBranch = string.IsNullOrWhiteSpace(_featureBranch) ? string.Empty : _featureBranch.Trim(),
-                Status = status,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            var created = await TaskRepository.CreateWithBaselineAsync(
-                newTask,
-                dependsOn: _selectedPrereqIds,
-                createdBy: AuditActors.User,
-                reason: "Initial task creation via UI");
-
-            await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(ServiceProvider, created, active, Logger);
-
-            // Sync markdown to repository path on disk if available
-            if (MarkdownSync != null && !string.IsNullOrWhiteSpace(active.RepositoryPath) && Directory.Exists(active.RepositoryPath))
-            {
-                try
-                {
-                    await MarkdownSync.SyncTaskToDiskAsync(created, active.RepositoryPath);
-                }
-                catch (Exception syncEx)
-                {
-                    Logger.LogWarning(syncEx, "Failed to sync created task markdown to disk for Task #{TaskId}", created.Id);
-                }
+                ToastService.Show("Task Launched", $"Task #{result.Task.Id} created and dispatched to execution queue.", ToastLevel.Success);
+                Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{result.Task.Id}"));
             }
-
-            if (launchImmediately)
+            else if (launchImmediately)
             {
-                var workflow = _workflows.FirstOrDefault(w => w.Id == created.WorkflowId) ?? _workflows.FirstOrDefault();
-                var initialStage = workflow?.Stages.OrderBy(s => s.SequenceOrder).FirstOrDefault();
-                var tier = initialStage?.QueueTier ?? StageQueueTier.TaskReview;
-
-                var jobId = TaskJobQueue.EnqueueStage(created.Id, tier, created.Priority);
-                Logger.LogInformation("Dispatched Task #{TaskId} (P{Priority}) to tier {Tier} (JobId: {JobId})", created.Id, created.Priority, tier, jobId);
-
-                created.LastHangfireJobId = jobId;
-                await TaskRepository.UpdateAsync(created, dependsOn: _selectedPrereqIds);
-
-                ToastService.Show("Task Launched", $"Task #{created.Id} created and dispatched to execution queue.", ToastLevel.Success);
-                Navigation.NavigateTo(WorkspaceState.GetPath($"inspector/{created.Id}"));
+                ToastService.Show(
+                    "Task Queued Behind Prerequisites",
+                    $"Task #{result.Task.Id} saved as Open and will dispatch once prerequisites complete.",
+                    ToastLevel.Info);
+                Navigation.NavigateTo(WorkspaceState.GetPath("backlog"));
             }
             else
             {
                 var statusText = status == TaskOverallStatus.Suggested ? "Suggested (Triage)" : "Open (Backlog)";
-                ToastService.Show("Task Created", $"Task #{created.Id} saved as {statusText}.", ToastLevel.Success);
+                ToastService.Show("Task Created", $"Task #{result.Task.Id} saved as {statusText}.", ToastLevel.Success);
                 Navigation.NavigateTo(WorkspaceState.GetPath("backlog"));
             }
         }

@@ -61,6 +61,7 @@ public class BacklogPageTests : BunitContext
             _orchestrator,
             telemetryMock.Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

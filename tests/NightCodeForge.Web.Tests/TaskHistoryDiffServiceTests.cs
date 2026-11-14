@@ -117,7 +117,9 @@ public class TaskHistoryDiffServiceTests
         Assert.Contains(rev2.FieldChanges, c => c.FieldName == "Title" && c.OldValue == "Old Title" && c.NewValue == "New Title");
         Assert.Contains(rev2.FieldChanges, c => c.FieldName == "Status" && c.OldValue == "Suggested" && c.NewValue == "Open");
         Assert.Contains(rev2.FieldChanges, c => c.FieldName == "Priority" && c.OldValue == "P3" && c.NewValue == "P1");
-        Assert.Contains(rev2.FieldChanges, c => c.FieldName == "MergeMode" && c.OldValue == "ManualReviewRequired" && c.NewValue == "Automatic");
+        Assert.Contains(rev2.FieldChanges, c => c.FieldName == "MergeMode" &&
+            c.OldValue == MergeModeHelper.GetLabel(MergeMode.ManualReviewRequired) &&
+            c.NewValue == MergeModeHelper.GetLabel(MergeMode.Automatic));
         Assert.Contains(rev2.FieldChanges, c => c.FieldName == "BaseBranch" && c.OldValue == "main" && c.NewValue == "develop");
         Assert.Contains(rev2.FieldChanges, c => c.FieldName == "FeatureBranch" && c.OldValue == "None" && c.NewValue == "feature/task-101");
         Assert.Contains(rev2.FieldChanges, c => c.FieldName == "Stage" && c.OldValue == "None" && c.NewValue == "stage-1");
@@ -369,5 +371,68 @@ public class TaskHistoryDiffServiceTests
         Assert.NotNull(depChange);
         Assert.Equal("[#10, #30]", depChange.OldValue);
         Assert.Equal("[#20, #50]", depChange.NewValue);
+    }
+
+    [Fact]
+    public void BuildTimeline_GitHubAndExternalPullRequestFieldsChanged_EmitsExpectedFieldChanges()
+    {
+        var now = DateTime.UtcNow;
+        var histories = new[]
+        {
+            new ForgeTaskHistory
+            {
+                Id = 1,
+                TaskId = 112,
+                Version = 1,
+                Title = "Task",
+                MergeMode = MergeMode.ManualReviewRequired,
+                ExternalSource = null,
+                ExternalReferenceId = null,
+                PullRequestNumber = null,
+                PullRequestUrl = null,
+                SerializedDependencies = "[]",
+                ChangedAt = now.AddMinutes(-10),
+                ChangedBy = AuditActors.System
+            },
+            new ForgeTaskHistory
+            {
+                Id = 2,
+                TaskId = 112,
+                Version = 2,
+                Title = "Task",
+                MergeMode = MergeMode.ExternalPullRequest,
+                ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+                ExternalReferenceId = "#42",
+                PullRequestNumber = 99,
+                PullRequestUrl = "https://github.com/acme/demo/pull/99",
+                SerializedDependencies = "[]",
+                ChangedAt = now,
+                ChangedBy = AuditActors.User
+            }
+        };
+
+        var timeline = _service.BuildTimeline(histories, now);
+        Assert.Equal(2, timeline.Count);
+
+        var latest = timeline[0];
+        var mergeChange = Assert.Single(latest.FieldChanges, c => c.FieldName == "MergeMode");
+        Assert.Equal(MergeModeHelper.GetLabel(MergeMode.ManualReviewRequired), mergeChange.OldValue);
+        Assert.Equal(MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest), mergeChange.NewValue);
+
+        var sourceChange = Assert.Single(latest.FieldChanges, c => c.FieldName == "ExternalSource");
+        Assert.Equal("None", sourceChange.OldValue);
+        Assert.Equal("GitHub", sourceChange.NewValue);
+
+        var refChange = Assert.Single(latest.FieldChanges, c => c.FieldName == "ExternalReferenceId");
+        Assert.Equal("None", refChange.OldValue);
+        Assert.Equal("#42", refChange.NewValue);
+
+        var prNumChange = Assert.Single(latest.FieldChanges, c => c.FieldName == "PullRequestNumber");
+        Assert.Equal("None", prNumChange.OldValue);
+        Assert.Equal("#99", prNumChange.NewValue);
+
+        var prUrlChange = Assert.Single(latest.FieldChanges, c => c.FieldName == "PullRequestUrl");
+        Assert.Equal("None", prUrlChange.OldValue);
+        Assert.Equal("https://github.com/acme/demo/pull/99", prUrlChange.NewValue);
     }
 }

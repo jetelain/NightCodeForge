@@ -286,6 +286,33 @@ public class TriagePageTests : BunitContext
         Assert.DoesNotContain("Manual User Task", cut.Markup);
         Assert.DoesNotContain("Accepted Open Task", cut.Markup);
     }
+
+    [Fact]
+    public async Task TriagePage_RendersSuggestedGitHubIssueTasksWithIssueBadge()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 103,
+            WorkspaceId = 1,
+            Title = "GitHub Synced Issue Proposal",
+            Description = "Synced from GitHub issue #42",
+            Status = TaskOverallStatus.Suggested,
+            Origin = TaskOrigin.GitHubIssue,
+            ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId = "#42",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var cut = Render<Triage>();
+
+        var card = cut.Find("#triage-task-proposal-103");
+        Assert.Contains("GitHub Synced Issue Proposal", card.TextContent);
+        var issueBadge = cut.Find("#triage-github-issue-badge-103");
+        Assert.Contains("#42", issueBadge.TextContent);
+    }
 }
 
 public class MockTriageService : ITriageService

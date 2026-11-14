@@ -63,8 +63,18 @@ public interface ITaskMergeAndCascadeCoordinator
         int taskId,
         CancellationToken cancellationToken = default);
 
+    Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(
+        int taskId,
+        string changedBy,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
         int workspaceId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        Action<int>? cancelActiveExecution,
         CancellationToken cancellationToken = default);
 
     Task InitiateConflictResolutionAsync(

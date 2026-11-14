@@ -12,6 +12,7 @@
 @inject ITaskRepository TaskRepository
 @inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
+@inject ILogger<Triage> Logger
 @implements IDisposable
 
 <PageTitle>Untrusted Intake &amp; Triage - NightCodeForge</PageTitle>
@@ -274,7 +275,8 @@
         {
             var tasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
             var suggested = tasks
-                .Where(t => t.Status == TaskOverallStatus.Suggested && t.Origin == TaskOrigin.UntrustedIntake)
+                .Where(t => t.Status == TaskOverallStatus.Suggested &&
+                            t.Origin is TaskOrigin.UntrustedIntake or TaskOrigin.GitHubIssue)
                 .OrderByDescending(t => t.CreatedAt)
                 .Take(10)
                 .ToList();
@@ -284,9 +286,9 @@
                 _triagedTasks = suggested;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Non-critical, initial load fallback
+            Logger.LogDebug(ex, "Unable to preload suggested triage tasks for workspace #{WorkspaceId}.", workspace.Id);
         }
     }
 

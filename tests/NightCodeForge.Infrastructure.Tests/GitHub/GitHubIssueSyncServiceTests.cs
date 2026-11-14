@@ -895,6 +895,78 @@ public sealed class GitHubIssueSyncServiceTests : IDisposable
         Assert.Equal([1, 2, 3, 4], reloaded.GitHubSettings.TriagedIssueNumbers.OrderBy(n => n).ToArray());
     }
 
+    [Fact]
+    public async Task SyncWorkspaceIssuesAsync_And_SyncOpenIssuesAsync_WhenOperationsPausedExceptionThrown_ExitCleanlyWithoutThrowing()
+    {
+        var ws1 = CreateWorkspace(501);
+        var ws2 = CreateWorkspace(502);
+        var harness = CreateUnitHarness();
+        harness.WorkspaceRepoMock.Setup(r => r.GetByIdAsync(ws1.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ws1);
+        harness.WorkspaceRepoMock.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([ws1, ws2]);
+        harness.TaskRepoMock.Setup(r => r.GetByWorkspaceIdAsync(ws1.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<ForgeTask>());
+        harness.GitHubClientMock.Setup(c => c.ListIssuesAsync("octo-org", "app", It.IsAny<GitHubIssueFilter>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new GitHubIssue { Number = 1, Title = "Issue 1", State = "open" }]);
+        harness.TriageServiceMock
+            .Setup(t => t.TriageExternalReportAsync(It.IsAny<Workspace>(), It.IsAny<TriageReportRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationsPausedException("Paused mid-triage"));
+
+        await harness.Service.SyncWorkspaceIssuesAsync(ws1.Id);
+        await harness.Service.SyncOpenIssuesAsync();
+
+        harness.TaskRepoMock.Verify(r => r.GetByWorkspaceIdAsync(ws2.Id, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SyncWorkspaceIssuesAsync_WhenRepositoryChangesMidRun_AbortsBeforePersistingWatermarkOrTriagingNextIssue()
+    {
+        var initialWorkspace = CreateWorkspace(503);
+        var switchedWorkspace = CreateWorkspace(503, s => s.RepositoryName = "switched-repo");
+        var repoSwitched = false;
+
+        var harness = CreateUnitHarness();
+        harness.WorkspaceRepoMock.Setup(r => r.GetByIdAsync(initialWorkspace.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => repoSwitched ? switchedWorkspace : initialWorkspace);
+        harness.TaskRepoMock.Setup(r => r.GetByWorkspaceIdAsync(initialWorkspace.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<ForgeTask>());
+        harness.GitHubClientMock.Setup(c => c.ListIssuesAsync("octo-org", "app", It.IsAny<GitHubIssueFilter>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new GitHubIssue { Number = 1, Title = "First Issue", State = "open" },
+                new GitHubIssue { Number = 2, Title = "Second Issue", State = "open" }
+            ]);
+        harness.TriageServiceMock
+            .Setup(t => t.TriageExternalReportAsync(It.IsAny<Workspace>(), It.IsAny<TriageReportRequest>(), It.IsAny<CancellationToken>()))
+            .Callback(() => repoSwitched = true)
+            .ReturnsAsync(Array.Empty<ForgeTask>());
+
+        await harness.Service.SyncWorkspaceIssuesAsync(initialWorkspace.Id);
+
+        harness.TriageServiceMock.Verify(
+            t => t.TriageExternalReportAsync(It.IsAny<Workspace>(), It.IsAny<TriageReportRequest>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        harness.WorkspaceRepoMock.Verify(
+            r => r.UpdateAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        harness.GitHubClientMock.Verify(
+            c => c.UpdateIssueAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<UpdateGitHubIssueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public void RemoveWorkspaceRecurringJob_RemovesJobByCanonicalId()
+    {
+        var managerMock = new Mock<IRecurringJobManager>();
+
+        GitHubIssueSyncService.RemoveWorkspaceRecurringJob(managerMock.Object, 42);
+
+        managerMock.Verify(
+            m => m.RemoveIfExists(GitHubIssueSyncService.GetWorkspaceRecurringJobId(42)),
+            Times.Once);
+    }
+
     private static Workspace CreateWorkspace(int id, Action<GitHubIntegrationSettings>? configure = null)
     {
         var settings = new GitHubIntegrationSettings

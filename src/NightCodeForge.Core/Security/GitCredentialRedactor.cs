@@ -10,20 +10,40 @@ public static partial class GitCredentialRedactor
 {
     public const string RedactedPlaceholder = "[REDACTED]";
 
-    [GeneratedRegex(@"(?i)(http(?:\.[^\s=]+)?\.extraheader\s*=\s*(?:""|')?\s*authorization\s*:\s*(?:bearer|basic|token)?\s*)([^\s""']+)", RegexOptions.CultureInvariant)]
+    // Matches quoted: "http.extraHeader=..." or 'http.extraHeader=...'
+    [GeneratedRegex(@"(?i)("")(http(?:\.[^\s=""']+)?\.extraheader\s*=\s*)([^""\r\n]+)("")", RegexOptions.CultureInvariant)]
+    private static partial Regex DoubleQuotedFullExtraHeaderRegex();
+
+    [GeneratedRegex(@"(?i)(')(http(?:\.[^\s=""']+)?\.extraheader\s*=\s*)([^'\r\n]+)(')", RegexOptions.CultureInvariant)]
+    private static partial Regex SingleQuotedFullExtraHeaderRegex();
+
+    // Matches quoted value: http.extraHeader="..." or http.extraHeader='...'
+    [GeneratedRegex(@"(?i)(http(?:\.[^\s=""']+)?\.extraheader\s*=\s*"")([^""\r\n]+)("")", RegexOptions.CultureInvariant)]
+    private static partial Regex DoubleQuotedValueExtraHeaderRegex();
+
+    [GeneratedRegex(@"(?i)(http(?:\.[^\s=""']+)?\.extraheader\s*=\s*')([^'\r\n]+)(')", RegexOptions.CultureInvariant)]
+    private static partial Regex SingleQuotedValueExtraHeaderRegex();
+
+    // Matches standalone entire-argument extraHeader=HeaderName: Value (including custom schemes or arbitrary header values)
+    [GeneratedRegex(@"(?is)^(http(?:\.[^\s=]+)?\.extraheader\s*=\s*(?:authorization\s*:[ \t]*(?:[A-Za-z0-9_-]+[ \t]+)?|[^:\r\n]+:[ \t]*)?)(.+)$", RegexOptions.CultureInvariant)]
+    private static partial Regex WholeArgumentExtraHeaderRegex();
+
+    // Matches unquoted in multi-token strings: http.extraHeader=Authorization: <scheme> <secret> or http.extraHeader=Header: <secret>
+    [GeneratedRegex(@"(?i)(http(?:\.[^\s=]+)?\.extraheader\s*=\s*(?:authorization\s*:[ \t]*(?:[A-Za-z0-9_-]+[ \t]+)?|[A-Za-z0-9-]+\s*:[ \t]*))([^\s""']+)", RegexOptions.CultureInvariant)]
     private static partial Regex ExtraHeaderAuthRegex();
 
-    [GeneratedRegex(@"(?i)(http(?:\.[^\s=]+)?\.extraheader\s*=\s*)([^\s""']+)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?i)(http(?:\.[^\s=]+)?\.extraheader\s*=\s*)(?!\[REDACTED\]|[^:\s""']+\s*:[ \t]*(?:[A-Za-z0-9_-]+[ \t]+)?\[REDACTED\])([^\s""']+)", RegexOptions.CultureInvariant)]
     private static partial Regex ExtraHeaderGenericRegex();
 
-    [GeneratedRegex(@"(?i)(authorization\s*:\s*(?:bearer|basic|token)\s+)([^\s""']+)", RegexOptions.CultureInvariant)]
+    // Matches Authorization headers with arbitrary scheme + secret or single-token Authorization: <secret>
+    [GeneratedRegex(@"(?i)(authorization\s*:[ \t]*)(?:[^\s""']+[ \t]+)?([^\s""']+)", RegexOptions.CultureInvariant)]
     private static partial Regex AuthorizationHeaderRegex();
 
     [GeneratedRegex(@"(?i)(https?://[^/\s:@]+:)([^@\s/]+)(@)", RegexOptions.CultureInvariant)]
     private static partial Regex UrlUserPasswordRegex();
 
-    [GeneratedRegex(@"(?i)(https?://)([^/\s:@]+)(@github\.com\b)", RegexOptions.CultureInvariant)]
-    private static partial Regex UrlTokenAtGitHubRegex();
+    [GeneratedRegex(@"(?i)(https?://)([^/\s:@]+)(@[^\s/]+)", RegexOptions.CultureInvariant)]
+    private static partial Regex UrlTokenAtHostRegex();
 
     [GeneratedRegex(@"\b(gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b", RegexOptions.CultureInvariant)]
     private static partial Regex GitHubTokenPrefixRegex();
@@ -38,8 +58,24 @@ public static partial class GitCredentialRedactor
             return input ?? string.Empty;
         }
 
-        var redacted = ExtraHeaderAuthRegex().Replace(input, $"$1{RedactedPlaceholder}");
-        redacted = AuthorizationHeaderRegex().Replace(redacted, $"$1{RedactedPlaceholder}");
+        var redacted = DoubleQuotedFullExtraHeaderRegex().Replace(input, $"$1$2{RedactedPlaceholder}$4");
+        redacted = SingleQuotedFullExtraHeaderRegex().Replace(redacted, $"$1$2{RedactedPlaceholder}$4");
+        redacted = DoubleQuotedValueExtraHeaderRegex().Replace(redacted, $"$1{RedactedPlaceholder}$3");
+        redacted = SingleQuotedValueExtraHeaderRegex().Replace(redacted, $"$1{RedactedPlaceholder}$3");
+        redacted = ExtraHeaderAuthRegex().Replace(redacted, match =>
+        {
+            var value = match.Groups[2].Value;
+            return value.Contains(RedactedPlaceholder, StringComparison.Ordinal)
+                ? match.Value
+                : $"{match.Groups[1].Value}{RedactedPlaceholder}";
+        });
+        redacted = AuthorizationHeaderRegex().Replace(redacted, match =>
+        {
+            var value = match.Groups[2].Value;
+            return value.Contains(RedactedPlaceholder, StringComparison.Ordinal)
+                ? match.Value
+                : $"{match.Groups[1].Value}{RedactedPlaceholder}";
+        });
         redacted = ExtraHeaderGenericRegex().Replace(redacted, match =>
         {
             var value = match.Groups[2].Value;
@@ -50,10 +86,35 @@ public static partial class GitCredentialRedactor
             return $"{match.Groups[1].Value}{RedactedPlaceholder}";
         });
         redacted = UrlUserPasswordRegex().Replace(redacted, $"$1{RedactedPlaceholder}$3");
-        redacted = UrlTokenAtGitHubRegex().Replace(redacted, $"$1{RedactedPlaceholder}$3");
+        redacted = UrlTokenAtHostRegex().Replace(redacted, match =>
+        {
+            var token = match.Groups[2].Value;
+            return token.Contains(RedactedPlaceholder, StringComparison.Ordinal)
+                ? match.Value
+                : $"{match.Groups[1].Value}{RedactedPlaceholder}{match.Groups[3].Value}";
+        });
         redacted = GitHubTokenPrefixRegex().Replace(redacted, RedactedPlaceholder);
 
         return redacted;
+    }
+
+    /// <summary>
+    /// Redacts a single CLI argument, preserving awareness that the entire argument belongs to one option.
+    /// </summary>
+    public static string RedactArgument(string? argument)
+    {
+        if (string.IsNullOrEmpty(argument))
+        {
+            return argument ?? string.Empty;
+        }
+
+        var match = WholeArgumentExtraHeaderRegex().Match(argument);
+        if (match.Success)
+        {
+            return Redact($"{match.Groups[1].Value}{RedactedPlaceholder}");
+        }
+
+        return Redact(argument);
     }
 
     /// <summary>
@@ -62,7 +123,7 @@ public static partial class GitCredentialRedactor
     public static IReadOnlyList<string> RedactArguments(IEnumerable<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        return arguments.Select(Redact).ToList();
+        return arguments.Select(RedactArgument).ToList();
     }
 }
 

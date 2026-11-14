@@ -27,6 +27,9 @@ namespace NightCodeForge.Agents.Crucible;
 
 public partial class CrucibleAgentHarness : IAgentHarness
 {
+    [GeneratedRegex(@"<(/?(?:task|task_scope|stage_directives|rules|untrusted_external_report)\b[^>]*)>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StructuralScopeTagRegex();
+
     /// <summary>Maximum consecutive "resume" prompts sent after a response cut off mid-thought before the stage fails.</summary>
     public const int MaxConsecutiveTruncationNudges = 3;
 
@@ -1504,8 +1507,9 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         var docAttr = !string.IsNullOrWhiteSpace(taskDocPath) ? $" path=\"{EscapeAttribute(taskDocPath)}\"" : string.Empty;
         var dateAttr = !string.IsNullOrWhiteSpace(date) ? $" date=\"{EscapeAttribute(date)}\"" : string.Empty;
-        var description = (task.Description ?? string.Empty)
-            .Replace("</task>", "&lt;/task&gt;", StringComparison.OrdinalIgnoreCase);
+        var description = StructuralScopeTagRegex().Replace(
+            task.Description ?? string.Empty,
+            match => $"&lt;{match.Groups[1].Value}&gt;");
 
         return $"<task id=\"{task.Id}\" title=\"{EscapeAttribute(task.Title ?? string.Empty)}\"{docAttr}{dateAttr}>\n{description}\n</task>";
     }
@@ -1570,6 +1574,32 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
     private static IReadOnlyList<string> ResolvePermittedTools(CrucibleHarnessConfig config, AgentProfile profile, AgentMode requiredMode)
     {
+        if (requiredMode == AgentMode.ReadOnly || profile.Mode == AgentMode.ReadOnly)
+        {
+            var baselineAllowed = (profile.PermittedTools != null && profile.PermittedTools.Count > 0)
+                ? profile.PermittedTools
+                : DefaultAgentTools.ReadOnly;
+
+            if (requiredMode == AgentMode.ReadOnly && profile.Mode != AgentMode.ReadOnly)
+            {
+                var readOnlySet = new HashSet<string>(DefaultAgentTools.ReadOnly, StringComparer.OrdinalIgnoreCase);
+                var readOnlyFiltered = baselineAllowed.Where(readOnlySet.Contains).ToList();
+                baselineAllowed = readOnlyFiltered.Count > 0 ? readOnlyFiltered : DefaultAgentTools.ReadOnly;
+            }
+
+            if (config.AllowedTools != null && config.AllowedTools.Count > 0)
+            {
+                var baselineSet = new HashSet<string>(baselineAllowed, StringComparer.OrdinalIgnoreCase);
+                var intersected = config.AllowedTools
+                    .Where(t => !string.IsNullOrWhiteSpace(t) && baselineSet.Contains(t.Trim()))
+                    .Select(t => t.Trim())
+                    .ToList();
+                return intersected.Count > 0 ? intersected : baselineAllowed;
+            }
+
+            return baselineAllowed;
+        }
+
         // 1. Config override from database HarnessConfigurationJson
         if (config.AllowedTools != null && config.AllowedTools.Count > 0)
         {
@@ -1583,7 +1613,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 3. Modes: ReadOnly, Review, Full
-        return DefaultAgentTools.GetTools(profile.Mode == AgentMode.ReadOnly ? AgentMode.ReadOnly : requiredMode);
+        return DefaultAgentTools.GetTools(requiredMode);
     }
 
     private static string GetStageDirective(CrucibleHarnessConfig config, string stageId)

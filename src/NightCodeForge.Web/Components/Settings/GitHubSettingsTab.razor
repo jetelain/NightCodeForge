@@ -8,6 +8,7 @@
 @inject IOptions<SecurityOptions> SecurityOptions
 @inject ToastService ToastService
 @inject IJSRuntime JSRuntime
+@inject ILogger<GitHubSettingsTab> Logger
 @implements IDisposable
 
 <div class="forge-card mt-3" style="padding: 2rem;">
@@ -264,7 +265,7 @@
 
                     <div>
                         <label class="forge-field-label" for="github-polling-interval">Polling Interval (Minutes)</label>
-                        <input id="github-polling-interval" type="number" min="1" max="1440" class="forge-input" @bind="_settings.PollingIntervalMinutes" style="width: 100%; font-size: 0.88rem;" />
+                        <input id="github-polling-interval" type="number" min="@GitHubSettingsUiService.MinPollingIntervalMinutes" max="@GitHubSettingsUiService.MaxPollingIntervalMinutes" class="forge-input" @bind="_settings.PollingIntervalMinutes" style="width: 100%; font-size: 0.88rem;" />
                     </div>
                 </div>
             </div>
@@ -382,7 +383,7 @@
         _isLoading = true;
         try
         {
-            _settings = await UiService.LoadSettingsAsync(WorkspaceId);
+            _settings = (await UiService.LoadSettingsAsync(WorkspaceId)).Clone();
             _connectionState = await UiService.GetConnectionStateAsync();
             if (_connectionState.IsConnected)
             {
@@ -410,9 +411,14 @@
         _isLoadingRepos = true;
         try
         {
-            _accessibleRepositories = await UiService.LoadAccessibleRepositoriesAsync();
+            _accessibleRepositories = await UiService.RefreshAccessibleRepositoriesAsync();
             ApplyDefaultOwnerIfEmpty();
             ToastService.Show("Repositories Refreshed", $"Discovered {_accessibleRepositories.Count} accessible GitHub repositories.", ToastLevel.Info);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "Failed to refresh accessible GitHub repositories for workspace #{WorkspaceId}.", WorkspaceId);
+            ToastService.Show("Repository Refresh Failed", $"Failed to refresh repositories: {ex.Message}", ToastLevel.Error);
         }
         finally
         {
@@ -465,7 +471,7 @@
             await UiService.SaveSettingsAsync(WorkspaceId, _settings);
             if (WorkspaceState.ActiveWorkspace != null && WorkspaceState.ActiveWorkspace.Id == WorkspaceId)
             {
-                WorkspaceState.ActiveWorkspace.GitHubSettings = _settings;
+                WorkspaceState.ActiveWorkspace.GitHubSettings = _settings.Clone();
                 WorkspaceState.NotifyWorkspaceUpdated(WorkspaceState.ActiveWorkspace);
             }
             ToastService.Show("Settings Saved", "GitHub integration settings saved successfully.", ToastLevel.Success);
@@ -484,7 +490,7 @@
     {
         _isStartingAuth = true;
         _deviceCode = null;
-        _pollCts?.Cancel();
+        DisposePollCts();
         _pollCts = new CancellationTokenSource();
 
         try
@@ -556,9 +562,22 @@
 
     private void CancelDeviceFlow()
     {
-        _pollCts?.Cancel();
+        DisposePollCts();
         _isAuthenticating = false;
         _deviceCode = null;
+    }
+
+    private void DisposePollCts()
+    {
+        var previousCts = _pollCts;
+        _pollCts = null;
+        if (previousCts == null)
+        {
+            return;
+        }
+
+        previousCts.Cancel();
+        previousCts.Dispose();
     }
 
     private async Task DisconnectGitHubAsync()
@@ -607,7 +626,6 @@
     {
         if (_disposed) return;
         _disposed = true;
-        _pollCts?.Cancel();
-        _pollCts?.Dispose();
+        DisposePollCts();
     }
 }

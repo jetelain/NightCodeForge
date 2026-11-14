@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
@@ -12,11 +13,17 @@ namespace NightCodeForge.Infrastructure.GitHub;
 /// <summary>
 /// Typed REST client for GitHub API with automatic reactive 401 token refresh recovery.
 /// </summary>
-public class GitHubClientService : IGitHubClientService
+public partial class GitHubClientService : IGitHubClientService
 {
     private const string GitHubApiBaseUrl = "https://api.github.com";
+    private const string GitHubApiHost = "api.github.com";
     private const string GitHubApiVersion = "2022-11-28";
     private const string UserAgent = "NightCodeForge";
+    private const int DefaultPerPage = 100;
+    private const int MaxPaginationPages = 25;
+
+    [GeneratedRegex(@"<([^>]+)>\s*;\s*[^,]*\brel=""?next""?", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NextLinkRegex();
 
     private readonly HttpClient _httpClient;
     private readonly IGitHubDeviceAuthService _authService;
@@ -124,6 +131,39 @@ public class GitHubClientService : IGitHubClientService
         return ParsePullRequest(doc.RootElement);
     }
 
+    public async Task<GitHubPullRequest?> FindOpenPullRequestByHeadAsync(
+        string owner,
+        string repo,
+        string headBranch,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(headBranch);
+
+        var qualifiedHead = headBranch.Contains(':', StringComparison.Ordinal)
+            ? headBranch
+            : $"{owner}:{headBranch}";
+        var url = $"{GitHubApiBaseUrl}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/pulls?state=open&head={Uri.EscapeDataString(qualifiedHead)}&per_page=1";
+        using var response = await SendWithAuthAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, url),
+            cancellationToken);
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(content);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            return ParsePullRequest(element);
+        }
+
+        return null;
+    }
+
     // ==========================================
     // Issues, Labels & Comments
     // ==========================================
@@ -138,14 +178,20 @@ public class GitHubClientService : IGitHubClientService
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentNullException.ThrowIfNull(filter);
 
-        var queryParams = new List<string>();
+        var queryParams = new List<string> { $"per_page={DefaultPerPage}" };
         if (!string.IsNullOrWhiteSpace(filter.State))
         {
             queryParams.Add($"state={Uri.EscapeDataString(filter.State)}");
         }
         if (!string.IsNullOrWhiteSpace(filter.Labels))
         {
-            queryParams.Add($"labels={Uri.EscapeDataString(filter.Labels)}");
+            var normalizedLabels = string.Join(
+                ",",
+                filter.Labels.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            if (!string.IsNullOrWhiteSpace(normalizedLabels))
+            {
+                queryParams.Add($"labels={Uri.EscapeDataString(normalizedLabels)}");
+            }
         }
         if (!string.IsNullOrWhiteSpace(filter.Assignee))
         {
@@ -156,34 +202,18 @@ public class GitHubClientService : IGitHubClientService
             queryParams.Add($"since={Uri.EscapeDataString(filter.Since.Value.ToString("o"))}");
         }
 
-        var queryString = queryParams.Count > 0 ? "?" + string.Join("&", queryParams) : string.Empty;
+        var queryString = "?" + string.Join("&", queryParams);
         var url = $"{GitHubApiBaseUrl}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/issues{queryString}";
 
-        using var response = await SendWithAuthAsync(
-            () => new HttpRequestMessage(HttpMethod.Get, url),
-            cancellationToken);
-
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        using var doc = JsonDocument.Parse(content);
-        var issues = new List<GitHubIssue>();
-
-        if (doc.RootElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var element in doc.RootElement.EnumerateArray())
+        return await GetPaginatedListAsync(
+            url,
+            element =>
             {
-                if (element.ValueKind == JsonValueKind.Object)
-                {
-                    var issue = ParseIssue(element);
-                    // GitHub issues endpoint includes pull requests; filter them out
-                    if (!issue.IsPullRequest)
-                    {
-                        issues.Add(issue);
-                    }
-                }
-            }
-        }
-
-        return issues;
+                var issue = ParseIssue(element);
+                // GitHub issues endpoint includes pull requests; filter them out
+                return issue.IsPullRequest ? null : issue;
+            },
+            cancellationToken);
     }
 
     public async Task<GitHubIssue> GetIssueAsync(
@@ -283,27 +313,11 @@ public class GitHubClientService : IGitHubClientService
         ArgumentException.ThrowIfNullOrWhiteSpace(repo);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(issueNumber);
 
-        var url = $"{GitHubApiBaseUrl}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/issues/{issueNumber}/comments";
-        using var response = await SendWithAuthAsync(
-            () => new HttpRequestMessage(HttpMethod.Get, url),
+        var url = $"{GitHubApiBaseUrl}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/issues/{issueNumber}/comments?per_page={DefaultPerPage}";
+        return await GetPaginatedListAsync<GitHubIssueComment>(
+            url,
+            element => ParseIssueComment(element),
             cancellationToken);
-
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        using var doc = JsonDocument.Parse(content);
-        var comments = new List<GitHubIssueComment>();
-
-        if (doc.RootElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var element in doc.RootElement.EnumerateArray())
-            {
-                if (element.ValueKind == JsonValueKind.Object)
-                {
-                    comments.Add(ParseIssueComment(element));
-                }
-            }
-        }
-
-        return comments;
     }
 
     public async Task<GitHubIssueComment> AddIssueCommentAsync(
@@ -359,27 +373,104 @@ public class GitHubClientService : IGitHubClientService
     public async Task<IReadOnlyList<GitHubRepository>> ListAccessibleRepositoriesAsync(
         CancellationToken cancellationToken = default)
     {
-        var url = $"{GitHubApiBaseUrl}/user/repos?sort=updated&per_page=100";
-        using var response = await SendWithAuthAsync(
-            () => new HttpRequestMessage(HttpMethod.Get, url),
+        var url = $"{GitHubApiBaseUrl}/user/repos?sort=updated&per_page={DefaultPerPage}";
+        return await GetPaginatedListAsync<GitHubRepository>(
+            url,
+            element => ParseRepository(element),
             cancellationToken);
+    }
 
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        using var doc = JsonDocument.Parse(content);
-        var repositories = new List<GitHubRepository>();
+    private async Task<IReadOnlyList<T>> GetPaginatedListAsync<T>(
+        string initialUrl,
+        Func<JsonElement, T?> mapItem,
+        CancellationToken cancellationToken) where T : class
+    {
+        var items = new List<T>();
+        string? nextUrl = initialUrl;
 
-        if (doc.RootElement.ValueKind == JsonValueKind.Array)
+        for (var page = 0; page < MaxPaginationPages && !string.IsNullOrWhiteSpace(nextUrl); page++)
         {
-            foreach (var element in doc.RootElement.EnumerateArray())
+            var pageUrl = nextUrl;
+            using var response = await SendWithAuthAsync(
+                () => new HttpRequestMessage(HttpMethod.Get, pageUrl),
+                cancellationToken);
+
+            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(content);
+            if (doc.RootElement.ValueKind == JsonValueKind.Array)
             {
-                if (element.ValueKind == JsonValueKind.Object)
+                foreach (var element in doc.RootElement.EnumerateArray())
                 {
-                    repositories.Add(ParseRepository(element));
+                    if (element.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var mapped = mapItem(element);
+                    if (mapped != null)
+                    {
+                        items.Add(mapped);
+                    }
                 }
             }
+
+            nextUrl = ExtractNextPageUrl(response.Headers, _httpClient.BaseAddress);
         }
 
-        return repositories;
+        return items;
+    }
+
+    private string? ExtractNextPageUrl(HttpResponseHeaders headers, Uri? clientBaseAddress)
+    {
+        if (!headers.TryGetValues("Link", out var linkValues))
+        {
+            return null;
+        }
+
+        foreach (var headerValue in linkValues)
+        {
+            var match = NextLinkRegex().Match(headerValue);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            var rawNextUrl = match.Groups[1].Value.Trim();
+            if (!Uri.TryCreate(rawNextUrl, UriKind.RelativeOrAbsolute, out var nextUri))
+            {
+                return null;
+            }
+
+            if (!nextUri.IsAbsoluteUri)
+            {
+                if (clientBaseAddress == null || !Uri.TryCreate(clientBaseAddress, nextUri, out nextUri))
+                {
+                    return null;
+                }
+            }
+
+            var isOfficialGitHubOrigin =
+                string.Equals(nextUri.Host, GitHubApiHost, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(nextUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+
+            var matchesBaseAddressOrigin =
+                clientBaseAddress != null &&
+                string.Equals(nextUri.Host, clientBaseAddress.Host, StringComparison.OrdinalIgnoreCase) &&
+                nextUri.Port == clientBaseAddress.Port &&
+                string.Equals(nextUri.Scheme, clientBaseAddress.Scheme, StringComparison.OrdinalIgnoreCase);
+
+            if (!isOfficialGitHubOrigin && !matchesBaseAddressOrigin)
+            {
+                _logger.LogWarning(
+                    "Ignoring paginated GitHub Link next URL '{NextUrl}' because its origin does not match expected GitHub API origin.",
+                    nextUri.GetLeftPart(UriPartial.Authority));
+                return null;
+            }
+
+            return nextUri.ToString();
+        }
+
+        return null;
     }
 
     // ==========================================

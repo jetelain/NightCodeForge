@@ -11,6 +11,7 @@ public interface IGitHubClientService
     Task<GitHubPullRequest> CreatePullRequestAsync(string owner, string repo, CreateGitHubPullRequestRequest request, CancellationToken cancellationToken = default);
     Task<GitHubPullRequest> UpdatePullRequestAsync(string owner, string repo, int prNumber, UpdateGitHubPullRequestRequest request, CancellationToken cancellationToken = default);
     Task<GitHubPullRequest> GetPullRequestAsync(string owner, string repo, int prNumber, CancellationToken cancellationToken = default);
+    Task<GitHubPullRequest?> FindOpenPullRequestByHeadAsync(string owner, string repo, string headBranch, CancellationToken cancellationToken = default);
 
     // Issues, Labels & Comments
     Task<IReadOnlyList<GitHubIssue>> ListIssuesAsync(string owner, string repo, GitHubIssueFilter filter, CancellationToken cancellationToken = default);

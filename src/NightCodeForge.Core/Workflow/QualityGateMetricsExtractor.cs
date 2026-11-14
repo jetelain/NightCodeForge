@@ -18,7 +18,7 @@ public static class QualityGateMetricsExtractor
         {
             currentCov = cRate <= 1.0 ? cRate * 100.0 : cRate;
         }
-        else if (bag.TryGet<double>("coverage.current", out var cVal))
+        else if (bag.TryGet<double>(PipelineDataBagKeys.CoverageCurrent, out var cVal))
         {
             currentCov = cVal;
         }
@@ -28,7 +28,7 @@ public static class QualityGateMetricsExtractor
         {
             baseCov = bRate <= 1.0 ? bRate * 100.0 : bRate;
         }
-        else if (bag.TryGet<double>("coverage.baseline", out var bVal))
+        else if (bag.TryGet<double>(PipelineDataBagKeys.CoverageBaseline, out var bVal))
         {
             baseCov = bVal;
         }
@@ -40,19 +40,19 @@ public static class QualityGateMetricsExtractor
         }
 
         int currentWarns = bag.TryGet<int>(PipelineDataBagKeys.WarningsCurrentTotal, out var cw) ? cw :
-            (bag.TryGet<int>("warnings.current.count", out cw) ? cw : 0);
+            (bag.TryGet<int>(PipelineDataBagKeys.WarningsCurrentCount, out cw) ? cw : 0);
         int baseWarns = bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out var bw) ? bw :
-            (bag.TryGet<int>("warnings.baseline.count", out bw) ? bw : currentWarns);
+            (bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineCount, out bw) ? bw : currentWarns);
         int warnDelta = bag.TryGet<int>(PipelineDataBagKeys.WarningsDelta, out var wd) ? wd : (currentWarns - baseWarns);
 
         int totalTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out var tt) ? tt :
-            (bag.TryGet<int>("tests.total", out tt) ? tt : 0);
+            (bag.TryGet<int>(PipelineDataBagKeys.TestsTotal, out tt) ? tt : 0);
         int failedTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentFailed, out var ft) ? ft :
-            (bag.TryGet<int>("tests.failed", out ft) ? ft : 0);
+            (bag.TryGet<int>(PipelineDataBagKeys.TestsFailed, out ft) ? ft : 0);
         int passedTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentPassed, out var pt) ? pt :
-            (bag.TryGet<int>("tests.passed", out pt) ? pt : Math.Max(0, totalTests - failedTests));
+            (bag.TryGet<int>(PipelineDataBagKeys.TestsPassed, out pt) ? pt : Math.Max(0, totalTests - failedTests));
         int durationMs = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentDurationMs, out var dm) ? dm :
-            (bag.TryGet<int>("tests.duration_ms", out dm) ? dm : 0);
+            (bag.TryGet<int>(PipelineDataBagKeys.TestsDurationMs, out dm) ? dm : 0);
 
         return new QualityGateMetrics(
             BaselineCoverage: Math.Round(baseCov, 2),

@@ -458,5 +458,57 @@ public class GitHubDeviceAuthServiceTests
         Assert.Equal("octocat", user.Login);
         Assert.Equal(2, userAttempts);
     }
+
+    [Fact]
+    public async Task RefreshAccessTokenAsync_AcrossDistinctServiceInstances_DoesNotReuseRotatedRefreshToken()
+    {
+        var storedToken = new GitHubOAuthTokenPayload
+        {
+            AccessToken = "ghu_initial_token_" + Guid.NewGuid().ToString("N"),
+            AccessTokenExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(1),
+            RefreshToken = "ghr_initial_refresh_1",
+            RefreshTokenExpiresAtUtc = DateTimeOffset.UtcNow.AddMonths(3)
+        };
+
+        var rotatedAccessToken = "ghu_rotated_token_" + Guid.NewGuid().ToString("N");
+        var refreshRequests = 0;
+
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = _ =>
+            {
+                refreshRequests++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new
+                    {
+                        access_token = rotatedAccessToken,
+                        expires_in = 28800,
+                        refresh_token = "ghr_rotated_refresh_2",
+                        refresh_token_expires_in = 15768000
+                    }))
+                };
+            }
+        };
+
+        var tokenStoreMock = new Mock<IGitHubTokenStore>();
+        tokenStoreMock.Setup(s => s.GetTokenAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => storedToken);
+        tokenStoreMock.Setup(s => s.SaveTokenAsync(It.IsAny<GitHubOAuthTokenPayload>(), It.IsAny<CancellationToken>()))
+            .Callback<GitHubOAuthTokenPayload, CancellationToken>((p, _) => storedToken = p)
+            .Returns(Task.CompletedTask);
+
+        using var httpClientA = new HttpClient(handler);
+        using var httpClientB = new HttpClient(handler);
+        var instanceA = new GitHubDeviceAuthService(httpClientA, tokenStoreMock.Object, NullLogger<GitHubDeviceAuthService>.Instance);
+        var instanceB = new GitHubDeviceAuthService(httpClientB, tokenStoreMock.Object, NullLogger<GitHubDeviceAuthService>.Instance);
+
+        var refreshedByA = await instanceA.RefreshAccessTokenAsync();
+        var reusedByB = await instanceB.RefreshAccessTokenAsync();
+
+        Assert.Equal(1, refreshRequests);
+        Assert.Equal(rotatedAccessToken, refreshedByA.AccessToken);
+        Assert.Equal(rotatedAccessToken, reusedByB.AccessToken);
+    }
 }
 

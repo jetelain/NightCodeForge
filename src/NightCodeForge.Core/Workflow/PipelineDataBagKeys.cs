@@ -34,6 +34,14 @@ public static class PipelineDataBagKeys
     public const string CoverageCurrentLineRate = "coverage.current.line_rate";
     public const string CoverageBaselineLineRate = "coverage.baseline.line_rate";
     public const string CoverageDelta = "coverage.delta";
+    public const string CoverageCurrent = "coverage.current";
+    public const string CoverageBaseline = "coverage.baseline";
+    public const string TestsTotal = "tests.total";
+    public const string TestsPassed = "tests.passed";
+    public const string TestsFailed = "tests.failed";
+    public const string TestsDurationMs = "tests.duration_ms";
+    public const string WarningsCurrentCount = "warnings.current.count";
+    public const string WarningsBaselineCount = "warnings.baseline.count";
     public const string FailedTests = "diagnostics.failed_tests";
     public const string FailedTestsTruncated = "diagnostics.failed_tests_truncated";
     public const string AllowNoTests = "tests.allow_no_tests";

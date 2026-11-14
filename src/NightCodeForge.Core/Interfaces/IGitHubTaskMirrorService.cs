@@ -1,15 +1,75 @@
+using System.Text.RegularExpressions;
 using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Core.Interfaces;
 
 /// <summary>
-/// Canonical constants for pre-flight GitHub Issue claim-conflict human clarification prompts.
+/// Canonical constants and answer-parsing helpers for pre-flight GitHub Issue claim-conflict human clarification prompts.
 /// </summary>
-public static class GitHubClaimConflictConstants
+public static partial class GitHubClaimConflictConstants
 {
     public const string ClaimConflictBatchPrefix = "github-claim-conflict-";
     public const string OverrideClaimOption = "Override claim and execute locally";
     public const string CancelTaskOption = "Cancel local task";
+
+    [GeneratedRegex(@"\boverride\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex OverrideWordRegex();
+
+    [GeneratedRegex(@"\b(?:don'?t|do\s+not|not|never|avoid|cancel)\s+override\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NegatedOverrideRegex();
+
+    [GeneratedRegex(@"\bcancel\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CancelWordRegex();
+
+    [GeneratedRegex(@"\b(?:don'?t|do\s+not|not|never|avoid)\s+cancel\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NegatedCancelRegex();
+
+    public static bool IsOverrideAnswer(string? answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            return false;
+        }
+
+        var trimmed = answer.Trim();
+        if (string.Equals(trimmed, OverrideClaimOption, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(trimmed, CancelTaskOption, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return OverrideWordRegex().IsMatch(trimmed) && !NegatedOverrideRegex().IsMatch(trimmed);
+    }
+
+    public static bool IsCancelAnswer(string? answer)
+    {
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            return false;
+        }
+
+        var trimmed = answer.Trim();
+        if (string.Equals(trimmed, CancelTaskOption, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (string.Equals(trimmed, OverrideClaimOption, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (IsOverrideAnswer(trimmed))
+        {
+            return false;
+        }
+
+        return CancelWordRegex().IsMatch(trimmed) && !NegatedCancelRegex().IsMatch(trimmed);
+    }
 }
 
 /// <summary>

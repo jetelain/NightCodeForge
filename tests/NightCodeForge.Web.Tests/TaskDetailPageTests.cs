@@ -1,6 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -60,6 +61,7 @@ public class TaskDetailPageTests : BunitContext
         var reviewService = new TaskReviewService(
             _taskRepository,
             _workspaceRepository,
+            new WorkspaceLockProvider(),
             new Moq.Mock<IGitWorkspaceManager>().Object,
             new Moq.Mock<IGitHubPullRequestDeliveryService>().Object,
             _orchestrator,
@@ -69,6 +71,7 @@ public class TaskDetailPageTests : BunitContext
         Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
         Services.AddSingleton<ReviewCommentStateService>(new ReviewCommentStateService());
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

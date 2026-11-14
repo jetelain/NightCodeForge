@@ -35,7 +35,7 @@ public class GitHubDeviceAuthService : IGitHubDeviceAuthService
     private readonly IGitHubTokenStore _tokenStore;
     private readonly ILogger<GitHubDeviceAuthService> _logger;
     private static readonly SemaphoreSlim _refreshLock = new(1, 1);
-    private string? _lastRefreshedAccessToken;
+    private static string? _lastRefreshedAccessToken;
 
     public GitHubDeviceAuthService(
         HttpClient httpClient,

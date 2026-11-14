@@ -597,4 +597,214 @@ public class GitHubTaskMirrorIntegrationTests : IDisposable
             m => m.SyncMergedPullRequestsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    [Fact]
+    public async Task CloseExternallyMergedTaskAsync_ViaOrchestrator_CancelsExecutionClearsWaitingStateAndRecordsUserActor()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var wsRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var workspace = await wsRepo.CreateAsync(CreateGitHubWorkspace());
+
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = wsRepo,
+            DependencyStore = depStore
+        };
+
+        var task = await taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = workspace.Id,
+            Title = "External PR closure via UI",
+            Status = TaskOverallStatus.Ready,
+            CurrentStageId = StandardStageIds.Implementation,
+            BaseBranch = "main",
+            PullRequestNumber = 77,
+            IsWaitingForHuman = true,
+            InterruptedStageId = StandardStageIds.Implementation,
+            LastHangfireJobId = "job-ui-77",
+            Questions = new List<Question>
+            {
+                new() { Id = 7701, Prompt = "Pending?", Status = QuestionStatus.Pending }
+            }
+        }, null, AuditActors.TaskOrchestrator, "init");
+        depStore.AddTask(task.Id, workspace.Id, TaskOverallStatus.Ready);
+        await depStore.SetWaitingForHumanAsync(task.Id, true);
+
+        using var activeExecutionCts = builder.CancellationManager.Register(task.Id);
+
+        builder.GitHubPrDeliveryMock
+            .Setup(m => m.VerifyAndSyncExternallyMergedPullRequestAsync(
+                It.Is<ForgeTask>(t => t.Id == task.Id),
+                It.IsAny<Workspace>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubPullRequest
+            {
+                Number = 77,
+                Merged = true,
+                MergeCommitSha = "ext-merge-sha-77"
+            });
+
+        var orchestrator = builder.Build();
+        var result = await orchestrator.CloseExternallyMergedTaskAsync(task.Id);
+
+        Assert.Equal(CompleteTaskStatus.Completed, result.Status);
+        Assert.True(activeExecutionCts.IsCancellationRequested);
+
+        var closed = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(closed);
+        Assert.Equal(TaskOverallStatus.Closed, closed.Status);
+        Assert.Equal("ext-merge-sha-77", closed.SquashCommitSha);
+        Assert.False(closed.IsWaitingForHuman);
+        Assert.Null(closed.InterruptedStageId);
+        Assert.Equal(QuestionStatus.Skipped, Assert.Single(closed.Questions).Status);
+
+        var history = await taskRepo.GetHistoryAsync(task.Id);
+        Assert.Equal(AuditActors.User, history[^1].ChangedBy);
+
+        builder.GitHubTaskMirrorMock.Verify(
+            m => m.MirrorTaskClosedAsync(
+                It.Is<ForgeTask>(t => t.Id == task.Id && t.Status == TaskOverallStatus.Closed),
+                It.IsAny<Workspace>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ClaimConflictSubmission_CancelArchivesMarkdownAndMirrorsClosed_AndOverrideRecordsUserHistory()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var wsRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var jobQueue = new FakeTaskJobQueue();
+        var workspace = await wsRepo.CreateAsync(CreateGitHubWorkspace());
+
+        var mdSyncMock = new Mock<ITaskMarkdownSyncService>();
+        mdSyncMock
+            .Setup(m => m.SyncTaskToDiskAsync(
+                It.IsAny<ForgeTask>(),
+                It.IsAny<string>(),
+                It.IsAny<IReadOnlyList<int>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("docs/tasks/task.md");
+
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = wsRepo,
+            DependencyStore = depStore,
+            JobQueue = jobQueue,
+            MarkdownSyncService = mdSyncMock.Object
+        };
+
+        var cancelTask = await taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 1,
+            WorkspaceId = workspace.Id,
+            Title = "Cancel archives markdown",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.TaskReview,
+            BaseBranch = "main",
+            IsWaitingForHuman = true,
+            InterruptedStageId = StandardStageIds.TaskReview,
+            ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId = "901",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 9001,
+                    TaskId = 1,
+                    StageId = StandardStageIds.TaskReview,
+                    BatchId = GitHubClaimConflictConstants.ClaimConflictBatchPrefix + "cancel",
+                    QuestionType = QuestionType.SingleChoice,
+                    Prompt = "Conflict?",
+                    OptionsJson = $"[\"{GitHubClaimConflictConstants.OverrideClaimOption}\",\"{GitHubClaimConflictConstants.CancelTaskOption}\"]",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        }, null, AuditActors.TaskOrchestrator, "init");
+        depStore.AddTask(cancelTask.Id, workspace.Id, TaskOverallStatus.Open);
+        await depStore.SetWaitingForHumanAsync(cancelTask.Id, true);
+
+        var overrideTask = await taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 2,
+            WorkspaceId = workspace.Id,
+            Title = "Override records user history",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = string.Empty,
+            BaseBranch = "main",
+            IsWaitingForHuman = true,
+            InterruptedStageId = StandardStageIds.TaskReview,
+            ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId = "902",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 9002,
+                    TaskId = 2,
+                    StageId = StandardStageIds.TaskReview,
+                    BatchId = GitHubClaimConflictConstants.ClaimConflictBatchPrefix + "override",
+                    QuestionType = QuestionType.SingleChoice,
+                    Prompt = "Conflict?",
+                    OptionsJson = $"[\"{GitHubClaimConflictConstants.OverrideClaimOption}\",\"{GitHubClaimConflictConstants.CancelTaskOption}\"]",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        }, null, AuditActors.TaskOrchestrator, "init");
+        depStore.AddTask(overrideTask.Id, workspace.Id, TaskOverallStatus.Open);
+        await depStore.SetWaitingForHumanAsync(overrideTask.Id, true);
+
+        builder.GitHubTaskMirrorMock
+            .Setup(m => m.TryHandleClaimConflictAnswerAsync(
+                It.IsAny<ForgeTask>(),
+                It.IsAny<Workspace>(),
+                It.IsAny<IReadOnlyList<Question>>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<ForgeTask, Workspace, IReadOnlyList<Question>, CancellationToken>(async (t, _, qs, ct) =>
+            {
+                if (qs.Any(q => q.Answer == GitHubClaimConflictConstants.CancelTaskOption))
+                {
+                    t.Status = TaskOverallStatus.Cancelled;
+                    t.IsWaitingForHuman = false;
+                    await taskRepo.UpdateAsync(t, cancellationToken: ct);
+                    return true;
+                }
+                return false;
+            });
+
+        var orchestrator = builder.Build();
+        await orchestrator.SubmitAnswersAsync(cancelTask.Id, new Dictionary<int, string>
+        {
+            [9001] = GitHubClaimConflictConstants.CancelTaskOption
+        });
+        await orchestrator.SubmitAnswersAsync(overrideTask.Id, new Dictionary<int, string>
+        {
+            [9002] = GitHubClaimConflictConstants.OverrideClaimOption
+        });
+
+        mdSyncMock.Verify(
+            m => m.ArchiveOrCleanupTaskFileAsync(
+                It.Is<ForgeTask>(t => t.Id == cancelTask.Id),
+                workspace.RepositoryPath,
+                true,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        builder.GitHubTaskMirrorMock.Verify(
+            m => m.MirrorTaskClosedAsync(
+                It.Is<ForgeTask>(t => t.Id == cancelTask.Id && t.Status == TaskOverallStatus.Cancelled),
+                It.IsAny<Workspace>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        var updatedOverride = await taskRepo.GetByIdAsync(overrideTask.Id);
+        Assert.NotNull(updatedOverride);
+        Assert.Equal(StandardStageIds.TaskReview, updatedOverride.CurrentStageId);
+        var overrideHistory = await taskRepo.GetHistoryAsync(overrideTask.Id);
+        Assert.Equal(AuditActors.User, overrideHistory[^1].ChangedBy);
+    }
 }

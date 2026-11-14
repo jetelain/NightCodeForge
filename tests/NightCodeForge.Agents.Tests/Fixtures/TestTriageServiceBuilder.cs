@@ -19,6 +19,7 @@ public class TestTriageServiceBuilder
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
     public IWorkspacePathResolver PathResolver { get; set; } = CreateDefaultPathResolver();
     public IGlobalOptimizationSettingsService GlobalOptimizationSettings { get; set; } = new FakeGlobalOptimizationSettingsService();
+    public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
     public ILogger<TriageService> Logger { get; set; } = NullLogger<TriageService>.Instance;
 
     private static IWorkspacePathResolver CreateDefaultPathResolver()
@@ -47,6 +48,7 @@ public class TestTriageServiceBuilder
             workspaceContext,
             MarkdownSyncService,
             GlobalOptimizationSettings,
+            TelemetryService,
             Logger);
     }
 

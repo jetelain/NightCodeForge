@@ -11,6 +11,7 @@ public interface ITaskLifecycleMutationCoordinator
 {
     CancellationTokenSource RegisterExecutionCancellation(int taskId, CancellationToken externalToken = default);
     void UnregisterExecutionCancellation(int taskId, CancellationTokenSource cts);
+    bool CancelExecution(int taskId);
     bool IsCancelRequested(int taskId);
     bool IsPauseRequested(int taskId);
     bool IsHostShuttingDown { get; }

@@ -7,6 +7,7 @@ using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
@@ -24,6 +25,7 @@ public class BacklogMutationToolServiceTests
     private readonly Mock<IWorkspaceRepository> _workspaceRepository = new();
     private readonly Mock<ITaskMarkdownSyncService> _markdownSync = new();
     private readonly Mock<IAgentActivityStreamer> _streamer = new();
+    private readonly Mock<IGitHubPullRequestDeliveryService> _pullRequestDeliveryService = new();
     private readonly SecurityOptions _securityOptions = new();
     private readonly WorkspaceLockProvider _locks = new();
     private readonly BacklogMutationToolService _service;
@@ -47,6 +49,10 @@ public class BacklogMutationToolServiceTests
                 }
             });
 
+        _pullRequestDeliveryService
+            .Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
         _service = new BacklogMutationToolService(
             _repository,
             _workspaceRepository.Object,
@@ -54,6 +60,7 @@ public class BacklogMutationToolServiceTests
             _markdownSync.Object,
             _locks,
             _streamer.Object,
+            _pullRequestDeliveryService.Object,
             Options.Create(_securityOptions),
             NullLogger<BacklogMutationToolService>.Instance);
     }
@@ -653,6 +660,24 @@ public class BacklogMutationToolServiceTests
         var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.ProposeTasksAsync(_scope, [new TaskProposal("AirGapped PR Task", "Desc", mergeMode: "external_pull_request")], CancellationToken.None));
         Assert.Contains("Air-Gapped Mode", proposeEx.Message);
+    }
+
+    [Fact]
+    public async Task EditTask_And_ProposeTasks_RejectExternalPullRequest_WhenGitHubAuthOrRepositoryUnavailable()
+    {
+        _pullRequestDeliveryService
+            .Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var task = await AddTaskAsync("Unauthenticated PR Task");
+
+        var editEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, MergeMode: "ExternalPullRequest"), CancellationToken.None));
+        Assert.Contains("GitHub OAuth authentication", editEx.Message);
+
+        var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.ProposeTasksAsync(_scope, [new TaskProposal("Unauth PR Task", "Desc", mergeMode: "external_pull_request")], CancellationToken.None));
+        Assert.Contains("GitHub OAuth authentication", proposeEx.Message);
     }
 }
 

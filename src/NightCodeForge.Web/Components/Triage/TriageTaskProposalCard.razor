@@ -7,6 +7,13 @@
         <div class="task-proposal-meta">
             <span class="badge-suggested">Suggested</span>
             <span class="task-id-badge font-mono">#@Task.Id</span>
+            @if (string.Equals(Task.ExternalSource, GitHubSyncConstants.ExternalSourceGitHub, StringComparison.OrdinalIgnoreCase) &&
+                 !string.IsNullOrWhiteSpace(Task.ExternalReferenceId))
+            {
+                <span class="forge-badge badge-neutral font-mono" id="triage-github-issue-badge-@Task.Id" title="Imported from GitHub Issue #@Task.ExternalReferenceId.TrimStart('#')">
+                    🐙 #@Task.ExternalReferenceId.TrimStart('#')
+                </span>
+            }
         </div>
         <div class="task-proposal-actions">
             <span class="forge-badge badge-priority-@Task.Priority" title="@TaskPriority.GetLabel(Task.Priority)">

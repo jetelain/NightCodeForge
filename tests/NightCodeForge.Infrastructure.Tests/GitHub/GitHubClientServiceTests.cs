@@ -471,7 +471,7 @@ public class GitHubClientServiceTests
 
         Assert.NotNull(capturedRequest);
         Assert.Equal(HttpMethod.Get, capturedRequest!.Method);
-        Assert.Equal("https://api.github.com/repos/jetelain/NightCodeForge/issues/42/comments", capturedRequest.RequestUri?.ToString());
+        Assert.Equal("https://api.github.com/repos/jetelain/NightCodeForge/issues/42/comments?per_page=100", capturedRequest.RequestUri?.ToString());
         Assert.Equal(2, comments.Count);
         Assert.Equal(1001L, comments[0].Id);
         Assert.Contains(GitHubSyncConstants.TriagedCommentMarker, comments[0].Body);
@@ -619,6 +619,95 @@ public class GitHubClientServiceTests
         Assert.False(issue.IsPullRequest);
         Assert.Equal(["bug", "triage"], issue.Labels);
         Assert.Equal(["octocat"], issue.Assignees);
+    }
+
+    [Fact]
+    public async Task ListIssuesAsync_FollowsSameOriginNextLinkAndNormalizesCommaSeparatedLabels()
+    {
+        var requestedUrls = new List<string>();
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = req =>
+            {
+                var uri = req.RequestUri!.ToString();
+                requestedUrls.Add(uri);
+
+                if (!uri.Contains("page=2", StringComparison.Ordinal))
+                {
+                    var response = new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("""
+                        [
+                          { "number": 10, "title": "Page 1 Issue", "state": "open", "created_at": "2026-01-01T00:00:00Z" }
+                        ]
+                        """, System.Text.Encoding.UTF8, "application/json")
+                    };
+                    response.Headers.Add(
+                        "Link",
+                        "<https://api.github.com/repos/octocat/hello-world/issues?page=2>; rel=\"next\", <https://api.github.com/repos/octocat/hello-world/issues?page=2>; rel=\"last\"");
+                    return response;
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                    [
+                      { "number": 20, "title": "Page 2 Issue", "state": "open", "created_at": "2026-01-01T00:00:00Z" }
+                    ]
+                    """, System.Text.Encoding.UTF8, "application/json")
+                };
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("gho_test");
+
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        var issues = await client.ListIssuesAsync("octocat", "hello-world", new GitHubIssueFilter
+        {
+            Labels = " bug , , triage "
+        });
+
+        Assert.Equal(2, requestedUrls.Count);
+        Assert.Contains("labels=bug%2Ctriage", requestedUrls[0], StringComparison.Ordinal);
+        Assert.Equal([10, 20], issues.Select(i => i.Number).ToArray());
+    }
+
+    [Fact]
+    public async Task ListIssuesAsync_RejectsCrossOriginNextLinkHeader()
+    {
+        var requestedUrls = new List<string>();
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = req =>
+            {
+                requestedUrls.Add(req.RequestUri!.ToString());
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                    [
+                      { "number": 1, "title": "Safe page 1", "state": "open", "created_at": "2026-01-01T00:00:00Z" }
+                    ]
+                    """, System.Text.Encoding.UTF8, "application/json")
+                };
+                response.Headers.Add("Link", "<https://evil.example.com/steal-token?page=2>; rel=\"next\"");
+                return response;
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("gho_test");
+
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        var issues = await client.ListIssuesAsync("octocat", "hello-world", new GitHubIssueFilter());
+
+        Assert.Single(requestedUrls);
+        Assert.Single(issues);
+        Assert.DoesNotContain(requestedUrls, u => u.Contains("evil.example.com", StringComparison.OrdinalIgnoreCase));
     }
 }
 

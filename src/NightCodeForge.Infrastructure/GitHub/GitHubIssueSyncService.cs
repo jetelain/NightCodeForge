@@ -113,7 +113,27 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
             return;
         }
 
-        await SyncWorkspaceWithLockAsync(workspaceId, preloadedWorkspace: null, cancellationToken);
+        try
+        {
+            await SyncWorkspaceWithLockAsync(workspaceId, preloadedWorkspace: null, cancellationToken);
+        }
+        catch (OperationsPausedException)
+        {
+            _logger.LogInformation("Stopping GitHub issue sync for workspace #{WorkspaceId}: global operations were paused.", workspaceId);
+        }
+        catch (OperationCanceledException ex) when (IsOperationsPausedCancellation(ex, cancellationToken))
+        {
+            _logger.LogInformation("Stopping GitHub issue sync for workspace #{WorkspaceId}: global operations were paused.", workspaceId);
+        }
+    }
+
+    /// <summary>
+    /// Removes the recurring GitHub issue polling Hangfire job for a deleted or decommissioned workspace.
+    /// </summary>
+    public static void RemoveWorkspaceRecurringJob(IRecurringJobManager recurringJobManager, int workspaceId)
+    {
+        ArgumentNullException.ThrowIfNull(recurringJobManager);
+        recurringJobManager.RemoveIfExists(GetWorkspaceRecurringJobId(workspaceId));
     }
 
     /// <summary>
@@ -203,11 +223,18 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
         ArgumentNullException.ThrowIfNull(recurringJobManager);
         ArgumentNullException.ThrowIfNull(workspaces);
 
+        var activeWorkspaceIds = new HashSet<int>();
         foreach (var workspace in workspaces)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            activeWorkspaceIds.Add(workspace.Id);
             SynchronizeWorkspaceRecurringJob(recurringJobManager, workspace);
         }
+
+        GitHubRecurringJobCleanup.RemoveOrphanedWorkspaceRecurringJobs(
+            recurringJobManager,
+            RecurringJobIdPrefix,
+            activeWorkspaceIds);
 
         return Task.CompletedTask;
     }
@@ -244,7 +271,8 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
                 return;
             }
 
-            var workspace = await _workspaceRepository.GetByIdAsync(workspaceId, cancellationToken) ?? preloadedWorkspace;
+            var loadedWorkspace = await _workspaceRepository.GetByIdAsync(workspaceId, cancellationToken);
+            var workspace = loadedWorkspace ?? preloadedWorkspace;
             if (workspace == null)
             {
                 _logger.LogDebug("Skipping GitHub issue sync: workspace #{WorkspaceId} was not found.", workspaceId);
@@ -259,7 +287,7 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
                 return;
             }
 
-            await SyncEligibleWorkspaceLockedAsync(workspace, cancellationToken);
+            await SyncEligibleWorkspaceLockedAsync(workspace, initialLookupFound: loadedWorkspace != null, cancellationToken);
         }
         finally
         {
@@ -267,7 +295,10 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
         }
     }
 
-    private async Task SyncEligibleWorkspaceLockedAsync(Workspace workspace, CancellationToken cancellationToken)
+    private async Task SyncEligibleWorkspaceLockedAsync(
+        Workspace workspace,
+        bool initialLookupFound,
+        CancellationToken cancellationToken)
     {
         var settings = workspace.GitHubSettings;
         var owner = settings.RepositoryOwner!.Trim();
@@ -303,6 +334,8 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
             .Select(t => t.ExternalReferenceId!.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        var processedIssueIndex = 0;
+        var verifiedAfterPreviousIteration = false;
         foreach (var issue in openIssues.OrderBy(i => i.Number))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -311,6 +344,21 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
             {
                 return;
             }
+
+            if (processedIssueIndex > 0 && !verifiedAfterPreviousIteration)
+            {
+                var latestWorkspace = await _workspaceRepository.GetByIdAsync(workspace.Id, cancellationToken);
+                if (IsWorkspaceStoppedOrChanged(workspace, latestWorkspace, initialLookupFound))
+                {
+                    _logger.LogInformation(
+                        "Stopping GitHub issue sync for workspace #{WorkspaceId}: workspace settings changed or triage was disabled mid-run.",
+                        workspace.Id);
+                    return;
+                }
+            }
+
+            processedIssueIndex++;
+            verifiedAfterPreviousIteration = false;
 
             if (issue.IsPullRequest || !string.Equals(issue.State, OpenIssueState, StringComparison.OrdinalIgnoreCase))
             {
@@ -384,7 +432,16 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
                 // Persist the local watermark immediately (even when 0 tasks are proposed) so non-actionable
                 // issues are never re-triaged when status labels or comments are disabled or fail to write back.
                 existingExternalRefs.Add(externalRefId);
-                await PersistTriagedIssueWatermarkAsync(workspace, settings, triagedWatermark, issue.Number, cancellationToken);
+                var shouldContinue = await PersistTriagedIssueWatermarkAsync(workspace, settings, triagedWatermark, issue.Number, cancellationToken);
+                verifiedAfterPreviousIteration = true;
+                if (!shouldContinue)
+                {
+                    _logger.LogInformation(
+                        "Stopping GitHub issue sync for workspace #{WorkspaceId}: workspace settings changed or triage was disabled during issue #{IssueNumber}.",
+                        workspace.Id,
+                        issue.Number);
+                    return;
+                }
 
                 await ApplyTriagedLabelIfEnabledAsync(settings, owner, repo, issue, cancellationToken);
                 await PostTriagedCommentIfEnabledAsync(
@@ -397,6 +454,14 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
                     cancellationToken);
             }
             catch (OperationsPausedException)
+            {
+                _logger.LogInformation(
+                    "Stopping GitHub issue sync for workspace #{WorkspaceId}: global operations were paused while processing issue #{IssueNumber}.",
+                    workspace.Id,
+                    issue.Number);
+                throw;
+            }
+            catch (OperationCanceledException ex) when (IsOperationsPausedCancellation(ex, cancellationToken))
             {
                 _logger.LogInformation(
                     "Stopping GitHub issue sync for workspace #{WorkspaceId}: global operations were paused while processing issue #{IssueNumber}.",
@@ -421,7 +486,7 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
         }
     }
 
-    private async Task PersistTriagedIssueWatermarkAsync(
+    private async Task<bool> PersistTriagedIssueWatermarkAsync(
         Workspace workspace,
         GitHubIntegrationSettings settings,
         HashSet<int> triagedWatermark,
@@ -434,19 +499,48 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
         }
 
         // Re-fetch latest workspace state under the lock so concurrent settings edits are not clobbered.
-        var latestWorkspace = await _workspaceRepository.GetByIdAsync(workspace.Id, cancellationToken) ?? workspace;
-        latestWorkspace.GitHubSettings ??= new GitHubIntegrationSettings();
-        latestWorkspace.GitHubSettings.TriagedIssueNumbers ??= [];
+        var latestWorkspace = await _workspaceRepository.GetByIdAsync(workspace.Id, cancellationToken);
+        if (latestWorkspace != null && GitHubIntegrationSettings.HasRepositoryChanged(workspace.GitHubSettings, latestWorkspace.GitHubSettings))
+        {
+            return false;
+        }
+
+        var targetWorkspace = latestWorkspace ?? workspace;
+        targetWorkspace.GitHubSettings ??= new GitHubIntegrationSettings();
+        targetWorkspace.GitHubSettings.TriagedIssueNumbers ??= [];
 
         foreach (var triagedNumber in triagedWatermark)
         {
-            if (!latestWorkspace.GitHubSettings.TriagedIssueNumbers.Contains(triagedNumber))
+            if (!targetWorkspace.GitHubSettings.TriagedIssueNumbers.Contains(triagedNumber))
             {
-                latestWorkspace.GitHubSettings.TriagedIssueNumbers.Add(triagedNumber);
+                targetWorkspace.GitHubSettings.TriagedIssueNumbers.Add(triagedNumber);
             }
         }
 
-        await _workspaceRepository.UpdateAsync(latestWorkspace, cancellationToken);
+        await _workspaceRepository.UpdateAsync(targetWorkspace, cancellationToken);
+        return latestWorkspace == null || IsSyncEligibleWorkspace(latestWorkspace);
+    }
+
+    private bool IsOperationsPausedCancellation(OperationCanceledException exception, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        return exception.InnerException is OperationsPausedException
+               || _operationsControlService.IsPaused;
+    }
+
+    private static bool IsWorkspaceStoppedOrChanged(Workspace initialWorkspace, Workspace? latestWorkspace, bool initialLookupFound)
+    {
+        if (latestWorkspace == null)
+        {
+            return initialLookupFound;
+        }
+
+        return !IsSyncEligibleWorkspace(latestWorkspace)
+               || GitHubIntegrationSettings.HasRepositoryChanged(initialWorkspace.GitHubSettings, latestWorkspace.GitHubSettings);
     }
 
     private async Task<string?> ResolveAuthenticatedLoginAsync(CancellationToken cancellationToken)
@@ -468,7 +562,7 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Unable to resolve authenticated GitHub user login during issue intake.");
+            _logger.LogWarning(ex, "Unable to resolve authenticated GitHub user login during issue intake.");
             return null;
         }
     }

@@ -78,6 +78,7 @@ builder.Services.AddSingleton<IDevQueueSkippedJobRegistry, DevQueueSkippedJobReg
 builder.Services.AddScoped<IDevQueueService, DevQueueService>();
 builder.Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
 builder.Services.AddScoped<ITaskMutationService, TaskMutationService>();
+builder.Services.AddScoped<ITaskCreationUiService, TaskCreationUiService>();
 builder.Services.AddScoped<ITaskDiskSyncCoordinator, TaskDiskSyncCoordinator>();
 builder.Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
 builder.Services.AddScoped<OperationsTelemetryUiService>();

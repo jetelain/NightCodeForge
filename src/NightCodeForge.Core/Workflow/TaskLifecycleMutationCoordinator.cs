@@ -53,6 +53,9 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
     public void UnregisterExecutionCancellation(int taskId, CancellationTokenSource cts) =>
         _cancellationManager.Unregister(taskId, cts);
 
+    public bool CancelExecution(int taskId) =>
+        _cancellationManager.Cancel(taskId);
+
     public bool IsCancelRequested(int taskId) =>
         _cancellationManager.IsCancelRequested(taskId);
 
@@ -384,20 +387,29 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         task.InterruptedStageId = null;
         task.InterruptedAgentProfileId = null;
 
-        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
-        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
-        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
-
         var conflictWorkspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
         if (conflictWorkspace != null &&
             await _workspacePreparer.TryHandleClaimConflictAnswerAsync(task, conflictWorkspace, batchQuestions, cancellationToken))
         {
             await _workspacePreparer.SyncMarkdownTaskSafeAsync(conflictWorkspace, task, cancellationToken);
+            await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(conflictWorkspace, task, cancellationToken);
+            await _workspacePreparer.MirrorTaskClosedAsync(task, conflictWorkspace, cancellationToken);
             return;
         }
 
         var blockedStage = await ResolveBlockedStageAsync(task, cancellationToken);
+        task.CurrentStageId = blockedStage.StageId;
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: $"Maintainer overrode GitHub issue claim conflict for task #{task.Id} and resumed at stage '{blockedStage.StageId}'.",
+            cancellationToken: cancellationToken);
+        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
+        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
+
         if (conflictWorkspace != null)
         {
             await _workspacePreparer.SyncMarkdownTaskSafeAsync(conflictWorkspace, task, cancellationToken);
@@ -645,6 +657,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, "rejected", cancellationToken);
             await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
             await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
+            await _workspacePreparer.MirrorTaskClosedAsync(task, workspace, cancellationToken);
         }
 
         await _taskRepository.AddExecutionLogAsync(new ExecutionLog
@@ -767,7 +780,12 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
 
         if (task.Questions != null)
         {
-            foreach (var question in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            foreach (var question in task.Questions.Where(q =>
+                q.Status == QuestionStatus.Pending ||
+                (q.Status == QuestionStatus.Answered &&
+                 !string.IsNullOrWhiteSpace(q.BatchId) &&
+                 q.BatchId.StartsWith(GitHubClaimConflictConstants.ClaimConflictBatchPrefix, StringComparison.OrdinalIgnoreCase) &&
+                 (gitMode == TaskRestartGitMode.HardResetToBaseBranch || GitHubClaimConflictConstants.IsCancelAnswer(q.Answer)))))
             {
                 question.Status = QuestionStatus.Skipped;
             }

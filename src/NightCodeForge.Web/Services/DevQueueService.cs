@@ -433,7 +433,12 @@ public class DevQueueService : IDevQueueService
 
         if (task.Questions != null)
         {
-            foreach (var question in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            foreach (var question in task.Questions.Where(q =>
+                q.Status == QuestionStatus.Pending ||
+                (q.Status == QuestionStatus.Answered &&
+                 !string.IsNullOrWhiteSpace(q.BatchId) &&
+                 q.BatchId.StartsWith(GitHubClaimConflictConstants.ClaimConflictBatchPrefix, StringComparison.OrdinalIgnoreCase) &&
+                 GitHubClaimConflictConstants.IsCancelAnswer(q.Answer))))
             {
                 question.Status = QuestionStatus.Skipped;
             }

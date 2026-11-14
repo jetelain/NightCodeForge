@@ -435,4 +435,125 @@ public class TaskMergeAndCascadeCoordinatorTests
             It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    [Fact]
+    public async Task CloseExternallyMergedTaskAsync_ClearsWaitingStateSkipsQuestionsCancelsConversationsAndRecordsCaller()
+    {
+        var sut = CreateSut();
+        var bag = new PipelineDataBag();
+        bag.Set(PipelineDataBagKeys.HasResolvedConflict, true);
+        bag.Set(PipelineDataBagKeys.ConflictResolutionAttempts, 2);
+
+        var task = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 40,
+            WorkspaceId = 1,
+            Title = "Externally merged PR task",
+            Status = TaskOverallStatus.Ready,
+            CurrentStageId = StandardStageIds.Implementation,
+            BaseBranch = "main",
+            PullRequestNumber = 404,
+            IsWaitingForHuman = true,
+            InterruptedStageId = StandardStageIds.Implementation,
+            InterruptedAgentProfileId = "agent-99",
+            LastHangfireJobId = "job-ext-40",
+            PipelineDataJson = bag.ToJson(),
+            Questions = new List<Question>
+            {
+                new() { Id = 401, TaskId = 40, Prompt = "Pending question?", Status = QuestionStatus.Pending }
+            }
+        }, null, AuditActors.User, "init");
+
+        _depStore.AddTask(40, 1, TaskOverallStatus.Ready);
+        await _depStore.SetWaitingForHumanAsync(40, true);
+        var conv = await _taskRepo.StartConversationAsync(40, StandardStageIds.Implementation, WorkflowStageKind.Agentic, 1);
+
+        _preparerMock
+            .Setup(p => p.VerifyAndSyncExternallyMergedPullRequestAsync(
+                It.Is<ForgeTask>(t => t.Id == 40),
+                _workspace,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubPullRequest
+            {
+                Number = 404,
+                Merged = true,
+                MergeCommitSha = "ext-sha-404"
+            });
+
+        var result = await sut.CloseExternallyMergedTaskAsync(40, AuditActors.System);
+
+        Assert.Equal(CompleteTaskStatus.Completed, result.Status);
+        var closed = await _taskRepo.GetByIdAsync(40);
+        Assert.NotNull(closed);
+        Assert.Equal(TaskOverallStatus.Closed, closed.Status);
+        Assert.Equal("ext-sha-404", closed.SquashCommitSha);
+        Assert.False(closed.IsWaitingForHuman);
+        Assert.Null(closed.InterruptedStageId);
+        Assert.Null(closed.InterruptedAgentProfileId);
+        Assert.Null(closed.LastHangfireJobId);
+        Assert.Contains("job-ext-40", _jobQueue.DeletedJobs);
+        Assert.Equal(QuestionStatus.Skipped, Assert.Single(closed.Questions).Status);
+
+        var closedBag = PipelineDataBag.FromJson(closed.PipelineDataJson);
+        Assert.False(closedBag.ContainsKey(PipelineDataBagKeys.HasResolvedConflict));
+        Assert.False(closedBag.ContainsKey(PipelineDataBagKeys.ConflictResolutionAttempts));
+
+        var conversations = await _taskRepo.GetConversationsAsync(40);
+        Assert.Equal(StageExecutionStatus.Cancelled, Assert.Single(conversations, c => c.Id == conv.Id).Status);
+
+        Assert.False(await _depStore.IsTaskWaitingForHumanAsync(40));
+        var history = await _taskRepo.GetHistoryAsync(40);
+        Assert.Equal(AuditActors.System, history[^1].ChangedBy);
+
+        _preparerMock.Verify(p => p.AcquireWorkspaceLockAsync(1, It.IsAny<CancellationToken>()), Times.Once);
+        _preparerMock.Verify(p => p.RemoveWorktreeSafeAsync(_workspace, 40, "completed", It.IsAny<CancellationToken>()), Times.Once);
+        _preparerMock.Verify(p => p.DeleteTaskBranchSafeAsync(_workspace, 40, "completed", It.IsAny<CancellationToken>()), Times.Once);
+        _preparerMock.Verify(p => p.CleanupTaskContainerSafeAsync(_workspace, 40, "completed", It.IsAny<CancellationToken>()), Times.Once);
+        _preparerMock.Verify(p => p.SyncMarkdownTaskSafeAsync(_workspace, It.Is<ForgeTask>(t => t.Id == 40), It.IsAny<CancellationToken>()), Times.Once);
+        _preparerMock.Verify(p => p.ArchiveTaskMarkdownSafeAsync(_workspace, It.Is<ForgeTask>(t => t.Id == 40), It.IsAny<CancellationToken>()), Times.Once);
+        _preparerMock.Verify(p => p.MirrorTaskClosedAsync(It.Is<ForgeTask>(t => t.Id == 40), _workspace, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CloseExternallyMergedTaskAsync_WhenAlreadyClosed_IsIdempotentWithoutReverifyingPullRequest()
+    {
+        var sut = CreateSut();
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 41,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Closed,
+            SquashCommitSha = "already-merged"
+        });
+
+        var result = await sut.CloseExternallyMergedTaskAsync(41);
+
+        Assert.Equal(CompleteTaskStatus.Completed, result.Status);
+        _preparerMock.Verify(
+            p => p.VerifyAndSyncExternallyMergedPullRequestAsync(It.IsAny<ForgeTask>(), It.IsAny<Workspace>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Theory]
+    [InlineData(42, TaskOverallStatus.Rejected)]
+    [InlineData(43, TaskOverallStatus.Cancelled)]
+    public async Task CloseExternallyMergedTaskAsync_WhenTerminalRejectedOrCancelled_ThrowsTaskCannotBeModifiedException(
+        int taskId,
+        TaskOverallStatus terminalStatus)
+    {
+        var sut = CreateSut();
+        await _taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = taskId,
+            WorkspaceId = 1,
+            Status = terminalStatus
+        });
+
+        var ex = await Assert.ThrowsAsync<TaskCannotBeModifiedException>(() => sut.CloseExternallyMergedTaskAsync(taskId));
+
+        Assert.Equal(taskId, ex.TaskId);
+        _preparerMock.Verify(
+            p => p.VerifyAndSyncExternallyMergedPullRequestAsync(It.IsAny<ForgeTask>(), It.IsAny<Workspace>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

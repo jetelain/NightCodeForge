@@ -75,6 +75,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IWorkspaceLockProvider _lockProvider;
     private readonly IAgentActivityStreamer _activityStreamer;
+    private readonly IGitHubPullRequestDeliveryService _pullRequestDeliveryService;
     private readonly IOptions<SecurityOptions> _securityOptions;
     private readonly ILogger<BacklogMutationToolService> _logger;
 
@@ -85,6 +86,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         ITaskMarkdownSyncService markdownSyncService,
         IWorkspaceLockProvider lockProvider,
         IAgentActivityStreamer activityStreamer,
+        IGitHubPullRequestDeliveryService pullRequestDeliveryService,
         IOptions<SecurityOptions> securityOptions,
         ILogger<BacklogMutationToolService> logger)
     {
@@ -94,6 +96,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
+        _pullRequestDeliveryService = pullRequestDeliveryService ?? throw new ArgumentNullException(nameof(pullRequestDeliveryService));
         _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -548,6 +551,12 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             {
                 throw new InvalidOperationException(
                     $"MergeMode 'ExternalPullRequest' requires GitHub integration and Pull Request Delivery to be enabled on workspace #{scope.WorkspaceId} (Pull Request Delivery is disabled).");
+            }
+
+            if (!await _pullRequestDeliveryService.IsPullRequestDeliveryAvailableAsync(workspace, cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    $"MergeMode 'ExternalPullRequest' requires a configured GitHub repository (RepositoryOwner/RepositoryName) and valid GitHub OAuth authentication on workspace #{scope.WorkspaceId}.");
             }
         }
 

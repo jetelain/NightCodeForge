@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Execution;
@@ -58,21 +59,23 @@ public class TelemetryProcessRunner : IProcessRunner
 
         spec.OnStandardOutput = line =>
         {
+            var redactedLine = GitCredentialRedactor.Redact(line);
             if (outBuilder.Length < 10_000)
             {
-                outBuilder.AppendLine(line);
+                outBuilder.AppendLine(redactedLine);
             }
-            _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", false);
+            _telemetryService.UpdateShellCommandOutput(commandId, redactedLine + "\n", false);
             originalStdOut?.Invoke(line);
         };
 
         spec.OnStandardError = line =>
         {
+            var redactedLine = GitCredentialRedactor.Redact(line);
             if (errBuilder.Length < 10_000)
             {
-                errBuilder.AppendLine(line);
+                errBuilder.AppendLine(redactedLine);
             }
-            _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", true);
+            _telemetryService.UpdateShellCommandOutput(commandId, redactedLine + "\n", true);
             originalStdErr?.Invoke(line);
         };
 
@@ -82,11 +85,11 @@ public class TelemetryProcessRunner : IProcessRunner
             sw.Stop();
 
             var outPreview = !string.IsNullOrEmpty(result.StandardOutput)
-                ? Truncate(result.StandardOutput, 2_000)
+                ? Truncate(GitCredentialRedactor.Redact(result.StandardOutput), 2_000)
                 : Truncate(outBuilder.ToString(), 2_000);
 
             var errPreview = !string.IsNullOrEmpty(result.StandardError)
-                ? Truncate(result.StandardError, 2_000)
+                ? Truncate(GitCredentialRedactor.Redact(result.StandardError), 2_000)
                 : Truncate(errBuilder.ToString(), 2_000);
 
             var completedRecord = runningRecord with
@@ -104,16 +107,17 @@ public class TelemetryProcessRunner : IProcessRunner
         catch (Exception ex)
         {
             sw.Stop();
+            var redactedError = GitCredentialRedactor.Redact(ex.Message);
             var failedRecord = runningRecord with
             {
                 DurationMs = sw.Elapsed.TotalMilliseconds,
                 ExitCode = -1,
-                ErrorPreview = ex.Message,
+                ErrorPreview = redactedError,
                 Status = ShellCommandStatus.Failed
             };
 
             _telemetryService.RecordShellCommandCompleted(failedRecord);
-            _logger.LogDebug(ex, "Intercepted failure running shell command {CommandId}: {Cmd}", commandId, cmdLine);
+            _logger.LogDebug("Intercepted failure running shell command {CommandId}: {Cmd} ({Error})", commandId, cmdLine, redactedError);
             throw;
         }
         finally
@@ -154,21 +158,23 @@ public class TelemetryProcessRunner : IProcessRunner
 
         spec.OnStandardOutput = line =>
         {
+            var redactedLine = GitCredentialRedactor.Redact(line);
             if (outBuilder.Length < 10_000)
             {
-                outBuilder.AppendLine(line);
+                outBuilder.AppendLine(redactedLine);
             }
-            _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", false);
+            _telemetryService.UpdateShellCommandOutput(commandId, redactedLine + "\n", false);
             originalStdOut?.Invoke(line);
         };
 
         spec.OnStandardError = line =>
         {
+            var redactedLine = GitCredentialRedactor.Redact(line);
             if (errBuilder.Length < 10_000)
             {
-                errBuilder.AppendLine(line);
+                errBuilder.AppendLine(redactedLine);
             }
-            _telemetryService.UpdateShellCommandOutput(commandId, line + "\n", true);
+            _telemetryService.UpdateShellCommandOutput(commandId, redactedLine + "\n", true);
             originalStdErr?.Invoke(line);
         };
 
@@ -178,11 +184,11 @@ public class TelemetryProcessRunner : IProcessRunner
             sw.Stop();
 
             var outPreview = !string.IsNullOrEmpty(result.StandardOutput)
-                ? Truncate(result.StandardOutput, 2_000)
+                ? Truncate(GitCredentialRedactor.Redact(result.StandardOutput), 2_000)
                 : Truncate(outBuilder.ToString(), 2_000);
 
             var errPreview = !string.IsNullOrEmpty(result.StandardError)
-                ? Truncate(result.StandardError, 2_000)
+                ? Truncate(GitCredentialRedactor.Redact(result.StandardError), 2_000)
                 : Truncate(errBuilder.ToString(), 2_000);
 
             var completedRecord = runningRecord with
@@ -200,16 +206,17 @@ public class TelemetryProcessRunner : IProcessRunner
         catch (Exception ex)
         {
             sw.Stop();
+            var redactedError = GitCredentialRedactor.Redact(ex.Message);
             var failedRecord = runningRecord with
             {
                 DurationMs = sw.Elapsed.TotalMilliseconds,
                 ExitCode = -1,
-                ErrorPreview = ex.Message,
+                ErrorPreview = redactedError,
                 Status = ShellCommandStatus.Failed
             };
 
             _telemetryService.RecordShellCommandCompleted(failedRecord);
-            _logger.LogDebug(ex, "Intercepted failure running async shell command {CommandId}: {Cmd}", commandId, cmdLine);
+            _logger.LogDebug("Intercepted failure running async shell command {CommandId}: {Cmd} ({Error})", commandId, cmdLine, redactedError);
             throw;
         }
         finally
@@ -262,7 +269,7 @@ public class TelemetryProcessRunner : IProcessRunner
             {
                 DurationMs = sw.Elapsed.TotalMilliseconds,
                 ExitCode = -1,
-                ErrorPreview = ex.Message,
+                ErrorPreview = GitCredentialRedactor.Redact(ex.Message),
                 Status = ShellCommandStatus.Failed
             };
             _telemetryService.RecordShellCommandCompleted(failedRecord);
@@ -290,7 +297,7 @@ public class TelemetryProcessRunner : IProcessRunner
                         DurationMs = sw.Elapsed.TotalMilliseconds,
                         ExitCode = finalExitCode ?? -1,
                         OutputPreview = Truncate(outBuilder.ToString(), 2_000),
-                        ErrorPreview = ex.Message,
+                        ErrorPreview = GitCredentialRedactor.Redact(ex.Message),
                         Status = ShellCommandStatus.Failed
                     };
                     completionRecorded = true;
@@ -300,19 +307,21 @@ public class TelemetryProcessRunner : IProcessRunner
 
                 if (chunk.Kind == ProcessStreamKind.StandardOutput)
                 {
+                    var redactedText = GitCredentialRedactor.Redact(chunk.Text);
                     if (outBuilder.Length < 10_000)
                     {
-                        outBuilder.Append(chunk.Text);
+                        outBuilder.Append(redactedText);
                     }
-                    _telemetryService.UpdateShellCommandOutput(commandId, chunk.Text, false);
+                    _telemetryService.UpdateShellCommandOutput(commandId, redactedText, false);
                 }
                 else if (chunk.Kind == ProcessStreamKind.StandardError)
                 {
+                    var redactedText = GitCredentialRedactor.Redact(chunk.Text);
                     if (errBuilder.Length < 10_000)
                     {
-                        errBuilder.Append(chunk.Text);
+                        errBuilder.Append(redactedText);
                     }
-                    _telemetryService.UpdateShellCommandOutput(commandId, chunk.Text, true);
+                    _telemetryService.UpdateShellCommandOutput(commandId, redactedText, true);
                 }
                 else if (chunk.Kind == ProcessStreamKind.Exit)
                 {
@@ -418,13 +427,14 @@ public class TelemetryProcessRunner : IProcessRunner
     {
         if (spec.ArgumentList != null && spec.ArgumentList.Any())
         {
-            return $"{spec.FileName} {string.Join(" ", spec.ArgumentList)}".Trim();
+            var redactedArgs = GitCredentialRedactor.RedactArguments(spec.ArgumentList);
+            return GitCredentialRedactor.Redact($"{spec.FileName} {string.Join(" ", redactedArgs)}".Trim());
         }
         if (!string.IsNullOrWhiteSpace(spec.Arguments))
         {
-            return $"{spec.FileName} {spec.Arguments}".Trim();
+            return GitCredentialRedactor.Redact($"{spec.FileName} {spec.Arguments}".Trim());
         }
-        return spec.FileName;
+        return GitCredentialRedactor.Redact(spec.FileName);
     }
 
     private static string ResolveWorkingDirectory(ProcessStartSpec spec)
@@ -479,13 +489,15 @@ public class TelemetryProcessRunner : IProcessRunner
                 {
                     if (chunk.Kind == ProcessStreamKind.StandardOutput)
                     {
-                        if (_outBuilder.Length < 10_000) _outBuilder.Append(chunk.Text);
-                        _telemetryService.UpdateShellCommandOutput(_record.CommandId, chunk.Text, false);
+                        var redactedText = GitCredentialRedactor.Redact(chunk.Text);
+                        if (_outBuilder.Length < 10_000) _outBuilder.Append(redactedText);
+                        _telemetryService.UpdateShellCommandOutput(_record.CommandId, redactedText, false);
                     }
                     else if (chunk.Kind == ProcessStreamKind.StandardError)
                     {
-                        if (_errBuilder.Length < 10_000) _errBuilder.Append(chunk.Text);
-                        _telemetryService.UpdateShellCommandOutput(_record.CommandId, chunk.Text, true);
+                        var redactedText = GitCredentialRedactor.Redact(chunk.Text);
+                        if (_errBuilder.Length < 10_000) _errBuilder.Append(redactedText);
+                        _telemetryService.UpdateShellCommandOutput(_record.CommandId, redactedText, true);
                     }
 
                     yield return chunk;

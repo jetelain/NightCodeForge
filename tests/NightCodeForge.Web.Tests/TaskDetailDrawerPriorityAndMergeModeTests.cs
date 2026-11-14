@@ -36,6 +36,7 @@ public class TaskDetailDrawerPriorityAndMergeModeTests : BunitContext
             mockOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

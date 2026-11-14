@@ -36,6 +36,7 @@ public class IdeationRefinementTests : BunitContext
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
         Services.AddSingleton(new Moq.Mock<ITaskMutationService>().Object);
         Services.AddSingleton(new Moq.Mock<IDevQueueService>().Object);
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     private async Task<ForgeTask> SeedTaskAsync(TaskOverallStatus status = TaskOverallStatus.Open, bool hasExecutionRun = false, int workspaceId = 1)

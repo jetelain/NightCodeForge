@@ -16,6 +16,10 @@ public class ForgeTaskHistory
     public string BaseBranch { get; set; } = string.Empty;
     public string? FeatureBranch { get; set; }
     public string? CurrentStageId { get; set; }
+    public string? ExternalSource { get; set; }
+    public string? ExternalReferenceId { get; set; }
+    public int? PullRequestNumber { get; set; }
+    public string? PullRequestUrl { get; set; }
     public string SerializedDependencies { get; set; } = "[]";
     public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
     public string ChangedBy { get; set; } = string.Empty;

@@ -1,11 +1,8 @@
 @namespace NightCodeForge.Web.Components.Backlog
 @using NightCodeForge.Core.Domain
-@using NightCodeForge.Core.Repositories
-@using NightCodeForge.Core.Services
-@inject ITaskRepository TaskRepository
-@inject IWorkflowRepository WorkflowRepository
+@using NightCodeForge.Web.Services
+@inject ITaskCreationUiService TaskCreationUiService
 @inject ToastService ToastService
-@inject IServiceProvider ServiceProvider
 @inject ILogger<TaskCreationModal> Logger
 
 @if (IsOpen)
@@ -144,8 +141,6 @@
     private bool _isPrDeliveryAvailable;
     private List<WorkflowDefinition> _workflows = new();
 
-    private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
-
     protected override async Task OnParametersSetAsync()
     {
         if (IsOpen)
@@ -155,7 +150,7 @@
                 _baseBranch = string.IsNullOrWhiteSpace(DefaultBaseBranch) ? "main" : DefaultBaseBranch;
             }
 
-            _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(ServiceProvider, WorkspaceId);
+            _isPrDeliveryAvailable = await TaskCreationUiService.IsPullRequestDeliveryAvailableAsync(WorkspaceId);
             if (!_isPrDeliveryAvailable && _selectedMergeMode == MergeMode.ExternalPullRequest)
             {
                 _selectedMergeMode = MergeMode.ManualReviewRequired;
@@ -169,25 +164,16 @@
     {
         try
         {
-            var list = await WorkflowRepository.GetWorkflowsAsync(WorkspaceId > 0 ? WorkspaceId : null);
+            var list = await TaskCreationUiService.LoadWorkflowsAsync(WorkspaceId > 0 ? WorkspaceId : null);
             _workflows = list.ToList();
-
-            if (!_selectedWorkflowId.HasValue || !_workflows.Any(w => w.Id == _selectedWorkflowId.Value))
-            {
-                if (DefaultWorkflowId.HasValue && _workflows.Any(w => w.Id == DefaultWorkflowId.Value))
-                {
-                    _selectedWorkflowId = DefaultWorkflowId.Value;
-                }
-                else
-                {
-                    var def = _workflows.FirstOrDefault(w => w.IsDefault) ?? _workflows.FirstOrDefault();
-                    _selectedWorkflowId = def?.Id;
-                }
-            }
+            _selectedWorkflowId = TaskCreationUiService.ResolveDefaultWorkflowId(
+                _workflows,
+                DefaultWorkflowId,
+                _selectedWorkflowId);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error loading workflows: {ex.Message}");
+            Logger.LogError(ex, "Error loading workflows for TaskCreationModal (workspace #{WorkspaceId}).", WorkspaceId);
         }
     }
 
@@ -198,48 +184,31 @@
         _isSubmitting = true;
         try
         {
-            var task = new ForgeTask
-            {
-                WorkspaceId = WorkspaceId,
-                WorkflowId = _selectedWorkflowId,
-                Title = _title.Trim(),
-                Description = _description.Trim(),
-                Priority = _selectedPriority,
-                MergeMode = _selectedMergeMode,
-                BaseBranch = string.IsNullOrWhiteSpace(_baseBranch) ? "main" : _baseBranch.Trim(),
-                Status = TaskOverallStatus.Open,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
+            var result = await TaskCreationUiService.CreateTaskAsync(new TaskCreationRequest(
+                WorkspaceId: WorkspaceId,
+                Workspace: null,
+                RepositoryPath: RepositoryPath,
+                Title: _title,
+                Description: _description,
+                WorkflowId: _selectedWorkflowId,
+                Priority: _selectedPriority,
+                MergeMode: _selectedMergeMode,
+                BaseBranch: _baseBranch,
+                FeatureBranch: null,
+                InitialStatus: TaskOverallStatus.Open,
+                PrerequisiteIds: null,
+                LaunchImmediately: false,
+                AuditReason: "Initial task creation via modal"));
 
-            var created = await TaskRepository.CreateWithBaselineAsync(
-                task,
-                dependsOn: null,
-                createdBy: AuditActors.User,
-                reason: "Initial task creation via modal");
-
-            await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(ServiceProvider, created, WorkspaceId, Logger);
-
-            if (MarkdownSync != null && !string.IsNullOrWhiteSpace(RepositoryPath) && Directory.Exists(RepositoryPath))
-            {
-                try
-                {
-                    await MarkdownSync.SyncTaskToDiskAsync(created, RepositoryPath);
-                }
-                catch (Exception syncEx)
-                {
-                    Logger.LogWarning(syncEx, "Failed to sync created task markdown to disk for Task #{TaskId}", created.Id);
-                }
-            }
-
-            ToastService.Show("Task Created", $"Task #{created.Id} created in Open status.", ToastLevel.Success);
+            ToastService.Show("Task Created", $"Task #{result.Task.Id} created in Open status.", ToastLevel.Success);
             _title = string.Empty;
             _description = string.Empty;
-            await OnTaskCreated.InvokeAsync(created);
+            await OnTaskCreated.InvokeAsync(result.Task);
             await Close();
         }
         catch (Exception ex)
         {
+            Logger.LogError(ex, "Failed to create task via TaskCreationModal");
             ToastService.Show("Creation Failed", ex.Message, ToastLevel.Error);
         }
         finally

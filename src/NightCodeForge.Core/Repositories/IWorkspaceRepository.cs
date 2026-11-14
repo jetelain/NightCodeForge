@@ -83,7 +83,14 @@ public class InMemoryWorkspaceRepository : IWorkspaceRepository
             if (_workspaces.TryGetValue(workspace.Id, out var existing))
             {
                 workspace.GitHubSettings ??= new GitHubIntegrationSettings();
-                workspace.GitHubSettings.MergeTriagedIssueNumbers(existing.GitHubSettings?.TriagedIssueNumbers);
+                if (!GitHubIntegrationSettings.HasRepositoryChanged(existing.GitHubSettings, workspace.GitHubSettings))
+                {
+                    workspace.GitHubSettings.MergeTriagedIssueNumbers(existing.GitHubSettings?.TriagedIssueNumbers);
+                }
+                else
+                {
+                    workspace.GitHubSettings.TriagedIssueNumbers = [];
+                }
             }
 
             _workspaces[workspace.Id] = workspace;

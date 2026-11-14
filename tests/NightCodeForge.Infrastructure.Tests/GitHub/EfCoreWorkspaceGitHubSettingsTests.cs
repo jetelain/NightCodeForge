@@ -135,5 +135,52 @@ public class EfCoreWorkspaceGitHubSettingsTests : IDisposable
         Assert.Equal("updated-repo", reloaded.GitHubSettings.RepositoryName);
         Assert.True(reloaded.GitHubSettings.PullRequestDeliveryEnabled);
     }
+
+    [Fact]
+    public async Task EfCoreWorkspaceRepository_UpdateAsync_WhenRepositoryChanges_ClearsTriagedIssueNumbers()
+    {
+        var factoryMock = new Mock<IDbContextFactory<AppDbContext>>();
+        factoryMock.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new AppDbContext(_options));
+
+        int workspaceId;
+        using (var initContext = new AppDbContext(_options))
+        {
+            await initContext.EnsureDatabaseCreatedAndWalAsync();
+
+            var workspace = new Workspace
+            {
+                Name = "Repo Switch WS",
+                RepositoryPath = "/repo/switch",
+                DefaultBaseBranch = "main",
+                GitHubSettings = new GitHubIntegrationSettings
+                {
+                    Enabled = true,
+                    RepositoryOwner = "acme",
+                    RepositoryName = "repo-a",
+                    IssueTriageEnabled = true,
+                    TriagedIssueNumbers = [11, 22]
+                }
+            };
+
+            initContext.Workspaces.Add(workspace);
+            await initContext.SaveChangesAsync();
+            workspaceId = workspace.Id;
+        }
+
+        var repo = new EfCoreWorkspaceRepository(factoryMock.Object);
+        var existing = await repo.GetByIdAsync(workspaceId);
+        Assert.NotNull(existing);
+
+        existing.GitHubSettings.RepositoryName = "repo-b";
+        existing.GitHubSettings.TriagedIssueNumbers = [11, 22, 33];
+
+        await repo.UpdateAsync(existing);
+
+        var reloaded = await repo.GetByIdAsync(workspaceId);
+        Assert.NotNull(reloaded);
+        Assert.Equal("repo-b", reloaded.GitHubSettings.RepositoryName);
+        Assert.Empty(reloaded.GitHubSettings.TriagedIssueNumbers);
+    }
 }
 

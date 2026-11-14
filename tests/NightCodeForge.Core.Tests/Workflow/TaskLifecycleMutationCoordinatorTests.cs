@@ -380,4 +380,74 @@ public class TaskLifecycleMutationCoordinatorTests
         var convs = await _taskRepo.GetConversationsAsync(50);
         Assert.Equal(StageExecutionStatus.Superseded, Assert.Single(convs).Status);
     }
+
+    [Fact]
+    public async Task RestartTaskPipelineAsync_ClaimConflictAnsweredQuestions_SkipsCancelOnPreserveWorkAndSkipsAllOnHardReset()
+    {
+        var sut = CreateSut();
+
+        var preserveTask = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 51,
+            WorkspaceId = 1,
+            Title = "Restart PreserveWork Claim Conflict",
+            Status = TaskOverallStatus.Cancelled,
+            BaseBranch = "main",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 201,
+                    TaskId = 51,
+                    BatchId = $"{GitHubClaimConflictConstants.ClaimConflictBatchPrefix}51-cancel",
+                    Prompt = "Conflict?",
+                    Status = QuestionStatus.Answered,
+                    Answer = GitHubClaimConflictConstants.CancelTaskOption
+                },
+                new()
+                {
+                    Id = 202,
+                    TaskId = 51,
+                    BatchId = $"{GitHubClaimConflictConstants.ClaimConflictBatchPrefix}51-override",
+                    Prompt = "Conflict?",
+                    Status = QuestionStatus.Answered,
+                    Answer = GitHubClaimConflictConstants.OverrideClaimOption
+                }
+            }
+        }, null, AuditActors.User, "init");
+
+        await sut.RestartTaskPipelineAsync(preserveTask.Id, TaskRestartGitMode.PreserveWork);
+
+        var reloadedPreserve = await _taskRepo.GetByIdAsync(preserveTask.Id);
+        Assert.NotNull(reloadedPreserve);
+        Assert.Equal(QuestionStatus.Skipped, Assert.Single(reloadedPreserve.Questions, q => q.Id == 201).Status);
+        Assert.Equal(QuestionStatus.Answered, Assert.Single(reloadedPreserve.Questions, q => q.Id == 202).Status);
+
+        var hardResetTask = await _taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            Id = 52,
+            WorkspaceId = 1,
+            Title = "Restart HardReset Claim Conflict",
+            Status = TaskOverallStatus.Failed,
+            BaseBranch = "main",
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 203,
+                    TaskId = 52,
+                    BatchId = $"{GitHubClaimConflictConstants.ClaimConflictBatchPrefix}52-override",
+                    Prompt = "Conflict?",
+                    Status = QuestionStatus.Answered,
+                    Answer = GitHubClaimConflictConstants.OverrideClaimOption
+                }
+            }
+        }, null, AuditActors.User, "init");
+
+        await sut.RestartTaskPipelineAsync(hardResetTask.Id, TaskRestartGitMode.HardResetToBaseBranch);
+
+        var reloadedHardReset = await _taskRepo.GetByIdAsync(hardResetTask.Id);
+        Assert.NotNull(reloadedHardReset);
+        Assert.Equal(QuestionStatus.Skipped, Assert.Single(reloadedHardReset.Questions, q => q.Id == 203).Status);
+    }
 }

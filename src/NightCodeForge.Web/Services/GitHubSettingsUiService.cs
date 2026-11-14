@@ -101,13 +101,26 @@ public class GitHubSettingsUiService
         settings.IssueFilterLabel = string.IsNullOrWhiteSpace(settings.IssueFilterLabel)
             ? null
             : settings.IssueFilterLabel.Trim();
-        settings.MergeTriagedIssueNumbers(workspace.GitHubSettings?.TriagedIssueNumbers);
+        if (!GitHubIntegrationSettings.HasRepositoryChanged(workspace.GitHubSettings, settings))
+        {
+            settings.MergeTriagedIssueNumbers(workspace.GitHubSettings?.TriagedIssueNumbers);
+        }
+        else
+        {
+            settings.TriagedIssueNumbers = [];
+        }
 
         workspace.GitHubSettings = settings;
         await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
         GitHubIssueSyncService.SynchronizeWorkspaceRecurringJob(_recurringJobManager, workspace);
         GitHubTaskMirrorService.SynchronizeWorkspacePrMergeRecurringJob(_recurringJobManager, workspace);
         _logger.LogInformation("Saved GitHub integration settings for workspace #{WorkspaceId}.", workspaceId);
+    }
+
+    public void RemoveWorkspaceRecurringJobs(int workspaceId)
+    {
+        GitHubIssueSyncService.RemoveWorkspaceRecurringJob(_recurringJobManager, workspaceId);
+        GitHubTaskMirrorService.RemoveWorkspacePrMergeRecurringJob(_recurringJobManager, workspaceId);
     }
 
     public async Task<GitHubConnectionState> GetConnectionStateAsync(CancellationToken cancellationToken = default)
@@ -240,6 +253,10 @@ public class GitHubSettingsUiService
             return Array.Empty<GitHubRepository>();
         }
     }
+
+    public Task<IReadOnlyList<GitHubRepository>> RefreshAccessibleRepositoriesAsync(
+        CancellationToken cancellationToken = default) =>
+        _clientService.ListAccessibleRepositoriesAsync(cancellationToken);
 
     public IReadOnlyList<string> GetAvailableOwners(
         IReadOnlyList<GitHubRepository>? repositories,

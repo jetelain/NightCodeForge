@@ -174,13 +174,34 @@ public class GitCliRunnerTests : IDisposable
         Assert.Equal("Ubuntu-24.04", args[1]);
         Assert.Equal("--exec", args[2]);
         Assert.Equal("env", args[3]);
-        Assert.Equal("GIT_INDEX_FILE=/tmp/temp.index", args[4]);
-        Assert.Equal("git", args[5]);
-        Assert.Equal("-c", args[6]);
-        Assert.Equal("core.pager=cat", args[7]);
-        Assert.Equal("-C", args[8]);
-        Assert.Equal(linuxPath, args[9]);
+        var gitIndex = args.IndexOf("git");
+        Assert.True(gitIndex > 4, "Expected env variables before 'git' executable argument.");
+        var envArgs = args.Skip(4).Take(gitIndex - 4).ToList();
+        Assert.Contains("PAGER=cat", envArgs);
+        Assert.Contains("GIT_PAGER=cat", envArgs);
+        Assert.Contains("GIT_TERMINAL_PROMPT=0", envArgs);
+        Assert.Contains("GIT_INDEX_FILE=/tmp/temp.index", envArgs);
+        Assert.Equal("-c", args[gitIndex + 1]);
+        Assert.Equal("core.pager=cat", args[gitIndex + 2]);
+        Assert.Equal("-C", args[gitIndex + 3]);
+        Assert.Equal(linuxPath, args[gitIndex + 4]);
         Assert.DoesNotContain(@"\\wsl", string.Join(" ", args));
+    }
+
+    [Theory]
+    [InlineData(new[] { "-C", "push", "status" }, null, GitCliRunner.DefaultTimeoutSeconds)]
+    [InlineData(new[] { "--git-dir", "fetch", "diff" }, null, GitCliRunner.DefaultTimeoutSeconds)]
+    [InlineData(new[] { "-c", "core.pager=cat", "--no-pager", "fetch", "origin" }, null, GitCliRunner.NetworkOperationTimeoutSeconds)]
+    [InlineData(new[] { "-C", "/repo", "clone", "https://github.com/o/r.git" }, null, GitCliRunner.NetworkOperationTimeoutSeconds)]
+    [InlineData(new[] { "fetch", "origin" }, 45, 45)]
+    public void ResolveTimeoutSeconds_SkipsGlobalOptionValuesAndDetectsNetworkSubcommands(
+        string[] args,
+        int? explicitTimeout,
+        int expectedTimeout)
+    {
+        var actual = GitCliRunner.ResolveTimeoutSeconds(args, explicitTimeout);
+
+        Assert.Equal(expectedTimeout, actual);
     }
 
     public void Dispose()

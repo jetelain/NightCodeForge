@@ -67,6 +67,10 @@ public class TaskHistoryRevisionModel
     public string BaseBranch { get; set; } = string.Empty;
     public string? FeatureBranch { get; set; }
     public string? CurrentStageId { get; set; }
+    public string? ExternalSource { get; set; }
+    public string? ExternalReferenceId { get; set; }
+    public int? PullRequestNumber { get; set; }
+    public string? PullRequestUrl { get; set; }
     public IReadOnlyList<int> Dependencies { get; set; } = Array.Empty<int>();
 
     public string TimeAgo { get; set; } = string.Empty;
@@ -128,6 +132,10 @@ public class TaskHistoryDiffService : ITaskHistoryDiffService
                 BaseBranch = curr.BaseBranch,
                 FeatureBranch = curr.FeatureBranch,
                 CurrentStageId = curr.CurrentStageId,
+                ExternalSource = curr.ExternalSource,
+                ExternalReferenceId = curr.ExternalReferenceId,
+                PullRequestNumber = curr.PullRequestNumber,
+                PullRequestUrl = curr.PullRequestUrl,
                 Dependencies = currDeps,
                 TimeAgo = FormatRelativeTime(curr.ChangedAt, utcNow),
                 ActorBadgeClass = GetActorBadgeClass(actor),
@@ -156,7 +164,7 @@ public class TaskHistoryDiffService : ITaskHistoryDiffService
 
                 if (prev.MergeMode != curr.MergeMode)
                 {
-                    model.FieldChanges.Add(new TaskFieldChange("MergeMode", prev.MergeMode.ToString(), curr.MergeMode.ToString(), "badge-purple"));
+                    model.FieldChanges.Add(new TaskFieldChange("MergeMode", MergeModeHelper.GetLabel(prev.MergeMode), MergeModeHelper.GetLabel(curr.MergeMode), "badge-purple"));
                 }
 
                 if (!string.Equals(prev.BaseBranch, curr.BaseBranch, StringComparison.Ordinal))
@@ -172,6 +180,28 @@ public class TaskHistoryDiffService : ITaskHistoryDiffService
                 if (!string.Equals(prev.CurrentStageId, curr.CurrentStageId, StringComparison.OrdinalIgnoreCase))
                 {
                     model.FieldChanges.Add(new TaskFieldChange("Stage", prev.CurrentStageId ?? "None", curr.CurrentStageId ?? "None", "badge-blue"));
+                }
+
+                if (!string.Equals(prev.ExternalSource, curr.ExternalSource, StringComparison.Ordinal))
+                {
+                    model.FieldChanges.Add(new TaskFieldChange("ExternalSource", prev.ExternalSource ?? "None", curr.ExternalSource ?? "None", "badge-purple"));
+                }
+
+                if (!string.Equals(prev.ExternalReferenceId, curr.ExternalReferenceId, StringComparison.Ordinal))
+                {
+                    model.FieldChanges.Add(new TaskFieldChange("ExternalReferenceId", prev.ExternalReferenceId ?? "None", curr.ExternalReferenceId ?? "None", "badge-purple"));
+                }
+
+                if (prev.PullRequestNumber != curr.PullRequestNumber)
+                {
+                    var oldPr = prev.PullRequestNumber.HasValue ? $"#{prev.PullRequestNumber.Value}" : "None";
+                    var newPr = curr.PullRequestNumber.HasValue ? $"#{curr.PullRequestNumber.Value}" : "None";
+                    model.FieldChanges.Add(new TaskFieldChange("PullRequestNumber", oldPr, newPr, "badge-purple"));
+                }
+
+                if (!string.Equals(prev.PullRequestUrl, curr.PullRequestUrl, StringComparison.Ordinal))
+                {
+                    model.FieldChanges.Add(new TaskFieldChange("PullRequestUrl", prev.PullRequestUrl ?? "None", curr.PullRequestUrl ?? "None", "badge-purple"));
                 }
 
                 var prevDeps = ParseDependencies(prev.SerializedDependencies);

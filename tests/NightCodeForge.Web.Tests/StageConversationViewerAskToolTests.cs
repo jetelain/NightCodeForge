@@ -947,5 +947,53 @@ public class StageConversationViewerAskToolTests : BunitContext
         Assert.False(primedCard.Instance.IsRunning);
         Assert.Equal("Exit Code: 0\nPassed: 42 tests.", primedCard.Instance.Result);
     }
+
+    [Fact]
+    public void StageConversationViewer_WhenConversationNullAndTaskHasPendingQuestion_RendersQuestionCardAndSubmitsPreStageAnswer()
+    {
+        var task = new ForgeTask
+        {
+            Id = 25,
+            Title = "Claimed Issue Task",
+            Status = TaskOverallStatus.Open,
+            IsWaitingForHuman = true,
+            CurrentStageId = StandardStageIds.TaskReview,
+            Questions = new List<Question>
+            {
+                new()
+                {
+                    Id = 305,
+                    TaskId = 25,
+                    StageId = StandardStageIds.TaskReview,
+                    BatchId = "github-claim-conflict-25",
+                    Prompt = "Issue #42 is assigned to @alice",
+                    OptionsJson = "[\"Override claim and execute locally\",\"Cancel local task\"]",
+                    Status = QuestionStatus.Pending
+                }
+            }
+        };
+
+        var cut = Render<StageConversationViewer>(p => p
+            .Add(x => x.Conversation, null)
+            .Add(x => x.Task, task)
+            .Add(x => x.IsActiveStage, false));
+
+        var card = cut.FindComponent<AgentQuestionTurnCard>();
+        Assert.NotNull(card);
+        Assert.Contains("Issue #42 is assigned to @alice", cut.Markup);
+        Assert.Contains("Override claim and execute locally", cut.Markup);
+        Assert.Contains("Cancel local task", cut.Markup);
+
+        var overrideBtn = cut.FindAll("button.agent-option-chip")
+            .First(b => b.TextContent.Trim() == "Override claim and execute locally");
+        overrideBtn.Click();
+
+        cut.Find("#submit-all-btn-github-claim-conflict-25").Click();
+
+        Assert.NotNull(_orchestrator.LastSubmitAnswersCall);
+        Assert.Equal(25, _orchestrator.LastSubmitAnswersCall.Value.TaskId);
+        Assert.Single(_orchestrator.LastSubmitAnswersCall.Value.Answers);
+        Assert.Equal("Override claim and execute locally", _orchestrator.LastSubmitAnswersCall.Value.Answers[305]);
+    }
 }
 

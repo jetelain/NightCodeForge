@@ -532,9 +532,17 @@ public class TelemetryChatClient : DelegatingChatClient
         // Enforce the remaining FirstTokenTimeout budget for the current attempt until the first non-empty chunk arrives.
         var attemptElapsed = _timeProvider.GetElapsedTime(streamState.CurrentAttemptStartTimestamp);
         var remaining = _firstTokenTimeout - attemptElapsed;
-        var waitBudget = remaining > TimeSpan.FromMilliseconds(1) ? remaining : TimeSpan.FromMilliseconds(1);
+        if (remaining <= TimeSpan.Zero)
+        {
+            if (moveNextTask.IsCompleted)
+            {
+                return await moveNextTask;
+            }
 
-        return await moveNextTask.WaitAsync(waitBudget, _timeProvider, cancellationToken);
+            throw new TimeoutException("The operation has timed out.");
+        }
+
+        return await moveNextTask.WaitAsync(remaining, _timeProvider, cancellationToken);
     }
 
     private static bool HasNonEmptyStreamContent(ChatResponseUpdate update)

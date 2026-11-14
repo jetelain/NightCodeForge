@@ -35,4 +35,37 @@ public class TriageTaskProposalCardTests : BunitContext
         Assert.Contains(expectedText, badge.TextContent);
         Assert.Equal(expectedTitle, badge.GetAttribute("title"));
     }
+
+    [Fact]
+    public void Render_WhenGitHubExternalIssueLinked_RendersGitHubIssueBadge()
+    {
+        var linkedTask = new ForgeTask
+        {
+            Id = 10,
+            Title = "Imported Issue",
+            Description = "Issue details",
+            Priority = TaskPriority.Normal,
+            Status = TaskOverallStatus.Suggested,
+            ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId = "#42"
+        };
+
+        var linkedCut = Render<TriageTaskProposalCard>(p => p.Add(c => c.Task, linkedTask));
+        var badge = linkedCut.Find("#triage-github-issue-badge-10");
+        Assert.Contains("#42", badge.TextContent);
+
+        var unlinkedTask = new ForgeTask
+        {
+            Id = 10,
+            Title = "Unlinked Proposal",
+            Description = "No external source",
+            Priority = TaskPriority.Normal,
+            Status = TaskOverallStatus.Suggested,
+            ExternalSource = null,
+            ExternalReferenceId = null
+        };
+
+        var unlinkedCut = Render<TriageTaskProposalCard>(p => p.Add(c => c.Task, unlinkedTask));
+        Assert.Empty(unlinkedCut.FindAll("#triage-github-issue-badge-10"));
+    }
 }

@@ -23,6 +23,7 @@ public class TaskCreationModalTests : BunitContext
         Services.AddSingleton<ITaskRepository>(_taskRepo);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepo);
         Services.AddSingleton(_toastService);
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

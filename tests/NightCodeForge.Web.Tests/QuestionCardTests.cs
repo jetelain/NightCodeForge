@@ -307,4 +307,34 @@ public class QuestionCardTests : BunitContext
         Assert.Equal("Q1: Ans 1\n\nQ2: Ans 2", _orchestrator.LastSubmitAnswersCall.Value.Answers[201]);
         Assert.Equal("Ans 3", _orchestrator.LastSubmitAnswersCall.Value.Answers[202]);
     }
+
+    [Fact]
+    public void SubmitAnswer_WhenClaimConflictCancelSelected_ShowsTaskCancelledToast()
+    {
+        var question = new Question
+        {
+            Id = 55,
+            TaskId = 19,
+            BatchId = $"{NightCodeForge.Core.Interfaces.GitHubClaimConflictConstants.ClaimConflictBatchPrefix}19",
+            Prompt = "Issue already claimed by @alice",
+            OptionsJson = System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                NightCodeForge.Core.Interfaces.GitHubClaimConflictConstants.OverrideClaimOption,
+                NightCodeForge.Core.Interfaces.GitHubClaimConflictConstants.CancelTaskOption
+            })
+        };
+
+        var cut = Render<QuestionCard>(p => p.Add(c => c.Question, question));
+
+        var cancelButton = cut.FindAll(".option-btn")
+            .First(b => b.TextContent.Contains(NightCodeForge.Core.Interfaces.GitHubClaimConflictConstants.CancelTaskOption, StringComparison.Ordinal));
+        cancelButton.Click();
+
+        cut.Find("#submit-answer-btn-55").Click();
+
+        Assert.NotNull(_orchestrator.LastSubmitHumanAnswerCall);
+        Assert.Equal(55, _orchestrator.LastSubmitHumanAnswerCall.Value.QuestionId);
+        Assert.Contains(_toastService.Toasts, t => t.Title == "Task Cancelled" && t.Level == ToastLevel.Info);
+        Assert.DoesNotContain(_toastService.Toasts, t => t.Title == "Clarification Submitted");
+    }
 }

@@ -252,6 +252,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                 if (!claimAllowed)
                 {
                     await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
+                    if (task.Status == TaskOverallStatus.Cancelled)
+                    {
+                        await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
+                    }
                     cohortExitReason = task.Status == TaskOverallStatus.Cancelled
                         ? CohortExitReason.Cancelled
                         : CohortExitReason.WaitingForHuman;
@@ -1895,7 +1899,15 @@ public class TaskOrchestrator : ITaskOrchestrator
                             {
                                 try
                                 {
-                                    var pr = await _workspacePreparer.DeliverPullRequestAsync(task, workspace, cancellationToken);
+                                    GitHubPullRequest pr;
+                                    using (await _workspacePreparer.AcquireWorkspaceLockAsync(workspace.Id, cancellationToken))
+                                    {
+                                        pr = await _workspacePreparer.DeliverPullRequestAsync(task, workspace, cancellationToken);
+                                        var refreshedDiffStat = await _workspacePreparer.GenerateDiffStatSafeAsync(workspace, task.Id, task.BaseBranch, cancellationToken);
+                                        pipelineContext.DataBag.Set(PipelineDataBagKeys.ReviewDiffStat, refreshedDiffStat);
+                                        pipelineContext.SyncDataBagToTask();
+                                    }
+
                                     await _taskRepository.AddExecutionLogAsync(new ExecutionLog
                                     {
                                         TaskId = task.Id,
@@ -2199,8 +2211,11 @@ public class TaskOrchestrator : ITaskOrchestrator
     public Task<CompleteTaskResult> CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default) =>
         _mergeAndCascadeCoordinator.CompleteTaskAndCascadeAsync(taskId, finalCommitMessage, cancellationToken);
 
-    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
-        _mergeAndCascadeCoordinator.CloseExternallyMergedTaskAsync(taskId, cancellationToken);
+    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        _lifecycleMutationCoordinator.CancelExecution(taskId);
+        return _mergeAndCascadeCoordinator.CloseExternallyMergedTaskAsync(taskId, AuditActors.User, cancellationToken);
+    }
 
     public Task<bool> RestartTaskPipelineAsync(
         int taskId,
@@ -2219,7 +2234,10 @@ public class TaskOrchestrator : ITaskOrchestrator
             return Task.FromResult<IReadOnlyList<int>>(Array.Empty<int>());
         }
 
-        return _mergeAndCascadeCoordinator.SyncMergedPullRequestsAsync(workspaceId, cancellationToken);
+        return _mergeAndCascadeCoordinator.SyncMergedPullRequestsAsync(
+            workspaceId,
+            id => _lifecycleMutationCoordinator.CancelExecution(id),
+            cancellationToken);
     }
 
     private async Task ExecuteGate1BaselineSyncAsync(

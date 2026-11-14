@@ -52,11 +52,20 @@ public class EfCoreWorkspaceRepository : IWorkspaceRepository
         var existing = await context.Workspaces.FindAsync(new object[] { workspace.Id }, cancellationToken);
         if (existing != null)
         {
-            var existingTriagedNumbers = existing.GitHubSettings?.TriagedIssueNumbers;
+            var existingSettings = existing.GitHubSettings;
+            var incomingSettings = workspace.GitHubSettings ?? new GitHubIntegrationSettings();
+            var existingTriagedNumbers = existingSettings?.TriagedIssueNumbers;
             context.Entry(existing).CurrentValues.SetValues(workspace);
-            workspace.GitHubSettings ??= new GitHubIntegrationSettings();
-            workspace.GitHubSettings.MergeTriagedIssueNumbers(existingTriagedNumbers);
-            existing.GitHubSettings = workspace.GitHubSettings;
+            if (!GitHubIntegrationSettings.HasRepositoryChanged(existingSettings, incomingSettings))
+            {
+                incomingSettings.MergeTriagedIssueNumbers(existingTriagedNumbers);
+            }
+            else
+            {
+                incomingSettings.TriagedIssueNumbers = [];
+            }
+            workspace.GitHubSettings = incomingSettings;
+            existing.GitHubSettings = incomingSettings;
             context.Entry(existing).Property(w => w.GitHubSettings).IsModified = true;
             await SyncAgentProfilesAsync(context, workspace, existing, cancellationToken);
         }

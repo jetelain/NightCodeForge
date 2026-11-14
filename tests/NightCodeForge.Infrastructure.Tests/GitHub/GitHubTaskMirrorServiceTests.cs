@@ -709,4 +709,145 @@ public class GitHubTaskMirrorServiceTests
         Assert.DoesNotContain("ghp_anotherSecretToken99", capturedLog.Message);
         Assert.Contains(GitCredentialRedactor.RedactedPlaceholder, capturedLog.Message);
     }
+
+    [Fact]
+    public async Task TryClaimIssueForExecutionAsync_WhenMirroringDisabled_SkipsClaimCheckAndProceeds()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace(s => s.TaskMirroringEnabled = false);
+        var task = CreateLinkedTask(10, "42");
+
+        var allowed = await sut.TryClaimIssueForExecutionAsync(task, workspace);
+
+        Assert.True(allowed);
+        _gitHubClientMock.Verify(
+            c => c.GetIssueAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task TryClaimIssueForExecutionAsync_WhenIssueClosedExternallyButReadySiblingHasPullRequest_Proceeds()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace();
+        var task = CreateLinkedTask(10, "42", TaskOverallStatus.Open);
+        var readyPrSibling = CreateLinkedTask(11, "42", TaskOverallStatus.Ready);
+        readyPrSibling.PullRequestNumber = 99;
+
+        _taskRepoMock
+            .Setup(r => r.GetByWorkspaceIdAsync(workspace.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([task, readyPrSibling]);
+        _gitHubClientMock
+            .Setup(c => c.GetIssueAsync("acme", "nightcodeforge", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubIssue { Number = 42, State = "closed" });
+
+        var allowed = await sut.TryClaimIssueForExecutionAsync(task, workspace);
+
+        Assert.True(allowed);
+        Assert.Equal(TaskOverallStatus.Open, task.Status);
+    }
+
+    [Fact]
+    public async Task MirrorTaskOpenedAsync_WhenActiveSiblingExists_SkipsBacklogLabelDowngrade()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace();
+        var openingTask = CreateLinkedTask(10, "42", TaskOverallStatus.Open);
+        openingTask.HasExecutionRun = false;
+        var activeSibling = CreateLinkedTask(11, "42", TaskOverallStatus.Open);
+        activeSibling.HasExecutionRun = true;
+
+        _taskRepoMock
+            .Setup(r => r.GetByWorkspaceIdAsync(workspace.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([openingTask, activeSibling]);
+
+        await sut.MirrorTaskOpenedAsync(openingTask, workspace);
+
+        _gitHubClientMock.Verify(
+            c => c.GetIssueAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _gitHubClientMock.Verify(
+            c => c.UpdateIssueAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<UpdateGitHubIssueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ApplyStatusLabelSafeAsync_WhenTargetLabelAlreadyMatches_SkipsNoOpUpdateIssueCall()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace(s => s.PostMilestoneComments = false);
+        var task = CreateLinkedTask(10, "42");
+
+        _gitHubClientMock
+            .Setup(c => c.GetIssueAsync("acme", "nightcodeforge", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubIssue
+            {
+                Number = 42,
+                State = "open",
+                Labels = ["bug", GitHubSyncConstants.LabelInProgress]
+            });
+
+        await sut.MirrorTaskReviewCompletedAsync(task, workspace, "Spec");
+
+        _gitHubClientMock.Verify(
+            c => c.UpdateIssueAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<UpdateGitHubIssueRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SyncMergedPullRequestsAsync_WhenPullRequestDeliveryDisabled_SkipsPolling()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace(s =>
+        {
+            s.PullRequestDeliveryEnabled = false;
+            s.CloseTaskOnPrMerge = true;
+        });
+
+        var closed = await sut.SyncMergedPullRequestsAsync(workspace, (_, _) => Task.FromResult(new CompleteTaskResult(CompleteTaskStatus.Completed)));
+
+        Assert.Empty(closed);
+        _gitHubClientMock.Verify(
+            c => c.GetPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task MirrorTaskClosedAsync_WhenLastSiblingCancelledAfterCompletedSibling_ClosesGitHubIssue()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace(s => s.PostMilestoneComments = false);
+        var cancelledLastSibling = CreateLinkedTask(10, "42", TaskOverallStatus.Cancelled);
+        var completedSibling = CreateLinkedTask(11, "42", TaskOverallStatus.Closed);
+
+        _taskRepoMock
+            .Setup(r => r.GetByWorkspaceIdAsync(workspace.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([cancelledLastSibling, completedSibling]);
+        _gitHubClientMock
+            .Setup(c => c.GetIssueAsync("acme", "nightcodeforge", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubIssue { Number = 42, State = "open", Labels = [GitHubSyncConstants.LabelInProgress] });
+
+        await sut.MirrorTaskClosedAsync(cancelledLastSibling, workspace);
+
+        _gitHubClientMock.Verify(
+            c => c.UpdateIssueAsync(
+                "acme",
+                "nightcodeforge",
+                42,
+                It.Is<UpdateGitHubIssueRequest>(req => req.State == "closed"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public void RemoveWorkspacePrMergeRecurringJob_RemovesJobByCanonicalId()
+    {
+        var managerMock = new Mock<IRecurringJobManager>();
+
+        GitHubTaskMirrorService.RemoveWorkspacePrMergeRecurringJob(managerMock.Object, 15);
+
+        managerMock.Verify(
+            m => m.RemoveIfExists(GitHubTaskMirrorService.GetWorkspacePrMergeRecurringJobId(15)),
+            Times.Once);
+    }
 }

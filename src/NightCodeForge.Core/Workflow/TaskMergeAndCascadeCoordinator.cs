@@ -427,17 +427,55 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
         return new CompleteTaskResult(CompleteTaskStatus.Completed);
     }
 
-    public async Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(
+    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(
         int taskId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        CloseExternallyMergedTaskInternalAsync(taskId, AuditActors.User, cancelActiveExecution: null, cancellationToken);
+
+    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(
+        int taskId,
+        string changedBy,
+        CancellationToken cancellationToken = default) =>
+        CloseExternallyMergedTaskInternalAsync(
+            taskId,
+            string.IsNullOrWhiteSpace(changedBy) ? AuditActors.User : changedBy,
+            cancelActiveExecution: null,
+            cancellationToken);
+
+    private async Task<CompleteTaskResult> CloseExternallyMergedTaskInternalAsync(
+        int taskId,
+        string changedBy,
+        Action<int>? cancelActiveExecution,
+        CancellationToken cancellationToken)
     {
-        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
-        if (task == null)
+        var initialTask = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+
+        if (initialTask.Status is TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled)
         {
-            throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+            throw new TaskCannotBeModifiedException(
+                initialTask.Id,
+                $"ForgeTask #{initialTask.Id} cannot be closed because it is already in terminal status {initialTask.Status}.");
         }
 
-        using var lockReleaser = await _workspacePreparer.AcquireWorkspaceLockAsync(task.WorkspaceId, cancellationToken);
+        cancelActiveExecution?.Invoke(taskId);
+
+        using var lockReleaser = await _workspacePreparer.AcquireWorkspaceLockAsync(initialTask.WorkspaceId, cancellationToken);
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+
+        if (task.Status == TaskOverallStatus.Closed)
+        {
+            return new CompleteTaskResult(CompleteTaskStatus.Completed);
+        }
+
+        if (task.Status is TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled)
+        {
+            throw new TaskCannotBeModifiedException(
+                task.Id,
+                $"ForgeTask #{task.Id} cannot be closed because it is already in terminal status {task.Status}.");
+        }
+
         var workspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
         if (workspace == null)
         {
@@ -451,8 +489,33 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
             task.SquashCommitSha = pr.MergeCommitSha;
         }
 
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+        {
+            try
+            {
+                _jobQueue.Delete(task.LastHangfireJobId);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Failed to delete Hangfire job {JobId} while closing externally merged Task #{TaskId}", task.LastHangfireJobId, task.Id);
+            }
+            task.LastHangfireJobId = null;
+        }
+
         task.Status = TaskOverallStatus.Closed;
         task.CurrentStageId = string.Empty;
+        task.IsWaitingForHuman = false;
+        task.InterruptedStageId = null;
+        task.InterruptedAgentProfileId = null;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        if (task.Questions != null)
+        {
+            foreach (var pending in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            {
+                pending.Status = QuestionStatus.Skipped;
+            }
+        }
 
         var closedBag = PipelineDataBag.FromJson(task.PipelineDataJson);
         closedBag.Remove(PipelineDataBagKeys.HasResolvedConflict);
@@ -463,13 +526,26 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
 
         var reason = $"ForgeTask #{task.Id} closed after GitHub Pull Request #{task.PullRequestNumber} was merged.";
 
+        var conversations = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken)
+            ?? Array.Empty<Conversation>();
+        foreach (var conversation in conversations.Where(c =>
+            c.Status is StageExecutionStatus.Running or StageExecutionStatus.WaitingForHuman or StageExecutionStatus.Interrupted or StageExecutionStatus.Pending))
+        {
+            await _taskRepository.CompleteConversationAsync(
+                conversation.Id,
+                StageExecutionStatus.Cancelled,
+                summary: reason,
+                cancellationToken: cancellationToken);
+        }
+
         await _taskRepository.UpdateWithHistoryAsync(
             task,
             dependsOn: null,
-            changedBy: AuditActors.User,
+            changedBy: changedBy,
             reason: reason,
             cancellationToken: cancellationToken);
         await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
+        await _dependencyStore.SetWaitingForHumanAsync(task.Id, false, cancellationToken);
         await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
 
         await _workspacePreparer.RemoveWorktreeSafeAsync(workspace, task.Id, "completed", CancellationToken.None);
@@ -512,7 +588,16 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
     public Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
         int workspaceId,
         CancellationToken cancellationToken = default) =>
-        _workspacePreparer.SyncMergedPullRequestsAsync(workspaceId, CloseExternallyMergedTaskAsync, cancellationToken);
+        SyncMergedPullRequestsAsync(workspaceId, cancelActiveExecution: null, cancellationToken);
+
+    public Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
+        int workspaceId,
+        Action<int>? cancelActiveExecution,
+        CancellationToken cancellationToken = default) =>
+        _workspacePreparer.SyncMergedPullRequestsAsync(
+            workspaceId,
+            (mergedTaskId, ct) => CloseExternallyMergedTaskInternalAsync(mergedTaskId, AuditActors.System, cancelActiveExecution, ct),
+            cancellationToken);
 
     private async Task CascadeUnblockDependentTasksAsync(ForgeTask task, CancellationToken cancellationToken)
     {

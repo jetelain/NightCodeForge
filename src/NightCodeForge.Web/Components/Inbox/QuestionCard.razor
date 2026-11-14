@@ -1,5 +1,6 @@
 @namespace NightCodeForge.Web.Components.Inbox
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Monitoring
 @using NightCodeForge.Web.Services
@@ -72,7 +73,7 @@ else if (EffectiveQuestions.Count > 1)
             var countBefore = WorkerState.Current.PendingQuestionCount;
             await TaskOrchestrator.SubmitHumanAnswerAsync(q.Id, answer);
             q.Status = QuestionStatus.Answered;
-            ToastService.Show("Clarification Submitted", $"ForgeTask #{q.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
+            ShowSubmissionToast(q.TaskId, IsClaimConflictCancellation(q, answer));
             await OnAnswerSubmitted.InvokeAsync(q.Id);
             if (WorkerState.Current.PendingQuestionCount == countBefore)
             {
@@ -106,7 +107,10 @@ else if (EffectiveQuestions.Count > 1)
             {
                 q.Status = QuestionStatus.Answered;
             }
-            ToastService.Show("Clarification Submitted", $"ForgeTask #{firstQ.TaskId} resumed on llm-urgent queue.", ToastLevel.Success);
+            var isClaimCancelled = EffectiveQuestions.Any(q =>
+                dict.TryGetValue(q.Id, out var submittedAnswer) &&
+                IsClaimConflictCancellation(q, submittedAnswer));
+            ShowSubmissionToast(firstQ.TaskId, isClaimCancelled);
 
             var submittedIds = dict.Keys.ToList();
             if (OnBatchSubmitted.HasDelegate)
@@ -130,5 +134,21 @@ else if (EffectiveQuestions.Count > 1)
         {
             ToastService.Show("Submission Failed", $"Error submitting answers: {ex.Message}", ToastLevel.Error);
         }
+    }
+
+    private static bool IsClaimConflictCancellation(Question question, string answer) =>
+        !string.IsNullOrWhiteSpace(question.BatchId) &&
+        question.BatchId.StartsWith(GitHubClaimConflictConstants.ClaimConflictBatchPrefix, StringComparison.OrdinalIgnoreCase) &&
+        GitHubClaimConflictConstants.IsCancelAnswer(answer);
+
+    private void ShowSubmissionToast(int taskId, bool isClaimCancelled)
+    {
+        if (isClaimCancelled)
+        {
+            ToastService.Show("Task Cancelled", $"ForgeTask #{taskId} was cancelled.", ToastLevel.Info);
+            return;
+        }
+
+        ToastService.Show("Clarification Submitted", $"ForgeTask #{taskId} resumed on llm-urgent queue.", ToastLevel.Success);
     }
 }

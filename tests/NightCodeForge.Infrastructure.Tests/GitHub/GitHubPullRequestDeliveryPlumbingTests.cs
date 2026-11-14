@@ -5,6 +5,7 @@ using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Security;
 using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
@@ -76,7 +77,8 @@ public class GitHubPullRequestDeliveryPlumbingTests : IDisposable
         string login = "alice",
         string? accessToken = "gho_test_token_123",
         Mock<IGitHubClientService>? clientMock = null,
-        bool airGapped = false)
+        bool airGapped = false,
+        ITaskRepository? taskRepository = null)
     {
         var authMock = new Mock<IGitHubDeviceAuthService>();
         authMock
@@ -97,27 +99,30 @@ public class GitHubPullRequestDeliveryPlumbingTests : IDisposable
             });
 
         var ghClient = clientMock ?? new Mock<IGitHubClientService>();
-        ghClient
-            .Setup(c => c.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CreateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string _, string _, CreateGitHubPullRequestRequest req, CancellationToken _) => new GitHubPullRequest
-            {
-                Number = 45,
-                Title = req.Title,
-                Body = req.Body,
-                Draft = req.Draft,
-                State = "open",
-                HtmlUrl = "https://github.com/acme/demo/pull/45"
-            });
-        ghClient
-            .Setup(c => c.UpdatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<UpdateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string _, string _, int prNum, UpdateGitHubPullRequestRequest req, CancellationToken _) => new GitHubPullRequest
-            {
-                Number = prNum,
-                Title = req.Title ?? "Updated PR",
-                Body = req.Body,
-                State = "open",
-                HtmlUrl = $"https://github.com/acme/demo/pull/{prNum}"
-            });
+        if (clientMock == null)
+        {
+            ghClient
+                .Setup(c => c.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CreateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string _, string _, CreateGitHubPullRequestRequest req, CancellationToken _) => new GitHubPullRequest
+                {
+                    Number = 45,
+                    Title = req.Title,
+                    Body = req.Body,
+                    Draft = req.Draft,
+                    State = "open",
+                    HtmlUrl = "https://github.com/acme/demo/pull/45"
+                });
+            ghClient
+                .Setup(c => c.UpdatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<UpdateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string _, string _, int prNum, UpdateGitHubPullRequestRequest req, CancellationToken _) => new GitHubPullRequest
+                {
+                    Number = prNum,
+                    Title = req.Title ?? "Updated PR",
+                    Body = req.Body,
+                    State = "open",
+                    HtmlUrl = $"https://github.com/acme/demo/pull/{prNum}"
+                });
+        }
 
         return new GitHubPullRequestDeliveryService(
             _runner,
@@ -126,6 +131,7 @@ public class GitHubPullRequestDeliveryPlumbingTests : IDisposable
             authMock.Object,
             tokenStoreMock.Object,
             ghClient.Object,
+            taskRepository ?? new InMemoryTaskRepository(),
             Options.Create(new SecurityOptions { AirGappedMode = airGapped }),
             NullLogger<GitHubPullRequestDeliveryService>.Instance);
     }
@@ -790,6 +796,236 @@ public class GitHubPullRequestDeliveryPlumbingTests : IDisposable
         var mainShaAfter = (await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["rev-parse", "main"])).StandardOutput.Trim();
         Assert.Equal(mainShaBefore, mainShaAfter);
         Assert.Equal(45, pr.Number);
+    }
+
+    [Fact]
+    public async Task DeliverPullRequestAsync_CleansUntrackedDocsTasks_AndPreservesCanonicalStagedIndexDuringRefPlumbing()
+    {
+        var githubRemoteBare = await InitBareRepoAsync("gh_plumb_remote");
+        using var hostRepo = new TestGitRepository("main");
+        await ConfigureGitIdentityAsync(hostRepo.RepositoryPath);
+        hostRepo.CreateFile("README.md", "base\n");
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["add", "README.md"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["commit", "-m", "initial main"]);
+
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["checkout", "-b", "feature/task-9"]);
+        hostRepo.CreateFile("feature.cs", "public class Feature9 {}");
+        hostRepo.CreateFile("docs/tasks/9-task.md", "# Task 9");
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["add", "-A"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["commit", "-m", "feat: task 9"]);
+
+        // Untracked file under docs/tasks should be cleaned cleanly via `git clean -fd -- docs/tasks`
+        hostRepo.CreateFile("docs/tasks/untracked-draft.md", "# Untracked draft");
+
+        var workspaceA = new Workspace
+        {
+            Id = 63,
+            Name = "Dirty Docs Workspace",
+            RepositoryPath = hostRepo.RepositoryPath,
+            DefaultBaseBranch = "main",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                PullRequestDeliveryEnabled = true,
+                RepositoryOwner = "acme",
+                RepositoryName = githubRemoteBare
+            }
+        };
+
+        var deliveryService = CreateDeliveryService(login: "alice", accessToken: null);
+        await deliveryService.DeliverPullRequestAsync(new ForgeTask
+        {
+            Id = 9,
+            WorkspaceId = workspaceA.Id,
+            Title = "Clean untracked docs/tasks",
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-9",
+            MergeMode = MergeMode.ExternalPullRequest
+        }, workspaceA);
+
+        Assert.False(File.Exists(Path.Combine(hostRepo.RepositoryPath, "docs", "tasks", "untracked-draft.md")));
+        var pushedTree = await _runner.ExecuteAsync(githubRemoteBare, ["ls-tree", "-r", "--name-only", "refs/heads/ncf/alice/task-9"]);
+        Assert.Contains("feature.cs", pushedTree.StandardOutput);
+        Assert.DoesNotContain("docs/tasks", pushedTree.StandardOutput);
+
+        // Now verify ref plumbing on non-checked-out branch preserves canonical repo staged index
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["checkout", "main"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["checkout", "-b", "feature/task-10"]);
+        hostRepo.CreateFile("task10.cs", "public class Task10 {}");
+        hostRepo.CreateFile("docs/tasks/10-task.md", "# Task 10");
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["add", "-A"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["commit", "-m", "feat: task 10"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["checkout", "main"]);
+
+        hostRepo.CreateFile("canonical-staged.txt", "keep staged on main");
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["add", "canonical-staged.txt"]);
+        var mainShaBefore = (await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["rev-parse", "main"])).StandardOutput.Trim();
+
+        await deliveryService.DeliverPullRequestAsync(new ForgeTask
+        {
+            Id = 10,
+            WorkspaceId = workspaceA.Id,
+            Title = "Ref plumbing preserves canonical index",
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-10",
+            MergeMode = MergeMode.ExternalPullRequest
+        }, workspaceA);
+
+        var mainShaAfter = (await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["rev-parse", "main"])).StandardOutput.Trim();
+        var stagedOnMain = (await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["diff", "--cached", "--name-only"])).StandardOutput.Trim();
+        Assert.Equal(mainShaBefore, mainShaAfter);
+        Assert.Equal("canonical-staged.txt", stagedOnMain);
+    }
+
+    [Fact]
+    public async Task DeliverPullRequestAsync_RecoversFrom422AlreadyExists_AndClosedUnmergedPr()
+    {
+        var githubRemoteBare = await InitBareRepoAsync("gh_recover_remote");
+        using var hostRepo = new TestGitRepository("main");
+        await ConfigureGitIdentityAsync(hostRepo.RepositoryPath);
+        hostRepo.CreateFile("README.md", "base\n");
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["add", "README.md"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["commit", "-m", "initial"]);
+
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["checkout", "-b", "feature/task-11"]);
+        hostRepo.CreateFile("work.txt", "done\n");
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["add", "work.txt"]);
+        await _runner.ExecuteAsync(hostRepo.RepositoryPath, ["commit", "-m", "work"]);
+
+        var workspace = new Workspace
+        {
+            Id = 64,
+            Name = "PR Recovery WS",
+            RepositoryPath = hostRepo.RepositoryPath,
+            DefaultBaseBranch = "main",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                PullRequestDeliveryEnabled = true,
+                RepositoryOwner = "acme",
+                RepositoryName = githubRemoteBare
+            }
+        };
+
+        // Case 1: 422 "PR already exists" recovers via FindOpenPullRequestByHeadAsync
+        var recover422Client = new Mock<IGitHubClientService>();
+        recover422Client
+            .Setup(c => c.CreatePullRequestAsync("acme", githubRemoteBare, It.IsAny<CreateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NightCodeForge.Core.Exceptions.GitHubApiException(System.Net.HttpStatusCode.UnprocessableEntity, "A pull request already exists", "{}"));
+        recover422Client
+            .Setup(c => c.FindOpenPullRequestByHeadAsync("acme", githubRemoteBare, "ncf/alice/task-11", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubPullRequest { Number = 88, State = "open", HtmlUrl = "https://github.com/acme/demo/pull/88" });
+        recover422Client
+            .Setup(c => c.UpdatePullRequestAsync("acme", githubRemoteBare, 88, It.IsAny<UpdateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubPullRequest { Number = 88, State = "open", HtmlUrl = "https://github.com/acme/demo/pull/88" });
+
+        var task = new ForgeTask
+        {
+            Id = 11,
+            WorkspaceId = workspace.Id,
+            Title = "Recover 422 PR",
+            BaseBranch = "main",
+            FeatureBranch = "feature/task-11",
+            MergeMode = MergeMode.ExternalPullRequest
+        };
+
+        var prFrom422 = await CreateDeliveryService(clientMock: recover422Client, accessToken: null)
+            .DeliverPullRequestAsync(task, workspace);
+
+        Assert.Equal(88, prFrom422.Number);
+        recover422Client.Verify(
+            c => c.UpdatePullRequestAsync("acme", githubRemoteBare, 88, It.IsAny<UpdateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        // Case 2: Updating a closed-unmerged PR creates a fresh PR
+        var recreateClient = new Mock<IGitHubClientService>();
+        recreateClient
+            .Setup(c => c.UpdatePullRequestAsync("acme", githubRemoteBare, 88, It.IsAny<UpdateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubPullRequest { Number = 88, State = "closed", Merged = false });
+        recreateClient
+            .Setup(c => c.FindOpenPullRequestByHeadAsync("acme", githubRemoteBare, "ncf/alice/task-11", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((GitHubPullRequest?)null);
+        recreateClient
+            .Setup(c => c.CreatePullRequestAsync("acme", githubRemoteBare, It.IsAny<CreateGitHubPullRequestRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubPullRequest { Number = 89, State = "open", HtmlUrl = "https://github.com/acme/demo/pull/89" });
+
+        var recreatedPr = await CreateDeliveryService(clientMock: recreateClient, accessToken: null)
+            .DeliverPullRequestAsync(task, workspace);
+
+        Assert.Equal(89, recreatedPr.Number);
+        Assert.Equal(89, task.PullRequestNumber);
+    }
+
+    [Fact]
+    public async Task BuildPullRequestBodyAsync_UsesRefsForActiveSiblingResolvesForSoleTaskAndRespectsNumberBoundaries()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var primaryTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = 70,
+            Title = "Primary task",
+            Description = "Follows conventions from #42.",
+            Status = TaskOverallStatus.Ready,
+            ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId = "4"
+        });
+        var siblingTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = 70,
+            Title = "Active sibling",
+            Status = TaskOverallStatus.Open,
+            ExternalSource = GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId = "4"
+        });
+
+        var workspace = new Workspace
+        {
+            Id = 70,
+            Name = "Sibling Ref WS",
+            RepositoryPath = "C:/repo",
+            DefaultBaseBranch = "main",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                PullRequestDeliveryEnabled = true,
+                RepositoryOwner = "acme",
+                RepositoryName = "demo"
+            }
+        };
+
+        var deliveryService = CreateDeliveryService(taskRepository: taskRepo);
+
+        var bodyWithSibling = await deliveryService.BuildPullRequestBodyAsync(primaryTask, workspace, "main");
+        Assert.Contains("Refs #4", bodyWithSibling, StringComparison.Ordinal);
+        Assert.DoesNotContain("Resolves #4", bodyWithSibling, StringComparison.Ordinal);
+
+        siblingTask.Status = TaskOverallStatus.Closed;
+        await taskRepo.UpdateAsync(siblingTask);
+
+        var bodySoleActive = await deliveryService.BuildPullRequestBodyAsync(primaryTask, workspace, "main");
+        Assert.Contains("Resolves #4", bodySoleActive, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task IsPullRequestDeliveryAvailableAsync_WhenOwnerOrRepoMissing_ReturnsFalse()
+    {
+        var deliveryService = CreateDeliveryService();
+        var workspaceMissingRepo = new Workspace
+        {
+            Id = 71,
+            Name = "Incomplete Repo Settings",
+            RepositoryPath = "C:/repo",
+            DefaultBaseBranch = "main",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                PullRequestDeliveryEnabled = true,
+                RepositoryOwner = "acme",
+                RepositoryName = "   "
+            }
+        };
+
+        Assert.False(await deliveryService.IsPullRequestDeliveryAvailableAsync(workspaceMissingRepo));
     }
 
     public void Dispose()

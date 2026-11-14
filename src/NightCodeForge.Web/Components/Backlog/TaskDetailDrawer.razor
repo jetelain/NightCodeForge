@@ -1,13 +1,20 @@
 @namespace NightCodeForge.Web.Components.Backlog
+@using Microsoft.Extensions.Options
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Security
 @using NightCodeForge.Core.Services
 @using NightCodeForge.Web.Services
 @inject ITaskRepository TaskRepository
+@inject IWorkspaceRepository WorkspaceRepository
+@inject WorkspaceStateService WorkspaceState
 @inject IDevQueueService DevQueueService
 @inject ITaskMutationService TaskMutationService
+@inject ITaskReviewService TaskReviewService
+@inject IGitHubPullRequestDeliveryService GitHubPrDeliveryService
+@inject IOptions<SecurityOptions> SecurityOptions
 @inject ToastService ToastService
-@inject IServiceProvider ServiceProvider
 @inject ILogger<TaskDetailDrawer> Logger
 
 @if (IsOpen && Task != null)
@@ -168,7 +175,7 @@
                                             class="forge-btn btn-xs @(Task.MergeMode == MergeMode.ExternalPullRequest ? "forge-btn-primary" : "forge-btn-secondary")"
                                             style="padding: 0.25rem 0.55rem; font-size: 0.78rem;"
                                             @onclick="() => UpdateMergeModeAsync(MergeMode.ExternalPullRequest)"
-                                            disabled="@_isUpdatingMergeMode"
+                                            disabled="@(_isUpdatingMergeMode || !_isPrDeliveryAvailable)"
                                             title="@MergeModeHelper.GetDescription(MergeMode.ExternalPullRequest)">
                                         🐙 PR
                                     </button>
@@ -396,11 +403,19 @@
             <div class="task-drawer-footer">
                 @if (Task.Status == TaskOverallStatus.Ready)
                 {
-                    @if (_isPrDeliveryAvailable || Task.MergeMode == MergeMode.ExternalPullRequest)
+                    @if (_isPrDeliveryAvailable)
                     {
                         <button type="button" class="forge-btn forge-btn-secondary" id="btn-drawer-create-or-sync-pr" @onclick="CreateOrSyncPullRequestAsync" disabled="@_isPrActionBusy">
                             🐙 @GitHubPullRequestUiHelper.GetCreateOrSyncPullRequestLabel(Task.PullRequestUrl, Task.PullRequestNumber)
                         </button>
+                    }
+                    else if (Task.MergeMode == MergeMode.ExternalPullRequest)
+                    {
+                        <span id="badge-pr-delivery-unavailable"
+                              class="forge-badge badge-amber"
+                              title="GitHub Pull Request delivery is disabled, unconfigured, or not authenticated.">
+                            GitHub PR Delivery Unavailable
+                        </span>
                     }
                     @if (Task.PullRequestNumber.HasValue)
                     {
@@ -462,9 +477,13 @@
     {
         if (IsOpen && Task != null)
         {
+            var workspace = WorkspaceState.ActiveWorkspace?.Id == Task.WorkspaceId
+                ? WorkspaceState.ActiveWorkspace
+                : (Task.WorkspaceId > 0 ? await WorkspaceRepository.GetByIdAsync(Task.WorkspaceId) : null);
             _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(
-                ServiceProvider,
-                Task.WorkspaceId);
+                SecurityOptions.Value,
+                GitHubPrDeliveryService,
+                workspace);
         }
     }
 
@@ -536,13 +555,11 @@
     private async Task CreateOrSyncPullRequestAsync()
     {
         if (Task == null || _isPrActionBusy) return;
-        var reviewService = ServiceProvider.GetService<ITaskReviewService>();
-        if (reviewService == null) return;
 
         _isPrActionBusy = true;
         try
         {
-            var pr = await reviewService.CreateOrSyncPullRequestAsync(Task.Id);
+            var pr = await TaskReviewService.CreateOrSyncPullRequestAsync(Task.Id);
             Task.PullRequestNumber = pr.Number;
             if (!string.IsNullOrWhiteSpace(pr.HtmlUrl))
             {
@@ -564,13 +581,11 @@
     private async Task CloseExternallyMergedPullRequestAsync()
     {
         if (Task == null || _isPrActionBusy) return;
-        var reviewService = ServiceProvider.GetService<ITaskReviewService>();
-        if (reviewService == null) return;
 
         _isPrActionBusy = true;
         try
         {
-            await reviewService.CloseExternallyMergedTaskAsync(Task.Id);
+            await TaskReviewService.CloseExternallyMergedTaskAsync(Task.Id);
             Task.Status = TaskOverallStatus.Closed;
             ToastService.Show("Task Closed", $"ForgeTask #{Task.Id} closed via merged GitHub Pull Request #{Task.PullRequestNumber}.", ToastLevel.Success);
             await OnTaskUpdated.InvokeAsync(Task);

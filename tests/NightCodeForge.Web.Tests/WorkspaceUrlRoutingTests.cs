@@ -240,6 +240,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         var reviewService = new TaskReviewService(
             taskRepo,
             workspaceRepo,
+            new NightCodeForge.Core.Concurrency.WorkspaceLockProvider(),
             new Mock<IGitWorkspaceManager>().Object,
             new Mock<IGitHubPullRequestDeliveryService>().Object,
             orchestrator,
@@ -267,6 +268,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         Services.AddSingleton<ITaskReviewService>(reviewService);
         Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
+        TestServices.AddDefaultWebUiServices(Services);
 
         var nav = Services.GetRequiredService<NavigationManager>();
         nav.NavigateTo($"http://localhost/w/{ws1.Id}/tasks/{task.Id}");
@@ -301,6 +303,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         var reviewService = new TaskReviewService(
             taskRepo,
             workspaceRepo,
+            new NightCodeForge.Core.Concurrency.WorkspaceLockProvider(),
             new Mock<IGitWorkspaceManager>().Object,
             new Mock<IGitHubPullRequestDeliveryService>().Object,
             new MockTaskOrchestrator(),
@@ -316,6 +319,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new Mock<ITaskMutationService>().Object);
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
         Services.AddSingleton(WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
+        TestServices.AddDefaultWebUiServices(Services);
 
         var nav = Services.GetRequiredService<NavigationManager>();
         nav.NavigateTo($"http://localhost/w/{ws1.Id}/review/{task.Id}");

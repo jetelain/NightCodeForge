@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
@@ -25,6 +26,7 @@ public partial class TaskReviewService : ITaskReviewService
 {
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
+    private readonly IWorkspaceLockProvider _workspaceLockProvider;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IGitHubPullRequestDeliveryService _gitHubPrDeliveryService;
     private readonly ITaskOrchestrator _taskOrchestrator;
@@ -37,6 +39,7 @@ public partial class TaskReviewService : ITaskReviewService
     public TaskReviewService(
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
+        IWorkspaceLockProvider workspaceLockProvider,
         IGitWorkspaceManager gitWorkspaceManager,
         IGitHubPullRequestDeliveryService gitHubPrDeliveryService,
         ITaskOrchestrator taskOrchestrator,
@@ -45,6 +48,7 @@ public partial class TaskReviewService : ITaskReviewService
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
+        _workspaceLockProvider = workspaceLockProvider ?? throw new ArgumentNullException(nameof(workspaceLockProvider));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
         _gitHubPrDeliveryService = gitHubPrDeliveryService ?? throw new ArgumentNullException(nameof(gitHubPrDeliveryService));
         _taskOrchestrator = taskOrchestrator ?? throw new ArgumentNullException(nameof(taskOrchestrator));
@@ -75,21 +79,46 @@ public partial class TaskReviewService : ITaskReviewService
 
     public async Task<GitHubPullRequest> CreateOrSyncPullRequestAsync(int taskId, CancellationToken cancellationToken = default)
     {
+        var initialTask = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new TaskNotFoundException(taskId);
+
+        if (initialTask.Status != TaskOverallStatus.Ready)
+        {
+            throw new TaskCannotBeModifiedException(
+                initialTask.Id,
+                $"Cannot deliver or synchronize a Pull Request while ForgeTask #{initialTask.Id} is in status {initialTask.Status}; task must be Ready.");
+        }
+
+        using var lockReleaser = await _workspaceLockProvider.AcquireLockAsync(initialTask.WorkspaceId, cancellationToken);
+
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
             ?? throw new TaskNotFoundException(taskId);
+
+        if (task.Status != TaskOverallStatus.Ready)
+        {
+            throw new TaskCannotBeModifiedException(
+                task.Id,
+                $"Cannot deliver or synchronize a Pull Request while ForgeTask #{task.Id} is in status {task.Status}; task must be Ready.");
+        }
 
         var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken)
             ?? throw new InvalidOperationException($"Workspace #{task.WorkspaceId} not found for task #{taskId}.");
 
         var pr = await _gitHubPrDeliveryService.DeliverPullRequestAsync(task, workspace, cancellationToken);
 
-        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: $"Synchronized GitHub Pull Request #{pr.Number} ({pr.HtmlUrl}) for task #{task.Id}.",
+            cancellationToken: cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
         {
             try
             {
-                await _markdownSyncService.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+                var dependencies = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
+                await _markdownSyncService.SyncTaskToDiskAsync(task, workspace.RepositoryPath, dependencies, cancellationToken: cancellationToken);
             }
             catch (Exception mex) when (mex is not OperationCanceledException)
             {

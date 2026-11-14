@@ -402,6 +402,10 @@ public class AppDbContext : DbContext
             b.Property(h => h.BaseBranch).IsRequired().HasMaxLength(128);
             b.Property(h => h.FeatureBranch).HasMaxLength(256);
             b.Property(h => h.CurrentStageId).HasMaxLength(128);
+            b.Property(h => h.ExternalSource).HasMaxLength(64);
+            b.Property(h => h.ExternalReferenceId).HasMaxLength(128);
+            b.Property(h => h.PullRequestNumber);
+            b.Property(h => h.PullRequestUrl).HasMaxLength(1024);
             b.Property(h => h.SerializedDependencies).IsRequired();
             b.Property(h => h.ChangedAt).IsRequired();
             b.Property(h => h.ChangedBy).IsRequired().HasMaxLength(128);
@@ -483,6 +487,11 @@ public class AppDbContext : DbContext
     /// Migration identifier for ForgeTask GitHub Pull Request and external source tracking fields.
     /// </summary>
     public const string AddForgeTaskGitHubPullRequestFieldsMigrationId = "20261114000000_AddForgeTaskGitHubPullRequestFields";
+
+    /// <summary>
+    /// Migration identifier for ForgeTaskHistory GitHub external source and Pull Request audit fields.
+    /// </summary>
+    public const string AddTaskHistoryGitHubFieldsMigrationId = "20261114185639_AddTaskHistoryGitHubFields";
 
     /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
@@ -667,6 +676,17 @@ VALUES ('" + AddWorkspaceGitHubSettingsMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddForgeTaskGitHubPullRequestFieldsMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('TaskHistories') WHERE name = 'PullRequestNumber';";
+                var hasHistoryPullRequestNumberColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasHistoryPullRequestNumberColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddTaskHistoryGitHubFieldsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

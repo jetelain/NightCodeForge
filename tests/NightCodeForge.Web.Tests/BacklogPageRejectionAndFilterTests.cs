@@ -66,6 +66,7 @@ public class BacklogPageRejectionAndFilterTests : BunitContext
         Services.AddSingleton(workerState);
         Services.AddSingleton(TestServices.CreateOperationsControlService());
         Services.AddSingleton(TestHubConnectionHelper.Create(workerStateService: workerState));
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

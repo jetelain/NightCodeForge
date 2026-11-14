@@ -15,6 +15,57 @@ namespace NightCodeForge.Web.Services;
 public static class GitHubPullRequestUiHelper
 {
     public static async Task<bool> IsPullRequestDeliveryAvailableAsync(
+        SecurityOptions? securityOptions,
+        IGitHubPullRequestDeliveryService prDeliveryService,
+        Workspace? workspace,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(prDeliveryService);
+
+        if (securityOptions?.AirGappedMode == true)
+        {
+            return false;
+        }
+
+        if (workspace?.GitHubSettings is not { Enabled: true, PullRequestDeliveryEnabled: true })
+        {
+            return false;
+        }
+
+        return await prDeliveryService.IsPullRequestDeliveryAvailableAsync(workspace, cancellationToken);
+    }
+
+    public static async Task MirrorTaskOpenedSafeAsync(
+        IGitHubTaskMirrorService mirrorService,
+        ForgeTask task,
+        Workspace? workspace,
+        ILogger logger,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mirrorService);
+        ArgumentNullException.ThrowIfNull(task);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (workspace == null || task.Status != TaskOverallStatus.Open)
+        {
+            return;
+        }
+
+        try
+        {
+            await mirrorService.MirrorTaskOpenedAsync(task, workspace, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to mirror opened state to GitHub for Task #{TaskId}.", task.Id);
+        }
+    }
+
+    public static async Task<bool> IsPullRequestDeliveryAvailableAsync(
         IServiceProvider serviceProvider,
         Workspace? workspace,
         CancellationToken cancellationToken = default)

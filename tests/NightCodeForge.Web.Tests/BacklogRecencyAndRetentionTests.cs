@@ -244,6 +244,7 @@ public class BacklogRecencyAndRetentionTests : BunitContext
         Services.AddSingleton<ITaskDiskSyncCoordinator>(new Mock<ITaskDiskSyncCoordinator>().Object);
         Services.AddSingleton<IDagLayoutEngine>(new DagLayoutEngine());
         Services.AddSingleton(NullLogger<Backlog>.Instance);
+        TestServices.AddDefaultWebUiServices(Services);
 
         var cut = Render<Backlog>(parameters => parameters.Add(p => p.WorkspaceId, ws.Id));
 

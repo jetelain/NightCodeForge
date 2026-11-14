@@ -267,12 +267,15 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         ArgumentNullException.ThrowIfNull(context);
 
         int attemptIndex = (context.PipelineContext?.StageRetries.GetValueOrDefault(context.StageId, 0) ?? 0) + 1;
+        int? persistedTaskId = context.ForgeTask.Id > 0 ? context.ForgeTask.Id : null;
         Conversation? conversation = null;
         Conversation? waitingConversation = null;
         ConversationTurn? initialBootstrapTurn = null;
         bool hadPersistedTurnsBeforeResume = false;
 
-        var resumableConversation = await _taskRepository.GetResumableConversationAsync(context.ForgeTask.Id, context.StageId, cancellationToken);
+        var resumableConversation = persistedTaskId.HasValue
+            ? await _taskRepository.GetResumableConversationAsync(persistedTaskId.Value, context.StageId, cancellationToken)
+            : null;
         if (resumableConversation != null)
         {
             if (resumableConversation.Status == StageExecutionStatus.WaitingForHuman)
@@ -317,25 +320,30 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
         if (conversation == null)
         {
-            var existingConvs = await _taskRepository.GetConversationsAsync(context.ForgeTask.Id, cancellationToken);
-            if (existingConvs != null)
+            if (persistedTaskId.HasValue)
             {
-                var maxExistingAttempt = existingConvs
-                    .Where(c => string.Equals(c.StageId, context.StageId, StringComparison.OrdinalIgnoreCase))
-                    .Select(c => c.AttemptIndex)
-                    .DefaultIfEmpty(0)
-                    .Max();
-                attemptIndex = Math.Max(attemptIndex, maxExistingAttempt + 1);
+                var existingConvs = await _taskRepository.GetConversationsAsync(persistedTaskId.Value, cancellationToken);
+                if (existingConvs != null)
+                {
+                    var maxExistingAttempt = existingConvs
+                        .Where(c => string.Equals(c.StageId, context.StageId, StringComparison.OrdinalIgnoreCase))
+                        .Select(c => c.AttemptIndex)
+                        .DefaultIfEmpty(0)
+                        .Max();
+                    attemptIndex = Math.Max(attemptIndex, maxExistingAttempt + 1);
+                }
             }
 
             conversation = await _taskRepository.StartConversationAsync(
-                context.ForgeTask.Id,
+                persistedTaskId,
                 context.StageId,
                 WorkflowStageKind.Agentic,
                 attemptIndex,
                 context.Profile.Id,
                 harnessId,
                 context.Profile.ModelName,
+                workspaceId: context.Workspace?.Id,
+                title: context.ForgeTask.Title,
                 cancellationToken: cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(context.BootstrapPrompt))
@@ -383,7 +391,9 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             ApplyPendingHumanAnswer(state, context, resumedWaitingConversation);
         }
 
-        var sessionId = LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId);
+        var sessionId = persistedTaskId.HasValue
+            ? LlmSessionIds.ForStage(persistedTaskId.Value, context.StageId)
+            : $"task-transient-{Guid.NewGuid():N}-stage-{context.StageId}";
         RouterSessionUsage? baselineUsage = null;
         try
         {

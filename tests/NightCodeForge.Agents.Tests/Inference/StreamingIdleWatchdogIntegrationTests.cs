@@ -748,11 +748,13 @@ public class StreamingIdleWatchdogIntegrationTests
         });
 
         await enteredFirstWaitTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
 
         // 1. Advance 4 minutes and emit empty role chunk (6 minutes of the 10-minute prefill budget remain)
         timeProvider.Advance(TimeSpan.FromMinutes(4));
         emptyChunkTcs.TrySetResult(true);
         await enteredSecondWaitTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
 
         // 2. Advance 6.5 minutes (total 10.5m > 10m FirstTokenTimeout, even though 6.5m < 10m since the empty chunk)
         timeProvider.Advance(TimeSpan.FromMinutes(6.5));
@@ -844,6 +846,24 @@ public class StreamingIdleWatchdogIntegrationTests
         private DateTimeOffset _utcNow = new(2026, 11, 10, 8, 0, 0, TimeSpan.Zero);
         private long _timestampTicks;
         private readonly List<ControllableTimer> _timers = new();
+        private TaskCompletionSource<bool> _timerRegisteredTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WaitForActiveTimerAsync(TimeSpan timeout)
+        {
+            Task waitTask;
+            lock (_sync)
+            {
+                if (_timers.Any(t => !t.IsDisposed))
+                {
+                    return;
+                }
+
+                _timerRegisteredTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                waitTask = _timerRegisteredTcs.Task;
+            }
+
+            await waitTask.WaitAsync(timeout);
+        }
 
         public override DateTimeOffset GetUtcNow()
         {
@@ -889,6 +909,7 @@ public class StreamingIdleWatchdogIntegrationTests
             {
                 var timer = new ControllableTimer(this, callback, state, dueTime);
                 _timers.Add(timer);
+                _timerRegisteredTcs.TrySetResult(true);
                 return timer;
             }
         }

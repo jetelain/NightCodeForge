@@ -94,14 +94,24 @@ public class GitCliRunner : IGitCliRunner
             ProcessStartSpec spec;
             if (isWslTarget)
             {
-                var wslArgs = new List<string> { "-d", distro, "--exec" };
-                if (environmentVariables != null && environmentVariables.Count > 0)
+                var wslEnv = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    wslArgs.Add("env");
+                    ["PAGER"] = "cat",
+                    ["GIT_PAGER"] = "cat",
+                    ["GIT_TERMINAL_PROMPT"] = "0"
+                };
+                if (environmentVariables != null)
+                {
                     foreach (var kvp in environmentVariables)
                     {
-                        wslArgs.Add($"{kvp.Key}={kvp.Value}");
+                        wslEnv[kvp.Key] = kvp.Value;
                     }
+                }
+
+                var wslArgs = new List<string> { "-d", distro, "--exec", "env" };
+                foreach (var kvp in wslEnv)
+                {
+                    wslArgs.Add($"{kvp.Key}={kvp.Value}");
                 }
                 wslArgs.AddRange(["git", "-c", "core.pager=cat", "-C", linuxDir]);
                 wslArgs.AddRange(argsArray);
@@ -111,7 +121,7 @@ public class GitCliRunner : IGitCliRunner
                     FileName = "wsl.exe",
                     ArgumentList = wslArgs,
                     TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
-                    EnvironmentVariables = environmentVariables
+                    EnvironmentVariables = wslEnv
                 };
             }
             else
@@ -241,6 +251,18 @@ public class GitCliRunner : IGitCliRunner
         "ls-remote"
     };
 
+    private static readonly HashSet<string> GlobalOptionsWithValue = new(StringComparer.Ordinal)
+    {
+        "-c",
+        "-C",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--exec-path",
+        "--super-prefix",
+        "--config-env"
+    };
+
     public static int ResolveTimeoutSeconds(IReadOnlyList<string> args, int? timeoutSeconds)
     {
         if (timeoutSeconds.HasValue)
@@ -251,8 +273,7 @@ public class GitCliRunner : IGitCliRunner
         for (int i = 0; i < args.Count; i++)
         {
             var arg = args[i];
-            if (string.Equals(arg, "-c", StringComparison.Ordinal) ||
-                string.Equals(arg, "-C", StringComparison.Ordinal))
+            if (GlobalOptionsWithValue.Contains(arg))
             {
                 i++; // skip option value
                 continue;

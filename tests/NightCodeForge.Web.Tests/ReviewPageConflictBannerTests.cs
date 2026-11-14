@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -32,6 +33,7 @@ public class ReviewPageConflictBannerTests : BunitContext
         _reviewService = new TaskReviewService(
             _taskRepository,
             _workspaceRepository,
+            new WorkspaceLockProvider(),
             new Mock<IGitWorkspaceManager>().Object,
             new Mock<IGitHubPullRequestDeliveryService>().Object,
             _orchestrator,
@@ -51,6 +53,7 @@ public class ReviewPageConflictBannerTests : BunitContext
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ISyntaxHighlightingService>(new SimpleSyntaxHighlighter());
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]
