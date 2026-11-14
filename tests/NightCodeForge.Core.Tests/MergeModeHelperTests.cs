@@ -10,23 +10,30 @@ public class MergeModeHelperTests
     {
         Assert.Equal("Automatic Merge", MergeModeHelper.GetLabel(MergeMode.Automatic));
         Assert.Equal("Manual Review Required", MergeModeHelper.GetLabel(MergeMode.ManualReviewRequired));
+        Assert.Equal("External Pull Request (GitHub)", MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest));
 
         Assert.Equal("Auto", MergeModeHelper.GetShortLabel(MergeMode.Automatic));
         Assert.Equal("Manual", MergeModeHelper.GetShortLabel(MergeMode.ManualReviewRequired));
+        Assert.Equal("PR", MergeModeHelper.GetShortLabel(MergeMode.ExternalPullRequest));
 
         Assert.Contains("Auto-squashes and merges", MergeModeHelper.GetDescription(MergeMode.Automatic));
         Assert.Contains("Pauses at Ready for human maintainer review", MergeModeHelper.GetDescription(MergeMode.ManualReviewRequired));
+        Assert.Contains("Pushes branch to GitHub, creates or updates a Pull Request", MergeModeHelper.GetDescription(MergeMode.ExternalPullRequest));
 
         Assert.Equal("badge-teal", MergeModeHelper.GetBadgeClass(MergeMode.Automatic));
         Assert.Equal("badge-indigo", MergeModeHelper.GetBadgeClass(MergeMode.ManualReviewRequired));
+        Assert.Equal("badge-purple", MergeModeHelper.GetBadgeClass(MergeMode.ExternalPullRequest));
 
         Assert.Equal("#14b8a6", MergeModeHelper.GetBadgeColor(MergeMode.Automatic));
         Assert.Equal("#6366f1", MergeModeHelper.GetBadgeColor(MergeMode.ManualReviewRequired));
+        Assert.Equal("#a855f7", MergeModeHelper.GetBadgeColor(MergeMode.ExternalPullRequest));
 
         Assert.Equal("⚡", MergeModeHelper.GetIcon(MergeMode.Automatic));
         Assert.Equal("🔍", MergeModeHelper.GetIcon(MergeMode.ManualReviewRequired));
+        Assert.Equal("🐙", MergeModeHelper.GetIcon(MergeMode.ExternalPullRequest));
 
-        Assert.Equal(2, MergeModeHelper.All.Length);
+        Assert.Equal(3, MergeModeHelper.All.Length);
+        Assert.Contains(MergeMode.ExternalPullRequest, MergeModeHelper.All);
     }
 
     [Fact]

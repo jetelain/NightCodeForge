@@ -1264,6 +1264,15 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             return Task.FromResult(new TaskDiffResult(DiffFilesToReturn, DiffProvenance.LiveWorktree, "main"));
         }
 
+        public Task<bool> IsPullRequestDeliveryAvailableAsync(int workspaceId, CancellationToken cancellationToken = default)
+            => Task.FromResult(false);
+
+        public Task<GitHubPullRequest> CreateOrSyncPullRequestAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new GitHubPullRequest { Number = 1, HtmlUrl = "https://github.com/owner/repo/pull/1" });
+
+        public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CompleteTaskResult(CompleteTaskStatus.Completed, "sha"));
+
         public bool IsPendingReview(TaskReviewSnapshot snapshot)
             => snapshot.HasExecutionRun && snapshot.Status == TaskOverallStatus.Ready;
 

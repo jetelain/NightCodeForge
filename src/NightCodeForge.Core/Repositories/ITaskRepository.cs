@@ -299,6 +299,16 @@ public class InMemoryTaskRepository : ITaskRepository
         {
             if (_tasks.TryGetValue(task.Id, out var existing) && !ReferenceEquals(existing, task))
             {
+                if (!task.PullRequestNumber.HasValue && existing.PullRequestNumber.HasValue)
+                {
+                    task.PullRequestNumber = existing.PullRequestNumber;
+                }
+
+                if (string.IsNullOrWhiteSpace(task.PullRequestUrl) && !string.IsNullOrWhiteSpace(existing.PullRequestUrl))
+                {
+                    task.PullRequestUrl = existing.PullRequestUrl;
+                }
+
                 if (existing.Version > task.Version)
                 {
                     task.Version = existing.Version;
@@ -306,6 +316,8 @@ public class InMemoryTaskRepository : ITaskRepository
                     task.Priority = existing.Priority;
                     task.Title = existing.Title;
                     task.Description = existing.Description;
+                    task.ExternalSource = existing.ExternalSource;
+                    task.ExternalReferenceId = existing.ExternalReferenceId;
                 }
                 else
                 {

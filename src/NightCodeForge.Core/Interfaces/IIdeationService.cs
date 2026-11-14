@@ -8,7 +8,8 @@ public record IdeationProposal(
     int Priority = TaskPriority.Normal,
     IReadOnlyList<string>? DependsOnTitles = null,
     int? TaskId = null,
-    IReadOnlyList<int>? DependsOnIds = null);
+    IReadOnlyList<int>? DependsOnIds = null,
+    string? MergeMode = null);
 
 public record IdeationToolCallInfo(
     string ToolCallId,

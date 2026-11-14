@@ -1264,6 +1264,61 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         }
     }
 
+    /// <inheritdoc />
+    public async Task DeleteTaskBranchAsync(
+        Workspace workspace,
+        int taskId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        var canonicalPath = GetCanonicalWorkingPath(workspace);
+        var branchName = $"feature/task-{taskId}";
+        var baseBranch = string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? "main" : workspace.DefaultBaseBranch;
+
+        await DeleteBranchInRepoSafeAsync(canonicalPath, branchName, baseBranch, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+            !string.Equals(workspace.RepositoryPath, canonicalPath, StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(workspace.RepositoryPath))
+        {
+            await DeleteBranchInRepoSafeAsync(workspace.RepositoryPath, branchName, baseBranch, cancellationToken);
+        }
+    }
+
+    private async Task DeleteBranchInRepoSafeAsync(
+        string repoPath,
+        string branchName,
+        string fallbackBranch,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var headRef = await _gitCliRunner.ExecuteAsync(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken: cancellationToken);
+            if (string.Equals(headRef.StandardOutput.Trim(), branchName, StringComparison.OrdinalIgnoreCase))
+            {
+                await _gitCliRunner.ExecuteAsync(repoPath, ["checkout", fallbackBranch], cancellationToken: cancellationToken);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Could not inspect or switch HEAD before deleting branch '{BranchName}' in '{RepoPath}'", branchName, repoPath);
+        }
+
+        try
+        {
+            var branchList = await _gitCliRunner.ExecuteAsync(repoPath, ["branch", "--list", branchName], cancellationToken: cancellationToken);
+            if (!string.IsNullOrWhiteSpace(branchList.StandardOutput))
+            {
+                await _gitCliRunner.ExecuteAsync(repoPath, ["branch", "-D", branchName], cancellationToken: cancellationToken);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to delete local branch '{BranchName}' in '{RepoPath}'", branchName, repoPath);
+        }
+    }
+
     private string GetWorkingPath(Workspace workspace, int? taskId = null)
     {
         if (taskId.HasValue)

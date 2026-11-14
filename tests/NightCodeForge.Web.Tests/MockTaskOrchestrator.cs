@@ -71,6 +71,20 @@ public class MockTaskOrchestrator : ITaskOrchestrator
     public Exception? CompleteTaskException { get; set; }
     public Func<int, string, CompleteTaskResult>? OnCompleteTaskAndCascade { get; set; }
 
+    public int? LastCloseExternallyMergedTaskId { get; private set; }
+    public CompleteTaskResult CloseExternallyMergedResult { get; set; } = new(CompleteTaskStatus.Completed, "ext-merge-sha");
+    public Exception? CloseExternallyMergedException { get; set; }
+
+    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        LastCloseExternallyMergedTaskId = taskId;
+        if (CloseExternallyMergedException != null)
+        {
+            throw CloseExternallyMergedException;
+        }
+        return Task.FromResult(CloseExternallyMergedResult);
+    }
+
     public Task<CompleteTaskResult> CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default)
     {
         LastCompleteTaskCall = (taskId, finalCommitMessage);

@@ -140,5 +140,13 @@ public interface IGitWorkspaceManager
         int taskId,
         string baseBranch,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes the local <c>feature/task-{id}</c> branch from the canonical repository (and host repository when mirrored).
+    /// </summary>
+    Task DeleteTaskBranchAsync(
+        Workspace workspace,
+        int taskId,
+        CancellationToken cancellationToken = default);
 }
 

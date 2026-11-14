@@ -469,4 +469,56 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Null(await repo.GetByIdAsync(draft1.Id));
         Assert.Empty(await repo.GetDependenciesAsync(draft2.Id));
     }
+
+    [Fact]
+    public async Task UpdateAsync_PreservesGitHubPullRequestAndExternalProvenanceFieldsAcrossConcurrentUpdates()
+    {
+        using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(new AppDbContextFactory(_options));
+
+        var workspace = new Workspace { Name = "GitHubPrPersistenceWs", RepositoryPath = "/tmp/pr-ws" };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var created = await repo.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = "PR Delivery Task",
+                Description = "Initial spec",
+                Status = TaskOverallStatus.Implemented,
+                MergeMode = MergeMode.ExternalPullRequest,
+                ExternalSource = "github",
+                ExternalReferenceId = "77"
+            },
+            null,
+            AuditActors.User,
+            "Created");
+
+        // Load a stale worker copy before a concurrent specification edit
+        var workerCopy = await repo.GetByIdAsync(created.Id);
+        Assert.NotNull(workerCopy);
+
+        // Concurrent user specification edit increments Version to 2
+        var userCopy = await repo.GetByIdAsync(created.Id);
+        Assert.NotNull(userCopy);
+        userCopy.Description = "Updated spec by maintainer";
+        await repo.UpdateWithHistoryAsync(userCopy, null, AuditActors.User, "Maintainer spec tweak");
+
+        // Worker finishes Stage 6 and sets PullRequestNumber/PullRequestUrl on workerCopy (Version still 1)
+        workerCopy.Status = TaskOverallStatus.Ready;
+        workerCopy.PullRequestNumber = 45;
+        workerCopy.PullRequestUrl = "https://github.com/acme/demo/pull/45";
+        await repo.UpdateAsync(workerCopy);
+
+        var finalTask = await repo.GetByIdAsync(created.Id);
+        Assert.NotNull(finalTask);
+        Assert.Equal(TaskOverallStatus.Ready, finalTask.Status);
+        Assert.Equal("Updated spec by maintainer", finalTask.Description);
+        Assert.Equal(MergeMode.ExternalPullRequest, finalTask.MergeMode);
+        Assert.Equal("github", finalTask.ExternalSource);
+        Assert.Equal("77", finalTask.ExternalReferenceId);
+        Assert.Equal(45, finalTask.PullRequestNumber);
+        Assert.Equal("https://github.com/acme/demo/pull/45", finalTask.PullRequestUrl);
+    }
 }

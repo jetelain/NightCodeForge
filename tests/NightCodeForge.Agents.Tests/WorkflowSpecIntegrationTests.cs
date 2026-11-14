@@ -436,6 +436,7 @@ public class WorkflowSpecIntegrationTests
             mockMdSync.Object,
             pathResolver,
             envProviderMock.Object,
+            new Mock<IGitHubPullRequestDeliveryService>().Object,
             NullLogger<TaskWorkspacePreparer>.Instance);
         var mockTelemetryService = new Mock<IOperationsTelemetryService>();
         var mergeAndCascadeCoordinator = new TaskMergeAndCascadeCoordinator(

@@ -201,6 +201,14 @@ public class FakeGitWorkspaceManager : IGitWorkspaceManager
     {
         return Task.CompletedTask;
     }
+
+    public List<int> DeletedTaskBranches { get; } = new();
+
+    public Task DeleteTaskBranchAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default)
+    {
+        DeletedTaskBranches.Add(taskId);
+        return Task.CompletedTask;
+    }
 }
 
 public class FakeGitCliRunner : IGitCliRunner

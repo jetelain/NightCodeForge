@@ -241,6 +241,9 @@ public class WorkspaceUrlRoutingTests : BunitContext
             taskRepo,
             workspaceRepo,
             new Mock<IGitWorkspaceManager>().Object,
+            new Mock<IGitHubPullRequestDeliveryService>().Object,
+            orchestrator,
+            markdownSync,
             NullLogger<TaskReviewService>.Instance);
 
         Services.AddSingleton<ITaskRepository>(taskRepo);
@@ -299,6 +302,9 @@ public class WorkspaceUrlRoutingTests : BunitContext
             taskRepo,
             workspaceRepo,
             new Mock<IGitWorkspaceManager>().Object,
+            new Mock<IGitHubPullRequestDeliveryService>().Object,
+            new MockTaskOrchestrator(),
+            new MockTaskMarkdownSyncService(),
             NullLogger<TaskReviewService>.Instance);
 
         Services.AddSingleton<ITaskRepository>(taskRepo);

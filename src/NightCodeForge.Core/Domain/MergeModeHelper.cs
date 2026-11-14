@@ -8,7 +8,7 @@ public static class MergeModeHelper
     /// <summary>
     /// All currently supported merge modes.
     /// </summary>
-    public static readonly MergeMode[] All = [MergeMode.Automatic, MergeMode.ManualReviewRequired];
+    public static readonly MergeMode[] All = [MergeMode.Automatic, MergeMode.ManualReviewRequired, MergeMode.ExternalPullRequest];
 
     /// <summary>
     /// Returns the human-readable display label for a merge mode.
@@ -17,6 +17,7 @@ public static class MergeModeHelper
     {
         MergeMode.Automatic => "Automatic Merge",
         MergeMode.ManualReviewRequired => "Manual Review Required",
+        MergeMode.ExternalPullRequest => "External Pull Request (GitHub)",
         _ => mode.ToString()
     };
 
@@ -27,7 +28,30 @@ public static class MergeModeHelper
     {
         MergeMode.Automatic => "Auto",
         MergeMode.ManualReviewRequired => "Manual",
+        MergeMode.ExternalPullRequest => "PR",
         _ => mode.ToString()
+    };
+
+    /// <summary>
+    /// Returns the compact badge label used in task detail headers and drawers.
+    /// </summary>
+    public static string GetBadgeLabel(MergeMode mode) => mode switch
+    {
+        MergeMode.Automatic => "Auto-Merge",
+        MergeMode.ManualReviewRequired => "Manual Review",
+        MergeMode.ExternalPullRequest => "External PR",
+        _ => GetLabel(mode)
+    };
+
+    /// <summary>
+    /// Returns the SVG text fill color for DAG nodes.
+    /// </summary>
+    public static string GetSvgPillColor(MergeMode mode) => mode switch
+    {
+        MergeMode.Automatic => "#5eead4",
+        MergeMode.ManualReviewRequired => "#a5b4fc",
+        MergeMode.ExternalPullRequest => "#c084fc",
+        _ => "#94a3b8"
     };
 
     /// <summary>
@@ -37,6 +61,7 @@ public static class MergeModeHelper
     {
         MergeMode.Automatic => "Auto-squashes and merges to base branch once status reaches Ready.",
         MergeMode.ManualReviewRequired => "Pauses at Ready for human maintainer review in the Review Room before merging.",
+        MergeMode.ExternalPullRequest => "Pushes branch to GitHub, creates or updates a Pull Request, and pauses at Ready for human review.",
         _ => string.Empty
     };
 
@@ -47,6 +72,7 @@ public static class MergeModeHelper
     {
         MergeMode.Automatic => "badge-teal",
         MergeMode.ManualReviewRequired => "badge-indigo",
+        MergeMode.ExternalPullRequest => "badge-purple",
         _ => "badge-secondary"
     };
 
@@ -57,6 +83,7 @@ public static class MergeModeHelper
     {
         MergeMode.Automatic => "#14b8a6",
         MergeMode.ManualReviewRequired => "#6366f1",
+        MergeMode.ExternalPullRequest => "#a855f7",
         _ => "#64748b"
     };
 
@@ -67,6 +94,7 @@ public static class MergeModeHelper
     {
         MergeMode.Automatic => "⚡",
         MergeMode.ManualReviewRequired => "🔍",
+        MergeMode.ExternalPullRequest => "🐙",
         _ => "🔀"
     };
 }

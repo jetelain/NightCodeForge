@@ -75,8 +75,12 @@ public interface ITaskWorkspacePreparer
     Task ResetCanonicalBranchAsync(Workspace workspace, string branchName, string targetSha, CancellationToken cancellationToken = default);
     Task<GitSyncResult> PushBaseBranchToHostAsync(string mirrorPath, string baseBranch, CancellationToken cancellationToken = default);
     Task RemoveWorktreeSafeAsync(Workspace workspace, int taskId, string contextDescription, CancellationToken cancellationToken = default);
+    Task DeleteTaskBranchSafeAsync(Workspace workspace, int taskId, string contextDescription, CancellationToken cancellationToken = default);
     Task CleanupTaskContainerSafeAsync(Workspace workspace, int taskId, string contextDescription, CancellationToken cancellationToken = default);
     Task ResetTaskWorkspaceToBaseAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default);
+
+    Task<GitHubPullRequest> DeliverPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
+    Task<GitHubPullRequest> VerifyAndSyncExternallyMergedPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default);
 
     Task MaterializeConflictMarkersForImplementationAsync(Workspace workspace, ForgeTask task, PipelineContext pipelineContext, CancellationToken cancellationToken = default);
     Task PopulateReviewDiffsAsync(Workspace workspace, ForgeTask task, PipelineContext pipelineContext, CancellationToken cancellationToken = default);

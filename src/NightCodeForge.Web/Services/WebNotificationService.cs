@@ -82,7 +82,7 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
                 foreach (var t in readyTasks)
                 {
                     UpdateSnapshot(t);
-                    if (t.MergeMode == MergeMode.ManualReviewRequired)
+                    if (t.MergeMode != MergeMode.Automatic)
                     {
                         _deduplicator.TryAdd(BuildSignature(NotificationSubject.ReviewRoom, t));
                     }
@@ -419,7 +419,7 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
                 foreach (var task in readyTasks)
                 {
                     if (cancellationToken.IsCancellationRequested) break;
-                    if (task.MergeMode == MergeMode.ManualReviewRequired)
+                    if (task.MergeMode != MergeMode.Automatic)
                     {
                         bool isNewTransition;
                         lock (_snapshotLock)
@@ -532,7 +532,7 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
                 return;
             }
 
-            if (task.Status == TaskOverallStatus.Ready && task.MergeMode == MergeMode.ManualReviewRequired)
+            if (task.Status == TaskOverallStatus.Ready && task.MergeMode != MergeMode.Automatic)
             {
                 var notified = await DispatchNotificationAsync(NotificationSubject.ReviewRoom, task);
                 if (notified || !await ShouldNotifySubjectAsync(NotificationSubject.ReviewRoom))

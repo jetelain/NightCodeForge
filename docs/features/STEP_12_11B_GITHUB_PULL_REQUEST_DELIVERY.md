@@ -203,18 +203,18 @@ Execute against real temporary Git repositories (`git init --bare` simulating `h
 
 ## 5. Implementation Checklist & Deliverables
 
-- [ ] **Domain Model, `MergeModeHelper`, EF Core Migration & Markdown Sync:**
-  - [ ] Add `MergeMode.ExternalPullRequest = 2` and `ExternalSource`, `ExternalReferenceId`, `PullRequestNumber`, and `PullRequestUrl` on [`ForgeTask`](../../src/NightCodeForge.Core/Domain/ForgeTask.cs), plus `MergeModeHelper` support across all UI badge/selector call sites.
-  - [ ] Add EF Core migration and update `AppDbContext.BaselineExistingPreMigrationDatabaseAsync`, `EfCoreTaskRepository.UpdateAsync` (concurrency-safe preservation), `InMemoryTaskRepository`, `ForgeTaskHistory` / `TaskHistoryDiffService`, `TaskWorkspacePreparer.CopyTaskMetadata`, `TaskMergeAndCascadeCoordinator` (`discardApproval`), `TaskMarkdownSyncService`, `BacklogMutationToolService`, and `WebNotificationService`.
-- [ ] **Git Plumbing Hardening (`GitCliRunner` & `GitMirrorSyncService`):**
-  - [ ] Redact `http.extraHeader` / `Authorization:` / URL credentials across all [`GitCliRunner`](../../src/NightCodeForge.Infrastructure/Git/GitCliRunner.cs) logs, `TimeoutException`, and `GitCommandException` fields, and ensure network timeouts apply when `-c` flags precede `push` / `fetch` / `ls-remote`.
-  - [ ] Guard [`GitMirrorSyncService.PullFromHostAsync`](../../src/NightCodeForge.Infrastructure/Git/GitMirrorSyncService.cs) with an ancestor check (`git merge-base --is-ancestor`) so fetched GitHub commits on `BaseBranch` are never wiped by `reset --hard`.
-- [ ] **PR Delivery Orchestration, Non-Destructive Error Handling & External Merge Closure:**
-  - [ ] Extract shared quality gate metrics helper in `NightCodeForge.Core`.
-  - [ ] Implement remote `BaseBranch` fetch, pathspec-safe stripping of local `docs/tasks/*.md` state files from outbound PR commits, raw-URL explicit ref lease push (`ls-remote` + `--force-with-lease=refs/heads/ncf/{sanitizedLogin}/task-{id}:{expectedSha}`), non-destructive Stage 6 delivery failure recovery (transitioning to `Ready` with warning log), and `CloseExternallyMergedTaskAsync` (with remote `BaseBranch` sync and downstream DAG cascade unblocking) within the 10-constructor-parameter limit.
-- [ ] **Blazor UI Integration (Presentation Separation):**
-  - [ ] Extract PR creation/sync and external-merge closure actions into `ITaskReviewService` / `TaskReviewService`.
-  - [ ] Enable `MergeMode.ExternalPullRequest` option across task creation, promotion, and detail selectors when `PullRequestDeliveryEnabled` is active, and render `"Open GitHub Pull Request"`, `"Create GitHub Pull Request"`, and `"Close Merged PR"` actions in `Review.razor`, `TaskDetail.razor`, and `TaskDetailDrawer.razor`.
-- [ ] **Complete Automated Test Suite (Section 4):**
-  - [ ] Implement all 4 test layers: existing workflow non-regression (`Automatic` & `ManualReviewRequired`), real-Git bare-repo integration tests (`NightCodeForge.Infrastructure.Tests`), orchestrator & EF Core lifecycle tests (`NightCodeForge.Core.Tests`), and `TaskReviewService` + bUnit UI tests (`NightCodeForge.Web.Tests`), followed by full `dotnet test` (including E2E).
+- [x] **Domain Model, `MergeModeHelper`, EF Core Migration & Markdown Sync:**
+  - [x] Add `MergeMode.ExternalPullRequest = 2` and `ExternalSource`, `ExternalReferenceId`, `PullRequestNumber`, and `PullRequestUrl` on [`ForgeTask`](../../src/NightCodeForge.Core/Domain/ForgeTask.cs), plus `MergeModeHelper` support across all UI badge/selector call sites.
+  - [x] Add EF Core migration and update `AppDbContext.BaselineExistingPreMigrationDatabaseAsync`, `EfCoreTaskRepository.UpdateAsync` (concurrency-safe preservation), `InMemoryTaskRepository`, `ForgeTaskHistory` / `TaskHistoryDiffService`, `TaskWorkspacePreparer.CopyTaskMetadata`, `TaskMergeAndCascadeCoordinator` (`discardApproval`), `TaskMarkdownSyncService`, `BacklogMutationToolService`, and `WebNotificationService`.
+- [x] **Git Plumbing Hardening (`GitCliRunner` & `GitMirrorSyncService`):**
+  - [x] Redact `http.extraHeader` / `Authorization:` / URL credentials across all [`GitCliRunner`](../../src/NightCodeForge.Infrastructure/Git/GitCliRunner.cs) logs, `TimeoutException`, and `GitCommandException` fields, and ensure network timeouts apply when `-c` flags precede `push` / `fetch` / `ls-remote`.
+  - [x] Guard [`GitMirrorSyncService.PullFromHostAsync`](../../src/NightCodeForge.Infrastructure/Git/GitMirrorSyncService.cs) with an ancestor check (`git merge-base --is-ancestor`) so fetched GitHub commits on `BaseBranch` are never wiped by `reset --hard`.
+- [x] **PR Delivery Orchestration, Non-Destructive Error Handling & External Merge Closure:**
+  - [x] Extract shared quality gate metrics helper in `NightCodeForge.Core`.
+  - [x] Implement remote `BaseBranch` fetch, pathspec-safe stripping of local `docs/tasks/*.md` state files from outbound PR commits, raw-URL explicit ref lease push (`ls-remote` + `--force-with-lease=refs/heads/ncf/{sanitizedLogin}/task-{id}:{expectedSha}`), non-destructive Stage 6 delivery failure recovery (transitioning to `Ready` with warning log), and `CloseExternallyMergedTaskAsync` (with remote `BaseBranch` sync and downstream DAG cascade unblocking) within the 10-constructor-parameter limit.
+- [x] **Blazor UI Integration (Presentation Separation):**
+  - [x] Extract PR creation/sync and external-merge closure actions into `ITaskReviewService` / `TaskReviewService`.
+  - [x] Enable `MergeMode.ExternalPullRequest` option across task creation, promotion, and detail selectors when `PullRequestDeliveryEnabled` is active, and render `"Open GitHub Pull Request"`, `"Create GitHub Pull Request"`, and `"Close Merged PR"` actions in `Review.razor`, `TaskDetail.razor`, and `TaskDetailDrawer.razor`.
+- [x] **Complete Automated Test Suite (Section 4):**
+  - [x] Implement all 4 test layers: existing workflow non-regression (`Automatic` & `ManualReviewRequired`), real-Git bare-repo integration tests (`NightCodeForge.Infrastructure.Tests`), orchestrator & EF Core lifecycle tests (`NightCodeForge.Core.Tests`), and `TaskReviewService` + bUnit UI tests (`NightCodeForge.Web.Tests`), followed by full `dotnet test` (including E2E).
 

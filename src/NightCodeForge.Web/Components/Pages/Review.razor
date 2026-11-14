@@ -14,6 +14,7 @@
 @inject NavigationManager NavigationManager
 @inject WorkspaceStateService WorkspaceState
 @inject WorkerStateService WorkerState
+@inject IServiceProvider ServiceProvider
 @implements IDisposable
 
 <PageTitle>Review Room - NightCodeForge</PageTitle>
@@ -108,6 +109,16 @@
                     <a href="@WorkspaceState.GetPath($"tasks/{_snapshot.TaskId}")" class="btn btn-secondary btn-sm" id="btn-header-task-details" title="Open Task Details">
                         📄 Task Details
                     </a>
+                    @if (!string.IsNullOrWhiteSpace(_snapshot.PullRequestUrl))
+                    {
+                        <a href="@_snapshot.PullRequestUrl"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           class="btn btn-secondary btn-sm"
+                           id="btn-open-github-pr">
+                            🐙 @GitHubPullRequestUiHelper.GetOpenPullRequestLabel(_snapshot.PullRequestNumber)
+                        </a>
+                    }
                     @if (_snapshot.MergeMode == MergeMode.Automatic && _snapshot.Status == TaskOverallStatus.Closed)
                     {
                         <span class="badge-success-large" id="badge-auto-merged">✅ Auto-Merged to @_snapshot.BaseBranch</span>
@@ -118,11 +129,29 @@
                     }
                     else if (TaskReviewService.IsPendingReview(_snapshot))
                     {
-                        <button class="btn btn-warning-outline" id="btn-request-changes" @onclick="OpenChangeRequestModal">
+                        @if (_isPrDeliveryAvailable || _snapshot.MergeMode == MergeMode.ExternalPullRequest)
+                        {
+                            <button class="btn btn-secondary"
+                                    id="btn-create-or-sync-pr"
+                                    @onclick="CreateOrSyncPullRequestAsync"
+                                    disabled="@_isPrActionBusy">
+                                🐙 @GitHubPullRequestUiHelper.GetCreateOrSyncPullRequestLabel(_snapshot.PullRequestUrl, _snapshot.PullRequestNumber)
+                            </button>
+                        }
+                        @if (_snapshot.PullRequestNumber.HasValue)
+                        {
+                            <button class="btn btn-primary"
+                                    id="btn-close-merged-pr"
+                                    @onclick="CloseExternallyMergedPullRequestAsync"
+                                    disabled="@_isPrActionBusy">
+                                ✅ Close Merged PR
+                            </button>
+                        }
+                        <button class="btn btn-warning-outline" id="btn-request-changes" @onclick="OpenChangeRequestModal" disabled="@_isPrActionBusy">
                             📝 Request Changes @(CommentState.CommentCount > 0 ? $"({CommentState.CommentCount})" : "")
                         </button>
-                        <button class="btn btn-success" id="btn-approve-merge" @onclick="OpenApproveModal">
-                            🚀 Approve &amp; Merge
+                        <button class="btn btn-success" id="btn-approve-merge" @onclick="OpenApproveModal" disabled="@_isPrActionBusy">
+                            🚀 @(_snapshot.PullRequestNumber.HasValue ? "Approve & Merge Locally" : "Approve & Merge")
                         </button>
                     }
                 </div>
@@ -187,6 +216,8 @@
     private bool _showChangeRequestModal;
     private bool _showApproveModal;
     private bool _isLoading = true;
+    private bool _isPrDeliveryAvailable;
+    private bool _isPrActionBusy;
     private bool _disposed;
     private int _lastKnownPendingReviewCount = -1;
 
@@ -252,6 +283,9 @@
         try
         {
             var workspaceId = WorkspaceState.ActiveWorkspaceId;
+            _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(
+                ServiceProvider,
+                WorkspaceState.ActiveWorkspace);
             _pendingReviews = await TaskReviewService.GetPendingReviewsAsync(workspaceId);
 
             if (TaskId.HasValue)
@@ -331,6 +365,48 @@
     {
         _showApproveModal = false;
         await LoadReviewDataAsync();
+    }
+
+    private async Task CreateOrSyncPullRequestAsync()
+    {
+        if (_snapshot == null || _isPrActionBusy) return;
+
+        _isPrActionBusy = true;
+        try
+        {
+            var pr = await TaskReviewService.CreateOrSyncPullRequestAsync(_snapshot.TaskId);
+            ToastService.Show("Pull Request Ready", $"GitHub Pull Request #{pr.Number} synchronized.", ToastLevel.Success);
+            await LoadReviewDataAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Pull Request Delivery Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isPrActionBusy = false;
+        }
+    }
+
+    private async Task CloseExternallyMergedPullRequestAsync()
+    {
+        if (_snapshot == null || _isPrActionBusy) return;
+
+        _isPrActionBusy = true;
+        try
+        {
+            await TaskReviewService.CloseExternallyMergedTaskAsync(_snapshot.TaskId);
+            ToastService.Show("Task Closed", $"ForgeTask #{_snapshot.TaskId} closed via merged GitHub Pull Request #{_snapshot.PullRequestNumber}.", ToastLevel.Success);
+            await LoadReviewDataAsync();
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Cannot Close Task", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isPrActionBusy = false;
+        }
     }
 
     private string GetStatusBadgeClass(TaskOverallStatus status) => status switch

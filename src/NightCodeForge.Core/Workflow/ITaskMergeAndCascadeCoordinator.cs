@@ -59,6 +59,10 @@ public interface ITaskMergeAndCascadeCoordinator
         string finalCommitMessage,
         CancellationToken cancellationToken = default);
 
+    Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(
+        int taskId,
+        CancellationToken cancellationToken = default);
+
     Task InitiateConflictResolutionAsync(
         ForgeTask task,
         Workspace workspace,

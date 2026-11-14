@@ -61,6 +61,9 @@ public class TaskDetailPageTests : BunitContext
             _taskRepository,
             _workspaceRepository,
             new Moq.Mock<IGitWorkspaceManager>().Object,
+            new Moq.Mock<IGitHubPullRequestDeliveryService>().Object,
+            _orchestrator,
+            _markdownSync,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskReviewService>.Instance);
         Services.AddSingleton<ITaskReviewService>(reviewService);
         Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));

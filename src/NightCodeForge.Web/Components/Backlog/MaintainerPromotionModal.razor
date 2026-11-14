@@ -1,8 +1,10 @@
 @namespace NightCodeForge.Web.Components.Backlog
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
 @inject ITaskOrchestrator TaskOrchestrator
 @inject ToastService ToastService
+@inject IServiceProvider ServiceProvider
 
 @if (IsOpen && TargetTask != null)
 {
@@ -41,6 +43,10 @@
                     <select id="merge-mode-select" class="form-control-dark" @bind="_selectedMergeMode" disabled="@_isSubmitting">
                         <option value="@MergeMode.Automatic">Automatic (Auto-merge upon passing all deterministic gates)</option>
                         <option value="@MergeMode.ManualReviewRequired">ManualReviewRequired (Requires human diff review in Review Room)</option>
+                        @if (_isPrDeliveryAvailable || _selectedMergeMode == MergeMode.ExternalPullRequest)
+                        {
+                            <option value="@MergeMode.ExternalPullRequest">@MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest) — @MergeModeHelper.GetDescription(MergeMode.ExternalPullRequest)</option>
+                        }
                     </select>
                     <small style="display: block; margin-top: 0.35rem; color: var(--text-muted); font-size: 0.8rem;">
                         Automatic mode is recommended for deterministic fixes and test additions. Manual review halts at Stage 6 for maintainer diff inspection.
@@ -85,14 +91,16 @@
     private MergeMode _selectedMergeMode = MergeMode.Automatic;
     private string _selectedBaseBranch = string.Empty;
     private bool _isSubmitting;
+    private bool _isPrDeliveryAvailable;
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         if (TargetTask != null)
         {
             _selectedPriority = TargetTask.Priority > 0 ? TargetTask.Priority : TaskPriority.Normal;
             _selectedMergeMode = TargetTask.MergeMode;
             _selectedBaseBranch = TargetTask.BaseBranch ?? string.Empty;
+            _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(ServiceProvider, TargetTask.WorkspaceId);
         }
     }
 

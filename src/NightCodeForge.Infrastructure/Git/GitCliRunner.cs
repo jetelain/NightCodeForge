@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Infrastructure.Git;
@@ -83,7 +84,8 @@ public class GitCliRunner : IGitCliRunner
         using var timeoutCts = new CancellationTokenSource(timeoutDuration);
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        var displayArgs = string.Join(" ", argsArray);
+        var redactedArgs = GitCredentialRedactor.RedactArguments(argsArray);
+        var displayArgs = string.Join(" ", redactedArgs);
         _logger.LogDebug("Executing 'git {Arguments}' in '{WorkingDirectory}' (WSL: {IsWsl}, Timeout: {TimeoutSeconds}s)",
             displayArgs, workingDirectory, isWslTarget, timeoutDuration.TotalSeconds);
 
@@ -151,15 +153,16 @@ public class GitCliRunner : IGitCliRunner
 
             if (result.ExitCode != 0)
             {
+                var redactedStdErr = GitCredentialRedactor.Redact(stderr);
                 if (isWslTarget && stderr.Contains("cannot change to") && stderr.Contains("No such file or directory"))
                 {
-                    throw new DirectoryNotFoundException($"Working directory '{workingDirectory}' does not exist: {stderr.Trim()}");
+                    throw new DirectoryNotFoundException($"Working directory '{workingDirectory}' does not exist: {redactedStdErr.Trim()}");
                 }
 
                 _logger.LogWarning("Git command 'git {Arguments}' failed with exit code {ExitCode}: {StdErr}",
-                    displayArgs, result.ExitCode, stderr);
+                    displayArgs, result.ExitCode, redactedStdErr);
 
-                throw new GitCommandException(workingDirectory, argsArray, result.ExitCode, stdout, stderr);
+                throw new GitCommandException(workingDirectory, redactedArgs, result.ExitCode, GitCredentialRedactor.Redact(stdout), redactedStdErr);
             }
 
             return new GitCommandResult(result.ExitCode, stdout, stderr, stopwatch.Elapsed);
@@ -226,20 +229,48 @@ public class GitCliRunner : IGitCliRunner
         }
     }
 
-    private static TimeSpan ResolveTimeout(IReadOnlyList<string> args, int? timeoutSeconds)
+    public const int DefaultTimeoutSeconds = 30;
+    public const int NetworkOperationTimeoutSeconds = 120;
+
+    private static readonly HashSet<string> NetworkGitSubcommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "clone",
+        "fetch",
+        "push",
+        "pull",
+        "ls-remote"
+    };
+
+    public static int ResolveTimeoutSeconds(IReadOnlyList<string> args, int? timeoutSeconds)
     {
         if (timeoutSeconds.HasValue)
         {
-            return TimeSpan.FromSeconds(timeoutSeconds.Value);
+            return timeoutSeconds.Value;
         }
 
-        var firstArg = args.Count > 0 ? args[0] : string.Empty;
-        if (string.Equals(firstArg, "clone", StringComparison.OrdinalIgnoreCase) ||
-            args.Any(a => a.Contains("fetch", StringComparison.OrdinalIgnoreCase)))
+        for (int i = 0; i < args.Count; i++)
         {
-            return TimeSpan.FromSeconds(120);
+            var arg = args[i];
+            if (string.Equals(arg, "-c", StringComparison.Ordinal) ||
+                string.Equals(arg, "-C", StringComparison.Ordinal))
+            {
+                i++; // skip option value
+                continue;
+            }
+
+            if (arg.StartsWith('-'))
+            {
+                continue;
+            }
+
+            return NetworkGitSubcommands.Contains(arg)
+                ? NetworkOperationTimeoutSeconds
+                : DefaultTimeoutSeconds;
         }
 
-        return TimeSpan.FromSeconds(30);
+        return DefaultTimeoutSeconds;
     }
+
+    private static TimeSpan ResolveTimeout(IReadOnlyList<string> args, int? timeoutSeconds) =>
+        TimeSpan.FromSeconds(ResolveTimeoutSeconds(args, timeoutSeconds));
 }

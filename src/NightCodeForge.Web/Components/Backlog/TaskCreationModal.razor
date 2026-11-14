@@ -88,6 +88,10 @@
                         <select id="task-mergemode-select" class="form-control-dark" @bind="_selectedMergeMode" disabled="@_isSubmitting">
                             <option value="@MergeMode.Automatic">Automatic</option>
                             <option value="@MergeMode.ManualReviewRequired">Manual Review Required</option>
+                            @if (_isPrDeliveryAvailable)
+                            {
+                                <option value="@MergeMode.ExternalPullRequest">@MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest)</option>
+                            }
                         </select>
                     </div>
                 </div>
@@ -137,6 +141,7 @@
     private MergeMode _selectedMergeMode = MergeMode.ManualReviewRequired;
     private string _baseBranch = "main";
     private bool _isSubmitting;
+    private bool _isPrDeliveryAvailable;
     private List<WorkflowDefinition> _workflows = new();
 
     private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
@@ -148,6 +153,12 @@
             if (string.IsNullOrWhiteSpace(_baseBranch) || _baseBranch == "main")
             {
                 _baseBranch = string.IsNullOrWhiteSpace(DefaultBaseBranch) ? "main" : DefaultBaseBranch;
+            }
+
+            _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(ServiceProvider, WorkspaceId);
+            if (!_isPrDeliveryAvailable && _selectedMergeMode == MergeMode.ExternalPullRequest)
+            {
+                _selectedMergeMode = MergeMode.ManualReviewRequired;
             }
 
             await LoadWorkflowsAsync();

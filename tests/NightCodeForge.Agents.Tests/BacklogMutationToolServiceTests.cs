@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Concurrency;
@@ -7,6 +8,7 @@ using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 
@@ -19,20 +21,40 @@ public class BacklogMutationToolServiceTests
     private const string RepoPath = "/repo";
 
     private readonly InMemoryTaskRepository _repository = new();
+    private readonly Mock<IWorkspaceRepository> _workspaceRepository = new();
     private readonly Mock<ITaskMarkdownSyncService> _markdownSync = new();
     private readonly Mock<IAgentActivityStreamer> _streamer = new();
+    private readonly SecurityOptions _securityOptions = new();
     private readonly WorkspaceLockProvider _locks = new();
     private readonly BacklogMutationToolService _service;
     private readonly BacklogToolScope _scope = new(WorkspaceId, RepoPath);
 
     public BacklogMutationToolServiceTests()
     {
+        _workspaceRepository
+            .Setup(r => r.GetByIdAsync(WorkspaceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Workspace
+            {
+                Id = WorkspaceId,
+                Name = "Test Workspace",
+                RepositoryPath = RepoPath,
+                GitHubSettings = new GitHubIntegrationSettings
+                {
+                    Enabled = true,
+                    PullRequestDeliveryEnabled = true,
+                    RepositoryOwner = "octocat",
+                    RepositoryName = "hello-world"
+                }
+            });
+
         _service = new BacklogMutationToolService(
             _repository,
+            _workspaceRepository.Object,
             new DependencyResolutionEngine(new Mock<ITaskDependencyStore>().Object),
             _markdownSync.Object,
             _locks,
             _streamer.Object,
+            Options.Create(_securityOptions),
             NullLogger<BacklogMutationToolService>.Instance);
     }
 
@@ -565,6 +587,72 @@ public class BacklogMutationToolServiceTests
         Assert.Equal([existing.Id], await _repository.GetDependenciesAsync(idA));
         Assert.Equal([idA], await _repository.GetDependenciesAsync(idB));
         Assert.Equal(new[] { existing.Id, idA }.OrderBy(x => x), (await _repository.GetDependenciesAsync(idC)).OrderBy(x => x));
+    }
+
+    [Fact]
+    public async Task EditTask_And_ProposeTasks_AcceptExternalPullRequest_WhenEnabledAndNotAirGapped()
+    {
+        var task = await AddTaskAsync("PR Delivery Task");
+
+        await _service.EditTaskAsync(
+            _scope,
+            new TaskEditRequest(task.Id, MergeMode: "external_pull_request"),
+            CancellationToken.None);
+
+        var updated = await _repository.GetByIdAsync(task.Id);
+        Assert.Equal(MergeMode.ExternalPullRequest, updated!.MergeMode);
+
+        var json = await _service.ProposeTasksAsync(
+            _scope,
+            [new TaskProposal("Proposed PR Task", "Deliver via PR", priority: 2, mergeMode: "ExternalPullRequest")],
+            CancellationToken.None);
+        using var doc = JsonDocument.Parse(json);
+        var createdId = doc.RootElement.GetProperty("id").GetInt32();
+        var created = await _repository.GetByIdAsync(createdId);
+        Assert.Equal(MergeMode.ExternalPullRequest, created!.MergeMode);
+    }
+
+    [Fact]
+    public async Task EditTask_And_ProposeTasks_RejectExternalPullRequest_WhenPullRequestDeliveryDisabled()
+    {
+        _workspaceRepository
+            .Setup(r => r.GetByIdAsync(WorkspaceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Workspace
+            {
+                Id = WorkspaceId,
+                Name = "Disabled PR Workspace",
+                RepositoryPath = RepoPath,
+                GitHubSettings = new GitHubIntegrationSettings
+                {
+                    Enabled = true,
+                    PullRequestDeliveryEnabled = false
+                }
+            });
+
+        var task = await AddTaskAsync("Local Only Task");
+
+        var editEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, MergeMode: "external_pull_request"), CancellationToken.None));
+        Assert.Contains("Pull Request Delivery is disabled", editEx.Message);
+
+        var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.ProposeTasksAsync(_scope, [new TaskProposal("New PR Task", "Desc", mergeMode: "ExternalPullRequest")], CancellationToken.None));
+        Assert.Contains("Pull Request Delivery is disabled", proposeEx.Message);
+    }
+
+    [Fact]
+    public async Task EditTask_And_ProposeTasks_RejectExternalPullRequest_WhenAirGappedModeEnabled()
+    {
+        _securityOptions.AirGappedMode = true;
+        var task = await AddTaskAsync("AirGapped Task");
+
+        var editEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, MergeMode: "ExternalPullRequest"), CancellationToken.None));
+        Assert.Contains("Air-Gapped Mode", editEx.Message);
+
+        var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.ProposeTasksAsync(_scope, [new TaskProposal("AirGapped PR Task", "Desc", mergeMode: "external_pull_request")], CancellationToken.None));
+        Assert.Contains("Air-Gapped Mode", proposeEx.Message);
     }
 }
 

@@ -98,7 +98,7 @@
                             @SvgText(68, 20, $"P{task.Priority}", fill: node.PriorityText, fontSize: 10, fontWeight: "700", textAnchor: "middle")
 
                             <!-- MergeMode Pill -->
-                            @SvgText(208, 20, task.MergeMode == MergeMode.Automatic ? "Auto" : "Manual", fill: task.MergeMode == MergeMode.Automatic ? "#5eead4" : "#a5b4fc", fontSize: 10, textAnchor: "end")
+                            @SvgText(208, 20, MergeModeHelper.GetShortLabel(task.MergeMode), fill: MergeModeHelper.GetSvgPillColor(task.MergeMode), fontSize: 10, textAnchor: "end")
 
                             <!-- Title (clipped with ellipsis) -->
                             @SvgText(12, 42, node.TruncatedTitle, className: "dag-node-title", fill: "#f8fafc", fontSize: 12, fontWeight: "600")

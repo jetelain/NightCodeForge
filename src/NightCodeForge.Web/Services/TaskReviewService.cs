@@ -4,6 +4,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
@@ -13,6 +14,9 @@ public interface ITaskReviewService
     Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default);
     Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<bool> IsPullRequestDeliveryAvailableAsync(int workspaceId, CancellationToken cancellationToken = default);
+    Task<GitHubPullRequest> CreateOrSyncPullRequestAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default);
     bool IsPendingReview(TaskReviewSnapshot snapshot);
     bool ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot);
 }
@@ -22,6 +26,9 @@ public partial class TaskReviewService : ITaskReviewService
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
+    private readonly IGitHubPullRequestDeliveryService _gitHubPrDeliveryService;
+    private readonly ITaskOrchestrator _taskOrchestrator;
+    private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly ILogger<TaskReviewService> _logger;
 
     [GeneratedRegex(@"^diff --git a/(?<oldPath>.+?) b/(?<newPath>.+?)\r?$", RegexOptions.Multiline)]
@@ -31,11 +38,17 @@ public partial class TaskReviewService : ITaskReviewService
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
         IGitWorkspaceManager gitWorkspaceManager,
+        IGitHubPullRequestDeliveryService gitHubPrDeliveryService,
+        ITaskOrchestrator taskOrchestrator,
+        ITaskMarkdownSyncService markdownSyncService,
         ILogger<TaskReviewService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _gitWorkspaceManager = gitWorkspaceManager ?? throw new ArgumentNullException(nameof(gitWorkspaceManager));
+        _gitHubPrDeliveryService = gitHubPrDeliveryService ?? throw new ArgumentNullException(nameof(gitHubPrDeliveryService));
+        _taskOrchestrator = taskOrchestrator ?? throw new ArgumentNullException(nameof(taskOrchestrator));
+        _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -48,6 +61,55 @@ public partial class TaskReviewService : ITaskReviewService
     bool ITaskReviewService.IsPendingReview(TaskReviewSnapshot snapshot) => IsPendingReview(snapshot);
 
     bool ITaskReviewService.ShouldDisplayConflictResolvedBanner(TaskReviewSnapshot snapshot) => ShouldDisplayConflictResolvedBanner(snapshot);
+
+    public async Task<bool> IsPullRequestDeliveryAvailableAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        if (workspaceId <= 0)
+        {
+            return false;
+        }
+
+        var workspace = await _workspaceRepository.GetByIdAsync(workspaceId, cancellationToken);
+        return await _gitHubPrDeliveryService.IsPullRequestDeliveryAvailableAsync(workspace, cancellationToken);
+    }
+
+    public async Task<GitHubPullRequest> CreateOrSyncPullRequestAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new TaskNotFoundException(taskId);
+
+        var workspace = await _workspaceRepository.GetByIdAsync(task.WorkspaceId, cancellationToken)
+            ?? throw new InvalidOperationException($"Workspace #{task.WorkspaceId} not found for task #{taskId}.");
+
+        var pr = await _gitHubPrDeliveryService.DeliverPullRequestAsync(task, workspace, cancellationToken);
+
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
+        {
+            try
+            {
+                await _markdownSyncService.SyncTaskToDiskAsync(task, workspace.RepositoryPath, cancellationToken: cancellationToken);
+            }
+            catch (Exception mex) when (mex is not OperationCanceledException)
+            {
+                _logger.LogWarning(mex, "Failed syncing markdown frontmatter after PR delivery for task #{TaskId}", task.Id);
+            }
+        }
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Information,
+            Message = $"Synchronized GitHub Pull Request #{pr.Number} ({pr.HtmlUrl}) for task #{task.Id}.",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+
+        return pr;
+    }
+
+    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _taskOrchestrator.CloseExternallyMergedTaskAsync(taskId, cancellationToken);
 
     public async Task<TaskReviewSnapshot?> GetSnapshotAsync(int taskId, CancellationToken cancellationToken = default)
     {
@@ -72,7 +134,11 @@ public partial class TaskReviewService : ITaskReviewService
             Files: files,
             GateMetrics: metrics,
             HasResolvedConflict: hasResolvedConflict,
-            HasExecutionRun: task.HasExecutionRun);
+            HasExecutionRun: task.HasExecutionRun,
+            PullRequestNumber: task.PullRequestNumber,
+            PullRequestUrl: task.PullRequestUrl,
+            ExternalSource: task.ExternalSource,
+            ExternalReferenceId: task.ExternalReferenceId);
     }
 
     public async Task<IReadOnlyList<TaskReviewSnapshot>> GetPendingReviewsAsync(int? workspaceId = null, CancellationToken cancellationToken = default)
@@ -115,63 +181,8 @@ public partial class TaskReviewService : ITaskReviewService
         return results;
     }
 
-    private static QualityGateMetrics ExtractGateMetrics(ForgeTask task)
-    {
-        var bag = PipelineDataBag.FromJson(task.PipelineDataJson);
-
-        double currentCov = 0.0;
-        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageCurrentLineRate, out var cRate))
-        {
-            currentCov = cRate <= 1.0 ? cRate * 100.0 : cRate;
-        }
-        else if (bag.TryGet<double>("coverage.current", out var cVal))
-        {
-            currentCov = cVal;
-        }
-
-        double baseCov = currentCov;
-        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out var bRate))
-        {
-            baseCov = bRate <= 1.0 ? bRate * 100.0 : bRate;
-        }
-        else if (bag.TryGet<double>("coverage.baseline", out var bVal))
-        {
-            baseCov = bVal;
-        }
-
-        double covDelta = currentCov - baseCov;
-        if (bag.TryGet<double>(PipelineDataBagKeys.CoverageDelta, out var explicitCovDelta))
-        {
-            covDelta = explicitCovDelta <= 1.0 && explicitCovDelta >= -1.0 ? explicitCovDelta * 100.0 : explicitCovDelta;
-        }
-
-        int currentWarns = bag.TryGet<int>(PipelineDataBagKeys.WarningsCurrentTotal, out var cw) ? cw :
-            (bag.TryGet<int>("warnings.current.count", out cw) ? cw : 0);
-        int baseWarns = bag.TryGet<int>(PipelineDataBagKeys.WarningsBaselineTotal, out var bw) ? bw :
-            (bag.TryGet<int>("warnings.baseline.count", out bw) ? bw : currentWarns);
-        int warnDelta = bag.TryGet<int>(PipelineDataBagKeys.WarningsDelta, out var wd) ? wd : (currentWarns - baseWarns);
-
-        int totalTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentTotal, out var tt) ? tt :
-            (bag.TryGet<int>("tests.total", out tt) ? tt : 0);
-        int failedTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentFailed, out var ft) ? ft :
-            (bag.TryGet<int>("tests.failed", out ft) ? ft : 0);
-        int passedTests = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentPassed, out var pt) ? pt :
-            (bag.TryGet<int>("tests.passed", out pt) ? pt : Math.Max(0, totalTests - failedTests));
-        int durationMs = bag.TryGet<int>(PipelineDataBagKeys.TestsCurrentDurationMs, out var dm) ? dm :
-            (bag.TryGet<int>("tests.duration_ms", out dm) ? dm : 0);
-
-        return new QualityGateMetrics(
-            BaselineCoverage: Math.Round(baseCov, 2),
-            CurrentCoverage: Math.Round(currentCov, 2),
-            CoverageDelta: Math.Round(covDelta, 2),
-            BaselineWarnings: baseWarns,
-            CurrentWarnings: currentWarns,
-            WarningDelta: warnDelta,
-            TotalTests: totalTests,
-            PassedTests: passedTests,
-            FailedTests: failedTests,
-            DurationMs: durationMs);
-    }
+    public static QualityGateMetrics ExtractGateMetrics(ForgeTask task) =>
+        QualityGateMetricsExtractor.Extract(task);
 
     public async Task<TaskDiffResult> GetTaskDiffAsync(int taskId, CancellationToken cancellationToken = default)
     {

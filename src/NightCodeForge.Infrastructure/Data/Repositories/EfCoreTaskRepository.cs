@@ -185,8 +185,33 @@ public class EfCoreTaskRepository : ITaskRepository
             var authoritativePriority = existing.Priority;
             var authoritativeTitle = existing.Title;
             var authoritativeDescription = existing.Description;
+            var authoritativeExternalSource = existing.ExternalSource;
+            var authoritativeExternalReferenceId = existing.ExternalReferenceId;
+            var existingPullRequestNumber = existing.PullRequestNumber;
+            var existingPullRequestUrl = existing.PullRequestUrl;
 
             context.Entry(existing).CurrentValues.SetValues(task);
+
+            // Never overwrite a populated PullRequestNumber / PullRequestUrl with null from a stale execution snapshot
+            if (task.PullRequestNumber.HasValue)
+            {
+                existing.PullRequestNumber = task.PullRequestNumber;
+            }
+            else if (existingPullRequestNumber.HasValue)
+            {
+                existing.PullRequestNumber = existingPullRequestNumber;
+                task.PullRequestNumber = existingPullRequestNumber;
+            }
+
+            if (!string.IsNullOrWhiteSpace(task.PullRequestUrl))
+            {
+                existing.PullRequestUrl = task.PullRequestUrl;
+            }
+            else if (!string.IsNullOrWhiteSpace(existingPullRequestUrl))
+            {
+                existing.PullRequestUrl = existingPullRequestUrl;
+                task.PullRequestUrl = existingPullRequestUrl;
+            }
 
             // If the database has a newer version than the incoming in-memory task,
             // maintainer properties owned by UpdateWithHistoryAsync were modified concurrently.
@@ -198,6 +223,8 @@ public class EfCoreTaskRepository : ITaskRepository
                 existing.Priority = authoritativePriority;
                 existing.Title = authoritativeTitle;
                 existing.Description = authoritativeDescription;
+                existing.ExternalSource = authoritativeExternalSource;
+                existing.ExternalReferenceId = authoritativeExternalReferenceId;
 
                 // Sync latest maintainer values back to caller's in-memory instance
                 task.Version = authoritativeVersion;
@@ -205,6 +232,8 @@ public class EfCoreTaskRepository : ITaskRepository
                 task.Priority = authoritativePriority;
                 task.Title = authoritativeTitle;
                 task.Description = authoritativeDescription;
+                task.ExternalSource = authoritativeExternalSource;
+                task.ExternalReferenceId = authoritativeExternalReferenceId;
             }
             else
             {

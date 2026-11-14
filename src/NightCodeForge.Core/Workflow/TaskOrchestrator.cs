@@ -1857,13 +1857,45 @@ public class TaskOrchestrator : ITaskOrchestrator
                         }
                         else
                         {
+                            pipelineContext.SyncDataBagToTask();
+
+                            if (task.MergeMode == MergeMode.ExternalPullRequest)
+                            {
+                                try
+                                {
+                                    var pr = await _workspacePreparer.DeliverPullRequestAsync(task, workspace, cancellationToken);
+                                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                                    {
+                                        TaskId = task.Id,
+                                        Level = LogLevel.Information,
+                                        Message = $"Delivered GitHub Pull Request #{pr.Number} ({pr.HtmlUrl}) for task #{task.Id}.",
+                                        Timestamp = DateTime.UtcNow
+                                    }, cancellationToken);
+                                }
+                                catch (Exception prEx) when (prEx is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                                {
+                                    var redactedError = NightCodeForge.Core.Security.GitCredentialRedactor.Redact(prEx.Message);
+                                    _logger.LogWarning(
+                                        prEx,
+                                        "Automatic GitHub Pull Request delivery failed for task #{TaskId}: {Error}. Transitioning task to Ready for manual retry.",
+                                        task.Id, redactedError);
+
+                                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                                    {
+                                        TaskId = task.Id,
+                                        Level = LogLevel.Warning,
+                                        Message = $"Automatic GitHub Pull Request delivery failed for task #{task.Id}: {redactedError}. Task transitioned to Ready; use 'Create GitHub Pull Request' or 'Sync Pull Request' in the Review Room to retry.",
+                                        Timestamp = DateTime.UtcNow
+                                    }, cancellationToken);
+                                }
+                            }
+
                             task.Status = TaskOverallStatus.Ready;
                             var hasResolvedConflict = pipelineContext.DataBag.Get<bool?>(PipelineDataBagKeys.HasResolvedConflict) == true;
                             var readyReason = hasResolvedConflict
                                 ? ConflictResolutionConstants.AuditPostReviewVerificationPassedReopened
                                 : $"Pipeline completed all stages at '{stage.StageId}'. Status: {task.Status}";
 
-                            pipelineContext.SyncDataBagToTask();
                             await _taskRepository.UpdateWithHistoryAsync(
                                 task,
                                 dependsOn: null,
@@ -2133,6 +2165,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
     public Task<CompleteTaskResult> CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default) =>
         _mergeAndCascadeCoordinator.CompleteTaskAndCascadeAsync(taskId, finalCommitMessage, cancellationToken);
+
+    public Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _mergeAndCascadeCoordinator.CloseExternallyMergedTaskAsync(taskId, cancellationToken);
 
     public Task<bool> RestartTaskPipelineAsync(
         int taskId,

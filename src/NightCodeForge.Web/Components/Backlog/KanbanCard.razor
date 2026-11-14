@@ -57,8 +57,8 @@
                 }
             </div>
         </div>
-        <span class="forge-badge @(Task.MergeMode == MergeMode.Automatic ? "badge-teal" : "badge-indigo")" style="font-size: 0.7rem; padding: 2px 6px;">
-            @(Task.MergeMode == MergeMode.Automatic ? "Auto" : "Manual")
+        <span class="forge-badge @MergeModeHelper.GetBadgeClass(Task.MergeMode)" style="font-size: 0.7rem; padding: 2px 6px;">
+            @MergeModeHelper.GetShortLabel(Task.MergeMode)
         </span>
     </div>
 

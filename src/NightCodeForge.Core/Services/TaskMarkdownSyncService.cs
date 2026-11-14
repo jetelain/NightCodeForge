@@ -99,11 +99,15 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             Origin = FormatOrigin(task.Origin),
             CurrentStage = task.CurrentStageId,
             Priority = task.Priority,
-            MergeMode = task.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required",
+            MergeMode = FormatMergeMode(task.MergeMode),
             WaitingForHuman = task.IsWaitingForHuman,
             Version = task.Version > 0 ? task.Version : 1,
             BaseBranch = task.BaseBranch,
             FeatureBranch = string.IsNullOrWhiteSpace(task.FeatureBranch) ? null : task.FeatureBranch,
+            ExternalSource = string.IsNullOrWhiteSpace(task.ExternalSource) ? null : task.ExternalSource,
+            ExternalReferenceId = string.IsNullOrWhiteSpace(task.ExternalReferenceId) ? null : task.ExternalReferenceId,
+            PullRequestNumber = task.PullRequestNumber,
+            PullRequestUrl = string.IsNullOrWhiteSpace(task.PullRequestUrl) ? null : task.PullRequestUrl,
             DependsOn = new TaskDependencyReferenceList(depList),
             AgentProfile = agentProfileId,
             CreatedAt = task.CreatedAt,
@@ -153,7 +157,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             ? string.Join(",", frontmatter.DependsOn.Select(d => d?.ToString()?.Trim() ?? string.Empty))
             : string.Empty;
         var normDesc = (NormalizeLineEndings(description) ?? string.Empty).Trim();
-        var payload = string.Join("\n",
+        var lines = new List<string>(15)
+        {
             $"id:{frontmatter.Id}",
             $"title:{(frontmatter.Title ?? string.Empty).Trim()}",
             $"status:{(frontmatter.Status ?? string.Empty).Trim()}",
@@ -164,7 +169,27 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             $"feature_branch:{(frontmatter.FeatureBranch ?? string.Empty).Trim()}",
             $"agent_profile:{(frontmatter.AgentProfile ?? string.Empty).Trim()}",
             $"depends_on:{deps}",
-            $"description:{normDesc}");
+            $"description:{normDesc}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(frontmatter.ExternalSource))
+        {
+            lines.Add($"external_source:{frontmatter.ExternalSource.Trim()}");
+        }
+        if (!string.IsNullOrWhiteSpace(frontmatter.ExternalReferenceId))
+        {
+            lines.Add($"external_reference_id:{frontmatter.ExternalReferenceId.Trim()}");
+        }
+        if (frontmatter.PullRequestNumber.HasValue)
+        {
+            lines.Add($"pull_request_number:{frontmatter.PullRequestNumber.Value}");
+        }
+        if (!string.IsNullOrWhiteSpace(frontmatter.PullRequestUrl))
+        {
+            lines.Add($"pull_request_url:{frontmatter.PullRequestUrl.Trim()}");
+        }
+
+        var payload = string.Join("\n", lines);
         return ComputeSha256Hash(payload);
     }
 
@@ -1496,9 +1521,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 }
                 finalDepIds = finalDepIds.Distinct().ToList();
 
-                var mergeMode = string.Equals(nt.Item.Frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                    ? Domain.MergeMode.Automatic
-                    : Domain.MergeMode.ManualReviewRequired;
+                var mergeMode = ParseMergeMode(nt.Item.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
 
                 var newTask = new ForgeTask
                 {
@@ -1510,6 +1533,10 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     IsWaitingForHuman = nt.Item.Frontmatter.WaitingForHuman,
                     BaseBranch = !string.IsNullOrWhiteSpace(nt.Item.Frontmatter.BaseBranch) ? nt.Item.Frontmatter.BaseBranch : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch),
                     FeatureBranch = nt.Item.Frontmatter.FeatureBranch ?? string.Empty,
+                    ExternalSource = string.IsNullOrWhiteSpace(nt.Item.Frontmatter.ExternalSource) ? null : nt.Item.Frontmatter.ExternalSource.Trim(),
+                    ExternalReferenceId = string.IsNullOrWhiteSpace(nt.Item.Frontmatter.ExternalReferenceId) ? null : nt.Item.Frontmatter.ExternalReferenceId.Trim(),
+                    PullRequestNumber = nt.Item.Frontmatter.PullRequestNumber,
+                    PullRequestUrl = string.IsNullOrWhiteSpace(nt.Item.Frontmatter.PullRequestUrl) ? null : nt.Item.Frontmatter.PullRequestUrl.Trim(),
                     Status = TaskOverallStatus.Suggested,
                     Origin = ParseOrigin(nt.Item.Frontmatter.Origin),
                     CurrentStageId = string.Empty,
@@ -1531,9 +1558,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 nt.Item.Frontmatter.CreatedAt = created.CreatedAt;
                 nt.Item.Frontmatter.Status = created.Status.ToString();
                 nt.Item.Frontmatter.Origin = FormatOrigin(created.Origin);
-                nt.Item.Frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
+                nt.Item.Frontmatter.MergeMode = FormatMergeMode(created.MergeMode);
                 nt.Item.Frontmatter.WaitingForHuman = created.IsWaitingForHuman;
                 nt.Item.Frontmatter.CurrentStage = created.CurrentStageId;
+                nt.Item.Frontmatter.ExternalSource = created.ExternalSource;
+                nt.Item.Frontmatter.ExternalReferenceId = created.ExternalReferenceId;
+                nt.Item.Frontmatter.PullRequestNumber = created.PullRequestNumber;
+                nt.Item.Frontmatter.PullRequestUrl = created.PullRequestUrl;
                 nt.Item.Frontmatter.DependsOn = new TaskDependencyReferenceList(finalDepIds);
 
                 var rewrittenMarkdown = GenerateMarkdown(created, finalDepIds, nt.Item.Frontmatter.AgentProfile);
@@ -1771,6 +1802,10 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 }
 
                 var newOrigin = ParseOrigin(item.Frontmatter.Origin);
+                var newExternalSource = !string.IsNullOrWhiteSpace(item.Frontmatter.ExternalSource) ? item.Frontmatter.ExternalSource.Trim() : task.ExternalSource;
+                var newExternalRefId = !string.IsNullOrWhiteSpace(item.Frontmatter.ExternalReferenceId) ? item.Frontmatter.ExternalReferenceId.Trim() : task.ExternalReferenceId;
+                var newPrNumber = item.Frontmatter.PullRequestNumber ?? task.PullRequestNumber;
+                var newPrUrl = !string.IsNullOrWhiteSpace(item.Frontmatter.PullRequestUrl) ? item.Frontmatter.PullRequestUrl.Trim() : task.PullRequestUrl;
 
                 bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
                 bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
@@ -1778,11 +1813,16 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 bool mergeModeChanged = newMergeMode != task.MergeMode;
                 bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
                 bool originChanged = newOrigin != task.Origin;
+                bool externalSourceChanged = !string.Equals(newExternalSource, task.ExternalSource, StringComparison.Ordinal);
+                bool externalRefChanged = !string.Equals(newExternalRefId, task.ExternalReferenceId, StringComparison.Ordinal);
+                bool prNumberChanged = newPrNumber != task.PullRequestNumber;
+                bool prUrlChanged = !string.Equals(newPrUrl, task.PullRequestUrl, StringComparison.Ordinal);
 
                 var currentDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
                 bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
 
-                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged;
+                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged ||
+                                       externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged;
                 if (anyFieldChanged)
                 {
                     task.Title = newTitle;
@@ -1790,6 +1830,10 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     task.Priority = newPriority;
                     task.MergeMode = newMergeMode;
                     task.BaseBranch = newBaseBranch;
+                    task.ExternalSource = newExternalSource;
+                    task.ExternalReferenceId = newExternalRefId;
+                    task.PullRequestNumber = newPrNumber;
+                    task.PullRequestUrl = newPrUrl;
                     if (originChanged)
                     {
                         task.Origin = newOrigin;
@@ -2254,36 +2298,46 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         }
                     }
 
-                    var newMergeMode = string.IsNullOrWhiteSpace(frontmatter.MergeMode)
-                        ? task.MergeMode
-                        : (string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                            ? Domain.MergeMode.Automatic
-                            : Domain.MergeMode.ManualReviewRequired);
-                    var newBaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch.Trim() : task.BaseBranch;
-                    var newOrigin = ParseOrigin(frontmatter.Origin);
+                var effectiveMergeMode = ParseMergeMode(frontmatter.MergeMode);
+                var newMergeMode = effectiveMergeMode ?? task.MergeMode;
+                var newBaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch.Trim() : task.BaseBranch;
+                var newOrigin = ParseOrigin(frontmatter.Origin);
+                var newExternalSource = !string.IsNullOrWhiteSpace(frontmatter.ExternalSource) ? frontmatter.ExternalSource.Trim() : task.ExternalSource;
+                var newExternalRefId = !string.IsNullOrWhiteSpace(frontmatter.ExternalReferenceId) ? frontmatter.ExternalReferenceId.Trim() : task.ExternalReferenceId;
+                var newPrNumber = frontmatter.PullRequestNumber ?? task.PullRequestNumber;
+                var newPrUrl = !string.IsNullOrWhiteSpace(frontmatter.PullRequestUrl) ? frontmatter.PullRequestUrl.Trim() : task.PullRequestUrl;
 
-                    var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
-                    bool depsChanged = resolvedDeps != null && !resolvedDeps.OrderBy(x => x).SequenceEqual(currentDeps);
+                var currentDeps = task.Dependencies.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList();
+                bool depsChanged = resolvedDeps != null && !resolvedDeps.OrderBy(x => x).SequenceEqual(currentDeps);
 
-                    bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
-                    bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
-                    bool priorityChanged = newPriority != task.Priority;
-                    bool mergeModeChanged = newMergeMode != task.MergeMode;
-                    bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
-                    bool originChanged = newOrigin != task.Origin;
+                bool titleChanged = !string.Equals(newTitle, task.Title, StringComparison.Ordinal);
+                bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
+                bool priorityChanged = newPriority != task.Priority;
+                bool mergeModeChanged = newMergeMode != task.MergeMode;
+                bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
+                bool originChanged = newOrigin != task.Origin;
+                bool externalSourceChanged = !string.Equals(newExternalSource, task.ExternalSource, StringComparison.Ordinal);
+                bool externalRefChanged = !string.Equals(newExternalRefId, task.ExternalReferenceId, StringComparison.Ordinal);
+                bool prNumberChanged = newPrNumber != task.PullRequestNumber;
+                bool prUrlChanged = !string.Equals(newPrUrl, task.PullRequestUrl, StringComparison.Ordinal);
 
-                    bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged;
-                    if (anyFieldChanged)
+                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged ||
+                                       externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged;
+                if (anyFieldChanged)
+                {
+                    task.Title = newTitle;
+                    task.Description = newDesc;
+                    task.Priority = newPriority;
+                    task.MergeMode = newMergeMode;
+                    task.BaseBranch = newBaseBranch;
+                    task.ExternalSource = newExternalSource;
+                    task.ExternalReferenceId = newExternalRefId;
+                    task.PullRequestNumber = newPrNumber;
+                    task.PullRequestUrl = newPrUrl;
+                    if (originChanged)
                     {
-                        task.Title = newTitle;
-                        task.Description = newDesc;
-                        task.Priority = newPriority;
-                        task.MergeMode = newMergeMode;
-                        task.BaseBranch = newBaseBranch;
-                        if (originChanged)
-                        {
-                            task.Origin = newOrigin;
-                        }
+                        task.Origin = newOrigin;
+                    }
                         if (!string.IsNullOrWhiteSpace(frontmatter.FeatureBranch))
                         {
                             task.FeatureBranch = frontmatter.FeatureBranch;
@@ -2343,9 +2397,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     cancellationToken);
             }
 
-            var mergeMode = string.Equals(frontmatter.MergeMode, "automatic", StringComparison.OrdinalIgnoreCase)
-                ? Domain.MergeMode.Automatic
-                : Domain.MergeMode.ManualReviewRequired;
+            var mergeMode = ParseMergeMode(frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
 
             string defaultBaseBranch = WorkflowDefaults.DefaultBaseBranch;
             if (string.IsNullOrWhiteSpace(frontmatter.BaseBranch))
@@ -2370,6 +2422,10 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 MergeMode = mergeMode,
                 IsWaitingForHuman = frontmatter.WaitingForHuman,
                 BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? defaultBaseBranch : frontmatter.BaseBranch.Trim(),
+                ExternalSource = string.IsNullOrWhiteSpace(frontmatter.ExternalSource) ? null : frontmatter.ExternalSource.Trim(),
+                ExternalReferenceId = string.IsNullOrWhiteSpace(frontmatter.ExternalReferenceId) ? null : frontmatter.ExternalReferenceId.Trim(),
+                PullRequestNumber = frontmatter.PullRequestNumber,
+                PullRequestUrl = string.IsNullOrWhiteSpace(frontmatter.PullRequestUrl) ? null : frontmatter.PullRequestUrl.Trim(),
                 Status = TaskOverallStatus.Suggested,
                 Origin = ParseOrigin(frontmatter.Origin),
                 CurrentStageId = string.Empty,
@@ -2389,9 +2445,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             frontmatter.CreatedAt = created.CreatedAt;
             frontmatter.Status = created.Status.ToString();
             frontmatter.Origin = FormatOrigin(created.Origin);
-            frontmatter.MergeMode = created.MergeMode == Domain.MergeMode.Automatic ? "automatic" : "manual_review_required";
+            frontmatter.MergeMode = FormatMergeMode(created.MergeMode);
             frontmatter.WaitingForHuman = created.IsWaitingForHuman;
             frontmatter.CurrentStage = created.CurrentStageId;
+            frontmatter.ExternalSource = created.ExternalSource;
+            frontmatter.ExternalReferenceId = created.ExternalReferenceId;
+            frontmatter.PullRequestNumber = created.PullRequestNumber;
+            frontmatter.PullRequestUrl = created.PullRequestUrl;
             frontmatter.DependsOn = newResolvedDeps != null ? new TaskDependencyReferenceList(newResolvedDeps) : null;
 
             var inPlaceMarkdown = GenerateMarkdown(created, newResolvedDeps, frontmatter.AgentProfile);
@@ -2645,12 +2705,23 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return text?.Replace("\r\n", "\n").Replace('\r', '\n');
     }
 
-    private static Domain.MergeMode? ParseMergeMode(string? mergeModeStr)
+    public static string FormatMergeMode(Domain.MergeMode mergeMode) => mergeMode switch
+    {
+        Domain.MergeMode.Automatic => "automatic",
+        Domain.MergeMode.ExternalPullRequest => "external_pull_request",
+        _ => "manual_review_required"
+    };
+
+    public static Domain.MergeMode? ParseMergeMode(string? mergeModeStr)
     {
         if (string.IsNullOrWhiteSpace(mergeModeStr)) return null;
-        return string.Equals(mergeModeStr.Trim(), "automatic", StringComparison.OrdinalIgnoreCase)
-            ? Domain.MergeMode.Automatic
-            : Domain.MergeMode.ManualReviewRequired;
+        return mergeModeStr.Trim().ToLowerInvariant() switch
+        {
+            "automatic" => Domain.MergeMode.Automatic,
+            "external_pull_request" or "externalpullrequest" => Domain.MergeMode.ExternalPullRequest,
+            "manual_review_required" or "manualreviewrequired" => Domain.MergeMode.ManualReviewRequired,
+            _ => Domain.MergeMode.ManualReviewRequired
+        };
     }
 
     public void Dispose()

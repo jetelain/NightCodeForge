@@ -43,6 +43,12 @@ public interface ITaskOrchestrator
     Task<Domain.CompleteTaskResult> CompleteTaskAndCascadeAsync(int taskId, string finalCommitMessage, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Verifies that the task's GitHub Pull Request has been merged on GitHub, fast-forwards the local base branch,
+    /// cleans up the task worktree/container/branch, transitions the task to Closed, and cascades unblocking to dependent DAG tasks.
+    /// </summary>
+    Task<Domain.CompleteTaskResult> CloseExternallyMergedTaskAsync(int taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Transitions a non-terminal task to Rejected status, evicts/cancels any queued Hangfire jobs,
     /// records user audit history, updates dependency graph, and syncs markdown frontmatter to disk.
     /// </summary>

@@ -62,6 +62,9 @@ public class TaskDetailCostDisplayTests : BunitContext
             _taskRepository,
             _workspaceRepository,
             new Mock<IGitWorkspaceManager>().Object,
+            new Mock<IGitHubPullRequestDeliveryService>().Object,
+            _orchestrator,
+            _markdownSync,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskReviewService>.Instance);
         Services.AddSingleton<ITaskReviewService>(reviewService);
         Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));

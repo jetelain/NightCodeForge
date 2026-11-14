@@ -333,6 +333,25 @@
                                 Automatically squashes and merges to target branch immediately when the final stage completes green.
                             </div>
                         </div>
+
+                        @if (_isPrDeliveryAvailable)
+                        {
+                            <!-- Option 3: External Pull Request (GitHub) -->
+                            <div class="mergemode-card @(_selectedMergeMode == MergeMode.ExternalPullRequest ? "selected" : "")"
+                                 id="mergemode-option-external-pr"
+                                 @onclick="() => _selectedMergeMode = MergeMode.ExternalPullRequest"
+                                 style="padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid @(_selectedMergeMode == MergeMode.ExternalPullRequest ? "var(--accent-purple, #a855f7)" : "var(--border-subtle)"); background: @(_selectedMergeMode == MergeMode.ExternalPullRequest ? "rgba(168, 85, 247, 0.12)" : "var(--bg-input)"); cursor: pointer;">
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <div style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); display: flex; align-items: center; gap: 0.4rem;">
+                                        <span>@MergeModeHelper.GetIcon(MergeMode.ExternalPullRequest)</span> @MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest)
+                                    </div>
+                                    <div class="priority-radio-indicator" style="width: 14px; height: 14px; border-radius: 50%; border: 2px solid @(_selectedMergeMode == MergeMode.ExternalPullRequest ? "var(--accent-purple, #a855f7)" : "var(--border-subtle)"); background: @(_selectedMergeMode == MergeMode.ExternalPullRequest ? "var(--accent-purple, #a855f7)" : "transparent");"></div>
+                                </div>
+                                <div style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.35rem; line-height: 1.3;">
+                                    @MergeModeHelper.GetDescription(MergeMode.ExternalPullRequest)
+                                </div>
+                            </div>
+                        }
                     </div>
                 </div>
 
@@ -401,6 +420,7 @@
 
     private List<WorkflowDefinition> _workflows = new();
     private List<ForgeTask> _availableTasks = new();
+    private bool _isPrDeliveryAvailable;
     private bool _disposed;
 
     private ITaskMarkdownSyncService? MarkdownSync => ServiceProvider.GetService<ITaskMarkdownSyncService>();
@@ -449,11 +469,17 @@
             _workflows.Clear();
             _availableTasks.Clear();
             _selectedPrereqIds.Clear();
+            _isPrDeliveryAvailable = false;
             return;
         }
 
         _selectedPrereqIds.Clear();
         _baseBranch = string.IsNullOrWhiteSpace(active.DefaultBaseBranch) ? "main" : active.DefaultBaseBranch;
+        _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(ServiceProvider, active);
+        if (!_isPrDeliveryAvailable && _selectedMergeMode == MergeMode.ExternalPullRequest)
+        {
+            _selectedMergeMode = MergeMode.ManualReviewRequired;
+        }
 
         try
         {

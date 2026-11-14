@@ -85,9 +85,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("Task description with functional scope, acceptance criteria, and testing plan if single proposal")] string? description = null,
              [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null,
              [Description("Prerequisite task IDs")] IReadOnlyList<int>? depends_on_ids = null,
+             [Description("Merge mode if single proposal: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
              CancellationToken ct = default) =>
                 module != null
-                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, ct)
+                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.ProposeTasks,
             "Proposes structured backlog tasks for triage and discovery. Returns the draft task(s) created with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description. Subsequent tasks can reference earlier created IDs in depends_on_ids."),
@@ -107,7 +108,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("New full description (replaces the existing one)")] string? description = null,
              [Description("New priority (1 Critical - 5 Trivial)")] int? priority = null,
              [Description("Complete new list of prerequisite task IDs (replaces the existing list; cycles are rejected)")] int[]? depends_on_ids = null,
-             [Description("New merge mode: Automatic or ManualReviewRequired")] string? merge_mode = null,
+             [Description("New merge mode: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
              [Description("New base branch")] string? base_branch = null,
              CancellationToken ct = default) =>
                 module != null
@@ -275,15 +276,25 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         IReadOnlyList<int>? dependsOnIds = null) =>
         ProposeTasksAsync(tasks, title, description, priority, dependsOnIds).GetAwaiter().GetResult();
 
+    public Task<string> ProposeTasksAsync(
+        object? tasks,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        CancellationToken cancellationToken) =>
+        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, null, cancellationToken);
+
     public async Task<string> ProposeTasksAsync(
         object? tasks = null,
         string? title = null,
         string? description = null,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
+        string? mergeMode = null,
         CancellationToken cancellationToken = default)
     {
-        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds);
+        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds, mergeMode);
         if (discovered.Count == 0)
         {
             return "No tasks proposed.";
@@ -373,7 +384,8 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         string? title = null,
         string? description = null,
         int? priority = null,
-        IReadOnlyList<int>? dependsOnIds = null)
+        IReadOnlyList<int>? dependsOnIds = null,
+        string? mergeMode = null)
     {
         var discovered = new List<TaskProposal>();
 
@@ -382,7 +394,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             var effectiveTitle = !IsGenericOrEmptyTitle(title)
                 ? title!.Trim()
                 : DeriveTitleFromDescription(description);
-            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds));
+            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds, mergeMode: mergeMode));
         }
 
         if (tasks != null)
@@ -553,7 +565,13 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             type = ty.GetString() ?? "feature";
         }
 
-        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds);
+        string? mergeMode = null;
+        if ((item.TryGetProperty("merge_mode", out var mm) || item.TryGetProperty("mergeMode", out mm)) && mm.ValueKind == JsonValueKind.String)
+        {
+            mergeMode = mm.GetString();
+        }
+
+        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds, null, mergeMode);
     }
 
     private static int? TryReadIntProperty(JsonElement obj, string propertyName) =>

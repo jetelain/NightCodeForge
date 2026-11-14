@@ -21,6 +21,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IExecutionEnvironmentProvider _environmentProvider;
+    private readonly IGitHubPullRequestDeliveryService _gitHubPrDeliveryService;
     private readonly ILogger<TaskWorkspacePreparer> _logger;
 
     public TaskWorkspacePreparer(
@@ -31,6 +32,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         ITaskMarkdownSyncService markdownSyncService,
         IWorkspacePathResolver pathResolver,
         IExecutionEnvironmentProvider environmentProvider,
+        IGitHubPullRequestDeliveryService gitHubPrDeliveryService,
         ILogger<TaskWorkspacePreparer> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
@@ -40,6 +42,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
+        _gitHubPrDeliveryService = gitHubPrDeliveryService ?? throw new ArgumentNullException(nameof(gitHubPrDeliveryService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -161,6 +164,18 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
                     task.BaseBranch = resolvedBaseBranch;
                     task.UpdatedAt = DateTime.UtcNow;
                     await onBaseBranchResolved(previousBaseBranch, resolvedBaseBranch, cancellationToken);
+                }
+            }
+
+            if (workspace.GitHubSettings is { Enabled: true, PullRequestDeliveryEnabled: true })
+            {
+                try
+                {
+                    await _gitHubPrDeliveryService.FetchAndFastForwardBaseBranchFromRemoteAsync(workspace, task.BaseBranch, cancellationToken);
+                }
+                catch (Exception ghex) when (ghex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ghex, "Remote GitHub base branch fetch/fast-forward failed for task #{TaskId}; proceeding with local base branch '{BaseBranch}'", task.Id, task.BaseBranch);
                 }
             }
 
@@ -407,6 +422,18 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         }
     }
 
+    public async Task DeleteTaskBranchSafeAsync(Workspace workspace, int taskId, string contextDescription, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await _gitWorkspaceManager.DeleteTaskBranchAsync(workspace, taskId, cancellationToken);
+        }
+        catch (Exception bex) when (bex is not OperationCanceledException)
+        {
+            _logger.LogWarning(bex, "Failed to delete local branch for {Context} task #{TaskId}", contextDescription, taskId);
+        }
+    }
+
     public async Task CleanupTaskContainerSafeAsync(Workspace workspace, int taskId, string contextDescription, CancellationToken cancellationToken = default)
     {
         try
@@ -424,6 +451,12 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         await _environmentProvider.CleanupTaskContainerAsync(workspace, taskId, cancellationToken);
         await _gitWorkspaceManager.ResetTaskBranchToBaseAsync(workspace, taskId, baseBranch, cancellationToken);
     }
+
+    public Task<GitHubPullRequest> DeliverPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubPrDeliveryService.DeliverPullRequestAsync(task, workspace, cancellationToken);
+
+    public Task<GitHubPullRequest> VerifyAndSyncExternallyMergedPullRequestAsync(ForgeTask task, Workspace workspace, CancellationToken cancellationToken = default) =>
+        _gitHubPrDeliveryService.VerifyAndSyncExternallyMergedPullRequestAsync(task, workspace, cancellationToken);
 
     public async Task MaterializeConflictMarkersForImplementationAsync(
         Workspace workspace,
@@ -536,6 +569,10 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         target.BaseBranch = source.BaseBranch;
         target.FeatureBranch = source.FeatureBranch;
         target.Origin = source.Origin;
+        target.ExternalSource = source.ExternalSource;
+        target.ExternalReferenceId = source.ExternalReferenceId;
+        target.PullRequestNumber = source.PullRequestNumber;
+        target.PullRequestUrl = source.PullRequestUrl;
         target.UpdatedAt = source.UpdatedAt;
         target.Version = source.Version;
         target.Dependencies = source.Dependencies;

@@ -165,6 +165,10 @@ public class AppDbContext : DbContext
             b.Property(i => i.FeatureBranch).HasMaxLength(256);
             b.Property(i => i.LastHangfireJobId).HasMaxLength(128);
             b.Property(i => i.SquashCommitSha).HasMaxLength(64);
+            b.Property(i => i.ExternalSource).HasMaxLength(64);
+            b.Property(i => i.ExternalReferenceId).HasMaxLength(128);
+            b.Property(i => i.PullRequestNumber);
+            b.Property(i => i.PullRequestUrl).HasMaxLength(1024);
             b.Property(i => i.WorkflowId);
             b.Property(i => i.Version).HasDefaultValue(1);
 
@@ -476,6 +480,11 @@ public class AppDbContext : DbContext
     public const string AddWorkspaceGitHubSettingsMigrationId = "20261111155548_AddWorkspaceGitHubSettings";
 
     /// <summary>
+    /// Migration identifier for ForgeTask GitHub Pull Request and external source tracking fields.
+    /// </summary>
+    public const string AddForgeTaskGitHubPullRequestFieldsMigrationId = "20261114000000_AddForgeTaskGitHubPullRequestFields";
+
+    /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
     /// Also applies the workspace ID seed if configured via environment variables.
     /// </summary>
@@ -647,6 +656,17 @@ VALUES ('" + AddSessionCostAndTokenMetricsMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddWorkspaceGitHubSettingsMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Tasks') WHERE name = 'PullRequestNumber';";
+                var hasPullRequestNumberColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasPullRequestNumberColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddForgeTaskGitHubPullRequestFieldsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

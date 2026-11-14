@@ -22,6 +22,7 @@ public class TaskWorkspacePreparerTests : IDisposable
     private readonly Mock<ITaskMarkdownSyncService> _markdownSyncMock = new();
     private readonly Mock<IWorkspacePathResolver> _pathResolverMock = new();
     private readonly Mock<IExecutionEnvironmentProvider> _envProviderMock = new();
+    private readonly Mock<IGitHubPullRequestDeliveryService> _gitHubPrDeliveryMock = new();
 
     public TaskWorkspacePreparerTests()
     {
@@ -53,20 +54,22 @@ public class TaskWorkspacePreparerTests : IDisposable
         _markdownSyncMock.Object,
         _pathResolverMock.Object,
         _envProviderMock.Object,
+        _gitHubPrDeliveryMock.Object,
         NullLogger<TaskWorkspacePreparer>.Instance);
 
     [Fact]
     public void Constructor_WhenAnyDependencyIsNull_ThrowsArgumentNullException()
     {
         var logger = NullLogger<TaskWorkspacePreparer>.Instance;
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(null!, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, null!, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, null!, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, null!, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, null!, _pathResolverMock.Object, _envProviderMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, null!, _envProviderMock.Object, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, null!, logger));
-        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, null!));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(null!, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, null!, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, null!, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, null!, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, null!, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, null!, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, null!, _gitHubPrDeliveryMock.Object, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new TaskWorkspacePreparer(_workspaceRepo, _lockProvider, _gitManagerMock.Object, _mirrorSyncMock.Object, _markdownSyncMock.Object, _pathResolverMock.Object, _envProviderMock.Object, _gitHubPrDeliveryMock.Object, null!));
     }
 
     [Fact]

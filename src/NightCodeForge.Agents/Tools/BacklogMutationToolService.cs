@@ -2,11 +2,13 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
@@ -68,25 +70,31 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     };
 
     private readonly ITaskRepository _taskRepository;
+    private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IDependencyResolutionEngine _dependencyEngine;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IWorkspaceLockProvider _lockProvider;
     private readonly IAgentActivityStreamer _activityStreamer;
+    private readonly IOptions<SecurityOptions> _securityOptions;
     private readonly ILogger<BacklogMutationToolService> _logger;
 
     public BacklogMutationToolService(
         ITaskRepository taskRepository,
+        IWorkspaceRepository workspaceRepository,
         IDependencyResolutionEngine dependencyEngine,
         ITaskMarkdownSyncService markdownSyncService,
         IWorkspaceLockProvider lockProvider,
         IAgentActivityStreamer activityStreamer,
+        IOptions<SecurityOptions> securityOptions,
         ILogger<BacklogMutationToolService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
+        _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _dependencyEngine = dependencyEngine ?? throw new ArgumentNullException(nameof(dependencyEngine));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
+        _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -111,6 +119,10 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             priority = task.Priority,
             mergeMode = task.MergeMode,
             baseBranch = task.BaseBranch,
+            externalSource = task.ExternalSource,
+            externalReferenceId = task.ExternalReferenceId,
+            pullRequestNumber = task.PullRequestNumber,
+            pullRequestUrl = task.PullRequestUrl,
             prerequisites = prerequisites.OrderBy(id => id).ToList(),
             dependentTaskIds = dependents
         }, JsonOptions);
@@ -141,14 +153,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         MergeMode? mergeMode = null;
         if (request.MergeMode != null)
         {
-            if (!Enum.TryParse<MergeMode>(request.MergeMode, ignoreCase: true, out var parsedMergeMode) || !Enum.IsDefined(parsedMergeMode))
-            {
-                throw new ArgumentException(
-                    $"Invalid mergeMode '{request.MergeMode}'. Expected one of: {string.Join(", ", Enum.GetNames<MergeMode>())}.",
-                    nameof(request));
-            }
-
-            mergeMode = parsedMergeMode;
+            mergeMode = await ParseAndValidateMergeModeAsync(scope, request.MergeMode, nameof(request), cancellationToken);
         }
 
         var baseBranch = request.BaseBranch?.Trim();
@@ -341,6 +346,11 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
             ValidatePriority(proposal.Priority);
 
+            if (!string.IsNullOrWhiteSpace(proposal.MergeMode))
+            {
+                await ParseAndValidateMergeModeAsync(scope, proposal.MergeMode, nameof(proposals), cancellationToken);
+            }
+
             if (proposal.DependsOnIds is { Count: > 0 })
             {
                 var distinctIds = proposal.DependsOnIds.Distinct().OrderBy(id => id).ToList();
@@ -362,6 +372,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 single.Description,
                 single.Priority,
                 singleDeps,
+                single.MergeMode,
                 cancellationToken);
             return singleJson;
         }
@@ -380,6 +391,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 p.Description,
                 p.Priority,
                 deps,
+                p.MergeMode,
                 cancellationToken);
 
             createdEntities.Add(created);
@@ -455,6 +467,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         string description,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
+        string? mergeMode = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scope);
@@ -467,6 +480,10 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
         var effPriority = priority.HasValue ? priority.Value : TaskPriority.Normal;
         ValidatePriority(effPriority);
+
+        var effMergeMode = !string.IsNullOrWhiteSpace(mergeMode)
+            ? await ParseAndValidateMergeModeAsync(scope, mergeMode, nameof(mergeMode), cancellationToken)
+            : MergeMode.ManualReviewRequired;
 
         IReadOnlyList<int>? validDependencies = null;
         if (dependsOnIds != null && dependsOnIds.Count > 0)
@@ -483,7 +500,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             Description = description?.Trim() ?? string.Empty,
             Status = TaskOverallStatus.Draft,
             Priority = effPriority,
-            MergeMode = MergeMode.ManualReviewRequired,
+            MergeMode = effMergeMode,
             BaseBranch = WorkflowDefaults.DefaultBaseBranch,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
@@ -501,6 +518,40 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
         var json = await GetTaskAsync(scope, created.Id, cancellationToken);
         return (created, json);
+    }
+
+    private async Task<MergeMode> ParseAndValidateMergeModeAsync(
+        BacklogToolScope scope,
+        string rawMergeMode,
+        string paramName,
+        CancellationToken cancellationToken)
+    {
+        var normalizedMergeMode = rawMergeMode.Trim().Replace("_", string.Empty, StringComparison.Ordinal);
+        if (int.TryParse(normalizedMergeMode, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
+            !Enum.TryParse<MergeMode>(normalizedMergeMode, ignoreCase: true, out var parsedMergeMode) ||
+            !Enum.IsDefined(parsedMergeMode))
+        {
+            throw new ArgumentException(
+                $"Invalid mergeMode '{rawMergeMode}'. Expected one of: {string.Join(", ", Enum.GetNames<MergeMode>())}.",
+                paramName);
+        }
+
+        if (parsedMergeMode == MergeMode.ExternalPullRequest)
+        {
+            if (_securityOptions.Value.AirGappedMode)
+            {
+                throw new InvalidOperationException("MergeMode 'ExternalPullRequest' is not permitted when Air-Gapped Mode (AirGappedMode) is enabled.");
+            }
+
+            var workspace = await _workspaceRepository.GetByIdAsync(scope.WorkspaceId, cancellationToken);
+            if (workspace?.GitHubSettings is not { Enabled: true, PullRequestDeliveryEnabled: true })
+            {
+                throw new InvalidOperationException(
+                    $"MergeMode 'ExternalPullRequest' requires GitHub integration and Pull Request Delivery to be enabled on workspace #{scope.WorkspaceId} (Pull Request Delivery is disabled).");
+            }
+        }
+
+        return parsedMergeMode;
     }
 
     private IDisposable AcquireTaskLockOrThrow(int workspaceId, int taskId)

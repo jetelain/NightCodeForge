@@ -108,6 +108,8 @@ public class TestOrchestratorBuilder
     public IConflictResolutionVerifier ConflictResolutionVerifier { get; set; } = new Mock<IConflictResolutionVerifier>().Object;
     public IOperationsControlService OperationsControlService { get; set; } = CreateDefaultOperationsControlService();
     public IOperationsTelemetryService TelemetryService { get; set; } = new Mock<IOperationsTelemetryService>().Object;
+    public Mock<IGitHubPullRequestDeliveryService> GitHubPrDeliveryMock { get; } = new();
+    public IGitHubPullRequestDeliveryService? GitHubPrDeliveryService { get; set; }
     public ILogger<TaskOrchestrator> Logger { get; set; } = NullLogger<TaskOrchestrator>.Instance;
 
     private static IOperationsControlService CreateDefaultOperationsControlService()
@@ -127,6 +129,7 @@ public class TestOrchestratorBuilder
         MarkdownSyncService,
         PathResolver,
         EnvironmentProvider ?? EnvironmentProviderMock.Object,
+        GitHubPrDeliveryService ?? GitHubPrDeliveryMock.Object,
         NullLogger<TaskWorkspacePreparer>.Instance);
 
     public TaskMergeAndCascadeCoordinator BuildMergeAndCascadeCoordinator(ITaskWorkspacePreparer? workspacePreparer = null) => new(

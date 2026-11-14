@@ -1232,5 +1232,104 @@ Depends on archived prerequisite
         Assert.Equal(parsedRaw.Body, parsedBom.Body);
         Assert.Equal(sync.ComputeContentHash(raw), sync.ComputeContentHash(withBom));
     }
+
+    [Fact]
+    public async Task GenerateMarkdown_And_ProcessFileChangedAsync_RoundTripsExternalPullRequestAndGitHubProvenanceFields()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+
+        var task = new ForgeTask
+        {
+            Id = 995,
+            WorkspaceId = 1,
+            Title = "GitHub PR Linked Task",
+            Description = "Implements external PR delivery.",
+            Status = TaskOverallStatus.Ready,
+            MergeMode = MergeMode.ExternalPullRequest,
+            ExternalSource = "github",
+            ExternalReferenceId = "84",
+            PullRequestNumber = 123,
+            PullRequestUrl = "https://github.com/acme/demo/pull/123",
+            CreatedAt = new DateTime(2026, 11, 13, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        var markdown = sync.GenerateMarkdown(task);
+        Assert.Contains("merge_mode: external_pull_request", markdown);
+        Assert.Contains("external_source: github", markdown);
+        Assert.Contains("external_reference_id:", markdown);
+        Assert.Contains("84", markdown);
+        Assert.Contains("pull_request_number: 123", markdown);
+        Assert.Contains("pull_request_url: https://github.com/acme/demo/pull/123", markdown);
+
+        var parsed = sync.ParseMarkdown(markdown);
+        Assert.Equal("external_pull_request", parsed.Frontmatter.MergeMode);
+        Assert.Equal("github", parsed.Frontmatter.ExternalSource);
+        Assert.Equal("84", parsed.Frontmatter.ExternalReferenceId);
+        Assert.Equal(123, parsed.Frontmatter.PullRequestNumber);
+        Assert.Equal("https://github.com/acme/demo/pull/123", parsed.Frontmatter.PullRequestUrl);
+
+        // Sync an initial task to disk, edit its GitHub/PR frontmatter fields on disk, and read back via ProcessFileChangedAsync
+        var repo2 = new InMemoryTaskRepository();
+        var seedTask = new ForgeTask
+        {
+            Id = 995,
+            WorkspaceId = 1,
+            Title = "Placeholder",
+            Description = "Old",
+            Status = TaskOverallStatus.Ready,
+            MergeMode = MergeMode.ManualReviewRequired
+        };
+        await repo2.CreateWithBaselineAsync(seedTask, null, AuditActors.User, "Seed");
+        var sync2 = CreateSyncService(repo2);
+        var path = await sync2.SyncTaskToDiskAsync(seedTask, _tempWorkspaceDir);
+        await File.WriteAllTextAsync(path, markdown.Replace("content_hash:", "previous_hash:"));
+        await sync2.ProcessFileChangedAsync(path, workspaceId: 1);
+        var imported = await repo2.GetByIdAsync(995);
+
+        Assert.NotNull(imported);
+        Assert.Equal(MergeMode.ExternalPullRequest, imported.MergeMode);
+        Assert.Equal("github", imported.ExternalSource);
+        Assert.Equal("84", imported.ExternalReferenceId);
+        Assert.Equal(123, imported.PullRequestNumber);
+        Assert.Equal("https://github.com/acme/demo/pull/123", imported.PullRequestUrl);
+    }
+
+    [Fact]
+    public async Task SyncAllTasksFromDiskAsync_LegacyMarkdownWithoutGitHubFields_DoesNotTriggerSpuriousVersionBump()
+    {
+        var repo = new InMemoryTaskRepository();
+        var sync = CreateSyncService(repo);
+        var workspace = new Workspace { Id = 1, Name = "LegacySyncRepo", RepositoryPath = _tempWorkspaceDir };
+
+        var task = new ForgeTask
+        {
+            Id = 996,
+            WorkspaceId = 1,
+            Title = "Existing Legacy Task",
+            Description = "Existing task without GitHub fields.",
+            Status = TaskOverallStatus.Open,
+            MergeMode = MergeMode.ManualReviewRequired,
+            Version = 1,
+            CreatedAt = new DateTime(2026, 11, 13, 0, 0, 0, DateTimeKind.Utc)
+        };
+        await repo.CreateWithBaselineAsync(task, null, AuditActors.User, "Created");
+
+        var diskSync = await sync.SyncAllTasksToDiskAsync(workspace, _tempWorkspaceDir);
+        await sync.SyncAllTasksFromDiskAsync(
+            workspace,
+            _tempWorkspaceDir,
+            hostRepositoryPath: null,
+            baselineSnapshot: diskSync.Baseline,
+            changeActor: AuditActors.System,
+            changeReason: "No-op sync");
+
+        var reloaded = await repo.GetByIdAsync(996);
+        Assert.NotNull(reloaded);
+        Assert.Equal(1, reloaded.Version);
+        Assert.Null(reloaded.ExternalSource);
+        Assert.Null(reloaded.PullRequestNumber);
+    }
 }
 

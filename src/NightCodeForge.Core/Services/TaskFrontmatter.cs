@@ -38,6 +38,18 @@ public class TaskFrontmatter
     
     [YamlMember(Alias = "feature_branch")]
     public string? FeatureBranch { get; set; }
+
+    [YamlMember(Alias = "external_source")]
+    public string? ExternalSource { get; set; }
+
+    [YamlMember(Alias = "external_reference_id")]
+    public string? ExternalReferenceId { get; set; }
+
+    [YamlMember(Alias = "pull_request_number")]
+    public int? PullRequestNumber { get; set; }
+
+    [YamlMember(Alias = "pull_request_url")]
+    public string? PullRequestUrl { get; set; }
     
     [YamlMember(Alias = "depends_on")]
     public TaskDependencyReferenceList? DependsOn { get; set; } = null;

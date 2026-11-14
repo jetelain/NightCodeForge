@@ -318,7 +318,7 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                 _logger.LogWarning(ex, "Squash and merge failed for ForgeTask #{TaskId} due to merge conflict with '{BaseBranch}'.", task.Id, task.BaseBranch);
 
                 var pipelineContext = new PipelineContext(task, workspace);
-                await InitiateConflictResolutionAsync(task, workspace, pipelineContext, ex.ConflictedFiles, cancellationToken, discardApproval: task.MergeMode == MergeMode.ManualReviewRequired);
+                await InitiateConflictResolutionAsync(task, workspace, pipelineContext, ex.ConflictedFiles, cancellationToken, discardApproval: task.MergeMode != MergeMode.Automatic);
 
                 return new CompleteTaskResult(CompleteTaskStatus.ConflictResolutionDispatched, ConflictedFiles: ex.ConflictedFiles);
             }
@@ -418,6 +418,97 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
         }, cancellationToken);
 
         // 3. Cascade unblocking to dependent DAG tasks
+        await CascadeUnblockDependentTasksAsync(task, cancellationToken);
+
+        await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
+        await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
+
+        return new CompleteTaskResult(CompleteTaskStatus.Completed);
+    }
+
+    public async Task<CompleteTaskResult> CloseExternallyMergedTaskAsync(
+        int taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+        if (task == null)
+        {
+            throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        }
+
+        using var lockReleaser = await _workspacePreparer.AcquireWorkspaceLockAsync(task.WorkspaceId, cancellationToken);
+        var workspace = await _workspacePreparer.GetWorkspaceAsync(task, cancellationToken);
+        if (workspace == null)
+        {
+            throw new InvalidOperationException($"Workspace #{task.WorkspaceId} not found.");
+        }
+
+        var pr = await _workspacePreparer.VerifyAndSyncExternallyMergedPullRequestAsync(task, workspace, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(pr.MergeCommitSha))
+        {
+            task.SquashCommitSha = pr.MergeCommitSha;
+        }
+
+        task.Status = TaskOverallStatus.Closed;
+        task.CurrentStageId = string.Empty;
+
+        var closedBag = PipelineDataBag.FromJson(task.PipelineDataJson);
+        closedBag.Remove(PipelineDataBagKeys.HasResolvedConflict);
+        closedBag.Remove(PipelineDataBagKeys.ConflictResolutionAttempts);
+        closedBag.Remove(PipelineDataBagKeys.TotalConflictResolutionAttempts);
+        closedBag.Remove(PipelineDataBagKeys.LifetimeConflictDetections);
+        task.PipelineDataJson = closedBag.ToJson();
+
+        var reason = $"ForgeTask #{task.Id} closed after GitHub Pull Request #{task.PullRequestNumber} was merged.";
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.User,
+            reason: reason,
+            cancellationToken: cancellationToken);
+        await _dependencyStore.UpdateTaskStatusAsync(task.Id, TaskOverallStatus.Closed, cancellationToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
+
+        await _workspacePreparer.RemoveWorktreeSafeAsync(workspace, task.Id, "completed", CancellationToken.None);
+        await _workspacePreparer.DeleteTaskBranchSafeAsync(workspace, task.Id, "completed", CancellationToken.None);
+        await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, "completed", cancellationToken);
+
+        try
+        {
+            await _streamer.BroadcastAsync(new AgentActivityEvent(
+                Guid.NewGuid().ToString("N"),
+                task.Id,
+                StandardStageIds.Merge,
+                AgentActivityKind.StageCompleted,
+                reason,
+                DateTime.UtcNow,
+                new Dictionary<string, object?> { ["StageKind"] = "Deterministic" }), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to publish external merge closure event for task #{TaskId}", task.Id);
+        }
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            Level = LogLevel.Information,
+            Message = reason,
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+
+        await CascadeUnblockDependentTasksAsync(task, cancellationToken);
+
+        await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
+        await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
+
+        return new CompleteTaskResult(CompleteTaskStatus.Completed);
+    }
+
+    private async Task CascadeUnblockDependentTasksAsync(ForgeTask task, CancellationToken cancellationToken)
+    {
         var unblocked = await _dependencyEngine.ResolveCascadeUnblockedTasksAsync(task.Id);
         if (unblocked.Count > 0)
         {
@@ -450,11 +541,6 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                 await _taskRepository.UpdateAsync(unblockedTask, cancellationToken: cancellationToken);
             }
         }
-
-        await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, cancellationToken);
-        await _workspacePreparer.ArchiveTaskMarkdownSafeAsync(workspace, task, cancellationToken);
-
-        return new CompleteTaskResult(CompleteTaskStatus.Completed);
     }
 
     public async Task InitiateConflictResolutionAsync(

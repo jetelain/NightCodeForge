@@ -13,7 +13,11 @@ public record TaskReviewSnapshot(
     IReadOnlyList<FileDiffSummary> Files,
     QualityGateMetrics GateMetrics,
     bool HasResolvedConflict = false,
-    bool HasExecutionRun = false);
+    bool HasExecutionRun = false,
+    int? PullRequestNumber = null,
+    string? PullRequestUrl = null,
+    string? ExternalSource = null,
+    string? ExternalReferenceId = null);
 
 /// <summary>
 /// Quality gate metrics associated with a task review.

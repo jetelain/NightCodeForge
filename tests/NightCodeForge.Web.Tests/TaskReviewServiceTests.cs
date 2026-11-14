@@ -1,6 +1,9 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -9,6 +12,21 @@ namespace NightCodeForge.Web.Tests;
 
 public class TaskReviewServiceTests
 {
+    private static TaskReviewService CreateService(
+        ITaskRepository taskRepo,
+        IWorkspaceRepository workspaceRepo,
+        IGitWorkspaceManager gitManager,
+        IGitHubPullRequestDeliveryService? prDelivery = null,
+        ITaskOrchestrator? orchestrator = null,
+        ITaskMarkdownSyncService? markdownSync = null) =>
+        new(
+            taskRepo,
+            workspaceRepo,
+            gitManager,
+            prDelivery ?? new Mock<IGitHubPullRequestDeliveryService>().Object,
+            orchestrator ?? new MockTaskOrchestrator(),
+            markdownSync ?? new MockTaskMarkdownSyncService(),
+            NullLogger<TaskReviewService>.Instance);
     [Fact]
     public void ParseGitDiff_ParsesModifiedFileDiffCorrectly()
     {
@@ -76,7 +94,7 @@ deleted file mode 100644
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
         var gitManager = new TestGitWorkspaceManager();
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var bag = new PipelineDataBag();
         bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, 0.80);
@@ -137,7 +155,7 @@ deleted file mode 100644
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
         var gitManager = new TestGitWorkspaceManager();
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var bag = new PipelineDataBag();
         bag.Set(PipelineDataBagKeys.TestsCurrentTotal, 10);
@@ -179,7 +197,7 @@ new file mode 100644
 +}"
         };
 
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace
         {
@@ -228,7 +246,7 @@ new file mode 100644
 +}"
         };
 
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace
         {
@@ -309,7 +327,7 @@ new file mode 100644
         {
             CommitDiffResult = "diff --git a/src/Calculator.cs b/src/Calculator.cs\n--- a/src/Calculator.cs\n+++ b/src/Calculator.cs\n@@ -1,1 +1,2 @@\n+public int Multiply(int a, int b) => a * b;\n"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace
         {
@@ -345,7 +363,7 @@ new file mode 100644
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
         var gitManager = new TestGitWorkspaceManager();
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var readyWithRun = new ForgeTask
         {
@@ -406,7 +424,7 @@ new file mode 100644
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
         var gitManager = new TestGitWorkspaceManager();
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var taskWs1 = new ForgeTask
         {
@@ -463,7 +481,7 @@ new file mode 100644
         {
             LiveDiffResult = "diff --git a/test.cs b/test.cs\n+new line"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -495,7 +513,7 @@ new file mode 100644
         {
             LiveDiffResult = ""
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -530,7 +548,7 @@ new file mode 100644
             LiveDiffException = new NightCodeForge.Core.Exceptions.WorktreeNotFoundException(603, "/wks/task-603"),
             DiffResult = "diff --git a/fallback.cs b/fallback.cs\n+fallback line"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -563,7 +581,7 @@ new file mode 100644
         {
             CommitDiffResult = "diff --git a/merged.cs b/merged.cs\n+squashed code"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -598,7 +616,7 @@ new file mode 100644
         {
             DiffResult = "diff --git a/rejected.cs b/rejected.cs\n+rejected code"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -630,7 +648,7 @@ new file mode 100644
         var taskRepo = new InMemoryTaskRepository();
         var workspaceRepo = new InMemoryWorkspaceRepository();
         var gitManager = new TestGitWorkspaceManager();
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var bag = new PipelineDataBag();
         var bagFiles = new List<FileDiffSummary>
@@ -667,7 +685,7 @@ new file mode 100644
         {
             LiveDiffException = new NightCodeForge.Core.Interfaces.GitCommandException("/wks/wt", ["diff"], 128, "", "fatal: bad object HEAD")
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -694,7 +712,7 @@ new file mode 100644
         {
             LiveDiffException = new NightCodeForge.Core.Interfaces.GitCommandException("/wks/wt", ["diff"], 128, "", "fatal: bad object HEAD")
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -725,7 +743,7 @@ new file mode 100644
         {
             LiveDiffException = new NightCodeForge.Core.Interfaces.GitCommandException("/wks/wt", ["diff"], 128, "", "fatal: bad object HEAD")
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -758,7 +776,7 @@ new file mode 100644
             LiveDiffException = new NightCodeForge.Core.Exceptions.WorktreeNotFoundException(608, "/wks/wt"),
             DiffException = new NightCodeForge.Core.Interfaces.GitCommandException("/repo", ["diff"], 128, "", "fatal: bad revision main...feature/task-608")
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -785,7 +803,7 @@ new file mode 100644
         {
             DiffResult = "diff --git a/cancelled.cs b/cancelled.cs\n+cancelled code"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -821,7 +839,7 @@ new file mode 100644
         {
             DiffResult = "diff --git a/rejected.cs b/rejected.cs\n+rejected code"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -857,7 +875,7 @@ new file mode 100644
         {
             LiveDiffResult = "diff --git a/wsl.cs b/wsl.cs\n+wsl code"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace
         {
@@ -896,7 +914,7 @@ new file mode 100644
             LiveDiffException = new System.IO.DirectoryNotFoundException("Directory does not exist"),
             DiffResult = "diff --git a/branch.cs b/branch.cs\n+branch code"
         };
-        var service = new TaskReviewService(taskRepo, workspaceRepo, gitManager, NullLogger<TaskReviewService>.Instance);
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
 
         var workspace = new Workspace { Id = 1, Name = "Test Wks", RepositoryPath = "/repo" };
         await workspaceRepo.CreateAsync(workspace);
@@ -918,6 +936,100 @@ new file mode 100644
         Assert.True(gitManager.GenerateDiffCalled);
         Assert.Single(diffResult.Files);
         Assert.Equal("branch.cs", diffResult.Files[0].Path);
+    }
+
+    [Fact]
+    public async Task GetSnapshotAsync_IncludesPullRequestAndExternalProvenanceFields()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var service = CreateService(taskRepo, workspaceRepo, gitManager);
+
+        await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 701,
+            WorkspaceId = 1,
+            Title = "GitHub PR Task",
+            Status = TaskOverallStatus.Ready,
+            MergeMode = MergeMode.ExternalPullRequest,
+            PullRequestNumber = 45,
+            PullRequestUrl = "https://github.com/acme/demo/pull/45",
+            ExternalSource = "github",
+            ExternalReferenceId = "88"
+        });
+
+        var snapshot = await service.GetSnapshotAsync(701);
+        Assert.NotNull(snapshot);
+        Assert.Equal(MergeMode.ExternalPullRequest, snapshot.MergeMode);
+        Assert.Equal(45, snapshot.PullRequestNumber);
+        Assert.Equal("https://github.com/acme/demo/pull/45", snapshot.PullRequestUrl);
+        Assert.Equal("github", snapshot.ExternalSource);
+        Assert.Equal("88", snapshot.ExternalReferenceId);
+    }
+
+    [Fact]
+    public async Task CreateOrSyncPullRequestAsync_DeliversPullRequest_PersistsTask_AndAddsExecutionLog()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var prDeliveryMock = new Mock<IGitHubPullRequestDeliveryService>();
+        prDeliveryMock
+            .Setup(s => s.DeliverPullRequestAsync(It.IsAny<ForgeTask>(), It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+            .Callback<ForgeTask, Workspace, CancellationToken>((t, _, _) =>
+            {
+                t.PullRequestNumber = 99;
+                t.PullRequestUrl = "https://github.com/acme/demo/pull/99";
+            })
+            .ReturnsAsync(new GitHubPullRequest
+            {
+                Number = 99,
+                HtmlUrl = "https://github.com/acme/demo/pull/99",
+                State = "open"
+            });
+
+        await workspaceRepo.CreateAsync(new Workspace { Id = 1, Name = "PR Ws", RepositoryPath = "/fake/repo" });
+        await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 702,
+            WorkspaceId = 1,
+            Title = "On-Demand PR Task",
+            Status = TaskOverallStatus.Ready,
+            MergeMode = MergeMode.ExternalPullRequest
+        });
+
+        var service = CreateService(taskRepo, workspaceRepo, gitManager, prDelivery: prDeliveryMock.Object);
+
+        var pr = await service.CreateOrSyncPullRequestAsync(702);
+
+        Assert.Equal(99, pr.Number);
+        var updated = await taskRepo.GetByIdAsync(702);
+        Assert.NotNull(updated);
+        Assert.Equal(99, updated.PullRequestNumber);
+        Assert.Equal("https://github.com/acme/demo/pull/99", updated.PullRequestUrl);
+
+        Assert.Contains(updated.ExecutionLogs, l => l.Message.Contains("Pull Request #99"));
+    }
+
+    [Fact]
+    public async Task CloseExternallyMergedTaskAsync_DelegatesToTaskOrchestrator()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var gitManager = new TestGitWorkspaceManager();
+        var orchestrator = new MockTaskOrchestrator
+        {
+            CloseExternallyMergedResult = new CompleteTaskResult(CompleteTaskStatus.Completed, "merged-sha-999")
+        };
+
+        var service = CreateService(taskRepo, workspaceRepo, gitManager, orchestrator: orchestrator);
+
+        var result = await service.CloseExternallyMergedTaskAsync(703);
+
+        Assert.Equal(703, orchestrator.LastCloseExternallyMergedTaskId);
+        Assert.Equal(CompleteTaskStatus.Completed, result.Status);
+        Assert.Equal("merged-sha-999", result.Message);
     }
 
     private class TestGitWorkspaceManager : NightCodeForge.Core.Interfaces.IGitWorkspaceManager
@@ -980,5 +1092,6 @@ new file mode 100644
         public Task<string> GetBranchShaAsync(Workspace workspace, string branchName, CancellationToken cancellationToken = default) => Task.FromResult("sha");
         public Task ResetCanonicalBranchAsync(Workspace workspace, string branchName, string targetSha, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ResetTaskBranchToBaseAsync(Workspace workspace, int taskId, string baseBranch, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task DeleteTaskBranchAsync(Workspace workspace, int taskId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

@@ -79,7 +79,8 @@ public enum TaskOverallStatus
 public enum MergeMode
 {
     Automatic = 0,             // Auto-squashes and merges to base branch once status reaches Ready
-    ManualReviewRequired = 1   // Maintainer manually reviews diff/tests before triggering merge in UI
+    ManualReviewRequired = 1,  // Maintainer manually reviews diff/tests before triggering merge in UI
+    ExternalPullRequest = 2    // Pushes branch to GitHub, creates or updates a Pull Request, and pauses at Ready for human review
 }
 
 /// <summary>

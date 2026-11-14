@@ -546,7 +546,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                             {
                                 if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
-                                    var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds);
+                                    var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds, p.MergeMode);
                                     sessionProposals.Add(ideationProp);
                                     yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                                     await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -623,7 +623,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                         {
                             if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                             {
-                                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds);
+                                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds, p.MergeMode);
                                 sessionProposals.Add(ideationProp);
                                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                                 await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -670,7 +670,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         {
             if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
             {
-                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds);
+                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds, p.MergeMode);
                 sessionProposals.Add(ideationProp);
                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                 await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);

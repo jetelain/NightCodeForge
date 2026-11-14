@@ -83,7 +83,7 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(10, historyRows.Count);
+        Assert.Equal(11, historyRows.Count);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.InitialCreateMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileContextWindowTokensMigrationId);
@@ -94,6 +94,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileMaxOutputTokensMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddSessionCostAndTokenMetricsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddWorkspaceGitHubSettingsMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddForgeTaskGitHubPullRequestFieldsMigrationId);
     }
 
     [Fact]
@@ -255,7 +256,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Equal(10, appliedMigrations.Count);
+        Assert.Equal(11, appliedMigrations.Count);
         Assert.Contains(AppDbContext.InitialCreateMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddAgentProfileContextWindowTokensMigrationId, appliedMigrations);
@@ -266,6 +267,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Contains(AppDbContext.AddAgentProfileMaxOutputTokensMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddSessionCostAndTokenMetricsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddWorkspaceGitHubSettingsMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddForgeTaskGitHubPullRequestFieldsMigrationId, appliedMigrations);
     }
 
     [Fact]

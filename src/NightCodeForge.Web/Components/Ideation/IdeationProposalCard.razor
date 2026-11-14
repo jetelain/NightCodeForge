@@ -1,8 +1,9 @@
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Web.Services
+@inject IServiceProvider ServiceProvider
 
 <div class="proposal-card ideation-proposal-card @(Proposal.IsAdded ? "proposal-card-added" : "")">
-    <!-- Proposal Header: Title and Priority -->
+    <!-- Proposal Header: Title, Priority, and Merge Mode -->
     <div class="proposal-card-header">
         <div class="proposal-title-wrapper">
             <span class="proposal-badge">Proposal</span>
@@ -15,18 +16,34 @@
                 <span class="proposal-draft-badge font-mono">Draft #@Proposal.CreatedTaskId</span>
             }
         </div>
-        <div class="proposal-priority-wrapper">
-            <label class="form-label-sm">Priority:</label>
-            <select class="form-control-dark proposal-priority-select font-mono" 
-                    @bind="Proposal.Priority" 
-                    disabled="@Proposal.IsAdded"
-                    aria-label="Task Priority">
-                <option value="@TaskPriority.Critical">1 - Critical / Urgent (Highest)</option>
-                <option value="@TaskPriority.High">2 - High</option>
-                <option value="@TaskPriority.Normal">3 - Normal (Default)</option>
-                <option value="@TaskPriority.Low">4 - Low</option>
-                <option value="@TaskPriority.Trivial">5 - Lowest / Trivial</option>
-            </select>
+        <div class="proposal-priority-wrapper" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <label class="form-label-sm">Priority:</label>
+                <select class="form-control-dark proposal-priority-select font-mono" 
+                        @bind="Proposal.Priority" 
+                        disabled="@Proposal.IsAdded"
+                        aria-label="Task Priority">
+                    <option value="@TaskPriority.Critical">1 - Critical / Urgent (Highest)</option>
+                    <option value="@TaskPriority.High">2 - High</option>
+                    <option value="@TaskPriority.Normal">3 - Normal (Default)</option>
+                    <option value="@TaskPriority.Low">4 - Low</option>
+                    <option value="@TaskPriority.Trivial">5 - Lowest / Trivial</option>
+                </select>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <label class="form-label-sm">Merge:</label>
+                <select class="form-control-dark proposal-mergemode-select font-mono"
+                        @bind="Proposal.MergeMode"
+                        disabled="@Proposal.IsAdded"
+                        aria-label="Merge Mode">
+                    <option value="@MergeMode.Automatic">@MergeModeHelper.GetLabel(MergeMode.Automatic)</option>
+                    <option value="@MergeMode.ManualReviewRequired">@MergeModeHelper.GetLabel(MergeMode.ManualReviewRequired)</option>
+                    @if (_isPrDeliveryAvailable || Proposal.MergeMode == MergeMode.ExternalPullRequest)
+                    {
+                        <option value="@MergeMode.ExternalPullRequest">@MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest)</option>
+                    }
+                </select>
+            </div>
         </div>
     </div>
 
@@ -190,6 +207,15 @@
     private bool _showDependencies;
     private bool _isPreviewDescription = true;
     private bool _isExpanded;
+    private bool _isPrDeliveryAvailable;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var workspaceState = ServiceProvider.GetService(typeof(WorkspaceStateService)) as WorkspaceStateService;
+        _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(
+            ServiceProvider,
+            workspaceState?.ActiveWorkspace);
+    }
 
     private void OnDependencyToggled(int taskId, object? isChecked)
     {

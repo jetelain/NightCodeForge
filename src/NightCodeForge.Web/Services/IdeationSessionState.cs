@@ -159,6 +159,7 @@ public class IdeationProposalViewModel
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public int Priority { get; set; } = TaskPriority.Normal;
+    public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public List<int> SelectedDependencyIds { get; set; } = new();
     public List<string> DependsOnTitles { get; set; } = new();
     public bool IsAdded { get; set; }
@@ -172,6 +173,7 @@ public class IdeationProposalViewModel
             Title = proposal.Title ?? string.Empty,
             Description = proposal.Description ?? string.Empty,
             Priority = proposal.Priority > 0 ? proposal.Priority : TaskPriority.Normal,
+            MergeMode = ParseProposalMergeMode(proposal.MergeMode),
             CreatedTaskId = proposal.TaskId
         };
 
@@ -218,6 +220,7 @@ public class IdeationProposalViewModel
         Title = task.Title ?? string.Empty;
         Description = task.Description ?? string.Empty;
         Priority = task.Priority > 0 ? task.Priority : TaskPriority.Normal;
+        MergeMode = task.MergeMode;
         IsAdded = task.Status != TaskOverallStatus.Draft &&
                   task.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected);
 
@@ -295,6 +298,22 @@ public class IdeationProposalViewModel
     {
         var trimmed = reference.Trim().TrimStart('#');
         return int.TryParse(trimmed, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out taskId);
+    }
+
+    private static MergeMode ParseProposalMergeMode(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return MergeMode.ManualReviewRequired;
+        }
+
+        return raw.Trim().ToLowerInvariant() switch
+        {
+            "automatic" or "auto" => MergeMode.Automatic,
+            "externalpullrequest" or "external_pull_request" or "pull_request" or "pr" => MergeMode.ExternalPullRequest,
+            "manualreviewrequired" or "manual_review" or "manual" => MergeMode.ManualReviewRequired,
+            _ => MergeMode.ManualReviewRequired
+        };
     }
 }
 

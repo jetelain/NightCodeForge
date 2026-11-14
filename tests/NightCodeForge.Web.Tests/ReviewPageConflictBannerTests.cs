@@ -28,12 +28,15 @@ public class ReviewPageConflictBannerTests : BunitContext
     {
         _taskRepository = new InMemoryTaskRepository();
         _workspaceRepository = new InMemoryWorkspaceRepository();
+        _orchestrator = new MockTaskOrchestrator();
         _reviewService = new TaskReviewService(
             _taskRepository,
             _workspaceRepository,
             new Mock<IGitWorkspaceManager>().Object,
+            new Mock<IGitHubPullRequestDeliveryService>().Object,
+            _orchestrator,
+            new MockTaskMarkdownSyncService(),
             NullLogger<TaskReviewService>.Instance);
-        _orchestrator = new MockTaskOrchestrator();
         _commentState = new ReviewCommentStateService();
         _toastService = TestServices.CreateToastService();
         _workspaceState = new WorkspaceStateService();

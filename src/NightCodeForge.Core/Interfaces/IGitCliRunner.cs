@@ -1,3 +1,5 @@
+using NightCodeForge.Core.Security;
+
 namespace NightCodeForge.Core.Interfaces;
 
 /// <summary>
@@ -31,14 +33,14 @@ public class GitCommandException : Exception
         int exitCode,
         string standardOutput,
         string standardError)
-        : base($"Git command 'git {string.Join(" ", argumentsList)}' failed with exit code {exitCode} in '{workingDirectory}'.\n{standardError}")
+        : base($"Git command 'git {string.Join(" ", GitCredentialRedactor.RedactArguments(argumentsList))}' failed with exit code {exitCode} in '{workingDirectory}'.\n{GitCredentialRedactor.Redact(standardError)}")
     {
         WorkingDirectory = workingDirectory;
-        ArgumentsList = argumentsList as IReadOnlyList<string> ?? argumentsList.ToList();
+        ArgumentsList = GitCredentialRedactor.RedactArguments(argumentsList);
         Arguments = string.Join(" ", ArgumentsList);
         ExitCode = exitCode;
-        StandardOutput = standardOutput;
-        StandardError = standardError;
+        StandardOutput = GitCredentialRedactor.Redact(standardOutput);
+        StandardError = GitCredentialRedactor.Redact(standardError);
     }
 
     public GitCommandException(
@@ -47,9 +49,9 @@ public class GitCommandException : Exception
         int exitCode,
         string standardOutput,
         string standardError)
-        : this(workingDirectory, [arguments], exitCode, standardOutput, standardError)
+        : this(workingDirectory, [GitCredentialRedactor.Redact(arguments)], exitCode, standardOutput, standardError)
     {
-        Arguments = arguments;
+        Arguments = GitCredentialRedactor.Redact(arguments);
     }
 }
 
