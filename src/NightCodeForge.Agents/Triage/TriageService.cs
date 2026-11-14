@@ -50,8 +50,8 @@ public class TriageService : ITriageService
         ArgumentNullException.ThrowIfNull(request);
 
         var baseBranch = !string.IsNullOrWhiteSpace(request.BaseBranch)
-            ? request.BaseBranch
-            : (!string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? workspace.DefaultBaseBranch : WorkflowDefaults.DefaultBaseBranch);
+            ? request.BaseBranch.Trim()
+            : (!string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? workspace.DefaultBaseBranch.Trim() : WorkflowDefaults.DefaultBaseBranch);
 
         _logger.LogInformation("Starting untrusted intake triage for '{ReportTitle}' on workspace #{WorkspaceId} ({BaseBranch})",
             request.Title, workspace.Id, baseBranch);
@@ -71,13 +71,22 @@ public class TriageService : ITriageService
 
         await _workspaceContext.SyncBacklogToDiskAsync(workspace, locations with { RepoPath = repoPath }, cancellationToken);
 
-        // 1. Resolve triage agent profile with RestrictedReadOnly sandbox tier and ReadOnly agent mode
-        var profile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, StandardStageIds.Triage, cancellationToken);
+        // 1. Resolve triage agent profile and enforce RestrictedReadOnly sandbox tier and ReadOnly agent mode
+        var resolvedProfile = await _workspaceRepository.GetEffectiveAgentProfileAsync(workspace.Id, StandardStageIds.Triage, cancellationToken);
 
-        if (profile == null)
+        if (resolvedProfile == null)
         {
             throw new AgentProfileNotFoundException(StandardStageIds.Triage, workspace.Id);
         }
+
+        var profile = EnforceRestrictedReadOnlyProfile(resolvedProfile);
+
+        var externalSource = string.IsNullOrWhiteSpace(request.ExternalSource)
+            ? null
+            : request.ExternalSource.Trim();
+        var externalReferenceId = string.IsNullOrWhiteSpace(request.ExternalReferenceId)
+            ? null
+            : request.ExternalReferenceId.Trim();
 
         // 2. Set up synthetic triage task and pipeline context
         var triageTask = new ForgeTask
@@ -89,6 +98,9 @@ public class TriageService : ITriageService
             FeatureBranch = baseBranch,
             CurrentStageId = StandardStageIds.Triage,
             Status = TaskOverallStatus.Suggested,
+            Origin = request.Origin,
+            ExternalSource = externalSource,
+            ExternalReferenceId = externalReferenceId,
             Priority = TaskPriority.Critical,
             MergeMode = MergeMode.ManualReviewRequired,
             CreatedAt = DateTime.UtcNow,
@@ -114,6 +126,7 @@ public class TriageService : ITriageService
         {
             ForgeTask = triageTask,
             Workspace = workspace,
+            SandboxScope = SandboxScopeDescriptor.ForWorkspace(workspace, SandboxSecurityTier.RestrictedReadOnly),
             Profile = profile,
             StageId = StandardStageIds.Triage,
             StageDirective = stageDirective,
@@ -127,6 +140,21 @@ public class TriageService : ITriageService
         // 3. Execute triage stage with the harness
         var runResult = await harness.RunStageAsync(agentContext, cancellationToken);
         _logger.LogInformation("Triage agent finished with status {Status}: {Summary}", runResult.Status, runResult.Summary);
+
+        if (runResult.Status == AgentRunStatus.Cancelled && cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
+        if (runResult.Status != AgentRunStatus.Completed)
+        {
+            var errorDetail = !string.IsNullOrWhiteSpace(runResult.Error)
+                ? runResult.Error
+                : (!string.IsNullOrWhiteSpace(runResult.Summary)
+                    ? runResult.Summary
+                    : $"Triage stage ended with non-completed status '{runResult.Status}'.");
+            throw new InvalidOperationException($"Untrusted intake triage failed ({runResult.Status}): {errorDetail}");
+        }
 
         // 4. Extract proposed backlog items and persist as Suggested tasks
         var pendingProposals = (runResult.Proposals != null && runResult.Proposals.Count > 0)
@@ -144,7 +172,9 @@ public class TriageService : ITriageService
                     Title = p.Title,
                     Description = p.Description,
                     Status = TaskOverallStatus.Suggested,
-                    Origin = TaskOrigin.UntrustedIntake,
+                    Origin = request.Origin,
+                    ExternalSource = externalSource,
+                    ExternalReferenceId = externalReferenceId,
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = baseBranch,
                     Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
@@ -188,5 +218,83 @@ public class TriageService : ITriageService
         }
 
         return createdTasks;
+    }
+
+    private static AgentProfile EnforceRestrictedReadOnlyProfile(AgentProfile profile)
+    {
+        var sanitizedTools = SanitizeReadOnlyTools(profile.PermittedTools);
+        var toolsAlreadyValid = profile.PermittedTools != null
+            && profile.PermittedTools.Count == sanitizedTools.Count
+            && profile.PermittedTools.SequenceEqual(sanitizedTools, StringComparer.Ordinal);
+
+        if (profile.Mode == AgentMode.ReadOnly
+            && profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly
+            && toolsAlreadyValid)
+        {
+            return profile;
+        }
+
+        return new AgentProfile
+        {
+            Id = profile.Id,
+            WorkspaceId = profile.WorkspaceId,
+            Name = profile.Name,
+            HarnessId = profile.HarnessId,
+            ModelName = profile.ModelName,
+            ThinkingEffort = profile.ThinkingEffort,
+            ThinkingTokenBudget = profile.ThinkingTokenBudget,
+            Temperature = profile.Temperature,
+            HarnessConfigurationJson = profile.HarnessConfigurationJson,
+            OptimizationFlags = profile.OptimizationFlags,
+            PermittedTools = sanitizedTools,
+            StageDirectives = profile.StageDirectives,
+            Mode = AgentMode.ReadOnly,
+            SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
+            SystemPrompt = profile.SystemPrompt,
+            MaxTurns = profile.MaxTurns,
+            AllowNoTests = profile.AllowNoTests,
+            ContextWindowTokens = profile.ContextWindowTokens,
+            MaxOutputTokens = profile.MaxOutputTokens,
+            RoutingTarget = profile.RoutingTarget,
+            Workspace = profile.Workspace
+        };
+    }
+
+    private static IReadOnlyList<string> SanitizeReadOnlyTools(IReadOnlyList<string>? configuredTools)
+    {
+        if (configuredTools == null || configuredTools.Count == 0)
+        {
+            return DefaultAgentTools.ReadOnly;
+        }
+
+        var allowedReadOnly = new HashSet<string>(DefaultAgentTools.ReadOnly, StringComparer.OrdinalIgnoreCase);
+        var sanitized = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var tool in configuredTools)
+        {
+            if (string.IsNullOrWhiteSpace(tool))
+            {
+                continue;
+            }
+
+            var trimmed = tool.Trim();
+            if (allowedReadOnly.Contains(trimmed) && seen.Add(trimmed))
+            {
+                sanitized.Add(trimmed);
+            }
+        }
+
+        if (sanitized.Count == 0)
+        {
+            return DefaultAgentTools.ReadOnly;
+        }
+
+        if (!seen.Contains(CanonicalToolNames.ProposeTasks))
+        {
+            sanitized.Add(CanonicalToolNames.ProposeTasks);
+        }
+
+        return sanitized;
     }
 }

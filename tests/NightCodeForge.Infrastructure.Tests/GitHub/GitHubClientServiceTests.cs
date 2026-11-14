@@ -425,5 +425,200 @@ public class GitHubClientServiceTests
         Assert.Equal("shared-lib", repos[1].Name);
         Assert.False(repos[1].Private);
     }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_QueriesCommentsEndpoint_AndParsesList()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = request =>
+            {
+                capturedRequest = request;
+                const string json = """
+                [
+                  {
+                    "id": 1001,
+                    "body": "<!-- ncf:triaged -->\nAutomated triage completed.",
+                    "html_url": "https://github.com/jetelain/NightCodeForge/issues/42#issuecomment-1001",
+                    "created_at": "2026-11-14T09:00:00Z",
+                    "user": { "login": "octocat" }
+                  },
+                  {
+                    "id": 1002,
+                    "body": "Following up",
+                    "html_url": "https://github.com/jetelain/NightCodeForge/issues/42#issuecomment-1002",
+                    "created_at": "2026-11-14T09:05:00Z",
+                    "user": null
+                  }
+                ]
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+                };
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync("gho_test");
+
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        var comments = await client.ListIssueCommentsAsync("jetelain", "NightCodeForge", 42);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(HttpMethod.Get, capturedRequest!.Method);
+        Assert.Equal("https://api.github.com/repos/jetelain/NightCodeForge/issues/42/comments", capturedRequest.RequestUri?.ToString());
+        Assert.Equal(2, comments.Count);
+        Assert.Equal(1001L, comments[0].Id);
+        Assert.Contains(GitHubSyncConstants.TriagedCommentMarker, comments[0].Body);
+        Assert.Equal("octocat", comments[0].UserLogin);
+        Assert.Equal(1002L, comments[1].Id);
+        Assert.Null(comments[1].UserLogin);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task ListIssueCommentsAsync_WithInvalidIssueNumber_ThrowsArgumentOutOfRangeException(int invalidIssueNumber)
+    {
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = _ => throw new InvalidOperationException("HTTP call should not be made.")
+        };
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => client.ListIssueCommentsAsync("jetelain", "NightCodeForge", invalidIssueNumber));
+    }
+
+    [Theory]
+    [InlineData("{}", 0)]
+    [InlineData("[null, 42, {\"number\":10,\"title\":\"Valid Issue\",\"state\":\"open\",\"pull_request\":null}]", 1)]
+    public async Task ListIssuesAsync_WhenJsonIsNonArrayOrContainsNonObjectElements_ParsesSafely(string rawJson, int expectedCount)
+    {
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(rawJson, System.Text.Encoding.UTF8, "application/json")
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("gho_test");
+
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        var issues = await client.ListIssuesAsync("jetelain", "NightCodeForge", new GitHubIssueFilter());
+
+        Assert.Equal(expectedCount, issues.Count);
+        if (expectedCount == 1)
+        {
+            Assert.Equal(10, issues[0].Number);
+            Assert.Equal("Valid Issue", issues[0].Title);
+        }
+    }
+
+    [Fact]
+    public async Task ListIssueCommentsAsync_WhenJsonHasNonArrayOrMalformedFields_ParsesSafely()
+    {
+        const string json = """
+        [
+          null,
+          42,
+          {
+            "body": "Missing id and created_at",
+            "user": null
+          },
+          {
+            "id": 55,
+            "body": null,
+            "html_url": null,
+            "created_at": "not-a-timestamp",
+            "user": { "login": null }
+          }
+        ]
+        """;
+
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("gho_test");
+
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        var comments = await client.ListIssueCommentsAsync("jetelain", "NightCodeForge", 42);
+
+        Assert.Equal(2, comments.Count);
+        Assert.Equal(0L, comments[0].Id);
+        Assert.Equal("Missing id and created_at", comments[0].Body);
+        Assert.Null(comments[0].UserLogin);
+        Assert.Equal(55L, comments[1].Id);
+        Assert.Equal(string.Empty, comments[1].Body);
+        Assert.Equal(string.Empty, comments[1].HtmlUrl);
+        Assert.Null(comments[1].UserLogin);
+    }
+
+    [Fact]
+    public async Task ListIssuesAsync_WhenIssueJsonHasMissingOrMalformedFields_ParsesSafely()
+    {
+        const string json = """
+        [
+          {
+            "number": null,
+            "title": null,
+            "body": null,
+            "html_url": null,
+            "state": null,
+            "created_at": null,
+            "updated_at": "invalid-date",
+            "closed_at": null,
+            "labels": [ null, { "name": "bug" }, "triage" ],
+            "assignees": [ null, { "login": "octocat" } ],
+            "pull_request": null
+          }
+        ]
+        """;
+
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("gho_test");
+
+        using var httpClient = new HttpClient(handler);
+        var client = new GitHubClientService(httpClient, authMock.Object, NullLogger<GitHubClientService>.Instance);
+
+        var issues = await client.ListIssuesAsync("jetelain", "NightCodeForge", new GitHubIssueFilter());
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(0, issue.Number);
+        Assert.Equal(string.Empty, issue.Title);
+        Assert.Equal("open", issue.State);
+        Assert.Null(issue.UpdatedAt);
+        Assert.Null(issue.ClosedAt);
+        Assert.False(issue.IsPullRequest);
+        Assert.Equal(["bug", "triage"], issue.Labels);
+        Assert.Equal(["octocat"], issue.Assignees);
+    }
 }
 

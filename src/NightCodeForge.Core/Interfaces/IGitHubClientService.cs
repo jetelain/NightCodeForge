@@ -17,6 +17,7 @@ public interface IGitHubClientService
     Task<GitHubIssue> GetIssueAsync(string owner, string repo, int issueNumber, CancellationToken cancellationToken = default);
     Task<GitHubIssue> CreateIssueAsync(string owner, string repo, CreateGitHubIssueRequest request, CancellationToken cancellationToken = default);
     Task<GitHubIssue> UpdateIssueAsync(string owner, string repo, int issueNumber, UpdateGitHubIssueRequest request, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<GitHubIssueComment>> ListIssueCommentsAsync(string owner, string repo, int issueNumber, CancellationToken cancellationToken = default);
     Task<GitHubIssueComment> AddIssueCommentAsync(string owner, string repo, int issueNumber, string body, CancellationToken cancellationToken = default);
 
     // Repository Probe / Connection Test & Discovery

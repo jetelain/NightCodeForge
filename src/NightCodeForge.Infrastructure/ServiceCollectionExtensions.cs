@@ -126,6 +126,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IGitHubDeviceAuthService, GitHub.GitHubDeviceAuthService>();
         services.AddHttpClient<IGitHubClientService, GitHub.GitHubClientService>();
         services.TryAddScoped<IGitHubPullRequestDeliveryService, GitHub.GitHubPullRequestDeliveryService>();
+        services.TryAddScoped<IGitHubIssueSyncService, GitHub.GitHubIssueSyncService>();
 
         return services;
     }

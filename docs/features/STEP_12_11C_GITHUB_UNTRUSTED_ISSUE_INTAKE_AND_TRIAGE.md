@@ -4,7 +4,7 @@
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Steps:* [Step 12.11A: GitHub App Device Flow, Token Store, Client & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md)  
 > *Companion Step:* [Step 12.11D: Bi-Directional Task Mirroring & Multi-User Claiming](STEP_12_11D_GITHUB_TASK_MIRRORING_AND_MULTI_USER_CLAIMING.md)  
-> *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Agents/Triage`, `src/NightCodeForge.Core/Workflow`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Project Target:* `src/NightCodeForge.Infrastructure/GitHub`, `src/NightCodeForge.Agents/Triage`, `src/NightCodeForge.Core/Workflow`, `tests/NightCodeForge.Infrastructure.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -68,13 +68,13 @@ Building on `IGitHubClientService`, `IGitHubDeviceAuthService`, and `GitHubInteg
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **Provenance Propagation in `TriageService`:**
-  - [ ] Extend [`TriageReportRequest`](../../src/NightCodeForge.Core/Workflow/ITriageService.cs) and [`TriageService`](../../src/NightCodeForge.Agents/Triage/TriageService.cs) to propagate `Origin` (`TaskOrigin.GitHubIssue`), `ExternalSource` (`"GitHub"`), and `ExternalReferenceId` (`issue.Number.ToString()`).
-- [ ] **Untrusted Intake & Triage Poller (`GitHubIssueSyncService`):**
-  - [ ] Implement `GitHubIssueSyncService` (with `AirGappedMode` / pause guards and per-workspace concurrency serialization) and register Hangfire recurring poll job honoring per-workspace `PollingIntervalMinutes` and `GitHubIssueTriageScope` (`AssignedToMeOrUnassigned`, `AssignedToMeOnly`, `AllOpenIssues`).
-  - [ ] Filter out GitHub Pull Requests from issue listing, enforce deduplication by `(WorkspaceId, ExternalSource, ExternalReferenceId)`, `workspace.GitHubSettings.TriagedIssueNumbers`, and any `ncf:*` label / `<!-- ncf:triaged -->` tracking so 0-proposal issues (even when `SyncStatusLabels == false`) and issues already handled by another NCF user are never re-triaged.
-  - [ ] Route new issues through `ITriageService.TriageExternalReportAsync` in `RestrictedReadOnly` sandbox, persist the updated `TriagedIssueNumbers` watermark, and apply `ncf:triaged` + optional acknowledgment comment.
-- [ ] **Unit & Integration Tests:**
-  - [ ] Unit tests for `GitHubIssueSyncService` verifying `AirGappedMode` skip, PR filtering, `GitHubIssueTriageScope` assignee filtering (`AssignedToMeOrUnassigned`, `AssignedToMeOnly`, `AllOpenIssues`), issue deduplication (existing `ForgeTask`, `TriagedIssueNumbers` local watermark for 0-proposal non-actionable issues, and cross-instance `ncf:*` labels), idempotent `<!-- ncf:triaged -->` comment guard, and `TriageReportRequest` dispatch into `RestrictedReadOnly` triage with `TaskOrigin.GitHubIssue`.
-  - [ ] Integration tests verifying SQLite persistence of `Suggested` tasks (`Origin = TaskOrigin.GitHubIssue`, `ExternalSource = "GitHub"`, `ExternalReferenceId`), `docs/tasks/*.md` frontmatter mirroring, and `TriagedIssueNumbers` JSON column round-trip across consecutive sync cycles.
+- [x] **Provenance Propagation in `TriageService`:**
+  - [x] Extend [`TriageReportRequest`](../../src/NightCodeForge.Core/Workflow/ITriageService.cs) and [`TriageService`](../../src/NightCodeForge.Agents/Triage/TriageService.cs) to propagate `Origin` (`TaskOrigin.GitHubIssue`), `ExternalSource` (`"GitHub"`), and `ExternalReferenceId` (`issue.Number.ToString()`).
+- [x] **Untrusted Intake & Triage Poller (`GitHubIssueSyncService`):**
+  - [x] Implement `GitHubIssueSyncService` (with `AirGappedMode` / pause guards and per-workspace concurrency serialization) and register Hangfire recurring poll job honoring per-workspace `PollingIntervalMinutes` and `GitHubIssueTriageScope` (`AssignedToMeOrUnassigned`, `AssignedToMeOnly`, `AllOpenIssues`).
+  - [x] Filter out GitHub Pull Requests from issue listing, enforce deduplication by `(WorkspaceId, ExternalSource, ExternalReferenceId)`, `workspace.GitHubSettings.TriagedIssueNumbers`, and any `ncf:*` label / `<!-- ncf:triaged -->` tracking so 0-proposal issues (even when `SyncStatusLabels == false`) and issues already handled by another NCF user are never re-triaged.
+  - [x] Route new issues through `ITriageService.TriageExternalReportAsync` in `RestrictedReadOnly` sandbox, persist the updated `TriagedIssueNumbers` watermark, and apply `ncf:triaged` + optional acknowledgment comment.
+- [x] **Unit & Integration Tests:**
+  - [x] Unit tests for `GitHubIssueSyncService` verifying `AirGappedMode` skip, PR filtering, `GitHubIssueTriageScope` assignee filtering (`AssignedToMeOrUnassigned`, `AssignedToMeOnly`, `AllOpenIssues`), issue deduplication (existing `ForgeTask`, `TriagedIssueNumbers` local watermark for 0-proposal non-actionable issues, and cross-instance `ncf:*` labels), idempotent `<!-- ncf:triaged -->` comment guard, and `TriageReportRequest` dispatch into `RestrictedReadOnly` triage with `TaskOrigin.GitHubIssue`.
+  - [x] Integration tests verifying SQLite persistence of `Suggested` tasks (`Origin = TaskOrigin.GitHubIssue`, `ExternalSource = "GitHub"`, `ExternalReferenceId`), `docs/tasks/*.md` frontmatter mirroring, and `TriagedIssueNumbers` JSON column round-trip across consecutive sync cycles.
 

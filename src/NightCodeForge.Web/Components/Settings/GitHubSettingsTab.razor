@@ -4,6 +4,7 @@
 @using NightCodeForge.Core.Security
 @using NightCodeForge.Web.Services
 @inject GitHubSettingsUiService UiService
+@inject WorkspaceStateService WorkspaceState
 @inject IOptions<SecurityOptions> SecurityOptions
 @inject ToastService ToastService
 @inject IJSRuntime JSRuntime
@@ -462,6 +463,11 @@
         try
         {
             await UiService.SaveSettingsAsync(WorkspaceId, _settings);
+            if (WorkspaceState.ActiveWorkspace != null && WorkspaceState.ActiveWorkspace.Id == WorkspaceId)
+            {
+                WorkspaceState.ActiveWorkspace.GitHubSettings = _settings;
+                WorkspaceState.NotifyWorkspaceUpdated(WorkspaceState.ActiveWorkspace);
+            }
             ToastService.Show("Settings Saved", "GitHub integration settings saved successfully.", ToastLevel.Success);
         }
         catch (Exception ex)

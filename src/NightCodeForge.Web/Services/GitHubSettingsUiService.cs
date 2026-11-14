@@ -1,9 +1,11 @@
+using Hangfire;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Security;
+using NightCodeForge.Infrastructure.GitHub;
 
 namespace NightCodeForge.Web.Services;
 
@@ -42,17 +44,20 @@ public class GitHubSettingsUiService
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IGitHubDeviceAuthService _authService;
     private readonly IGitHubClientService _clientService;
+    private readonly IRecurringJobManager _recurringJobManager;
     private readonly ILogger<GitHubSettingsUiService> _logger;
 
     public GitHubSettingsUiService(
         IWorkspaceRepository workspaceRepository,
         IGitHubDeviceAuthService authService,
         IGitHubClientService clientService,
+        IRecurringJobManager recurringJobManager,
         ILogger<GitHubSettingsUiService> logger)
     {
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _authService = authService ?? throw new ArgumentNullException(nameof(authService));
         _clientService = clientService ?? throw new ArgumentNullException(nameof(clientService));
+        _recurringJobManager = recurringJobManager ?? throw new ArgumentNullException(nameof(recurringJobManager));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -96,9 +101,11 @@ public class GitHubSettingsUiService
         settings.IssueFilterLabel = string.IsNullOrWhiteSpace(settings.IssueFilterLabel)
             ? null
             : settings.IssueFilterLabel.Trim();
+        settings.MergeTriagedIssueNumbers(workspace.GitHubSettings?.TriagedIssueNumbers);
 
         workspace.GitHubSettings = settings;
         await _workspaceRepository.UpdateAsync(workspace, cancellationToken);
+        GitHubIssueSyncService.SynchronizeWorkspaceRecurringJob(_recurringJobManager, workspace);
         _logger.LogInformation("Saved GitHub integration settings for workspace #{WorkspaceId}.", workspaceId);
     }
 

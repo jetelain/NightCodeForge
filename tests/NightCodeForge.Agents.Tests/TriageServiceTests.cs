@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using NightCodeForge.Agents.Triage;
 using NightCodeForge.Core.Domain;
@@ -380,6 +381,261 @@ public class TriageServiceTests : IDisposable
             _workspace.RepositoryPath,
             cloneDir,
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_WithGitHubProvenance_PropagatesFieldsToTasksAndMarkdownFrontmatter()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddSingleton<NightCodeForge.Core.Repositories.ITaskRepository>(_taskRepo);
+        services.AddSingleton<NightCodeForge.Core.Repositories.IWorkspaceRepository>(_workspaceRepo);
+        using var serviceProvider = services.BuildServiceProvider();
+
+        var realMarkdownSync = new NightCodeForge.Core.Services.TaskMarkdownSyncService(
+            serviceProvider.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>(),
+            Mock.Of<NightCodeForge.Core.Interfaces.IWorkspacePathResolver>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NightCodeForge.Core.Services.TaskMarkdownSyncService>.Instance);
+
+        _fakeHarness.OnRunStage = _ => AgentRunResult.Completed(
+            new AgentRunMetrics(),
+            proposals:
+            [
+                new TaskProposal(
+                    "Fix save crash on empty filename",
+                    "Validate filename before saving workspace config."),
+                new TaskProposal(
+                    "Add regression test for save dialog",
+                    "Cover empty filename edge case in UI tests.")
+            ]);
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = realMarkdownSync
+        }.Build();
+
+        var request = new TriageReportRequest(
+            Title: "GitHub Issue #123: App crashes on save",
+            Description: "Steps to reproduce...",
+            Origin: TaskOrigin.GitHubIssue,
+            ExternalSource: GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId: "123");
+
+        var createdTasks = await triageService.TriageExternalReportAsync(_workspace, request);
+
+        Assert.Equal(2, createdTasks.Count);
+        foreach (var task in createdTasks)
+        {
+            Assert.Equal(TaskOverallStatus.Suggested, task.Status);
+            Assert.Equal(TaskOrigin.GitHubIssue, task.Origin);
+            Assert.Equal(GitHubSyncConstants.ExternalSourceGitHub, task.ExternalSource);
+            Assert.Equal("123", task.ExternalReferenceId);
+        }
+
+        var docsTasksDir = Path.Combine(_workspace.RepositoryPath, "docs", "tasks");
+        var markdownFiles = Directory.GetFiles(docsTasksDir, "*.md");
+        Assert.Equal(2, markdownFiles.Length);
+
+        foreach (var filePath in markdownFiles)
+        {
+            var content = await File.ReadAllTextAsync(filePath);
+            var (frontmatter, _) = realMarkdownSync.ParseMarkdown(content, filePath);
+            Assert.Equal("github_issue", frontmatter.Origin);
+            Assert.Equal(GitHubSyncConstants.ExternalSourceGitHub, frontmatter.ExternalSource);
+            Assert.Equal("123", frontmatter.ExternalReferenceId);
+        }
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_WhenHarnessFails_ThrowsInvalidOperationExceptionAndCreatesNoTasks()
+    {
+        _fakeHarness.OnRunStage = ctx =>
+        {
+            ctx.PipelineContext?.DataBag.Set(PipelineDataBagKeys.PendingProposals, new List<TaskProposal>
+            {
+                new("Should not persist", "Failed run should not persist tasks")
+            });
+            return AgentRunResult.Failed(
+                error: "LLM endpoint connection refused",
+                metrics: new AgentRunMetrics(25, 10, 0, 10));
+        };
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
+
+        var request = new TriageReportRequest(
+            Title: "GitHub Issue #124: Timeout",
+            Description: "Investigate intermittent timeout.",
+            Origin: TaskOrigin.GitHubIssue,
+            ExternalSource: GitHubSyncConstants.ExternalSourceGitHub,
+            ExternalReferenceId: "124");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            triageService.TriageExternalReportAsync(_workspace, request));
+
+        Assert.Contains("LLM endpoint connection refused", ex.Message);
+        Assert.Empty(await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id));
+    }
+
+    [Fact]
+    public async Task TriageExternalReportAsync_WhenStoredProfileIsPermissive_EnforcesReadOnlyAndRestrictedTierAndSandboxScope()
+    {
+        var permissiveWorkspace = new Workspace
+        {
+            Id = 77,
+            Name = "Permissive Triage Profile Workspace",
+            RepositoryPath = _tempDir,
+            DefaultBaseBranch = "main",
+            AgentProfiles =
+            [
+                new AgentProfile
+                {
+                    Id = TriageStage.DefaultStageId,
+                    Name = "Misconfigured Triage Profile",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = AgentMode.Full,
+                    SecurityTier = SandboxSecurityTier.Standard,
+                    PermittedTools = DefaultAgentTools.ReadOnly
+                }
+            ]
+        };
+        await _workspaceRepo.CreateAsync(permissiveWorkspace);
+
+        AgentSessionContext? capturedContext = null;
+        _fakeHarness.OnRunStage = ctx =>
+        {
+            capturedContext = ctx;
+            return AgentRunResult.Completed(new AgentRunMetrics(10, 5, 5, 10), summary: "Completed safely");
+        };
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
+
+        var request = new TriageReportRequest("Check security", "Ensure read-only confinement");
+
+        await triageService.TriageExternalReportAsync(permissiveWorkspace, request);
+
+        Assert.NotNull(capturedContext);
+        Assert.Equal(AgentMode.ReadOnly, capturedContext.RequiredMode);
+        Assert.Equal(AgentMode.ReadOnly, capturedContext.Profile.Mode);
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.Profile.SecurityTier);
+        Assert.NotNull(capturedContext.SandboxScope);
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.SandboxScope.SecurityTier);
+        Assert.True(capturedContext.SandboxScope.IsReadOnly);
+    }
+
+    public static IEnumerable<object[]> MisconfiguredTriageToolProfiles()
+    {
+        yield return new object[]
+        {
+            AgentMode.Full,
+            SandboxSecurityTier.Standard,
+            DefaultAgentTools.Full,
+            new[] { CanonicalToolNames.Edit, CanonicalToolNames.Write }
+        };
+        yield return new object[]
+        {
+            AgentMode.ReadOnly,
+            SandboxSecurityTier.RestrictedReadOnly,
+            DefaultAgentTools.Ideation,
+            CanonicalToolNames.BacklogMutationTools.ToArray()
+        };
+        yield return new object[]
+        {
+            AgentMode.ReadOnly,
+            SandboxSecurityTier.RestrictedReadOnly,
+            new[] { CanonicalToolNames.Read, CanonicalToolNames.Edit, CanonicalToolNames.Write },
+            new[] { CanonicalToolNames.Edit, CanonicalToolNames.Write }
+        };
+        yield return new object[]
+        {
+            AgentMode.ReadOnly,
+            SandboxSecurityTier.RestrictedReadOnly,
+            new[] { CanonicalToolNames.Edit, CanonicalToolNames.RequestChanges },
+            new[] { CanonicalToolNames.Edit, CanonicalToolNames.RequestChanges }
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(MisconfiguredTriageToolProfiles))]
+    public async Task TriageExternalReportAsync_SanitizesPermittedToolsToReadOnlyAndTrimsBaseBranch(
+        AgentMode configuredMode,
+        SandboxSecurityTier configuredTier,
+        IReadOnlyList<string> configuredTools,
+        string[] forbiddenTools)
+    {
+        var workspaceWithUnsafeTools = new Workspace
+        {
+            Id = 78,
+            Name = "Unsafe Tools Triage Workspace",
+            RepositoryPath = _tempDir,
+            DefaultBaseBranch = "main",
+            AgentProfiles =
+            [
+                new AgentProfile
+                {
+                    Id = TriageStage.DefaultStageId,
+                    Name = "Triage Profile With Extra Tools",
+                    HarnessId = "crucible",
+                    ModelName = "test-model",
+                    Mode = configuredMode,
+                    SecurityTier = configuredTier,
+                    PermittedTools = configuredTools
+                }
+            ]
+        };
+        await _workspaceRepo.CreateAsync(workspaceWithUnsafeTools);
+
+        AgentSessionContext? capturedContext = null;
+        _fakeHarness.OnRunStage = ctx =>
+        {
+            capturedContext = ctx;
+            return AgentRunResult.Completed(
+                new AgentRunMetrics(10, 5, 5, 10),
+                proposals: [new TaskProposal("Safe Task", "Proposed under read-only tools")]);
+        };
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
+
+        var request = new TriageReportRequest("Check tool sanitization", "Ensure unsafe tools are stripped", BaseBranch: "  release/v1  ");
+
+        var created = await triageService.TriageExternalReportAsync(workspaceWithUnsafeTools, request);
+
+        Assert.NotNull(capturedContext);
+        Assert.Equal(AgentMode.ReadOnly, capturedContext.Profile.Mode);
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.Profile.SecurityTier);
+        Assert.NotNull(capturedContext.Profile.PermittedTools);
+        Assert.Contains(CanonicalToolNames.ProposeTasks, capturedContext.Profile.PermittedTools);
+        foreach (var tool in capturedContext.Profile.PermittedTools)
+        {
+            Assert.Contains(tool, DefaultAgentTools.ReadOnly);
+        }
+        foreach (var forbidden in forbiddenTools)
+        {
+            Assert.DoesNotContain(forbidden, capturedContext.Profile.PermittedTools, StringComparer.OrdinalIgnoreCase);
+        }
+        Assert.Equal("release/v1", capturedContext.ForgeTask.BaseBranch);
+        Assert.Single(created);
+        Assert.Equal("release/v1", created[0].BaseBranch);
     }
 
     private class FakeAgentHarness : IAgentHarness

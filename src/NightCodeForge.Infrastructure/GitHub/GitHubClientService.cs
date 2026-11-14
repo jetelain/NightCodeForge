@@ -167,13 +167,19 @@ public class GitHubClientService : IGitHubClientService
         using var doc = JsonDocument.Parse(content);
         var issues = new List<GitHubIssue>();
 
-        foreach (var element in doc.RootElement.EnumerateArray())
+        if (doc.RootElement.ValueKind == JsonValueKind.Array)
         {
-            var issue = ParseIssue(element);
-            // GitHub issues endpoint includes pull requests; filter them out
-            if (!issue.IsPullRequest)
+            foreach (var element in doc.RootElement.EnumerateArray())
             {
-                issues.Add(issue);
+                if (element.ValueKind == JsonValueKind.Object)
+                {
+                    var issue = ParseIssue(element);
+                    // GitHub issues endpoint includes pull requests; filter them out
+                    if (!issue.IsPullRequest)
+                    {
+                        issues.Add(issue);
+                    }
+                }
             }
         }
 
@@ -267,6 +273,39 @@ public class GitHubClientService : IGitHubClientService
         return ParseIssue(doc.RootElement);
     }
 
+    public async Task<IReadOnlyList<GitHubIssueComment>> ListIssueCommentsAsync(
+        string owner,
+        string repo,
+        int issueNumber,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(issueNumber);
+
+        var url = $"{GitHubApiBaseUrl}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(repo)}/issues/{issueNumber}/comments";
+        using var response = await SendWithAuthAsync(
+            () => new HttpRequestMessage(HttpMethod.Get, url),
+            cancellationToken);
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(content);
+        var comments = new List<GitHubIssueComment>();
+
+        if (doc.RootElement.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var element in doc.RootElement.EnumerateArray())
+            {
+                if (element.ValueKind == JsonValueKind.Object)
+                {
+                    comments.Add(ParseIssueComment(element));
+                }
+            }
+        }
+
+        return comments;
+    }
+
     public async Task<GitHubIssueComment> AddIssueCommentAsync(
         string owner,
         string repo,
@@ -292,22 +331,7 @@ public class GitHubClientService : IGitHubClientService
 
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(content);
-        var root = doc.RootElement;
-
-        return new GitHubIssueComment
-        {
-            Id = root.GetProperty("id").GetInt64(),
-            Body = root.GetProperty("body").GetString() ?? string.Empty,
-            HtmlUrl = root.TryGetProperty("html_url", out var htmlEl) ? htmlEl.GetString() ?? string.Empty : string.Empty,
-            CreatedAt = root.TryGetProperty("created_at", out var createdEl) && createdEl.ValueKind == JsonValueKind.String
-                ? createdEl.GetDateTimeOffset()
-                : DateTimeOffset.UtcNow,
-            UserLogin = root.TryGetProperty("user", out var userEl) &&
-                        userEl.ValueKind == JsonValueKind.Object &&
-                        userEl.TryGetProperty("login", out var loginEl)
-                ? loginEl.GetString()
-                : null
-        };
+        return ParseIssueComment(doc.RootElement);
     }
 
     // ==========================================
@@ -475,8 +499,7 @@ public class GitHubClientService : IGitHubClientService
             foreach (var labelEl in labelsEl.EnumerateArray())
             {
                 if (labelEl.ValueKind == JsonValueKind.Object &&
-                    labelEl.TryGetProperty("name", out var nameEl) &&
-                    nameEl.GetString() is { } name)
+                    GetOptionalString(labelEl, "name") is { } name)
                 {
                     labels.Add(name);
                 }
@@ -493,33 +516,80 @@ public class GitHubClientService : IGitHubClientService
             foreach (var assigneeEl in assigneesEl.EnumerateArray())
             {
                 if (assigneeEl.ValueKind == JsonValueKind.Object &&
-                    assigneeEl.TryGetProperty("login", out var loginEl) &&
-                    loginEl.GetString() is { } login)
+                    GetOptionalString(assigneeEl, "login") is { } login)
                 {
                     assignees.Add(login);
                 }
             }
         }
 
-        var isPullRequest = root.TryGetProperty("pull_request", out var prEl) && prEl.ValueKind != JsonValueKind.Null;
+        var isPullRequest = root.TryGetProperty("pull_request", out var prEl)
+            && prEl.ValueKind != JsonValueKind.Null
+            && prEl.ValueKind != JsonValueKind.Undefined;
 
         return new GitHubIssue
         {
-            Number = root.GetProperty("number").GetInt32(),
-            Title = root.GetProperty("title").GetString() ?? string.Empty,
-            Body = root.TryGetProperty("body", out var bEl) ? bEl.GetString() : null,
-            HtmlUrl = root.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() ?? string.Empty : string.Empty,
-            State = root.TryGetProperty("state", out var stEl) ? stEl.GetString() ?? "open" : "open",
-            StateReason = root.TryGetProperty("state_reason", out var srEl) ? srEl.GetString() : null,
+            Number = GetOptionalInt32(root, "number") ?? 0,
+            Title = GetOptionalString(root, "title") ?? string.Empty,
+            Body = GetOptionalString(root, "body"),
+            HtmlUrl = GetOptionalString(root, "html_url") ?? string.Empty,
+            State = GetOptionalString(root, "state") ?? "open",
+            StateReason = GetOptionalString(root, "state_reason"),
             Labels = labels,
             Assignees = assignees,
-            CreatedAt = root.TryGetProperty("created_at", out var crEl) && crEl.ValueKind == JsonValueKind.String
-                ? crEl.GetDateTimeOffset()
-                : DateTimeOffset.UtcNow,
-            UpdatedAt = root.TryGetProperty("updated_at", out var upEl) && upEl.ValueKind == JsonValueKind.String ? upEl.GetDateTimeOffset() : null,
-            ClosedAt = root.TryGetProperty("closed_at", out var clEl) && clEl.ValueKind == JsonValueKind.String ? clEl.GetDateTimeOffset() : null,
+            CreatedAt = GetOptionalDateTimeOffset(root, "created_at") ?? DateTimeOffset.UtcNow,
+            UpdatedAt = GetOptionalDateTimeOffset(root, "updated_at"),
+            ClosedAt = GetOptionalDateTimeOffset(root, "closed_at"),
             IsPullRequest = isPullRequest
         };
+    }
+
+    private static GitHubIssueComment ParseIssueComment(JsonElement root)
+    {
+        return new GitHubIssueComment
+        {
+            Id = GetOptionalInt64(root, "id") ?? 0L,
+            Body = GetOptionalString(root, "body") ?? string.Empty,
+            HtmlUrl = GetOptionalString(root, "html_url") ?? string.Empty,
+            CreatedAt = GetOptionalDateTimeOffset(root, "created_at") ?? DateTimeOffset.UtcNow,
+            UserLogin = root.TryGetProperty("user", out var userEl) && userEl.ValueKind == JsonValueKind.Object
+                ? GetOptionalString(userEl, "login")
+                : null
+        };
+    }
+
+    private static string? GetOptionalString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String
+            ? prop.GetString()
+            : null;
+    }
+
+    private static int? GetOptionalInt32(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var prop)
+               && prop.ValueKind == JsonValueKind.Number
+               && prop.TryGetInt32(out var value)
+            ? value
+            : null;
+    }
+
+    private static long? GetOptionalInt64(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var prop)
+               && prop.ValueKind == JsonValueKind.Number
+               && prop.TryGetInt64(out var value)
+            ? value
+            : null;
+    }
+
+    private static DateTimeOffset? GetOptionalDateTimeOffset(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var prop)
+               && prop.ValueKind == JsonValueKind.String
+               && prop.TryGetDateTimeOffset(out var value)
+            ? value
+            : null;
     }
 }
 

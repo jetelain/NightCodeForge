@@ -1,4 +1,6 @@
 using System.Net;
+using Hangfire;
+using Hangfire.Common;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Domain;
@@ -6,6 +8,8 @@ using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Security;
+using NightCodeForge.Infrastructure.BackgroundJobs;
+using NightCodeForge.Infrastructure.GitHub;
 using NightCodeForge.Web.Services;
 using Xunit;
 
@@ -31,11 +35,7 @@ public class GitHubSettingsUiServiceTests
 
         repoMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
 
-        var service = new GitHubSettingsUiService(
-            repoMock.Object,
-            Mock.Of<IGitHubDeviceAuthService>(),
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(workspaceRepository: repoMock.Object);
 
         var settings = await service.LoadSettingsAsync(1);
 
@@ -56,11 +56,7 @@ public class GitHubSettingsUiServiceTests
 
         repoMock.Setup(r => r.GetByIdAsync(2, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
 
-        var service = new GitHubSettingsUiService(
-            repoMock.Object,
-            Mock.Of<IGitHubDeviceAuthService>(),
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(workspaceRepository: repoMock.Object);
 
         var newSettings = new GitHubIntegrationSettings
         {
@@ -83,11 +79,7 @@ public class GitHubSettingsUiServiceTests
         authMock.Setup(a => a.GetAuthenticatedUserAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitHubUser { Id = 10, Login = "octocat" });
 
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            authMock.Object,
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(authService: authMock.Object);
 
         var state = await service.GetConnectionStateAsync();
 
@@ -110,11 +102,7 @@ public class GitHubSettingsUiServiceTests
                 Permissions = new GitHubRepositoryPermissions { Push = true, Admin = true }
             });
 
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            clientMock.Object,
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(clientService: clientMock.Object);
 
         var result = await service.TestRepositoryAccessAsync("octocat", "hello-world");
 
@@ -131,11 +119,7 @@ public class GitHubSettingsUiServiceTests
         clientMock.Setup(c => c.GetRepositoryAsync("octocat", "hello-world", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new GitHubAuthenticationException("Token expired"));
 
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            clientMock.Object,
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(clientService: clientMock.Object);
 
         var result = await service.TestRepositoryAccessAsync("octocat", "hello-world");
 
@@ -150,11 +134,7 @@ public class GitHubSettingsUiServiceTests
         clientMock.Setup(c => c.GetRepositoryAsync("octocat", "hello-world", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new GitHubApiException(HttpStatusCode.NotFound, "Not Found", "{\"message\":\"Not Found\"}"));
 
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            clientMock.Object,
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(clientService: clientMock.Object);
 
         var result = await service.TestRepositoryAccessAsync("octocat", "hello-world");
 
@@ -168,11 +148,7 @@ public class GitHubSettingsUiServiceTests
     [InlineData(1441)]
     public async Task SaveSettingsAsync_WithOutOfRangePollingInterval_ThrowsArgumentOutOfRangeException(int invalidInterval)
     {
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService();
 
         var settings = new GitHubIntegrationSettings
         {
@@ -189,11 +165,7 @@ public class GitHubSettingsUiServiceTests
         var workspace = new Workspace { Id = 1, Name = "WS" };
         repoMock.Setup(r => r.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
 
-        var service = new GitHubSettingsUiService(
-            repoMock.Object,
-            Mock.Of<IGitHubDeviceAuthService>(),
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(workspaceRepository: repoMock.Object);
 
         var settings = new GitHubIntegrationSettings
         {
@@ -214,11 +186,7 @@ public class GitHubSettingsUiServiceTests
     [Fact]
     public void ShouldDisplayAvatar_WhenEnableContentSecurityPolicyIsTrue_ReturnsFalse()
     {
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService();
 
         var user = new GitHubUser
         {
@@ -244,11 +212,7 @@ public class GitHubSettingsUiServiceTests
                 new() { Id = 3, Owner = "my-org", Name = "org-repo" }
             });
 
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            clientMock.Object,
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService(clientService: clientMock.Object);
 
         var repos = await service.LoadAccessibleRepositoriesAsync();
 
@@ -267,15 +231,120 @@ public class GitHubSettingsUiServiceTests
     [Fact]
     public void GetAppInstallationUrl_ReturnsConnectionsApplicationUrlWithClientId()
     {
-        var service = new GitHubSettingsUiService(
-            Mock.Of<IWorkspaceRepository>(),
-            Mock.Of<IGitHubDeviceAuthService>(),
-            Mock.Of<IGitHubClientService>(),
-            NullLogger<GitHubSettingsUiService>.Instance);
+        var service = CreateService();
 
         Assert.Equal("https://github.com/settings/connections/applications/Iv23lienpd2ZF3rkKyfg", service.GetAppInstallationUrl());
         Assert.Equal("https://github.com/settings/connections/applications/Iv23lienpd2ZF3rkKyfg", service.GetAppInstallationUrl("   "));
         Assert.Equal("https://github.com/settings/connections/applications/Iv23customAppId", service.GetAppInstallationUrl("Iv23customAppId"));
+    }
+
+    [Fact]
+    public async Task SaveSettingsAsync_WhenIssueTriageEnabled_RegistersOrUpdatesRecurringPollJob()
+    {
+        var repoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace { Id = 14, Name = "Polling WS" };
+        repoMock.Setup(r => r.GetByIdAsync(14, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var recurringJobMock = new Mock<IRecurringJobManager>();
+        var service = CreateService(workspaceRepository: repoMock.Object, recurringJobManager: recurringJobMock.Object);
+
+        var settings = new GitHubIntegrationSettings
+        {
+            Enabled = true,
+            IssueTriageEnabled = true,
+            RepositoryOwner = "octo-org",
+            RepositoryName = "app",
+            PollingIntervalMinutes = 10
+        };
+
+        await service.SaveSettingsAsync(14, settings);
+
+        recurringJobMock.Verify(
+            m => m.AddOrUpdate(
+                GitHubIssueSyncService.GetWorkspaceRecurringJobId(14),
+                It.Is<Job>(j =>
+                    j.Type == typeof(IGitHubIssueSyncService)
+                    && j.Method.Name == nameof(IGitHubIssueSyncService.SyncWorkspaceIssuesAsync)
+                    && j.Queue == HangfireQueues.Default),
+                "*/10 * * * *",
+                It.IsAny<RecurringJobOptions>()),
+            Times.Once);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public async Task SaveSettingsAsync_WhenIssueTriageOrIntegrationDisabled_RemovesRecurringPollJob(bool enabled, bool issueTriageEnabled)
+    {
+        var repoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace { Id = 15, Name = "Disabled Polling WS" };
+        repoMock.Setup(r => r.GetByIdAsync(15, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var recurringJobMock = new Mock<IRecurringJobManager>();
+        var service = CreateService(workspaceRepository: repoMock.Object, recurringJobManager: recurringJobMock.Object);
+
+        var settings = new GitHubIntegrationSettings
+        {
+            Enabled = enabled,
+            IssueTriageEnabled = issueTriageEnabled,
+            RepositoryOwner = "octo-org",
+            RepositoryName = "app",
+            PollingIntervalMinutes = 5
+        };
+
+        await service.SaveSettingsAsync(15, settings);
+
+        recurringJobMock.Verify(
+            m => m.RemoveIfExists(GitHubIssueSyncService.GetWorkspaceRecurringJobId(15)),
+            Times.Once);
+        recurringJobMock.Verify(
+            m => m.AddOrUpdate(It.IsAny<string>(), It.IsAny<Job>(), It.IsAny<string>(), It.IsAny<RecurringJobOptions>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SaveSettingsAsync_PreservesAndDeduplicatesExistingTriagedIssueNumbers()
+    {
+        var repoMock = new Mock<IWorkspaceRepository>();
+        var workspace = new Workspace
+        {
+            Id = 16,
+            Name = "Watermark WS",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                TriagedIssueNumbers = [10, 20]
+            }
+        };
+        repoMock.Setup(r => r.GetByIdAsync(16, It.IsAny<CancellationToken>())).ReturnsAsync(workspace);
+
+        var service = CreateService(workspaceRepository: repoMock.Object);
+        var updatedSettings = new GitHubIntegrationSettings
+        {
+            Enabled = true,
+            IssueTriageEnabled = true,
+            RepositoryOwner = "octo-org",
+            RepositoryName = "app",
+            TriagedIssueNumbers = [20, 30]
+        };
+
+        await service.SaveSettingsAsync(16, updatedSettings);
+
+        Assert.Equal([10, 20, 30], updatedSettings.TriagedIssueNumbers);
+    }
+
+    private static GitHubSettingsUiService CreateService(
+        IWorkspaceRepository? workspaceRepository = null,
+        IGitHubDeviceAuthService? authService = null,
+        IGitHubClientService? clientService = null,
+        IRecurringJobManager? recurringJobManager = null)
+    {
+        return new GitHubSettingsUiService(
+            workspaceRepository ?? Mock.Of<IWorkspaceRepository>(),
+            authService ?? Mock.Of<IGitHubDeviceAuthService>(),
+            clientService ?? Mock.Of<IGitHubClientService>(),
+            recurringJobManager ?? Mock.Of<IRecurringJobManager>(),
+            NullLogger<GitHubSettingsUiService>.Instance);
     }
 }
 

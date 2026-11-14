@@ -5,7 +5,10 @@ namespace NightCodeForge.Core.Workflow;
 public record TriageReportRequest(
     string Title,
     string Description,
-    string? BaseBranch = null);
+    string? BaseBranch = null,
+    TaskOrigin Origin = TaskOrigin.UntrustedIntake,
+    string? ExternalSource = null,
+    string? ExternalReferenceId = null);
 
 /// <summary>
 /// Service executing untrusted intake triage on the base branch within a RestrictedReadOnly sandbox,

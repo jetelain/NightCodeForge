@@ -174,3 +174,19 @@ public class GitHubIssueComment
     public string? UserLogin { get; set; }
 }
 
+/// <summary>
+/// Well-known constants for GitHub issue intake, triage, and task mirroring synchronization.
+/// </summary>
+public static class GitHubSyncConstants
+{
+    public const string ExternalSourceGitHub = "GitHub";
+    public const string LabelPrefix = "ncf:";
+    public const string LabelTriaged = "ncf:triaged";
+    public const string LabelBacklog = "ncf:backlog";
+    public const string LabelInProgress = "ncf:in-progress";
+    public const string LabelGatesPassed = "ncf:gates-passed";
+    public const string LabelReadyForReview = "ncf:ready-for-review";
+    public const string LabelClosed = "ncf:closed";
+    public const string TriagedCommentMarker = "<!-- ncf:triaged -->";
+}
+

@@ -77,8 +77,15 @@ public class InMemoryWorkspaceRepository : IWorkspaceRepository
 
     public Task UpdateAsync(Workspace workspace, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(workspace);
         lock (_lock)
         {
+            if (_workspaces.TryGetValue(workspace.Id, out var existing))
+            {
+                workspace.GitHubSettings ??= new GitHubIntegrationSettings();
+                workspace.GitHubSettings.MergeTriagedIssueNumbers(existing.GitHubSettings?.TriagedIssueNumbers);
+            }
+
             _workspaces[workspace.Id] = workspace;
             return Task.CompletedTask;
         }

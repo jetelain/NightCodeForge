@@ -41,5 +41,16 @@ public class GitHubIntegrationSettings
     public bool AutoAssignIssueOnStart { get; set; } = true;
     public bool SyncStatusLabels { get; set; } = true;
     public bool PostMilestoneComments { get; set; } = true;
+
+    /// <summary>
+    /// Merges existing triaged GitHub issue numbers into this settings instance without losing watermarks.
+    /// </summary>
+    public void MergeTriagedIssueNumbers(IEnumerable<int>? existingIssueNumbers)
+    {
+        TriagedIssueNumbers = (existingIssueNumbers ?? [])
+            .Concat(TriagedIssueNumbers ?? [])
+            .Distinct()
+            .ToList();
+    }
 }
 
