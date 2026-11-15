@@ -3,7 +3,7 @@
 > **Feature Implementation Step (Part 1 of 2 — Existing Repository Discovery, Remote Forge Browser & Auto-Completion)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Companion Step:* [Step 12.32B: From-Scratch Workspace Templates & Remote Forge Publishing](STEP_12_32B_WORKSPACE_TEMPLATES_NATIVE_CLI_SCAFFOLDING_AND_REMOTE_PUBLISH.md)  
-> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](../archive/phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
+> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](../archive/phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
@@ -215,7 +215,7 @@ public interface IVcsHostingProviderRegistry
      - **Not Cloned Locally:** Shows a `📥 Clone & Onboard` primary action button.
 3. **Clone Execution Drawer / Modal (Ephemeral Auth for Private Repos):**
    - Clicking `📥 Clone & Onboard` suggests the default target path: `{DefaultReposRoot}/{RepoName}` (e.g. `C:\Users\Julien\source\repos\my-api`).
-   - Runs `git clone` via `IGitCliRunner` / `CliWrap` using the ephemeral HTTP header authentication pattern from [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) (`git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" clone <HttpsCloneUrl> <targetPath>` with `GIT_TERMINAL_PROMPT=0`), ensuring private repositories clone without interactive credential prompts and without writing short-lived `ghu_...` tokens into `.git/config`.
+   - Runs `git clone` via `IGitCliRunner` / `CliWrap` using the ephemeral HTTP header authentication pattern from [Step 12.11B](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) (`git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" clone <HttpsCloneUrl> <targetPath>` with `GIT_TERMINAL_PROMPT=0`), ensuring private repositories clone without interactive credential prompts and without writing short-lived `ghu_...` tokens into `.git/config`.
    - On clone completion, automatically initializes `Model.RepositoryPath`, probes the repository, links `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`), and transitions smoothly to Step 2.
 
 ---
