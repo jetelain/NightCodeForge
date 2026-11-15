@@ -189,12 +189,23 @@ public class WorkspaceUrlRoutingTests : BunitContext
     [InlineData(4, "/w/1/tasks/new?draft=true", "/w/4/tasks/new?draft=true", "w/4/tasks/new?draft=true")]
     [InlineData(4, "/hangfire", "/hangfire", "hangfire")]
     [InlineData(4, "/Error", "/Error", "Error")]
+    [InlineData(4, "/api/companion/config", "/api/companion/config", "api/companion/config")]
     [InlineData(null, "backlog?filter=open", "/backlog?filter=open", "backlog?filter=open")]
     public void BuildPath_And_BuildNavHref_PreserveQueryAndFragment_AndSkipNonWorkspaceRoutes(
         int? workspaceId, string subPath, string expectedPath, string expectedNavHref)
     {
         Assert.Equal(expectedPath, WorkspaceUrlHelper.BuildPath(workspaceId, subPath));
         Assert.Equal(expectedNavHref, WorkspaceUrlHelper.BuildNavHref(workspaceId, subPath));
+    }
+
+    [Theory]
+    [InlineData("/api/companion/config", true)]
+    [InlineData("/api/companion/workspaces", true)]
+    [InlineData("/api/companion/workspaces/1/triage", true)]
+    [InlineData("/backlog", false)]
+    public void IsNonWorkspaceRoute_RecognizesApiRoutesAsNonWorkspace(string path, bool expected)
+    {
+        Assert.Equal(expected, WorkspaceUrlHelper.IsNonWorkspaceRoute(path));
     }
 
     [Fact]

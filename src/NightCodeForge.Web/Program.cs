@@ -6,10 +6,12 @@ using NightCodeForge.Infrastructure;
 using NightCodeForge.Infrastructure.BackgroundJobs;
 using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Web.Components;
+using NightCodeForge.Web.Endpoints;
 using NightCodeForge.Web.Middleware;
 using NightCodeForge.Web.Services;
 using NightCodeForge.Web.Tailscale;
 using Microsoft.AspNetCore.HttpOverrides;
+using Pmad.LocalApi.Security;
 using Serilog;
 using Serilog.Events;
 
@@ -158,6 +160,9 @@ app.Logger.LogInformation(
     userConfigStatus,
     HostConfigurationSources.GetFullPath(builder.Environment.ContentRootPath));
 
+// Ensure default companion API key file (<ContentRoot>/config/default-key.dat) exists at startup.
+app.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey();
+
 // Run startup DB initialization, recovery, crash reconciliation, and start markdown watchers
 using (var scope = app.Services.CreateScope())
 {
@@ -258,6 +263,7 @@ app.UseAntiforgery();
 
 app.MapStaticAssets();
 app.MapHub<NightCodeForge.Infrastructure.Hubs.OrchestratorHub>("/hubs/orchestrator");
+app.MapCompanionEndpoints();
 
 // Configure Hangfire Dashboard with local requests allowed
 app.UseHangfireDashboard("/hangfire", new DashboardOptions

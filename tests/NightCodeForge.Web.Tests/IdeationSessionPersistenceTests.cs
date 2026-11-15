@@ -1,4 +1,4 @@
-﻿using Bunit;
+using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -53,6 +53,7 @@ public class IdeationSessionPersistenceTests : BunitContext
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_sessionState);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
+        Services.AddSingleton<ICompanionTriageDraftStore>(new CompanionTriageDraftStore(TimeProvider.System));
     }
 
     [Fact]

@@ -1,7 +1,9 @@
 using Bunit;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Components.Pages;
 using NightCodeForge.Web.Services;
@@ -14,6 +16,7 @@ public class TriagePageTests : BunitContext
     private readonly WorkspaceStateService _workspaceState;
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly MockTriageService _triageService;
+    private readonly CompanionTriageDraftStore _companionDraftStore;
     private readonly ToastService _toastService;
 
     public TriagePageTests()
@@ -21,11 +24,13 @@ public class TriagePageTests : BunitContext
         _workspaceState = new WorkspaceStateService();
         _taskRepository = new InMemoryTaskRepository();
         _triageService = new MockTriageService();
+        _companionDraftStore = new CompanionTriageDraftStore(TimeProvider.System);
         _toastService = TestServices.CreateToastService();
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<ITriageService>(_triageService);
+        Services.AddSingleton<ICompanionTriageDraftStore>(_companionDraftStore);
         Services.AddSingleton(_toastService);
     }
 
@@ -312,6 +317,308 @@ public class TriagePageTests : BunitContext
         Assert.Contains("GitHub Synced Issue Proposal", card.TextContent);
         var issueBadge = cut.Find("#triage-github-issue-badge-103");
         Assert.Contains("#42", issueBadge.TextContent);
+    }
+
+    [Fact]
+    public async Task WhenDraftIdMatchesActiveWorkspace_PopulatesFormFieldsAndAutoStartsTriage()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        _triageService.Handler = (_, _, _) => Task.FromResult<IReadOnlyList<ForgeTask>>(
+        [
+            new ForgeTask { Id = 77, Title = "Fix checkout 500 error" }
+        ]);
+
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "Assay Exploratory Report — Checkout Error",
+            reportMarkdown: "# Exploratory Report\n\nObserved 500 error on checkout.",
+            baseBranch: "develop",
+            sessionDirectoryPath: @"C:\sessions\2026-11-15");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(nav.GetUriWithQueryParameter("draftId", draft.DraftId));
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+        await cut.InvokeAsync(() => Task.CompletedTask);
+
+        Assert.Equal("Assay Exploratory Report — Checkout Error", cut.Find("#triage-report-title").GetAttribute("value"));
+        Assert.Equal("develop", cut.Find("#triage-base-branch").GetAttribute("value"));
+        var descValue = cut.Find("#triage-description").GetAttribute("value") ?? cut.Find("#triage-description").TextContent;
+        Assert.Contains("Observed 500 error on checkout.", descValue);
+        Assert.False(cut.Find("#triage-submit-btn").HasAttribute("disabled"));
+        Assert.NotNull(_triageService.LastRequest);
+        Assert.NotNull(cut.Find("#triage-task-proposal-77"));
+    }
+
+    [Fact]
+    public void WhenDraftHasPreStartedExecutionTask_ShowsRunningStateThenRendersProposalsWithoutDoubleExecution()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        var tcs = new TaskCompletionSource<IReadOnlyList<ForgeTask>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "Pre-started Assay Report",
+            reportMarkdown: "# Exploratory Report\n\nPre-started background triage.",
+            baseBranch: "main",
+            executionTask: tcs.Task);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(nav.GetUriWithQueryParameter("draftId", draft.DraftId));
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+
+        Assert.NotNull(cut.Find("#triage-running-card"));
+        Assert.Null(_triageService.LastRequest);
+
+        tcs.SetResult(
+        [
+            new ForgeTask { Id = 88, Title = "Investigate background triage finding" }
+        ]);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Empty(cut.FindAll("#triage-running-card"));
+            Assert.NotNull(cut.Find("#triage-task-proposal-88"));
+        });
+        Assert.Null(_triageService.LastRequest);
+    }
+
+    [Fact]
+    public void WhenDraftIdBelongsToDifferentWorkspace_DoesNotPopulateFormFields()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        var otherDraft = _companionDraftStore.CreateDraft(
+            workspaceId: 2,
+            title: "Other Workspace Report",
+            reportMarkdown: "Should not appear in workspace 1",
+            baseBranch: "release");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(nav.GetUriWithQueryParameter("draftId", otherDraft.DraftId));
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+
+        Assert.True(string.IsNullOrEmpty(cut.Find("#triage-report-title").GetAttribute("value")));
+        Assert.Equal("main", cut.Find("#triage-base-branch").GetAttribute("value"));
+        Assert.True(cut.Find("#triage-submit-btn").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void WhenReRenderedWithSameDraftId_PreservesUserEdits()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "Initial Draft Title",
+            reportMarkdown: "Initial Draft Body",
+            baseBranch: "main");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(nav.GetUriWithQueryParameter("draftId", draft.DraftId));
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+
+        cut.Find("#triage-report-title").Input("Edited Title By User");
+
+        cut.Render(p => p.Add(x => x.WorkspaceId, 1));
+
+        Assert.Equal("Edited Title By User", cut.Find("#triage-report-title").GetAttribute("value"));
+    }
+
+    [Fact]
+    public async Task WhenNavigatingToSecondDraftIdAndResettingForm_UpdatesFieldsClearsErrorAndPreservesReset()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        var draft1 = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "First Draft",
+            reportMarkdown: "First Draft Body",
+            baseBranch: "main");
+        var draft2 = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "Second Draft",
+            reportMarkdown: "Second Draft Body",
+            baseBranch: "release/v2");
+
+        _triageService.Handler = (_, _, _) => throw new InvalidOperationException("Sandbox startup error");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(nav.GetUriWithQueryParameter("draftId", draft1.DraftId));
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+        cut.Find("#triage-external-url").Change("https://github.com/org/repo/issues/1");
+        cut.Find("#triage-stack-trace").Change("System.Exception: boom");
+        await cut.InvokeAsync(() => cut.Find("#triage-submit-btn").Click());
+
+        Assert.NotNull(cut.Find("#triage-error-alert"));
+
+        // Reset handler so automatic triage on draft2 succeeds and clears the prior error banner
+        var draft2TriageCalls = 0;
+        _triageService.Handler = (_, _, _) =>
+        {
+            draft2TriageCalls++;
+            return Task.FromResult<IReadOnlyList<ForgeTask>>(Array.Empty<ForgeTask>());
+        };
+
+        // Navigating to a second distinct draftId replaces fields, clears ExternalUrl/StackTrace, and clears error banner
+        nav.NavigateTo(nav.GetUriWithQueryParameter("draftId", draft2.DraftId));
+        cut.Render(p => p.Add(x => x.WorkspaceId, 1));
+        await cut.InvokeAsync(() => Task.CompletedTask);
+
+        Assert.Equal(1, draft2TriageCalls);
+        Assert.Empty(cut.FindAll("#triage-error-alert"));
+        Assert.Equal("Second Draft", cut.Find("#triage-report-title").GetAttribute("value"));
+        Assert.Equal("release/v2", cut.Find("#triage-base-branch").GetAttribute("value"));
+        var descValue = cut.Find("#triage-description").GetAttribute("value") ?? cut.Find("#triage-description").TextContent;
+        Assert.Contains("Second Draft Body", descValue);
+        Assert.True(string.IsNullOrEmpty(cut.Find("#triage-external-url").GetAttribute("value")));
+        var stackTraceValue = cut.Find("#triage-stack-trace").GetAttribute("value") ?? cut.Find("#triage-stack-trace").TextContent;
+        Assert.True(string.IsNullOrEmpty(stackTraceValue));
+
+        // Clicking Reset Form while ?draftId=... is active clears the form and stays cleared across re-renders
+        cut.Find("button[title='Clear form inputs']").Click();
+        cut.Render(p => p.Add(x => x.WorkspaceId, 1));
+
+        Assert.True(string.IsNullOrEmpty(cut.Find("#triage-report-title").GetAttribute("value")));
+        var clearedDesc = cut.Find("#triage-description").GetAttribute("value") ?? cut.Find("#triage-description").TextContent;
+        Assert.True(string.IsNullOrEmpty(clearedDesc));
+        Assert.Equal("main", cut.Find("#triage-base-branch").GetAttribute("value"));
+        Assert.True(cut.Find("#triage-submit-btn").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void TryApplyCompanionDraft_NormalizesWhitespaceAroundDraftIdConsistently()
+    {
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 5,
+            title: "Trimmed Draft Title",
+            reportMarkdown: "Trimmed Draft Markdown",
+            baseBranch: "develop");
+
+        var model = new TriageSubmissionModel
+        {
+            ExternalUrl = "https://example.com/issue/1",
+            StackTrace = "stack trace"
+        };
+        string? lastAppliedDraftId = null;
+
+        var applied = model.TryApplyCompanionDraft(_companionDraftStore, 5, $"  {draft.DraftId}  ", ref lastAppliedDraftId);
+
+        Assert.True(applied);
+        Assert.Equal(draft.DraftId, lastAppliedDraftId);
+        Assert.Equal("Trimmed Draft Title", model.Title);
+        Assert.Equal("Trimmed Draft Markdown", model.Description);
+        Assert.Equal("develop", model.BaseBranch);
+        Assert.Null(model.ExternalUrl);
+        Assert.Null(model.StackTrace);
+
+        // Subsequent call with the unpadded draftId should treat it as the same draft
+        model.Title = "User Edited Title";
+        var reapplied = model.TryApplyCompanionDraft(_companionDraftStore, 5, draft.DraftId, ref lastAppliedDraftId);
+        Assert.False(reapplied);
+        Assert.Equal("User Edited Title", model.Title);
+    }
+
+    [Fact]
+    public async Task WhenDraftExecutionTaskFails_DoesNotFallbackToPreExistingSuggestedTasks()
+    {
+        var workspace = new Workspace { Id = 1, Name = "Core", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(workspace);
+
+        await _taskRepository.CreateAsync(new ForgeTask
+        {
+            Id = 55,
+            WorkspaceId = 1,
+            Title = "Pre-existing Unrelated Suggested Task",
+            Description = "Old intake item",
+            Status = TaskOverallStatus.Suggested,
+            Origin = TaskOrigin.UntrustedIntake,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var faultedTask = Task.FromException<IReadOnlyList<ForgeTask>>(new InvalidOperationException("Boom"));
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "Failed Assay Report",
+            reportMarkdown: "# Exploratory Report\n\nRepro failed.",
+            baseBranch: "main",
+            executionTask: faultedTask);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(nav.GetUriWithQueryParameter(TriageSubmissionModel.DraftIdQueryParameter, draft.DraftId));
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+
+        cut.WaitForAssertion(() =>
+        {
+            var errorAlert = cut.Find("#triage-error-alert");
+            Assert.Contains("Boom", errorAlert.TextContent);
+        });
+
+        Assert.Empty(cut.FindAll("#triaged-tasks-list"));
+        Assert.DoesNotContain("Pre-existing Unrelated Suggested Task", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WhenNavigatingAcrossWorkspacesToDraftId_AppliesDraftAndKeepsGeneratedProposals()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Workspace One", DefaultBaseBranch = "main" };
+        var ws2 = new Workspace { Id = 2, Name = "Workspace Two", DefaultBaseBranch = "develop" };
+        _workspaceState.SetKnownWorkspaces([ws1, ws2]);
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var cut = Render<Triage>(p => p.Add(x => x.WorkspaceId, 1));
+        Assert.Equal(1, _workspaceState.ActiveWorkspaceId);
+
+        var ws2Draft = _companionDraftStore.CreateDraft(
+            workspaceId: 2,
+            title: "Cross-Workspace Assay Report",
+            reportMarkdown: "# Exploratory Report\n\nObserved issue in workspace 2.",
+            baseBranch: "release/ws2");
+
+        var triageCallCount = 0;
+        _triageService.Handler = (ws, req, _) =>
+        {
+            Interlocked.Increment(ref triageCallCount);
+            return Task.FromResult<IReadOnlyList<ForgeTask>>(
+            [
+                new ForgeTask
+                {
+                    Id = 202,
+                    WorkspaceId = ws.Id,
+                    Title = "Fix WS2 regression",
+                    Status = TaskOverallStatus.Suggested,
+                    Origin = TaskOrigin.UntrustedIntake,
+                    BaseBranch = req.BaseBranch ?? "develop"
+                }
+            ]);
+        };
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo(TriageSubmissionModel.BuildCompanionDraftUrl(2, ws2Draft.DraftId));
+        cut.Render(p => p.Add(x => x.WorkspaceId, 2));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, _workspaceState.ActiveWorkspaceId);
+            Assert.Equal("Cross-Workspace Assay Report", cut.Find("#triage-report-title").GetAttribute("value"));
+            Assert.Equal("release/ws2", cut.Find("#triage-base-branch").GetAttribute("value"));
+            Assert.NotNull(cut.Find("#triage-task-proposal-202"));
+        });
+
+        await cut.InvokeAsync(() => Task.CompletedTask);
+        Assert.Equal(1, triageCallCount);
+        Assert.NotNull(cut.Find("#triage-task-proposal-202"));
     }
 }
 

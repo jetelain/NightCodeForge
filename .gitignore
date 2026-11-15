@@ -448,3 +448,7 @@ docs/transcripts/
 # User-owned configuration layer (local overrides)
 config/config.json
 **/config/config.json
+config/default-key.dat
+**/config/default-key.dat
+config/api-keys.json
+**/config/api-keys.json

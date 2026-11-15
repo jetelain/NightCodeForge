@@ -10,7 +10,9 @@
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
 @inject IdeationRefinementService RefinementService
+@inject ICompanionTriageDraftStore CompanionTriageDraftStore
 @inject ILogger<Ideation> Logger
+@using NightCodeForge.Core.Services
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @implements IDisposable
@@ -508,7 +510,11 @@
     [SupplyParameterFromQuery(Name = IdeationRefinementHelper.TaskIdQueryParameter)]
     public int? TaskId { get; set; }
 
+    [SupplyParameterFromQuery(Name = IdeationRefinementHelper.DraftIdQueryParameter)]
+    public string? DraftId { get; set; }
+
     private int? _handledRefinementTaskId;
+    private string? _lastAppliedDraftId;
     private string _userInput = string.Empty;
     private IdeationMobilePane _mobilePane = IdeationMobilePane.Chat;
     private bool _showCustomPromptConfig;
@@ -531,6 +537,7 @@
 
     protected override async Task OnParametersSetAsync()
     {
+        var previousWorkspaceId = WorkspaceState.ActiveWorkspaceId;
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
@@ -539,13 +546,78 @@
         if (!TaskId.HasValue)
         {
             _handledRefinementTaskId = null;
+        }
+
+        if (string.IsNullOrWhiteSpace(DraftId))
+        {
+            _lastAppliedDraftId = null;
+        }
+
+        if (WorkspaceState.ActiveWorkspaceId != previousWorkspaceId)
+        {
             return;
         }
 
-        if (TaskId != _handledRefinementTaskId && WorkspaceState.ActiveWorkspace != null)
+        if (TaskId.HasValue && TaskId != _handledRefinementTaskId && WorkspaceState.ActiveWorkspace != null)
         {
             _handledRefinementTaskId = TaskId;
             await TryInitializeTaskRefinementAsync(WorkspaceState.ActiveWorkspace.Id, TaskId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(DraftId) && WorkspaceState.ActiveWorkspace != null)
+        {
+            await TryInitializeCompanionDraftAsync(WorkspaceState.ActiveWorkspace.Id);
+        }
+    }
+
+    private async Task<bool> TryInitializeCompanionDraftAsync(int workspaceId)
+    {
+        if (Session.IsGenerating)
+        {
+            return false;
+        }
+
+        if (!IdeationRefinementHelper.TryResolveCompanionDraft(
+                CompanionTriageDraftStore,
+                workspaceId,
+                DraftId,
+                ref _lastAppliedDraftId,
+                out var draft) || draft is null)
+        {
+            return false;
+        }
+
+        var oldConvId = Session.ActiveConversationId;
+        var oldWsId = Session.BoundWorkspaceId ?? workspaceId;
+
+        var created = await TaskRepository.StartIdeationConversationAsync(
+            workspaceId,
+            title: draft.Title);
+
+        await ReleaseConversationAffinityIfChangedAsync(oldWsId, oldConvId, created.Id);
+
+        _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(workspaceId);
+
+        Session.Reset();
+        Session.BoundWorkspaceId = workspaceId;
+        Session.ActiveConversationId = created.Id;
+        Session.ActiveConversationTitle = created.Title;
+        _userInput = IdeationRefinementHelper.BuildCompanionSeedPrompt(draft);
+        return true;
+    }
+
+    private async Task ReleaseConversationAffinityIfChangedAsync(int workspaceId, int? oldConvId, int newConvId)
+    {
+        if (oldConvId.HasValue && oldConvId.Value != newConvId)
+        {
+            try
+            {
+                await IdeationService.ReleaseConversationSessionAsync(workspaceId, oldConvId.Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to release session affinity when switching ideation session #{ConversationId}", oldConvId.Value);
+            }
         }
     }
 
@@ -563,17 +635,7 @@
 
             var oldConvId = Session.ActiveConversationId;
             var oldWsId = Session.BoundWorkspaceId ?? workspaceId;
-            if (oldConvId.HasValue && oldConvId.Value != refinement.Conversation.Id)
-            {
-                try
-                {
-                    await IdeationService.ReleaseConversationSessionAsync(oldWsId, oldConvId.Value);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to release session affinity when switching to task refinement session #{ConversationId}", oldConvId.Value);
-                }
-            }
+            await ReleaseConversationAffinityIfChangedAsync(oldWsId, oldConvId, refinement.Conversation.Id);
 
             if (refinement.IsNew)
             {
@@ -635,6 +697,12 @@
                         await InvokeAsync(StateHasChanged);
                         return;
                     }
+                }
+
+                if (!string.IsNullOrWhiteSpace(DraftId) && await TryInitializeCompanionDraftAsync(active.Id))
+                {
+                    await InvokeAsync(StateHasChanged);
+                    return;
                 }
 
                 if (Session.BoundWorkspaceId != active.Id)

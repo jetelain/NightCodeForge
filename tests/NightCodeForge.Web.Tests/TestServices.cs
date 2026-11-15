@@ -42,6 +42,7 @@ public static class TestServices
         services.TryAddSingleton<IGitHubTaskMirrorService>(new Mock<IGitHubTaskMirrorService>().Object);
         services.TryAddSingleton<IGitHubPullRequestDeliveryService>(new Mock<IGitHubPullRequestDeliveryService>().Object);
         services.TryAddSingleton<IOptions<SecurityOptions>>(Options.Create(new SecurityOptions { AirGappedMode = false }));
+        services.TryAddSingleton<ICompanionTriageDraftStore>(_ => new CompanionTriageDraftStore(TimeProvider.System));
         services.TryAddSingleton<WorkspaceStateService>();
         services.TryAddSingleton<ITaskReviewService>(sp => new TaskReviewService(
             sp.GetRequiredService<ITaskRepository>(),

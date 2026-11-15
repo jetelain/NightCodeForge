@@ -18,6 +18,7 @@ public class IdeationRefinementTests : BunitContext
     private readonly WorkspaceStateService _workspaceState = new();
     private readonly InMemoryTaskRepository _taskRepository = new();
     private readonly IdeationSessionState _session = new();
+    private readonly CompanionTriageDraftStore _companionDraftStore = new(TimeProvider.System);
 
     public IdeationRefinementTests()
     {
@@ -34,6 +35,7 @@ public class IdeationRefinementTests : BunitContext
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton(_session);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
+        Services.AddSingleton<ICompanionTriageDraftStore>(_companionDraftStore);
         Services.AddSingleton(new Moq.Mock<ITaskMutationService>().Object);
         Services.AddSingleton(new Moq.Mock<IDevQueueService>().Object);
         TestServices.AddDefaultWebUiServices(Services);
@@ -185,5 +187,104 @@ public class IdeationRefinementTests : BunitContext
         proposal.ResolveDependencies([activeTask, cancelledTask]);
 
         Assert.Equal([10], proposal.SelectedDependencyIds);
+    }
+
+    [Fact]
+    public async Task IdeationPage_WithDraftIdQuery_StartsConversationAndPreSeedsReportPrompt()
+    {
+        var ideationService = (MockIdeationService)Services.GetRequiredService<IIdeationService>();
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 1,
+            title: "Assay Exploratory Report — Checkout Crash",
+            reportMarkdown: "# Exploratory Report\n\nClicking Pay with empty cart returns HTTP 500.",
+            baseBranch: "release/v2",
+            sessionDirectoryPath: @"C:\sessions\assay-1");
+
+        _workspaceState.SetActiveWorkspace(new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" });
+        Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>()
+            .NavigateTo($"/w/1/ideation?draftId={draft.DraftId}");
+
+        var cut = Render<Ideation>(p => p.Add(i => i.WorkspaceId, 1));
+
+        cut.WaitForAssertion(() =>
+        {
+            var textarea = cut.Find("textarea.chat-textarea");
+            var value = textarea.GetAttribute("value");
+            Assert.Contains("Assay Exploratory Report — Checkout Crash", value);
+            Assert.Contains("release/v2", value);
+            Assert.Contains("Clicking Pay with empty cart returns HTTP 500.", value);
+            Assert.Equal("Assay Exploratory Report — Checkout Crash", _session.ActiveConversationTitle);
+        });
+
+        var conversations = await _taskRepository.GetIdeationConversationsAsync(1);
+        var onlyConversation = Assert.Single(conversations);
+        Assert.Equal("Assay Exploratory Report — Checkout Crash", onlyConversation.Title);
+        Assert.False(_session.IsGenerating);
+        Assert.Empty(_session.Messages);
+        Assert.Null(ideationService.LastConversationId);
+    }
+
+    [Fact]
+    public void IdeationHelper_BuildsCompanionDraftUrlAndSeedPrompt_AndDeduplicatesDraftId()
+    {
+        var draft = _companionDraftStore.CreateDraft(
+            workspaceId: 3,
+            title: "Assay Report",
+            reportMarkdown: "# Findings\nSomething broke.",
+            baseBranch: "main");
+
+        Assert.Equal($"/w/3/ideation?draftId={draft.DraftId}", IdeationRefinementHelper.BuildCompanionDraftUrl(3, draft.DraftId));
+
+        string? lastApplied = null;
+        Assert.True(IdeationRefinementHelper.TryResolveCompanionDraft(_companionDraftStore, 3, $" {draft.DraftId} ", ref lastApplied, out var resolved));
+        Assert.Same(draft, resolved);
+        Assert.Equal(draft.DraftId, lastApplied);
+        Assert.False(IdeationRefinementHelper.TryResolveCompanionDraft(_companionDraftStore, 3, draft.DraftId, ref lastApplied, out _));
+
+        var prompt = IdeationRefinementHelper.BuildCompanionSeedPrompt(draft);
+        Assert.Contains("Assay Report", prompt);
+        Assert.Contains("base branch 'main'", prompt);
+        Assert.Contains("Something broke.", prompt);
+    }
+
+    [Fact]
+    public async Task IdeationPage_WhenSwitchingWorkspaceWithDraftIdQuery_InitializesSingleDraftConversationWithoutClobbering()
+    {
+        var ws1 = new Workspace { Id = 1, Name = "Repo One", DefaultBaseBranch = "main" };
+        var ws2 = new Workspace { Id = 2, Name = "Repo Two", DefaultBaseBranch = "develop" };
+        _workspaceState.SetKnownWorkspaces([ws1, ws2]);
+        _workspaceState.SetActiveWorkspace(ws1);
+
+        var nav = Services.GetRequiredService<Microsoft.AspNetCore.Components.NavigationManager>();
+        nav.NavigateTo("/w/1/ideation");
+
+        var cut = Render<Ideation>(p => p.Add(i => i.WorkspaceId, 1));
+        cut.WaitForAssertion(() => Assert.Equal(1, _session.BoundWorkspaceId));
+
+        var ws2Draft = _companionDraftStore.CreateDraft(
+            workspaceId: 2,
+            title: "Assay Report — WS2 Freeze",
+            reportMarkdown: "# Exploratory Report\n\nCross-workspace UI freeze.",
+            baseBranch: "develop");
+
+        nav.NavigateTo(IdeationRefinementHelper.BuildCompanionDraftUrl(2, ws2Draft.DraftId));
+        cut.Render(p => p.Add(i => i.WorkspaceId, 2));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(2, _workspaceState.ActiveWorkspaceId);
+            Assert.Equal(2, _session.BoundWorkspaceId);
+            Assert.Equal("Assay Report — WS2 Freeze", _session.ActiveConversationTitle);
+            var textareaValue = cut.Find("textarea.chat-textarea").GetAttribute("value");
+            Assert.Contains("Assay Report — WS2 Freeze", textareaValue);
+            Assert.Contains("develop", textareaValue);
+            Assert.Contains("Cross-workspace UI freeze.", textareaValue);
+        });
+
+        await cut.InvokeAsync(() => Task.CompletedTask);
+        var ws2Conversations = await _taskRepository.GetIdeationConversationsAsync(2);
+        var onlyWs2Conversation = Assert.Single(ws2Conversations);
+        Assert.Equal("Assay Report — WS2 Freeze", onlyWs2Conversation.Title);
+        Assert.Equal(onlyWs2Conversation.Id, _session.ActiveConversationId);
     }
 }

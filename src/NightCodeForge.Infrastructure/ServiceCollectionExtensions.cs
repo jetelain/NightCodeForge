@@ -2,7 +2,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Pmad.LocalApi.Security;
 using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Interfaces;
@@ -128,6 +130,19 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IGitHubPullRequestDeliveryService, GitHub.GitHubPullRequestDeliveryService>();
         services.TryAddScoped<IGitHubIssueSyncService, GitHub.GitHubIssueSyncService>();
         services.TryAddScoped<IGitHubTaskMirrorService, GitHub.GitHubTaskMirrorService>();
+
+        // 12. Companion API Key Store & Triage Handoff
+        services.TryAddSingleton<IKeyProtector>(_ => KeyProtectorFactory.CreatePlatformDefault());
+        services.TryAddSingleton<IApiKeyStore>(sp =>
+        {
+            var contentRootPath = sp.GetService<IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory;
+            return new ApiKeyStore(
+                Path.Combine(contentRootPath, Configuration.HostConfigurationSources.UserConfigDirectoryName),
+                sp.GetRequiredService<IKeyProtector>(),
+                sp.GetRequiredService<ILogger<ApiKeyStore>>(),
+                sp.GetRequiredService<TimeProvider>());
+        });
+        services.TryAddSingleton<ICompanionTriageDraftStore, CompanionTriageDraftStore>();
 
         return services;
     }

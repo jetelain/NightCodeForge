@@ -21,8 +21,9 @@
    - Protects all `/api/companion/*` endpoints by extracting tokens via `ApiKeyHeaderParser.ExtractKey` (`Authorization: Bearer <key>` or `X-Api-Key: <key>`) and validating via `IApiKeyStore.ValidateKey`, returning `401 Unauthorized` when missing or invalid.
 3. **Companion Configuration & Workspace Discovery Endpoints (`GET /api/companion/config` & `GET /api/companion/workspaces`):**
    - Allows `NightCodeAssay` to discover the active LLM provider (`ProviderType`, `EffectiveEndpoint`, `DefaultModelId`, `ArchitectModelId`, `CoderModelId`, and `OpenAiCompatible` endpoint/API key) and the list of registered workspaces (`Id`, `Name`, `Emoji`, `ColorCode`, `RepositoryPath`, `DefaultBaseBranch`).
-4. **1-Click Exploratory Report $\rightarrow$ Sandboxed Triage Handoff (`POST /api/companion/workspaces/{workspaceId:int}/triage`):**
-   - Stages a new triage draft for the target workspace pre-seeded with the exploratory test report Markdown in `ICompanionTriageDraftStore`, and supports selecting/loading that draft via `?draftId={id}` in [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) with the report pre-filled in the **Submit External Report** form.
+4. **1-Click Exploratory Report $\rightarrow$ Automatic Triage or Interactive Ideation Handoff:**
+   - **Automatic Triage (`POST /api/companion/workspaces/{workspaceId:int}/triage`):** Immediately starts `ITriageService.TriageExternalReportAsync` in the background, stores a draft referencing the running `ExecutionTask` in `ICompanionTriageDraftStore`, and returns the deep-link `/w/{workspaceId}/triage?draftId={id}`. Opening [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) with `?draftId={id}` populates the form and attaches automatically to the running triage task (or starts triage immediately if no `ExecutionTask` is attached) without waiting for manual validation.
+   - **Interactive Ideation (`POST /api/companion/workspaces/{workspaceId:int}/ideation`):** Stages a companion draft in `ICompanionTriageDraftStore` and returns the deep-link `/w/{workspaceId}/ideation?draftId={id}`. Opening [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor) with `?draftId={id}` initializes a new ideation conversation titled after `draft.Title` and pre-fills the prompt input with the exploratory report context so the user can refine or edit before sending.
 
 ---
 
@@ -142,8 +143,11 @@ Queries `IWorkspaceRepository.GetAllAsync(cancellationToken)` and `ITaskReposito
 }
 ```
 
-#### 3. `POST /api/companion/workspaces/{workspaceId:int}/triage` & `ICompanionTriageDraftStore`
-Stages a new Triage submission draft in the specified workspace seeded with an exploratory test report from `NightCodeAssay`:
+#### 3. `POST /api/companion/workspaces/{workspaceId:int}/triage`, `POST /api/companion/workspaces/{workspaceId:int}/ideation` & `ICompanionTriageDraftStore`
+Supports two handoff modes for an exploratory test report from `NightCodeAssay`:
+
+- **Automatic Triage (`POST /api/companion/workspaces/{workspaceId:int}/triage`):** Immediately kicks off `ITriageService.TriageExternalReportAsync` in the background (scoped via `IServiceScopeFactory` and bound to `IHostApplicationLifetime.ApplicationStopping`), stores a draft holding that running `ExecutionTask` in `ICompanionTriageDraftStore`, and responds immediately (`201 Created`) with `{ "draftId", "workspaceId", "title", "triageUrl": "/w/{workspaceId}/triage?draftId={draftId}" }`.
+- **Interactive Ideation (`POST /api/companion/workspaces/{workspaceId:int}/ideation`):** Stages a companion draft (without starting a background triage run) in `ICompanionTriageDraftStore` and responds immediately (`201 Created`) with `{ "draftId", "workspaceId", "title", "ideationUrl": "/w/{workspaceId}/ideation?draftId={draftId}" }`.
 
 - **Draft Store Contract (`NightCodeForge.Core.Services`):**
   ```csharp
@@ -156,7 +160,8 @@ Stages a new Triage submission draft in the specified workspace seeded with an e
       string ReportMarkdown,
       string BaseBranch,
       string? SessionDirectoryPath,
-      DateTimeOffset CreatedAt);
+      DateTimeOffset CreatedAt,
+      Task<IReadOnlyList<ForgeTask>>? ExecutionTask = null);
 
   public interface ICompanionTriageDraftStore
   {
@@ -165,13 +170,14 @@ Stages a new Triage submission draft in the specified workspace seeded with an e
           string title,
           string reportMarkdown,
           string baseBranch,
-          string? sessionDirectoryPath = null);
+          string? sessionDirectoryPath = null,
+          Task<IReadOnlyList<ForgeTask>>? executionTask = null);
 
       CompanionTriageDraft? GetDraft(string? draftId);
   }
   ```
   - `CompanionTriageDraftStore` is a thread-safe singleton in-memory store whose constructor takes `TimeProvider timeProvider` (no optional parameters) for deterministic 24-hour TTL expiration pruning.
-  - Generates a 12-character hex/base64url `DraftId` and prunes drafts older than 24 hours on access/insertion.
+  - Generates a 12-character hex `DraftId` and prunes drafts older than 24 hours on access/insertion.
 
 - **Request Payload (`CreateCompanionTriageRequest`):**
   ```json
@@ -182,14 +188,13 @@ Stages a new Triage submission draft in the specified workspace seeded with an e
     "sessionDirectoryPath": "C:\\Users\\Julien\\...\\sessions\\2026-11-14_09-05"
   }
   ```
-- **Validation & Behavior:**
+- **Validation & Behavior (shared input normalization via `TryPrepareDraftInputAsync`):**
   1. Verify workspace `{workspaceId}` exists via `IWorkspaceRepository.GetByIdAsync(workspaceId, cancellationToken)`; return `404 Not Found` with JSON body `{"error": "Workspace not found."}` if absent.
-  2. Validate `reportMarkdown` is non-empty; return `400 Bad Request` with JSON body `{"error": "reportMarkdown is required."}` if blank.
+  2. Read and deserialize the JSON request body inside the handler (catching `JsonException` as `400 Bad Request` JSON) and validate `reportMarkdown` is non-empty; return `400 Bad Request` with JSON body `{"error": "reportMarkdown is required."}` if blank.
   3. Build the report title: use `request.Title.Trim()` if non-whitespace, otherwise `$"Assay Report #{timeProvider.GetUtcNow():MMdd-HHmm}"` (using the injected `TimeProvider`).
   4. Resolve `baseBranch`: use `request.BaseBranch.Trim()` if non-whitespace, otherwise `!string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? workspace.DefaultBaseBranch : "main"`.
   5. Normalize `sessionDirectoryPath`: use `request.SessionDirectoryPath.Trim()` when non-whitespace, otherwise `null`.
-  6. Store the staged triage draft in `ICompanionTriageDraftStore` so the HTTP endpoint responds immediately (`201 Created`) without blocking on a long-running sandboxed agent run.
-  7. Return HTTP `201 Created` (`Results.Created(triageUrl, response)`):
+  6. For `/triage`: launch background triage via `ITriageService.TriageExternalReportAsync`, store the draft with its `ExecutionTask` in `ICompanionTriageDraftStore`, and return HTTP `201 Created` (`Results.Created(triageUrl, response)`):
      ```json
      {
        "draftId": "7f9c2b1e4a8d",
@@ -198,30 +203,47 @@ Stages a new Triage submission draft in the specified workspace seeded with an e
        "triageUrl": "/w/1/triage?draftId=7f9c2b1e4a8d"
      }
      ```
+  7. For `/ideation`: store the draft in `ICompanionTriageDraftStore` without starting triage and return HTTP `201 Created` (`Results.Created(ideationUrl, response)`):
+     ```json
+     {
+       "draftId": "7f9c2b1e4a8d",
+       "workspaceId": 1,
+       "title": "Assay Exploratory Report — 2026-11-14 09:05",
+       "ideationUrl": "/w/1/ideation?draftId=7f9c2b1e4a8d"
+     }
+     ```
 
 ---
 
-### 2.4 `Triage.razor` Deep-Link Support (`?draftId={id}`)
+### 2.4 `Triage.razor` & `Ideation.razor` Deep-Link Support (`?draftId={id}`)
 
-Enhance [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) and `TriageSubmissionModel` to support direct deep-linking to a staged companion triage draft while adhering to [`AGENTS.md`](../../AGENTS.md) UI/Presentation separation:
-1. Extract draft-loading logic into `TriageSubmissionModel.TryApplyCompanionDraft(ICompanionTriageDraftStore draftStore, int? activeWorkspaceId, string? draftId, ref string? lastAppliedDraftId)` in [`TriageViewModels.cs`](../../src/NightCodeForge.Web/Services/TriageViewModels.cs):
-   - Returns `false` if `string.IsNullOrWhiteSpace(draftId)`, if `activeWorkspaceId` is null, or if `string.Equals(lastAppliedDraftId, draftId, StringComparison.Ordinal)`.
-   - Looks up `draftStore.GetDraft(draftId)`; if found and `draft.WorkspaceId == activeWorkspaceId.Value`, sets `Title = draft.Title`, `Description = draft.ReportMarkdown`, `BaseBranch = draft.BaseBranch`, clears `ExternalUrl = null` and `StackTrace = null`, records `lastAppliedDraftId = draftId`, and returns `true`.
-   - Tracking `lastAppliedDraftId` prevents user edits or form resets in [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) from being overwritten on subsequent component re-renders unless `DraftId` changes.
-2. In [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor):
-   - Add `[SupplyParameterFromQuery(Name = "draftId")] public string? DraftId { get; set; }` and `@inject ICompanionTriageDraftStore CompanionTriageDraftStore`.
-   - Maintain `private string? _lastAppliedDraftId;` and call `_model.TryApplyCompanionDraft(CompanionTriageDraftStore, WorkspaceState.ActiveWorkspace?.Id, DraftId, ref _lastAppliedDraftId)` after `SyncBaseBranchFromActiveWorkspace()` in `OnInitializedAsync()`, `OnParametersSet()`, and `HandleWorkspaceChanged()`, clearing `_errorMessage = null` when `TryApplyCompanionDraft` returns `true` so the exploratory report is immediately loaded in the **Submit External Report** form for the maintainer to review and click **🛡️ Launch Sandboxed Triage ➔**.
-3. Update [`TriagePageTests.cs`](../../tests/NightCodeForge.Web.Tests/TriagePageTests.cs) constructor DI setup to register `ICompanionTriageDraftStore` (`new CompanionTriageDraftStore(TimeProvider.System)`) when `@inject ICompanionTriageDraftStore` is added to [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor).
+Enhance [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) (with `TriageSubmissionModel`) and [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor) (with `IdeationRefinementHelper`) to support direct deep-linking to companion drafts while adhering to [`AGENTS.md`](../../AGENTS.md) UI/Presentation separation:
+1. **Triage (`TriageSubmissionModel` & `Triage.razor`):**
+   - Extract draft-loading logic into `TriageSubmissionModel.TryApplyCompanionDraft` in [`TriageViewModels.cs`](../../src/NightCodeForge.Web/Services/TriageViewModels.cs) (`4`-argument and `5`-argument overload returning `out CompanionTriageDraft? appliedDraft`):
+     - Normalizes `draftId = draftId?.Trim()`. Returns `false` if `string.IsNullOrWhiteSpace(draftId)`, if `activeWorkspaceId` is null, or if `string.Equals(lastAppliedDraftId, draftId, StringComparison.Ordinal)`.
+     - Looks up `draftStore.GetDraft(draftId)`; if found and `draft.WorkspaceId == activeWorkspaceId.Value`, sets `Title = draft.Title`, `Description = draft.ReportMarkdown`, `BaseBranch = draft.BaseBranch`, clears `ExternalUrl = null` and `StackTrace = null`, records `lastAppliedDraftId = draftId`, outputs `appliedDraft`, and returns `true`.
+     - Tracking `lastAppliedDraftId` prevents user edits or form resets in [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) from being overwritten on subsequent re-renders unless `DraftId` changes.
+   - In [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor):
+     - Add `[SupplyParameterFromQuery(Name = "draftId")] public string? DraftId { get; set; }` and `@inject ICompanionTriageDraftStore CompanionTriageDraftStore`.
+     - Call `ApplyCompanionDraftIfPresentAsync()` in `OnInitializedAsync()`, `OnParametersSetAsync()`, and `HandleWorkspaceChanged()`: when `TryApplyCompanionDraft` applies a draft, clear `_errorMessage`, reset `_proposedTasks = null`, and immediately show triage progress/results by awaiting `appliedDraft.ExecutionTask` if present or invoking `StartTriageAsync()` otherwise—no manual form confirmation click required.
+   - Update [`TriagePageTests.cs`](../../tests/NightCodeForge.Web.Tests/TriagePageTests.cs) DI setup and verify both pre-started `ExecutionTask` attachment and fallback auto-start behavior.
+2. **Ideation (`IdeationRefinementHelper` & `Ideation.razor`):**
+   - Extract companion draft resolution and prompt building into `IdeationRefinementHelper` (`DraftIdQueryParameter`, `BuildCompanionDraftUrl`, `TryResolveCompanionDraft`, `BuildCompanionSeedPrompt`) in [`IdeationRefinementHelper.cs`](../../src/NightCodeForge.Web/Services/IdeationRefinementHelper.cs).
+   - In [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor):
+     - Add `[SupplyParameterFromQuery(Name = IdeationRefinementHelper.DraftIdQueryParameter)] public string? DraftId { get; set; }` and `@inject ICompanionTriageDraftStore CompanionTriageDraftStore`.
+     - When `TryResolveCompanionDraft` matches a draft for the active workspace, start a fresh ideation conversation titled `draft.Title` (releasing any prior conversation lock cleanly) and pre-fill `_userInput` with `BuildCompanionSeedPrompt(draft)` so the maintainer can edit or add guidance before sending.
+   - Register `ICompanionTriageDraftStore` across Ideation Razor unit test harnesses (`IdeationPageTests`, `IdeationCostDisplayTests`, `IdeationPageAskToolTests`, `IdeationSessionPersistenceTests`, `IdeationRefinementTests`) and add unit tests covering `IdeationRefinementHelper` and `Ideation` `?draftId={id}` seeding.
 
 ---
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] Add `<PackageReference Include="Pmad.LocalApi.Security" Version="0.1.0" />` to [`NightCodeForge.Infrastructure.csproj`](../../src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj) (and [`NightCodeForge.Web.csproj`](../../src/NightCodeForge.Web/NightCodeForge.Web.csproj) if referenced directly).
-- [ ] Register `IKeyProtector` (via `KeyProtectorFactory.CreatePlatformDefault()`), `IApiKeyStore` (configured for `<ContentRoot>/config`, resolving `IHostEnvironment.ContentRootPath` with `AppContext.BaseDirectory` fallback), and `ICompanionTriageDraftStore` (`CompanionTriageDraftStore`) as singletons in [`ServiceCollectionExtensions.cs`](../../src/NightCodeForge.Infrastructure/ServiceCollectionExtensions.cs) (`AddNightCodeForgeCoreAndInfrastructure`), and eagerly invoke `app.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey()` during [`Program.cs`](../../src/NightCodeForge.Web/Program.cs) startup initialization.
-- [ ] Update [`.gitignore`](../../.gitignore) under `# User-owned configuration layer (local overrides)` to ignore `config/default-key.dat`, `**/config/default-key.dat`, `config/api-keys.json`, and `**/config/api-keys.json`.
-- [ ] Implement `CompanionTriageDraft`, `ICompanionTriageDraftStore`, and `CompanionTriageDraftStore` in `NightCodeForge.Core.Services`.
-- [ ] Add `"api"` to `WorkspaceUrlHelper.NonWorkspaceRootSegments` in [`WorkspaceUrlHelper.cs`](../../src/NightCodeForge.Web/Services/WorkspaceUrlHelper.cs).
-- [ ] Implement `CompanionEndpoints` (`/api/companion/config`, `/api/companion/workspaces`, `POST /api/companion/workspaces/{workspaceId:int}/triage`) protected by `CompanionApiKeyEndpointFilter` (extracting headers via `ApiKeyHeaderParser.ExtractKey`, validating via `IApiKeyStore.ValidateKey`, with `.DisableAntiforgery()` and JSON error bodies on all 4xx responses) and map them in [`Program.cs`](../../src/NightCodeForge.Web/Program.cs).
-- [ ] Add `TriageSubmissionModel.TryApplyCompanionDraft` in [`TriageViewModels.cs`](../../src/NightCodeForge.Web/Services/TriageViewModels.cs) and wire `?draftId={id}` query parameter handling in [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor) (updating [`TriagePageTests.cs`](../../tests/NightCodeForge.Web.Tests/TriagePageTests.cs) DI setup).
-- [ ] Add unit and integration tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Web.Tests` (isolating `ContentRootPath` / `configDirectory` to temp directories under `Path.GetTempPath()`) covering `Pmad.LocalApi.Security` DI resolution & `<ContentRoot>/config/default-key.dat` startup creation, `CompanionTriageDraftStore` TTL & retrieval, `401`/`404`/`400` JSON responses on `/api/companion/*` requests (for both `Authorization: Bearer` and `X-Api-Key`), config/workspace discovery payloads, triage draft creation, `"api"` non-workspace routing in `WorkspaceUrlHelper`, and `?draftId={id}` deep-link loading in `TriageSubmissionModel` / [`TriagePageTests.cs`](../../tests/NightCodeForge.Web.Tests/TriagePageTests.cs).
+- [x] Add `<PackageReference Include="Pmad.LocalApi.Security" Version="0.1.0" />` to [`NightCodeForge.Infrastructure.csproj`](../../src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj) (and [`NightCodeForge.Web.csproj`](../../src/NightCodeForge.Web/NightCodeForge.Web.csproj) if referenced directly).
+- [x] Register `IKeyProtector` (via `KeyProtectorFactory.CreatePlatformDefault()`), `IApiKeyStore` (configured for `<ContentRoot>/config`, resolving `IHostEnvironment.ContentRootPath` with `AppContext.BaseDirectory` fallback), and `ICompanionTriageDraftStore` (`CompanionTriageDraftStore`) as singletons in [`ServiceCollectionExtensions.cs`](../../src/NightCodeForge.Infrastructure/ServiceCollectionExtensions.cs) (`AddNightCodeForgeCoreAndInfrastructure`), and eagerly invoke `app.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey()` during [`Program.cs`](../../src/NightCodeForge.Web/Program.cs) startup initialization.
+- [x] Update [`.gitignore`](../../.gitignore) under `# User-owned configuration layer (local overrides)` to ignore `config/default-key.dat`, `**/config/default-key.dat`, `config/api-keys.json`, and `**/config/api-keys.json`.
+- [x] Implement `CompanionTriageDraft` (with optional background `ExecutionTask`), `ICompanionTriageDraftStore`, and `CompanionTriageDraftStore` in `NightCodeForge.Core.Services`.
+- [x] Add `"api"` to `WorkspaceUrlHelper.NonWorkspaceRootSegments` in [`WorkspaceUrlHelper.cs`](../../src/NightCodeForge.Web/Services/WorkspaceUrlHelper.cs).
+- [x] Implement `CompanionEndpoints` (`/api/companion/config`, `/api/companion/workspaces`, `POST /api/companion/workspaces/{workspaceId:int}/triage` with immediate background triage execution, `POST /api/companion/workspaces/{workspaceId:int}/ideation` for interactive prompt staging) protected by `CompanionApiKeyEndpointFilter` (extracting headers via `ApiKeyHeaderParser.ExtractKey`, validating via `IApiKeyStore.ValidateKey`, with `.DisableAntiforgery()` and JSON error bodies on all 4xx responses) and map them in [`Program.cs`](../../src/NightCodeForge.Web/Program.cs).
+- [x] Add `TriageSubmissionModel.TryApplyCompanionDraft` in [`TriageViewModels.cs`](../../src/NightCodeForge.Web/Services/TriageViewModels.cs) and wire `?draftId={id}` automatic attachment/start in [`Triage.razor`](../../src/NightCodeForge.Web/Components/Pages/Triage.razor).
+- [x] Add `IdeationRefinementHelper` draft URL/prompt helpers in [`IdeationRefinementHelper.cs`](../../src/NightCodeForge.Web/Services/IdeationRefinementHelper.cs) and wire `?draftId={id}` conversation initialization and prompt pre-fill in [`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor).
+- [x] Add unit and integration tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Web.Tests` (isolating `ContentRootPath` / `configDirectory` to temp directories under `Path.GetTempPath()`) covering `Pmad.LocalApi.Security` DI resolution & `<ContentRoot>/config/default-key.dat` startup creation, `CompanionTriageDraftStore` TTL & retrieval, `401`/`404`/`400` JSON responses on `/api/companion/*` requests (for both `Authorization: Bearer` and `X-Api-Key`), config/workspace discovery payloads, automatic triage execution & ideation staging endpoints, `"api"` non-workspace routing in `WorkspaceUrlHelper`, `?draftId={id}` deep-link auto-attachment/start in [`TriagePageTests.cs`](../../tests/NightCodeForge.Web.Tests/TriagePageTests.cs), and `?draftId={id}` prompt pre-fill in [`IdeationRefinementTests.cs`](../../tests/NightCodeForge.Web.Tests/IdeationRefinementTests.cs).

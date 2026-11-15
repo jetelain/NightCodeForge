@@ -3,6 +3,7 @@
 @namespace NightCodeForge.Web.Components.Pages
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Services
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Common
 @using NightCodeForge.Web.Components.Triage
@@ -10,6 +11,7 @@
 @using NightCodeForge.Web.Services
 @inject ITriageService TriageService
 @inject ITaskRepository TaskRepository
+@inject ICompanionTriageDraftStore CompanionTriageDraftStore
 @inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
 @inject ILogger<Triage> Logger
@@ -220,11 +222,13 @@
 
 @code {
     [Parameter] public int? WorkspaceId { get; set; }
+    [SupplyParameterFromQuery(Name = TriageSubmissionModel.DraftIdQueryParameter)] public string? DraftId { get; set; }
 
     private TriageSubmissionModel _model = new();
     private bool _isTriaging;
     private List<ForgeTask> _triagedTasks = new();
     private string? _errorMessage;
+    private string? _lastAppliedDraftId;
 
     protected override async Task OnInitializedAsync()
     {
@@ -234,14 +238,34 @@
         }
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         SyncBaseBranchFromActiveWorkspace();
-        await LoadExistingSuggestedTasksAsync();
+        if (!await ApplyCompanionDraftIfPresentAsync())
+        {
+            await LoadExistingSuggestedTasksAsync();
+        }
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
+        var previousWorkspaceId = WorkspaceState.ActiveWorkspaceId;
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        if (string.IsNullOrWhiteSpace(DraftId))
+        {
+            _lastAppliedDraftId = null;
+        }
+
+        if (WorkspaceState.ActiveWorkspaceId != previousWorkspaceId)
+        {
+            return;
+        }
+
+        SyncBaseBranchFromActiveWorkspace();
+        if (!string.IsNullOrWhiteSpace(DraftId))
+        {
+            await ApplyCompanionDraftIfPresentAsync();
         }
     }
 
@@ -255,19 +279,84 @@
         }
     }
 
+    private async Task<bool> ApplyCompanionDraftIfPresentAsync()
+    {
+        if (_isTriaging)
+        {
+            return false;
+        }
+
+        if (!_model.TryApplyCompanionDraft(
+                CompanionTriageDraftStore,
+                WorkspaceState.ActiveWorkspace?.Id,
+                DraftId,
+                ref _lastAppliedDraftId,
+                out var appliedDraft) || appliedDraft is null)
+        {
+            return false;
+        }
+
+        _errorMessage = null;
+
+        if (appliedDraft.ExecutionTask is not null)
+        {
+            await AwaitCompanionTriageExecutionAsync(appliedDraft.ExecutionTask);
+        }
+        else
+        {
+            await StartTriageAsync();
+        }
+
+        return true;
+    }
+
+    private async Task AwaitCompanionTriageExecutionAsync(Task<IReadOnlyList<ForgeTask>> executionTask)
+    {
+        _isTriaging = true;
+        _errorMessage = null;
+        _triagedTasks.Clear();
+        StateHasChanged();
+
+        try
+        {
+            var tasks = await executionTask;
+            _triagedTasks = tasks.ToList();
+            ToastService.Show("Triage Complete", $"Triage agent formulated {_triagedTasks.Count} suggested task(s).", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Triage failed: {ex.Message}";
+            ToastService.Show("Triage Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isTriaging = false;
+        }
+    }
+
     private void HandleWorkspaceChanged()
     {
         SyncBaseBranchFromActiveWorkspace();
         _ = InvokeAsync(async () =>
         {
+            if (string.IsNullOrWhiteSpace(DraftId))
+            {
+                _lastAppliedDraftId = null;
+            }
+
             _triagedTasks.Clear();
-            await LoadExistingSuggestedTasksAsync();
+            if (!await ApplyCompanionDraftIfPresentAsync())
+            {
+                await LoadExistingSuggestedTasksAsync();
+            }
             StateHasChanged();
         });
     }
 
     private async Task LoadExistingSuggestedTasksAsync()
     {
+        if (_isTriaging) return;
+
         var workspace = WorkspaceState.ActiveWorkspace;
         if (workspace == null) return;
 
@@ -294,6 +383,11 @@
 
     private async Task StartTriageAsync()
     {
+        if (_isTriaging)
+        {
+            return;
+        }
+
         var workspace = WorkspaceState.ActiveWorkspace;
         if (workspace == null)
         {
@@ -310,6 +404,7 @@
         _isTriaging = true;
         _errorMessage = null;
         _triagedTasks.Clear();
+        StateHasChanged();
 
         try
         {

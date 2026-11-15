@@ -56,7 +56,7 @@ public enum UserConfigLoadStatus
 /// </summary>
 public static class HostConfigurationSources
 {
-    private const string UserConfigDirectoryName = "config";
+    public const string UserConfigDirectoryName = "config";
     private const string UserConfigFileName = "config.json";
     private const string AppsettingsFileName = "appsettings.json";
     private const string AppsettingsEnvironmentFileNameFormat = "appsettings.{0}.json";

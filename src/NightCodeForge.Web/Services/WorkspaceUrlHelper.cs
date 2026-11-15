@@ -17,6 +17,7 @@ public static class WorkspaceUrlHelper
         "_blazor",
         "_framework",
         "hubs",
+        "api",
         "css",
         "js",
         "lib"
