@@ -7,6 +7,5 @@ public static class StandardHarnessIds
 {
     public const string Crucible = "crucible";
     public const string Acp = "acp";
-    public const string PiRpc = "pirpc";
     public const string NativeCli = "native-cli";
 }

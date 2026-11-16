@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Infrastructure.Execution;
 using Xunit;
 
@@ -13,6 +14,7 @@ public class ContainerEnvironmentFactoryTests
 {
     private readonly Mock<IProcessRunner> _processRunnerMock = new();
     private readonly IOptions<ExecutionEnvironmentProviderOptions> _providerOptions;
+    private readonly IOptions<SecurityOptions> _securityOptions = Options.Create(new SecurityOptions());
     private readonly Mock<IWorkspacePathResolver> _pathResolverMock = new();
     private readonly Mock<IHostSdkDiscoveryService> _sdkDiscoveryMock = new();
     private readonly Mock<IHostUserIdentityResolver> _identityResolverMock = new();
@@ -35,9 +37,10 @@ public class ContainerEnvironmentFactoryTests
             .Returns("1000:1000");
     }
 
-    private ContainerEnvironmentFactory CreateSut() => new(
+    private ContainerEnvironmentFactory CreateSut(IOptions<SecurityOptions>? securityOptions = null) => new(
         _processRunnerMock.Object,
         _providerOptions,
+        securityOptions ?? _securityOptions,
         _pathResolverMock.Object,
         _sdkDiscoveryMock.Object,
         _identityResolverMock.Object,
@@ -48,14 +51,15 @@ public class ContainerEnvironmentFactoryTests
     [Fact]
     public void Constructor_WhenAnyDependencyIsNull_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(null!, _providerOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, null!, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, null!, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _pathResolverMock.Object, null!, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, null!, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, null!, _companionInstallerMock.Object, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, null!, _logger));
-        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, null!));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(null!, _providerOptions, _securityOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, null!, _securityOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, null!, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _securityOptions, null!, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _securityOptions, _pathResolverMock.Object, null!, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _securityOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, null!, _telemetryMock.Object, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _securityOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, null!, _companionInstallerMock.Object, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _securityOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, null!, _logger));
+        Assert.Throws<ArgumentNullException>(() => new ContainerEnvironmentFactory(_processRunnerMock.Object, _providerOptions, _securityOptions, _pathResolverMock.Object, _sdkDiscoveryMock.Object, _identityResolverMock.Object, _telemetryMock.Object, _companionInstallerMock.Object, null!));
     }
 
     [Fact]
@@ -199,5 +203,102 @@ public class ContainerEnvironmentFactoryTests
         _processRunnerMock.Setup(p => p.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(1, string.Empty, "Cannot connect to Docker daemon"));
         Assert.Empty(await sut.ListTaskContainerIdsAsync(workspace));
+    }
+
+    [Fact]
+    public async Task CreateContainerEnvironmentAsync_WslTaskContainer_MountsAgyAndGeminiOnlyWhenVerifiedPresent_AndCachesProbe()
+    {
+        var probeCallCount = 0;
+        _processRunnerMock
+            .Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s =>
+                    s.ArgumentList != null && s.ArgumentList.Any(a => a.Contains("test -f ~/.local/bin/agy") || a.Contains("test -d ~/.gemini"))),
+                It.IsAny<CancellationToken>()))
+            .Returns<ProcessStartSpec, CancellationToken>((spec, _) =>
+            {
+                Interlocked.Increment(ref probeCallCount);
+                return Task.FromResult(new ProcessExecutionResult(0, string.Empty, string.Empty));
+            });
+
+        var sut = CreateSut();
+        var workspace = new Workspace
+        {
+            Id = 77,
+            Name = "ACP Mount WS",
+            Ext4MirrorPath = "/home/testuser/.nightcodeforge/wks/77/clone",
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            UseWslForContainers = true
+        };
+
+        var env1 = Assert.IsType<NightCodeForgeContainerExecutor>(
+            await sut.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, effectiveTaskId: 10));
+        var env2 = Assert.IsType<NightCodeForgeContainerExecutor>(
+            await sut.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, effectiveTaskId: 11));
+
+        // 2 probes total (agy + gemini), cached across second container creation
+        Assert.Equal(2, probeCallCount);
+        Assert.Contains(env1.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath && m.IsReadOnly);
+        Assert.Contains(env1.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath && !m.IsReadOnly);
+        Assert.Contains(ContainerExecutorOptions.HostAgyContainerDirectory, env1.Options.ExtraPathDirectories);
+        Assert.Contains(ContainerExecutorOptions.HostAgyContainerBinaryPath,
+            ContainerMountAndDriftBuilder.BuildVolumeMounts(env1.Options).Select(m => m.ContainerPath));
+        Assert.Equal(2, env2.Options.AdditionalVolumeMounts.Count(m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath));
+    }
+
+    [Fact]
+    public async Task CreateContainerEnvironmentAsync_ExcludesAcpMounts_WhenRestrictedReadOnlySystemNightwatchAirGappedOrAbsent()
+    {
+        _processRunnerMock
+            .Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+
+        var sut = CreateSut();
+        var ws = new Workspace
+        {
+            Id = 78,
+            Ext4MirrorPath = "/home/testuser/.nightcodeforge/wks/78/clone",
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            UseWslForContainers = true
+        };
+
+        var roEnv = Assert.IsType<NightCodeForgeContainerExecutor>(
+            await sut.CreateContainerEnvironmentAsync(ws, SandboxSecurityTier.RestrictedReadOnly, effectiveTaskId: 1));
+        Assert.DoesNotContain(roEnv.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath);
+
+        var nwScope = SandboxScopeDescriptor.ForNightwatch("/logs", "/logs", "/skills", "/skills");
+        var nwEnv = Assert.IsType<NightCodeForgeContainerExecutor>(await sut.CreateContainerEnvironmentAsync(nwScope));
+        Assert.DoesNotContain(nwEnv.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath);
+
+        var airGappedSut = CreateSut(Options.Create(new SecurityOptions { AirGappedMode = true }));
+        var airEnv = Assert.IsType<NightCodeForgeContainerExecutor>(
+            await airGappedSut.CreateContainerEnvironmentAsync(ws, SandboxSecurityTier.Standard, effectiveTaskId: 2));
+        Assert.DoesNotContain(airEnv.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath);
+
+        // Null/non-zero probe results omit mounts gracefully
+        var absentRunner = new Mock<IProcessRunner>();
+        var absentSut = new ContainerEnvironmentFactory(
+            absentRunner.Object,
+            _providerOptions,
+            _securityOptions,
+            _pathResolverMock.Object,
+            _sdkDiscoveryMock.Object,
+            _identityResolverMock.Object,
+            _telemetryMock.Object,
+            _companionInstallerMock.Object,
+            _logger);
+        var absentEnv = Assert.IsType<NightCodeForgeContainerExecutor>(
+            await absentSut.CreateContainerEnvironmentAsync(ws, SandboxSecurityTier.Standard, effectiveTaskId: 3));
+        Assert.DoesNotContain(absentEnv.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath);
     }
 }

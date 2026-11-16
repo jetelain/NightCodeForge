@@ -76,6 +76,7 @@ public class Step1140BashTimeoutAndEscalationLadderTests
         var script = NightCodeForgeContainerExecutor.BuildInContainerReaperScript();
 
         Assert.Contains("csnav", script);
+        Assert.Contains("agy", script);
         Assert.Contains("[[ \"$comm\" == \"tail\" ]] && [[ \"$cmdline\" == *\"tail\"*\"/dev/null\"* ]]", script);
         Assert.Contains("[ \"$pid\" = \"$BASHPID\" ] && continue", script);
         Assert.Contains("[ \"$state\" = \"Z\" ]", script);

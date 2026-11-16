@@ -12,6 +12,7 @@
 @inject ILlmModelCatalogService ModelCatalogService
 @inject ILlmGatewayService GatewayService
 @inject ILlmContextWindowCache ContextWindowCache
+@inject IAcpHarnessCatalogService AcpCatalogService
 @inject IOptions<LlmProviderOptions> LlmOptions
 @inject ToastService ToastService
 @inject ILogger<AgentProfilesTab> Logger
@@ -59,38 +60,93 @@
     </div>
 
     <!-- Provider Connection & Model Refresh Strip -->
-    <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.15rem 1.5rem; border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid var(--border-subtle); margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;">
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-            @if (_isLoadingModels)
-            {
-                <span class="status-dot waiting"></span>
-                <span style="font-size: 0.92rem; color: var(--text-secondary); font-weight: 500;">
-                    Connecting to @GetProviderShortName(_providerType) and discovering models...
-                </span>
-            }
-            else if (_isOllamaOnline)
-            {
-                <span class="status-dot running"></span>
-                <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
-                    @($"{GetProviderTitle(_providerType)} connected ({_availableModels.Count} models available)")
-                </span>
-            }
-            else
-            {
-                <span class="status-dot blocked"></span>
-                <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
-                    @($"Inference endpoint unreachable at {(string.IsNullOrWhiteSpace(LlmOptions.Value.EffectiveEndpoint) ? "configured endpoint" : LlmOptions.Value.EffectiveEndpoint)} - fallback to manual model entry")
-                </span>
-            }
+    <div style="display: flex; flex-direction: column; gap: 1rem; padding: 1.15rem 1.5rem; border-radius: var(--radius-lg); background: var(--bg-surface); border: 1px solid var(--border-subtle); margin-bottom: 2rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                @if (_isLoadingModels)
+                {
+                    <span class="status-dot waiting"></span>
+                    <span style="font-size: 0.92rem; color: var(--text-secondary); font-weight: 500;">
+                        Connecting to @GetProviderShortName(_providerType) and discovering models...
+                    </span>
+                }
+                else if (_isOllamaOnline)
+                {
+                    <span class="status-dot running"></span>
+                    <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
+                        @($"{GetProviderTitle(_providerType)} connected ({_availableModels.Count} models available)")
+                    </span>
+                }
+                else
+                {
+                    <span class="status-dot blocked"></span>
+                    <span style="font-size: 0.92rem; color: var(--text-primary); font-weight: 500;">
+                        @($"Inference endpoint unreachable at {(string.IsNullOrWhiteSpace(LlmOptions.Value.EffectiveEndpoint) ? "configured endpoint" : LlmOptions.Value.EffectiveEndpoint)} - fallback to manual model entry")
+                    </span>
+                }
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="DetectProviderAsync" disabled="@(_isDetecting || _isLoadingModels)">
+                    @(_isDetecting ? "Detecting..." : "🔍 Auto-Detect")
+                </button>
+                <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="RefreshOllamaModelsAsync" disabled="@_isLoadingModels">
+                    @(_isLoadingModels ? "Refreshing..." : "🔄 Refresh Models")
+                </button>
+            </div>
         </div>
-        <div style="display: flex; gap: 0.5rem; align-items: center;">
-            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="DetectProviderAsync" disabled="@(_isDetecting || _isLoadingModels)">
-                @(_isDetecting ? "Detecting..." : "🔍 Auto-Detect")
-            </button>
-            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="RefreshOllamaModelsAsync" disabled="@_isLoadingModels">
-                @(_isLoadingModels ? "Refreshing..." : "🔄 Refresh Models")
-            </button>
+
+        @{
+            var acpBadge = AgentProfileAcpPresentationHelper.FormatAntigravityBadge(_acpStatus, _isLoadingAcp);
+        }
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; padding-top: 0.85rem; border-top: 1px solid var(--border-subtle);">
+            <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                <span class="status-dot @acpBadge.DotClass"></span>
+                <span id="acp-status-badge" class="forge-badge @acpBadge.BadgeClass" style="font-size: 0.85rem; padding: 0.3rem 0.75rem;">
+                    @acpBadge.Text
+                </span>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+                <button type="button" id="btn-refresh-acp" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="() => RefreshAcpStatusAsync(forceRefresh: true)" disabled="@_isLoadingAcp">
+                    @(_isLoadingAcp ? "Probing ACP..." : "🔄 Refresh ACP Status & Models")
+                </button>
+                <button type="button" id="btn-acp-login-hints" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="ToggleAcpLoginModal">
+                    🔑 Login Hints / Test Connection
+                </button>
+            </div>
         </div>
+
+        @if (_showAcpLoginModal)
+        {
+            <div id="acp-login-modal" style="margin-top: 0.5rem; padding: 1.25rem; border-radius: var(--radius-md); background: var(--bg-input); border: 1px solid var(--border-subtle);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                    <strong style="font-size: 0.98rem; color: var(--text-primary);">🔑 Google Antigravity CLI (`agy acp`) Diagnostics &amp; Authentication</strong>
+                    <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.25rem 0.65rem; font-size: 0.8rem;" @onclick="ToggleAcpLoginModal">
+                        ✕ Close
+                    </button>
+                </div>
+                <div style="font-size: 0.86rem; color: var(--text-secondary); line-height: 1.6;">
+                    <div><strong>Detected Binary:</strong> <code>@(_acpStatus?.DetectedExecutablePath ?? "Not detected")</code></div>
+                    <div><strong>Execution Target:</strong> @(_acpStatus?.ExecutionTargetDescription ?? "Unavailable")</div>
+                    <div><strong>Server Version / Tier:</strong> @(_acpStatus?.ServerVersion ?? "Unknown") / @(_acpStatus?.AccountTierName ?? "Unknown")</div>
+                    @if (!string.IsNullOrWhiteSpace(_acpStatus?.DiagnosticMessage))
+                    {
+                        <div style="margin-top: 0.4rem; color: var(--accent-amber, #f59e0b);"><strong>Diagnostic:</strong> @_acpStatus.DiagnosticMessage</div>
+                    }
+                    <div style="margin-top: 0.75rem;">
+                        <strong>Sign-in Commands:</strong>
+                        <ul style="margin: 0.35rem 0 0 1.25rem; padding: 0;">
+                            <li>WSL2 (recommended for Container &amp; WSL2 execution): <code>wsl -e ~/.local/bin/agy login</code></li>
+                            <li>Host OS: <code>agy login</code> (or <code>agy acp --login</code>)</li>
+                        </ul>
+                    </div>
+                </div>
+                <div style="margin-top: 0.85rem; display: flex; gap: 0.5rem;">
+                    <button type="button" id="btn-test-acp-connection" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem;" @onclick="TestAcpConnectionAsync" disabled="@_isLoadingAcp">
+                        @(_isLoadingAcp ? "Testing..." : "🧪 Test ACP Connection")
+                    </button>
+                </div>
+            </div>
+        }
     </div>
 
     @if (Scope == ProfileScope.Workspace && !_hasDedicatedProfiles)
@@ -121,40 +177,70 @@
         <div style="display: flex; flex-direction: column; gap: 2rem;">
             @foreach (var profile in _profiles)
             {
-                <div class="forge-subcard" style="padding: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
+                var isAcp = AgentProfileAcpPresentationHelper.IsAcpProfile(profile);
+                var isHarnessSelectable = AgentProfileAcpPresentationHelper.IsStageHarnessSelectable(profile.Id);
+                var acpModels = AgentProfileAcpPresentationHelper.GetEffectiveAcpModels(_acpStatus);
+
+                <div class="forge-subcard" data-profile-id="@profile.Id" style="padding: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);">
                     <!-- Profile Header -->
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.75rem; flex-wrap: wrap; gap: 1rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 1.25rem;">
                         <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
                             <strong style="font-size: 1.2rem; color: var(--text-primary); font-weight: 700;">@profile.Name</strong>
                             <code class="forge-badge badge-indigo" style="font-size: 0.82rem; padding: 0.25rem 0.65rem;">@profile.Id</code>
                             <span class="forge-badge badge-teal" style="font-size: 0.82rem; padding: 0.25rem 0.65rem;">@profile.Mode</span>
-                            <span class="forge-badge badge-amber" style="font-size: 0.82rem; padding: 0.25rem 0.65rem;">Harness: @profile.HarnessId</span>
+                            @if (!isHarnessSelectable)
+                            {
+                                <span class="forge-badge badge-amber" style="font-size: 0.82rem; padding: 0.25rem 0.65rem;" title="@AgentProfileAcpPresentationHelper.GetPinnedHarnessReason(profile.Id)">
+                                    Harness: @profile.HarnessId (Pinned)
+                                </span>
+                            }
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.75rem;">
-                            @if (profile.OptimizationFlags == null)
+                            @if (!isAcp)
                             {
-                                <span class="forge-badge badge-teal" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">⚡ Inheriting Global Optimizations</span>
-                                <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 600;" @onclick="() => CustomizeFlags(profile)">
-                                    Override
-                                </button>
+                                @if (profile.OptimizationFlags == null)
+                                {
+                                    <span class="forge-badge badge-teal" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">⚡ Inheriting Global Optimizations</span>
+                                    <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 600;" @onclick="() => CustomizeFlags(profile)">
+                                        Override
+                                    </button>
+                                }
+                                else
+                                {
+                                    <span class="forge-badge badge-indigo" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">🔧 Custom Optimizations</span>
+                                    <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 600;" @onclick="() => RevertFlags(profile)">
+                                        Revert to Global
+                                    </button>
+                                }
                             }
                             else
                             {
-                                <span class="forge-badge badge-indigo" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">🔧 Custom Optimizations</span>
-                                <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.45rem 1rem; font-size: 0.85rem; font-weight: 600;" @onclick="() => RevertFlags(profile)">
-                                    Revert to Global
-                                </button>
+                                <span class="forge-badge badge-indigo" style="font-size: 0.82rem; padding: 0.35rem 0.75rem;">
+                                    🔌 External Antigravity ACP
+                                </span>
                             }
                         </div>
                     </div>
 
                     <!-- Core Parameters Grid -->
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; font-size: 0.92rem;">
-                        <!-- 1. Ollama Model Dropdown -->
+                        <!-- 0. Harness Selector (Pipeline stages) or Pinned Info -->
+                        @if (isHarnessSelectable)
+                        {
+                            <div>
+                                <label class="forge-field-label">Execution Harness</label>
+                                <select class="forge-input harness-select" style="width: 100%;" value="@profile.HarnessId" @onchange="(e) => OnHarnessChanged(profile, e.Value?.ToString())">
+                                    <option value="@StandardHarnessIds.Crucible">@AgentProfileAcpPresentationHelper.CrucibleHarnessDisplayLabel</option>
+                                    <option value="@StandardHarnessIds.Acp">@AgentProfileAcpPresentationHelper.AcpHarnessDisplayLabel</option>
+                                </select>
+                            </div>
+                        }
+
+                        <!-- 1. Inference Model Dropdown -->
                         <div>
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
                                 <label class="forge-field-label" style="margin: 0;">Inference Model</label>
-                                @if (_availableModels.Count > 0)
+                                @if ((isAcp && acpModels.Count > 0) || (!isAcp && _availableModels.Count > 0))
                                 {
                                     <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.15rem 0.5rem; font-size: 0.72rem;"
                                             @onclick="() => ToggleCustomModel(profile.Id)">
@@ -162,40 +248,63 @@
                                     </button>
                                 }
                             </div>
-                            @if (_availableModels.Count > 0 && !IsCustomModel(profile.Id))
+                            @if (isAcp)
                             {
-                                <select class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)">
-                                    @if (!string.IsNullOrWhiteSpace(profile.ModelName) && !_availableModels.Any(m => string.Equals(m.ModelId, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
-                                    {
-                                        <option value="@profile.ModelName">@profile.ModelName (Configured)</option>
-                                    }
-                                    @foreach (var m in _availableModels)
-                                    {
-                                        <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
-                                    }
-                                </select>
+                                @if (acpModels.Count > 0 && !IsCustomModel(profile.Id))
+                                {
+                                    <select class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)">
+                                        @if (!string.IsNullOrWhiteSpace(profile.ModelName) && !acpModels.Any(m => string.Equals(m.ModelId, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            <option value="@profile.ModelName">@profile.ModelName (Configured)</option>
+                                        }
+                                        @foreach (var m in acpModels)
+                                        {
+                                            <option value="@m.ModelId">@m.DisplayName (@m.ModelId)</option>
+                                        }
+                                    </select>
+                                }
+                                else
+                                {
+                                    <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)" placeholder="e.g. gemini-4-argon" />
+                                }
                             }
                             else
                             {
-                                <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)" placeholder="e.g. qwen2.5-coder:32b" />
-                            }
+                                @if (_availableModels.Count > 0 && !IsCustomModel(profile.Id))
+                                {
+                                    <select class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)">
+                                        @if (!string.IsNullOrWhiteSpace(profile.ModelName) && !_availableModels.Any(m => string.Equals(m.ModelId, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            <option value="@profile.ModelName">@profile.ModelName (Configured)</option>
+                                        }
+                                        @foreach (var m in _availableModels)
+                                        {
+                                            <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
+                                        }
+                                    </select>
+                                }
+                                else
+                                {
+                                    <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)" placeholder="e.g. qwen2.5-coder:32b" />
+                                }
 
-                            @if (!string.IsNullOrWhiteSpace(profile.ModelName) && _discoveredContextWindows.TryGetValue(profile.ModelName, out var pTokens))
-                            {
-                                <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-top: 0.35rem; display: inline-block;">
-                                    ⚡ @pTokens.ToString("N0") tokens discovered
-                                </span>
-                            }
-                            @if (GetThinkingBadge(profile.ModelName) is { Length: > 0 } thinkingBadge)
-                            {
-                                <span class="forge-badge badge-indigo" style="font-size: 0.72rem; margin-top: 0.35rem; margin-left: 0.35rem; display: inline-block;">
-                                    @thinkingBadge
-                                </span>
+                                @if (!string.IsNullOrWhiteSpace(profile.ModelName) && _discoveredContextWindows.TryGetValue(profile.ModelName, out var pTokens))
+                                {
+                                    <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-top: 0.35rem; display: inline-block;">
+                                        ⚡ @pTokens.ToString("N0") tokens discovered
+                                    </span>
+                                }
+                                @if (GetThinkingBadge(profile.ModelName) is { Length: > 0 } thinkingBadge)
+                                {
+                                    <span class="forge-badge badge-indigo" style="font-size: 0.72rem; margin-top: 0.35rem; margin-left: 0.35rem; display: inline-block;">
+                                        @thinkingBadge
+                                    </span>
+                                }
                             }
                         </div>
 
-                        <!-- 2. OllamaRouter Target Pinning (Suppressed in Standalone Ollama mode) -->
-                        @if (_providerType == LlmProviderType.OllamaRouter)
+                        <!-- 2. OllamaRouter Target Pinning (Suppressed in Standalone Ollama, OpenAI, and ACP modes) -->
+                        @if (!isAcp && _providerType == LlmProviderType.OllamaRouter)
                         {
                             <div>
                                 <label class="forge-field-label">OllamaRouter Target</label>
@@ -214,16 +323,28 @@
                         <!-- 3. Thinking Effort -->
                         <div>
                             <label class="forge-field-label">Thinking Effort</label>
-                            <select class="forge-input" style="width: 100%;" @bind="profile.ThinkingEffort">
-                                <option value="@ThinkingEffort.None">None (Instant)</option>
-                                <option value="@ThinkingEffort.Low">Low (~1k tokens)</option>
-                                <option value="@ThinkingEffort.Medium">Medium (~4k tokens)</option>
-                                <option value="@ThinkingEffort.High">High (~8k tokens)</option>
-                                <option value="@ThinkingEffort.CustomBudget">Custom Token Budget</option>
-                            </select>
+                            @if (isAcp)
+                            {
+                                <select class="forge-input" style="width: 100%;" @bind="profile.ThinkingEffort">
+                                    @foreach (var opt in AgentProfileAcpPresentationHelper.GetSupportedAcpThinkingEfforts(_acpStatus, profile.ModelName))
+                                    {
+                                        <option value="@opt.Effort">@opt.DisplayLabel</option>
+                                    }
+                                </select>
+                            }
+                            else
+                            {
+                                <select class="forge-input" style="width: 100%;" @bind="profile.ThinkingEffort">
+                                    <option value="@ThinkingEffort.None">None (Instant)</option>
+                                    <option value="@ThinkingEffort.Low">Low (~1k tokens)</option>
+                                    <option value="@ThinkingEffort.Medium">Medium (~4k tokens)</option>
+                                    <option value="@ThinkingEffort.High">High (~8k tokens)</option>
+                                    <option value="@ThinkingEffort.CustomBudget">Custom Token Budget</option>
+                                </select>
+                            }
                         </div>
 
-                        @if (profile.ThinkingEffort == ThinkingEffort.CustomBudget)
+                        @if (!isAcp && profile.ThinkingEffort == ThinkingEffort.CustomBudget)
                         {
                             <div>
                                 <label class="forge-field-label">Custom Thinking Token Budget</label>
@@ -246,15 +367,18 @@
                         <!-- 6. Sandbox Security Tier -->
                         <div>
                             <label class="forge-field-label">Security Tier</label>
-                            <select class="forge-input" style="width: 100%;" @bind="profile.SecurityTier">
+                            <select class="forge-input" style="width: 100%;" @bind="profile.SecurityTier" disabled="@isAcp" title="@(isAcp ? "Antigravity ACP requires network access and host credential mounts (Standard Sandbox)." : null)">
                                 <option value="@SandboxSecurityTier.Standard">Standard (Full Sandbox)</option>
-                                <option value="@SandboxSecurityTier.RestrictedReadOnly">Restricted Read-Only (Stage 0)</option>
+                                @if (!isAcp)
+                                {
+                                    <option value="@SandboxSecurityTier.RestrictedReadOnly">Restricted Read-Only (Stage 0)</option>
+                                }
                             </select>
                         </div>
                     </div>
 
-                    <!-- Complete 12-Parameter Optimization Override Section -->
-                    @if (profile.OptimizationFlags != null)
+                    <!-- Complete Optimization Override Section (Crucible only) -->
+                    @if (!isAcp && profile.OptimizationFlags != null)
                     {
                         <div style="margin-top: 2rem; padding: 1.75rem; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border-subtle); padding-bottom: 0.75rem;">
@@ -341,11 +465,14 @@
     private List<AvailableModelInfo> _availableModels = new();
     private ConcurrentDictionary<string, int> _discoveredContextWindows = new(StringComparer.OrdinalIgnoreCase);
     private LlmProviderType _providerType = LlmProviderType.OllamaRouter;
+    private AcpCatalogProviderStatus? _acpStatus;
 
     private bool _hasDedicatedProfiles;
     private bool _isOllamaOnline;
     private bool _isLoading = true;
     private bool _isLoadingModels = true;
+    private bool _isLoadingAcp = true;
+    private bool _showAcpLoginModal;
     private bool _isSaving;
     private bool _isDetecting;
     private int? _lastLoadedWorkspaceId;
@@ -359,8 +486,53 @@
             _lastLoadedWorkspaceId = WorkspaceId;
             _providerType = GatewayService.ProviderType;
             await RefreshOllamaModelsAsync();
+            await RefreshAcpStatusAsync(forceRefresh: false);
             await LoadProfilesAsync();
         }
+    }
+
+    private async Task RefreshAcpStatusAsync(bool forceRefresh)
+    {
+        _isLoadingAcp = true;
+        try
+        {
+            _acpStatus = await AcpCatalogService.ProbeProviderAsync(KnownAcpCatalogIds.Antigravity, forceRefresh);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Non-fatal ACP catalog probe failure");
+            _acpStatus = null;
+        }
+        finally
+        {
+            _isLoadingAcp = false;
+        }
+    }
+
+    private void ToggleAcpLoginModal() => _showAcpLoginModal = !_showAcpLoginModal;
+
+    private async Task TestAcpConnectionAsync()
+    {
+        await RefreshAcpStatusAsync(forceRefresh: true);
+        if (_acpStatus is { IsInstalled: true, IsAuthenticated: true })
+        {
+            ToastService.Show("Antigravity ACP Ready", $"Connected ({_acpStatus.ServerVersion ?? "v?"} | {_acpStatus.AccountTierName ?? "Authenticated"}).", ToastLevel.Success);
+        }
+        else if (_acpStatus is { IsInstalled: true })
+        {
+            ToastService.Show("Authentication Required", _acpStatus.DiagnosticMessage ?? "Run 'wsl -e ~/.local/bin/agy login' or 'agy login'.", ToastLevel.Warning);
+        }
+        else
+        {
+            ToastService.Show("Antigravity ACP Not Detected", _acpStatus?.DiagnosticMessage ?? "agy binary not found.", ToastLevel.Warning);
+        }
+    }
+
+    private void OnHarnessChanged(AgentProfile profile, string? selectedHarnessId)
+    {
+        var fallbackCrucibleModel = _availableModels.FirstOrDefault()?.ModelId ?? LlmOptions.Value.DefaultModelId;
+        AgentProfileAcpPresentationHelper.ApplyHarnessChange(profile, selectedHarnessId, _acpStatus, fallbackCrucibleModel);
+        _customModelProfiles.Remove(profile.Id);
     }
 
     private async Task DetectProviderAsync()
@@ -434,6 +606,12 @@
 
     private async Task OnProfileModelChangedAsync(AgentProfile profile)
     {
+        if (AgentProfileAcpPresentationHelper.IsAcpProfile(profile))
+        {
+            AgentProfileAcpPresentationHelper.NormalizeAcpProfileSettings(profile, _acpStatus);
+            return;
+        }
+
         await ResolveModelContextWindowAsync(profile.ModelName);
     }
 
@@ -490,8 +668,16 @@
                     : await db.AgentProfiles.Where(p => p.WorkspaceId == null).OrderBy(p => p.Id).ToListAsync();
             }
 
+            foreach (var p in _profiles)
+            {
+                if (AgentProfileAcpPresentationHelper.IsAcpProfile(p))
+                {
+                    AgentProfileAcpPresentationHelper.NormalizeAcpProfileSettings(p, _acpStatus);
+                }
+            }
+
             var distinctModels = _profiles
-                .Where(p => !string.IsNullOrWhiteSpace(p.ModelName))
+                .Where(p => !AgentProfileAcpPresentationHelper.IsAcpProfile(p) && !string.IsNullOrWhiteSpace(p.ModelName))
                 .Select(p => p.ModelName!)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -544,27 +730,7 @@
 
             foreach (var g in globalProfiles)
             {
-                var dedicated = new AgentProfile
-                {
-                    Id = $"ws-{WorkspaceId.Value}:{g.Id}",
-                    WorkspaceId = WorkspaceId.Value,
-                    Name = $"{g.Name} ({WorkspaceName ?? "Workspace"})",
-                    HarnessId = g.HarnessId,
-                    ModelName = g.ModelName,
-                    Mode = g.Mode,
-                    SecurityTier = g.SecurityTier,
-                    RoutingTarget = g.RoutingTarget,
-                    PermittedTools = g.PermittedTools,
-                    StageDirectives = g.StageDirectives,
-                    Temperature = g.Temperature,
-                    ThinkingEffort = g.ThinkingEffort,
-                    ThinkingTokenBudget = g.ThinkingTokenBudget,
-                    MaxTurns = g.MaxTurns,
-                    OptimizationFlags = g.OptimizationFlags?.Clone(),
-                    ContextWindowTokens = g.ContextWindowTokens,
-                    MaxOutputTokens = g.MaxOutputTokens,
-                    SystemPrompt = g.SystemPrompt
-                };
+                var dedicated = AgentProfileAcpPresentationHelper.CloneToDedicatedProfile(g, WorkspaceId.Value, WorkspaceName);
                 db.AgentProfiles.Add(dedicated);
             }
 
@@ -622,40 +788,17 @@
             using var scope = ScopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            // If not OllamaRouter, reset routing target to Auto
-            if (_providerType != LlmProviderType.OllamaRouter)
-            {
-                foreach (var p in _profiles)
-                {
-                    p.RoutingTarget = OllamaRoutingTarget.Auto;
-                }
-            }
-
             foreach (var p in _profiles)
             {
-                if (!string.IsNullOrWhiteSpace(p.ModelName) && _discoveredContextWindows.TryGetValue(p.ModelName, out var ctxTokens))
-                {
-                    p.ContextWindowTokens = ctxTokens;
-                }
-
                 var existing = await db.AgentProfiles.FindAsync(p.Id);
                 if (existing != null)
                 {
-                    existing.ModelName = p.ModelName;
-                    existing.RoutingTarget = p.RoutingTarget;
-                    existing.ThinkingEffort = p.ThinkingEffort;
-                    existing.ThinkingTokenBudget = p.ThinkingTokenBudget;
-                    existing.Temperature = p.Temperature;
-                    existing.MaxTurns = p.MaxTurns;
-                    existing.SecurityTier = p.SecurityTier;
-                    existing.SystemPrompt = p.SystemPrompt;
-                    existing.OptimizationFlags = p.OptimizationFlags;
-                    existing.ContextWindowTokens = p.ContextWindowTokens;
-                    existing.MaxOutputTokens = p.MaxOutputTokens;
+                    AgentProfileAcpPresentationHelper.SynchronizeProfileForSave(existing, p, _providerType, _discoveredContextWindows, _acpStatus);
                     db.Entry(existing).State = EntityState.Modified;
                 }
                 else
                 {
+                    AgentProfileAcpPresentationHelper.SynchronizeProfileForSave(p, p, _providerType, _discoveredContextWindows, _acpStatus);
                     db.AgentProfiles.Add(p);
                 }
             }

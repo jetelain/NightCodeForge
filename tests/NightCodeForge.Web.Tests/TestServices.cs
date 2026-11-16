@@ -3,7 +3,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using NightCodeForge.Agents.Acp;
 using NightCodeForge.Core.Concurrency;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
@@ -43,6 +45,26 @@ public static class TestServices
         services.TryAddSingleton<IGitHubPullRequestDeliveryService>(new Mock<IGitHubPullRequestDeliveryService>().Object);
         services.TryAddSingleton<IOptions<SecurityOptions>>(Options.Create(new SecurityOptions { AirGappedMode = false }));
         services.TryAddSingleton<ICompanionTriageDraftStore>(_ => new CompanionTriageDraftStore(TimeProvider.System));
+        services.TryAddSingleton<IAcpHarnessCatalogService>(_ =>
+        {
+            var mock = new Mock<IAcpHarnessCatalogService>();
+            var defaultStatus = new AcpCatalogProviderStatus(
+                KnownAcpCatalogIds.Antigravity,
+                AcpHarnessCatalogService.AntigravityDisplayName,
+                IsInstalled: true,
+                IsAuthenticated: true,
+                DetectedExecutablePath: "~/.local/bin/agy",
+                ExecutionTargetDescription: "WSL2 (Ubuntu) + Container Bind-Mount",
+                ServerVersion: "1.5.3",
+                AccountTierName: "Google AI Ultra",
+                DiagnosticMessage: null,
+                AvailableModels: AcpHarnessCatalogService.DefaultAntigravityModels);
+            mock.Setup(s => s.GetCatalogStatusAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync([defaultStatus]);
+            mock.Setup(s => s.ProbeProviderAsync(It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(defaultStatus);
+            return mock.Object;
+        });
         services.TryAddSingleton<WorkspaceStateService>();
         services.TryAddSingleton<ITaskReviewService>(sp => new TaskReviewService(
             sp.GetRequiredService<ITaskRepository>(),

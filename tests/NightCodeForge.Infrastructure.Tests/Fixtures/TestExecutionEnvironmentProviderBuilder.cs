@@ -1,12 +1,13 @@
-namespace NightCodeForge.Infrastructure.Tests.Fixtures;
-
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Infrastructure.Execution;
+
+namespace NightCodeForge.Infrastructure.Tests.Fixtures;
 
 public class TestExecutionEnvironmentProviderBuilder
 {
@@ -16,6 +17,7 @@ public class TestExecutionEnvironmentProviderBuilder
         Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
     public BareHostExecutionEnvironment? BareHost { get; set; }
     public IOptions<ExecutionEnvironmentProviderOptions> Options { get; set; } = Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions());
+    public IOptions<SecurityOptions> SecurityOptions { get; set; } = Microsoft.Extensions.Options.Options.Create(new SecurityOptions());
     public IHostSdkDiscoveryService SdkDiscoveryService { get; set; } = new Mock<IHostSdkDiscoveryService>().Object;
     public IGitWorkspaceManager GitWorkspaceManager { get; set; } = new Mock<IGitWorkspaceManager>().Object;
     public IHostUserIdentityResolver UserIdentityResolver { get; set; } = new Mock<IHostUserIdentityResolver>().Object;
@@ -28,6 +30,7 @@ public class TestExecutionEnvironmentProviderBuilder
         new ContainerEnvironmentFactory(
             ProcessRunner,
             Options,
+            SecurityOptions,
             PathResolver,
             SdkDiscoveryService,
             UserIdentityResolver,

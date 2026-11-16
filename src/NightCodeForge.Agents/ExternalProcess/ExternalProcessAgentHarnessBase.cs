@@ -49,6 +49,8 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
 
     protected ILogger Logger { get; }
 
+    protected IHarnessActivityRecorder Recorder => _recorder;
+
     /// <summary>Human readable agent name used in launch failure messages (e.g. "ACP agent").</summary>
     protected abstract string AgentDisplayName { get; }
 
@@ -74,6 +76,7 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     {
         var sw = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid().ToString("N");
+        await _recorder.BeginConversationAsync(sessionId, HarnessId, context, cancellationToken);
         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
 
         var customFactory = CustomProcessFactory;
@@ -114,23 +117,17 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
             }
         }
 
-        var (exePath, args) = ResolveLaunchCommand(context);
-        var workingDir = ResolveLaunchWorkingDirectory(context);
-
         IProcessStreamSession session;
+        string launchTarget = DefaultExecutablePath;
         try
         {
-            session = _processRunner.StartSession(new ProcessStartSpec
-            {
-                FileName = exePath,
-                Arguments = args,
-                WorkingDirectory = workingDir,
-                TimeoutSeconds = ProcessTimeoutSeconds
-            });
+            var spec = await CreateProcessStartSpecAsync(context, cancellationToken);
+            launchTarget = spec.FileName;
+            session = _processRunner.StartSession(spec);
         }
         catch (Exception ex)
         {
-            return await FailLaunchAsync(ex, exePath, context, sessionId, sw, cancellationToken);
+            return await FailLaunchAsync(ex, launchTarget, context, sessionId, sw, cancellationToken);
         }
 
         await using (session.ConfigureAwait(false))
@@ -139,10 +136,36 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         }
     }
 
+    protected virtual Task<ProcessStartSpec> CreateProcessStartSpecAsync(AgentSessionContext context, CancellationToken cancellationToken)
+    {
+        var (exePath, args) = ResolveLaunchCommand(context);
+        var workingDir = ResolveLaunchWorkingDirectory(context);
+
+        return Task.FromResult(new ProcessStartSpec
+        {
+            FileName = exePath,
+            Arguments = args,
+            WorkingDirectory = workingDir,
+            TimeoutSeconds = ProcessTimeoutSeconds
+        });
+    }
+
     private async Task<AgentRunResult> FailLaunchAsync(Exception ex, string target, AgentSessionContext context, string sessionId, Stopwatch sw, CancellationToken cancellationToken)
     {
+        sw.Stop();
         Logger.LogError(ex, "Failed to launch {AgentName} at {ExecutablePath}", AgentDisplayName, target);
         await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
+        await SaveTranscriptAsync(
+            context,
+            ResolveLaunchWorkingDirectory(context),
+            string.Empty,
+            $"Failed to launch {AgentDisplayName}: {ex.Message}",
+            sw.ElapsedMilliseconds,
+            0,
+            0,
+            AgentRunStatus.Failed,
+            cancellationToken,
+            sessionId);
         return AgentRunResult.Failed($"Failed to launch {AgentDisplayName}: {ex.Message}", new AgentRunMetrics(sw.ElapsedMilliseconds));
     }
 
@@ -187,7 +210,9 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         return (exePath, args);
     }
 
-    private string ResolveLaunchWorkingDirectory(AgentSessionContext context)
+    protected const int DefaultProcessTimeoutSeconds = ProcessTimeoutSeconds;
+
+    protected string ResolveLaunchWorkingDirectory(AgentSessionContext context)
     {
         var workingDir = !string.IsNullOrEmpty(context.WorkspacePath) ? context.WorkspacePath : Directory.GetCurrentDirectory();
         if (IsForeignPath(workingDir))
@@ -247,6 +272,74 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         => OperatingSystem.IsWindows() && (path.StartsWith('/') || path.StartsWith('~'));
 
     /// <summary>
+    /// Resolves the container-side working directory for <see cref="ExecutionMode.ContainerSandbox"/> runs,
+    /// mapping task runs to <c>/workspace/task-{id}</c> via <see cref="SandboxScopeDescriptor.DefaultWorkingDirectory"/>.
+    /// </summary>
+    protected static string ResolveContainerSessionWorkingDirectory(AgentSessionContext context)
+    {
+        if (!string.IsNullOrWhiteSpace(context.SandboxScope?.DefaultWorkingDirectory))
+        {
+            return context.SandboxScope.DefaultWorkingDirectory;
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.WorkspacePath) &&
+            context.WorkspacePath.StartsWith("/workspace/", StringComparison.Ordinal))
+        {
+            return context.WorkspacePath;
+        }
+
+        return context.ForgeTask.Id > 0
+            ? $"{ContainerWorkspacePath}/task-{context.ForgeTask.Id}"
+            : ContainerWorkspacePath;
+    }
+
+    /// <summary>
+    /// Resolves the WSL2-side working directory for <see cref="ExecutionMode.WslDirect"/> runs.
+    /// </summary>
+    public static string ResolveWslDirectSessionWorkingDirectory(AgentSessionContext context, IWorkspacePathResolver pathResolver)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(pathResolver);
+
+        if (!string.IsNullOrWhiteSpace(context.WorkspacePath) &&
+            (context.WorkspacePath.StartsWith('/') || context.WorkspacePath.StartsWith('~')))
+        {
+            return context.WorkspacePath;
+        }
+
+        if (context.SandboxScope != null)
+        {
+            return new SandboxPathResolver(context.SandboxScope).ResolveBashWorkingDirectory(null, ExecutionTier.WslDirect);
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.Workspace?.Ext4MirrorPath))
+        {
+            var norm = context.Workspace.Ext4MirrorPath.Replace('\\', '/').TrimEnd('/');
+            if (context.ForgeTask.Id > 0)
+            {
+                var baseDir = norm.EndsWith("/clone", StringComparison.OrdinalIgnoreCase)
+                    ? norm[..^"/clone".Length]
+                    : norm;
+                return $"{baseDir}/task-{context.ForgeTask.Id}";
+            }
+
+            return norm;
+        }
+
+        if (context.Workspace != null)
+        {
+            return pathResolver.GetAgentWorkingClonePath(context.Workspace.Id);
+        }
+
+        return !string.IsNullOrWhiteSpace(context.WorkspacePath)
+            ? context.WorkspacePath
+            : Directory.GetCurrentDirectory();
+    }
+
+    protected string ResolveWslDirectSessionWorkingDirectory(AgentSessionContext context)
+        => ResolveWslDirectSessionWorkingDirectory(context, _pathResolver);
+
+    /// <summary>
     /// Assembles the prompt sent to the agent: stage directive, resumed history, execution guidelines,
     /// environment block and pending human answer.
     /// </summary>
@@ -275,9 +368,21 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
             basePromptText = $"{basePromptText}\n\n{guidelines}";
         }
 
-        var agentWorkingDir = context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox
-            ? ContainerWorkspacePath
-            : localWorkspaceRoot;
+        if ((context.RequiredMode == AgentMode.Review ||
+             context.Profile.Mode == AgentMode.Review ||
+             string.Equals(context.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase)) &&
+            !basePromptText.Contains("request_changes", StringComparison.OrdinalIgnoreCase) &&
+            !basePromptText.Contains("request-changes", StringComparison.OrdinalIgnoreCase))
+        {
+            basePromptText = $"{basePromptText}\n\n[Stage Completion Contract]:\nConclude your review with either `<approved>...</approved>` if all changes meet the specification and tests pass, or `<request_changes>[actionable feedback]</request_changes>` if issues remain for the implementation stage.";
+        }
+
+        var agentWorkingDir = context.Workspace?.ExecutionMode switch
+        {
+            ExecutionMode.ContainerSandbox => ResolveContainerSessionWorkingDirectory(context),
+            ExecutionMode.WslDirect => ResolveWslDirectSessionWorkingDirectory(context),
+            _ => localWorkspaceRoot
+        };
         var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
         basePromptText = $"{basePromptText}\n\n{envInfo}";
 
@@ -289,6 +394,16 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     protected Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken cancellationToken)
         => _recorder.BroadcastAsync(sessionId, taskId, stageId, kind, content, cancellationToken);
 
+    protected Task BroadcastAsync(
+        string sessionId,
+        int taskId,
+        string stageId,
+        AgentActivityKind kind,
+        string content,
+        IReadOnlyDictionary<string, object?>? metadata,
+        CancellationToken cancellationToken)
+        => _recorder.BroadcastAsync(sessionId, taskId, stageId, kind, content, metadata, cancellationToken);
+
     protected Task SaveTranscriptAsync(
         AgentSessionContext context,
         string workspacePath,
@@ -298,7 +413,21 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         long promptTokens,
         long completionTokens,
         AgentRunStatus status,
-        CancellationToken cancellationToken)
-        => _recorder.SaveTranscriptAsync(HarnessId, context, workspacePath, promptText, summaryText, elapsedMs, promptTokens, completionTokens, status, cancellationToken);
+        CancellationToken cancellationToken,
+        string? sessionId = null,
+        int? cachedInputTokens = null)
+        => _recorder.SaveTranscriptAsync(
+            HarnessId,
+            context,
+            workspacePath,
+            promptText,
+            summaryText,
+            elapsedMs,
+            promptTokens,
+            completionTokens,
+            status,
+            cancellationToken,
+            sessionId,
+            cachedInputTokens);
 }
 

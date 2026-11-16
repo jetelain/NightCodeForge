@@ -784,10 +784,24 @@ VALUES ('" + AddTaskHistoryGitHubFieldsMigrationId + @"', '10.0.12');";
         }
 
         await ReconcileIdeationProfilesAsync(cancellationToken);
+        await NormalizeLegacyPiRpcProfilesAsync(cancellationToken);
 
         if (ChangeTracker.HasChanges())
         {
             await SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    private async Task NormalizeLegacyPiRpcProfilesAsync(CancellationToken cancellationToken)
+    {
+        const string legacyPiRpcHarnessId = "pirpc";
+        var legacyProfiles = await AgentProfiles
+            .Where(p => p.HarnessId.ToLower() == legacyPiRpcHarnessId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var profile in legacyProfiles)
+        {
+            profile.HarnessId = StandardHarnessIds.Crucible;
         }
     }
 

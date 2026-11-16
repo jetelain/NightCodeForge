@@ -5,7 +5,6 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Agents.Crucible;
-using NightCodeForge.Agents.PiRpc;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
@@ -16,9 +15,9 @@ namespace NightCodeForge.Agents.Tests;
 public class HarnessSessionResumptionTests
 {
     [Fact]
-    public async Task PiRpcAgentHarness_WhenResumingWithReconstructedHistory_InjectsPriorHistoryIntoPrompt()
+    public async Task AcpAgentHarness_WhenResumingWithReconstructedHistory_IncludesThinkingAndSystemNoticeInPrompt()
     {
-        var harness = new TestPiRpcHarnessBuilder().Build();
+        var harness = new TestAcpHarnessBuilder().Build();
 
         var turns = new List<ConversationTurn>
         {
@@ -32,21 +31,24 @@ public class HarnessSessionResumptionTests
         {
             ForgeTask = new ForgeTask { Id = 50, Title = "Login Task", Description = "Implement login" },
             StageId = "stage-impl",
-            Profile = new AgentProfile { Name = "PiDev", ModelName = "qwen2.5-coder:7b" },
+            Profile = new AgentProfile { Name = "AcpDev", ModelName = "gemini-4-argon" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\dummy" },
             SerializedStateJson = reconstructedHistory
         };
 
-        var piOutput = new StringBuilder();
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Resuming login page work.\"}}");
-        piOutput.AppendLine("{\"type\":\"agent_settled\"}");
+        var acpOutput = new StringBuilder();
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-50\"}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-50\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Resuming login page work.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}");
 
-        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(piOutput.ToString()));
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput.ToString()));
         using var reader = new StreamReader(inStream);
         using var outStream = new MemoryStream();
         using var writer = new StreamWriter(outStream, Encoding.UTF8) { AutoFlush = true };
 
         var sw = Stopwatch.StartNew();
-        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-pi-resume", sw);
+        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-acp-thinking-resume", sw);
 
         Assert.Equal(AgentRunStatus.Completed, result.Status);
 

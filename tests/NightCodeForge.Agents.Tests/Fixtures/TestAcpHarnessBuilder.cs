@@ -8,11 +8,11 @@ using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
-using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Streaming;
 
 public class TestAcpHarnessBuilder
@@ -25,9 +25,11 @@ public class TestAcpHarnessBuilder
     public AgentsMdService AgentsMdService { get; set; } = new();
     public IAgentActivityStreamer ActivityStreamer { get; set; } = new InMemoryAgentActivityStreamer();
     public SessionTranscriptService TranscriptService { get; set; } = new();
+    public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
     public IWorkspacePathResolver PathResolver { get; set; } = new Mock<IWorkspacePathResolver>().Object;
     public IProcessRunner ProcessRunner { get; set; } = new Mock<IProcessRunner>().Object;
     public IAcpHostRpcHandler? HostRpcHandler { get; set; }
+    public IAcpProcessLauncher? ProcessLauncher { get; set; }
     public IHarnessActivityRecorder? ActivityRecorder { get; set; }
     public ILogger<AcpAgentHarness> Logger { get; set; } = NullLogger<AcpAgentHarness>.Instance;
 
@@ -39,11 +41,20 @@ public class TestAcpHarnessBuilder
             EditorConfigFileApplier,
             PathResolver,
             NullLogger<AcpHostRpcHandler>.Instance);
-        var recorder = ActivityRecorder ?? new HarnessActivityRecorder(ActivityStreamer, TranscriptService, NullLogger<HarnessActivityRecorder>.Instance);
+        var launcher = ProcessLauncher ?? new AcpProcessLauncher(
+            EnvProvider,
+            PathResolver,
+            NullLogger<AcpProcessLauncher>.Instance);
+        var recorder = ActivityRecorder ?? new HarnessActivityRecorder(
+            ActivityStreamer,
+            TranscriptService,
+            TaskRepository,
+            NullLogger<HarnessActivityRecorder>.Instance);
         return new AcpAgentHarness(
             Options,
             McpManager,
             handler,
+            launcher,
             recorder,
             AgentsMdService,
             PathResolver,

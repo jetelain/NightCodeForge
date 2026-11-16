@@ -8,6 +8,7 @@ using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Tests;
@@ -21,7 +22,7 @@ public class ExternalProcessAgentHarnessBaseTests
     {
         public ProbeHarness()
             : base(
-                new HarnessActivityRecorder(new InMemoryAgentActivityStreamer(), new SessionTranscriptService(), NullLogger<HarnessActivityRecorder>.Instance),
+                new HarnessActivityRecorder(new InMemoryAgentActivityStreamer(), new SessionTranscriptService(), new InMemoryTaskRepository(), NullLogger<HarnessActivityRecorder>.Instance),
                 new AgentsMdService(),
                 new Mock<IWorkspacePathResolver>().Object,
                 new Mock<IProcessRunner>().Object,

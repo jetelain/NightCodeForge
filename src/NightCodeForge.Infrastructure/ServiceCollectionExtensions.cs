@@ -83,6 +83,8 @@ public static class ServiceCollectionExtensions
         // 6. Execution Environments, Process Runner & Path Resolution
         services.AddOptions<Execution.ExecutionEnvironmentProviderOptions>();
         services.AddOptions<Execution.ContainerExecutorOptions>();
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Security.SecurityOptions>(
+            NightCodeForge.Core.Security.SecurityOptions.SectionName);
 
         services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
         services.TryAddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();

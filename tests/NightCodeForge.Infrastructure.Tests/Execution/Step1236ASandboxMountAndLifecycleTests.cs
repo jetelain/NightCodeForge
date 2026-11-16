@@ -108,6 +108,7 @@ public class Step1236ASandboxMountAndLifecycleTests
         var factory = new ContainerEnvironmentFactory(
             runnerMock.Object,
             Options.Create(new ExecutionEnvironmentProviderOptions { DefaultWslDistribution = "Ubuntu" }),
+            Options.Create(new NightCodeForge.Core.Security.SecurityOptions()),
             pathResolverMock.Object,
             sdkMock.Object,
             identityMock.Object,
@@ -434,6 +435,7 @@ public class Step1236ASandboxMountAndLifecycleTests
         var factory = new ContainerEnvironmentFactory(
             runnerMock.Object,
             Options.Create(new ExecutionEnvironmentProviderOptions { DefaultWslDistribution = "Ubuntu", UseWslForContainers = true }),
+            Options.Create(new NightCodeForge.Core.Security.SecurityOptions()),
             pathResolverMock.Object,
             sdkMock.Object,
             identityMock.Object,

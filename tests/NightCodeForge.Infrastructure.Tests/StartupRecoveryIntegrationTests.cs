@@ -419,6 +419,7 @@ public class StartupRecoveryIntegrationTests : IDisposable
             var containerFactory = new ContainerEnvironmentFactory(
                 _processRunner,
                 Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()),
+                Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Security.SecurityOptions()),
                 _pathResolver,
                 new Mock<IHostSdkDiscoveryService>().Object,
                 new Mock<IHostUserIdentityResolver>().Object,

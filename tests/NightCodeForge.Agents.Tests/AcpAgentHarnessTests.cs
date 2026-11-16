@@ -1,10 +1,15 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Agents.Acp;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -266,11 +271,11 @@ public class AcpAgentHarnessTests
     [InlineData("{\"executablePath\":\"custom-acp\",\"arguments\":\"--flag1 --flag2\"}", "custom-acp", "--flag1 --flag2")]
     [InlineData("{\"executable\":\"acp-bin\",\"args\":\"--v2\"}", "acp-bin", "--v2")]
     [InlineData("{\"command\":\"my-cmd\",\"args\":\"--custom\"}", "my-cmd", "--custom")]
-    [InlineData("", "gemini", "--experimental-acp")]
-    [InlineData(null, "gemini", "--experimental-acp")]
-    [InlineData("{ malformed json", "gemini", "--experimental-acp")]
-    [InlineData("{\"arguments\":[\"--array-not-string\"]}", "gemini", "--experimental-acp")]
-    [InlineData("{\"args\":123}", "gemini", "--experimental-acp")]
+    [InlineData("", "agy", "acp --dangerously-skip-permissions")]
+    [InlineData(null, "agy", "acp --dangerously-skip-permissions")]
+    [InlineData("{ malformed json", "agy", "acp --dangerously-skip-permissions")]
+    [InlineData("{\"arguments\":[\"--array-not-string\"]}", "agy", "acp --dangerously-skip-permissions")]
+    [InlineData("{\"args\":123}", "agy", "acp --dangerously-skip-permissions")]
     public async Task RunStageAsync_ParsesHarnessConfigurationJson_OrFallsBackToDefaults(
         string? harnessConfigJson,
         string expectedExe,
@@ -278,7 +283,8 @@ public class AcpAgentHarnessTests
     {
         var streamer = new TestActivityStreamer();
         var acpOutput = new StringBuilder();
-        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":2}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"s-cfg\"}}");
         acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}");
 
         using var session = new FakeProcessStreamSession(acpOutput.ToString());
@@ -306,7 +312,7 @@ public class AcpAgentHarnessTests
             ForgeTask = new ForgeTask { Id = 101, Title = "ACP Config Test", Description = "Test config parsing" },
             StageId = "stage-2",
             Profile = new AgentProfile { Name = "AcpAgent", HarnessConfigurationJson = harnessConfigJson },
-            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory(), ExecutionMode = ExecutionMode.BareHost },
             WorkspacePath = Directory.GetCurrentDirectory()
         };
 
@@ -352,7 +358,7 @@ public class AcpAgentHarnessTests
                 ForgeTask = new ForgeTask { Id = 202, Title = "Unix Path Test", Description = "Verify path resolution" },
                 StageId = "stage-2",
                 Profile = new AgentProfile { Name = "AcpAgent" },
-                Workspace = new Workspace { Id = 15, RepositoryPath = tempDir },
+                Workspace = new Workspace { Id = 15, RepositoryPath = tempDir, ExecutionMode = ExecutionMode.BareHost },
                 WorkspacePath = unixWorkspacePath
             };
 
@@ -655,6 +661,568 @@ public class AcpAgentHarnessTests
         }
     }
 
+    [Fact]
+    public async Task RunSessionStreamAsync_AntigravityWireSequence_SetsSessionIdConfigOptionsCorrelatesToolsExtractsUsageAndPersistsDb()
+    {
+        var streamer = new TestActivityStreamer();
+        var taskRepo = new InMemoryTaskRepository();
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Title = "ACP Wire Sequence",
+            Description = "Implement feature X",
+            WorkspaceId = 1
+        });
+
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            ActivityStreamer = streamer,
+            TaskRepository = taskRepo
+        }.Build();
+
+        var scope = SandboxScopeDescriptor.ForWorkspace(
+            new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory(), ExecutionMode = ExecutionMode.ContainerSandbox },
+            SandboxSecurityTier.Standard,
+            taskId: task.Id,
+            mountTable: SandboxMountTable.ForWorkspace(Directory.GetCurrentDirectory(), "/wks/1/task-1", false, task.Id),
+            defaultWorkingDirectory: $"/workspace/task-{task.Id}");
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = task,
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile
+            {
+                Id = StandardStageIds.Implementation,
+                Name = "AgyImpl",
+                HarnessId = StandardHarnessIds.Acp,
+                ModelName = "gemini-4-argon",
+                ThinkingEffort = ThinkingEffort.High,
+                Mode = AgentMode.Full,
+                SystemPrompt = "Be concise and thorough."
+            },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory(), ExecutionMode = ExecutionMode.ContainerSandbox },
+            SandboxScope = scope
+        };
+
+        var acpOutput = new StringBuilder();
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1,\"agentInfo\":{\"name\":\"Antigravity ACP Server\",\"version\":\"1.5.3\"}}}");
+        // Interleaved session/update before session-1 completes
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-agy-42\",\"update\":{\"sessionUpdate\":\"available_commands_update\",\"commands\":[]}}}");
+        // session/new response with server-assigned sessionId and configOptions
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-agy-42\",\"configOptions\":[{\"id\":\"model\",\"options\":[{\"value\":\"gemini-4-argon\"}]},{\"id\":\"thought_level\",\"options\":[{\"value\":\"low\"},{\"value\":\"medium\"},{\"value\":\"high\"}]},{\"id\":\"mode\",\"options\":[{\"value\":\"default\"},{\"value\":\"accept-edits\"},{\"value\":\"plan\"}]}]}}");
+        // cfg-* responses ignored cleanly
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"cfg-opt-1\",\"result\":{}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"cfg-opt-2\",\"result\":{}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"cfg-opt-mode\",\"result\":{}}");
+        // Agent thinking, tool call (with name + args), tool_call_update, final message, and usage
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-agy-42\",\"update\":{\"sessionUpdate\":\"agent_thought_chunk\",\"content\":{\"text\":\"Planning build check...\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-agy-42\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"call-99\",\"name\":\"run_command\",\"args\":{\"CommandLine\":\"dotnet test\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-agy-42\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"call-99\",\"status\":\"completed\",\"rawOutput\":\"Passed: 12\"}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-agy-42\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Implemented feature X and all tests pass.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\",\"usage\":{\"inputTokens\":1200,\"cachedInputTokens\":400,\"outputTokens\":300,\"thoughtTokens\":50,\"totalTokens\":1550}}}");
+
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput.ToString()));
+        using var reader = new StreamReader(inStream);
+        using var outStream = new MemoryStream();
+        using var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        var sw = Stopwatch.StartNew();
+        var result = await harness.RunSessionStreamAsync(writer, reader, context, "local-sess-1", sw);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal("srv-agy-42", result.UpdatedState);
+        Assert.Equal("Implemented feature X and all tests pass.", result.Summary);
+        Assert.Equal(1200, result.Metrics.PromptTokens);
+        Assert.Equal(350, result.Metrics.CompletionTokens);
+        Assert.Equal(400, result.Metrics.CachedInputTokens);
+        Assert.Equal(1550, result.Metrics.TotalTokens);
+
+        var sentLines = Encoding.UTF8.GetString(outStream.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => JsonNode.Parse(l.TrimStart('\uFEFF'))!)
+            .ToList();
+
+        var initReq = sentLines.First(n => n["id"]?.ToString() == "init-1");
+        Assert.Equal(1, initReq["params"]?["protocolVersion"]?.GetValue<int>());
+        Assert.True(initReq["params"]?["clientCapabilities"]?["terminal"]?.GetValue<bool>());
+
+        var sessionReq = sentLines.First(n => n["id"]?.ToString() == "session-1");
+        Assert.Equal($"/workspace/task-{task.Id}", sessionReq["params"]?["cwd"]?.ToString());
+        Assert.Equal("Be concise and thorough.", sessionReq["params"]?["_meta"]?["antigravity"]?["systemPrompt"]?["append"]?.ToString());
+
+        var modelCfg = sentLines.First(n => n["id"]?.ToString() == "cfg-opt-1");
+        Assert.Equal("session/set_config_option", modelCfg["method"]?.ToString());
+        Assert.Equal("srv-agy-42", modelCfg["params"]?["sessionId"]?.ToString());
+        Assert.Equal("model", modelCfg["params"]?["configId"]?.ToString());
+        Assert.Equal("gemini-4-argon", modelCfg["params"]?["value"]?.ToString());
+
+        var thoughtCfg = sentLines.First(n => n["id"]?.ToString() == "cfg-opt-2");
+        Assert.Equal("thought_level", thoughtCfg["params"]?["configId"]?.ToString());
+        Assert.Equal("high", thoughtCfg["params"]?["value"]?.ToString());
+
+        var modeCfg = sentLines.First(n => n["id"]?.ToString() == "cfg-opt-mode");
+        Assert.Equal("mode", modeCfg["params"]?["configId"]?.ToString());
+        Assert.Equal("accept-edits", modeCfg["params"]?["value"]?.ToString());
+
+        var promptReq = sentLines.First(n => n["id"]?.ToString() == "prompt-1");
+        Assert.Equal("srv-agy-42", promptReq["params"]?["sessionId"]?.ToString());
+        Assert.Equal("text", promptReq["params"]?["prompt"]?[0]?["type"]?.ToString());
+        Assert.Contains($"Current Working Directory (PWD): /workspace/task-{task.Id}", promptReq["params"]?["prompt"]?[0]?["text"]?.ToString());
+
+        // Tool correlation metadata
+        var toolStart = Assert.Single(streamer.Events, e => e.Kind == AgentActivityKind.ToolStarted);
+        Assert.Equal("run_command", toolStart.Metadata?[AgentActivityMetadataKeys.ToolName]?.ToString());
+
+        var toolEnd = Assert.Single(streamer.Events, e => e.Kind == AgentActivityKind.ToolCompleted);
+        Assert.Equal("run_command", toolEnd.Metadata?[AgentActivityMetadataKeys.ToolName]?.ToString());
+        Assert.StartsWith("run_command: completed:", toolEnd.Content);
+
+        // SQLite Conversation & Turns persisted via HarnessActivityRecorder
+        var convs = await taskRepo.GetConversationsAsync(task.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StandardHarnessIds.Acp, conv.HarnessId);
+        Assert.Equal(StageExecutionStatus.Completed, conv.Status);
+        Assert.Equal(1200, conv.InputTokens);
+        Assert.Equal(350, conv.OutputTokens);
+        Assert.Equal(400, conv.CachedInputTokens);
+        Assert.Null(conv.Cost);
+        Assert.False(string.IsNullOrWhiteSpace(conv.TranscriptFileName));
+
+        var loadedConv = await taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(loadedConv);
+        Assert.Contains(loadedConv!.Turns, t => t.Role == StageTurnRole.User);
+        Assert.Contains(loadedConv.Turns, t => t.Role == StageTurnRole.Tool && t.ToolName == "run_command");
+        Assert.Contains(loadedConv.Turns, t => t.Role == StageTurnRole.ToolResult && t.ToolName == "run_command" && t.ToolResult == "Passed: 12");
+        Assert.Contains(loadedConv.Turns, t => t.Role == StageTurnRole.Assistant && t.Content == "Implemented feature X and all tests pass.");
+        Assert.Contains(loadedConv.Turns, t => t.Role == StageTurnRole.Assistant && t.ThinkingTrace == "Planning build check...");
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_WhenSessionNewReturnsError_ThrowsAcpAuthenticationExceptionAndMarksConversationFailed()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var task = await taskRepo.CreateAsync(new ForgeTask { Title = "Auth Fail", Description = "Desc" });
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            TaskRepository = taskRepo
+        }.Build();
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = task,
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory(), ExecutionMode = ExecutionMode.BareHost }
+        };
+
+        var acpOutput = new StringBuilder();
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"error\":{\"code\":-32001,\"message\":\"Not authenticated\"}}");
+
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput.ToString()));
+        using var reader = new StreamReader(inStream);
+        using var outStream = new MemoryStream();
+        using var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        var sw = Stopwatch.StartNew();
+        await Assert.ThrowsAsync<AcpAuthenticationException>(() =>
+            harness.RunSessionStreamAsync(writer, reader, context, "sess-auth-fail", sw));
+
+        var convs = await taskRepo.GetConversationsAsync(task.Id);
+        var conv = Assert.Single(convs);
+        Assert.Equal(StageExecutionStatus.Failed, conv.Status);
+    }
+
+    [Fact]
+    public async Task RunStageAsync_ReadOnlyMode_OmitsSkipPermissionsFlag_SetsPlanMode_AndRejectsPermissionRequest()
+    {
+        var acpOutput = new StringBuilder();
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-ro\",\"configOptions\":[{\"id\":\"mode\",\"options\":[{\"value\":\"plan\"},{\"value\":\"accept-edits\"}]}]}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"perm-ro\",\"method\":\"session/request_permission\",\"params\":{\"prompt\":\"Write file?\"}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-ro\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Read-only review completed.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}");
+
+        using var session = new FakeProcessStreamSession(acpOutput.ToString());
+        ProcessStartSpec? capturedSpec = null;
+        var mockRunner = new Mock<IProcessRunner>();
+        mockRunner
+            .Setup(r => r.StartSession(It.IsAny<ProcessStartSpec>()))
+            .Callback<ProcessStartSpec>(spec => capturedSpec = spec)
+            .Returns(session);
+
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            ProcessRunner = mockRunner.Object
+        }.Build();
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 88, Title = "RO ACP", Description = "Review only" },
+            StageId = StandardStageIds.TaskReview,
+            Profile = new AgentProfile { Name = "AgyRO", HarnessId = StandardHarnessIds.Acp, Mode = AgentMode.ReadOnly },
+            RequiredMode = AgentMode.ReadOnly,
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory(), ExecutionMode = ExecutionMode.BareHost },
+            WorkspacePath = Directory.GetCurrentDirectory()
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.NotNull(capturedSpec);
+        Assert.DoesNotContain("--dangerously-skip-permissions", capturedSpec!.Arguments ?? string.Empty);
+
+        var sentLines = session.GetCapturedStdinText();
+        Assert.Contains("\"configId\":\"mode\",\"value\":\"plan\"", sentLines);
+        Assert.Contains("\"id\":\"perm-ro\"", sentLines);
+        Assert.Contains("Permission denied", sentLines);
+    }
+
+    [Fact]
+    public async Task AcpProcessLauncher_ContainerSandbox_And_WslDirect_ResolveExpectedCommandAndWorkingDirectory()
+    {
+        var runnerMock = new Mock<IProcessRunner>();
+        runnerMock.Setup(r => r.Run(It.IsAny<ProcessStartSpec>()))
+            .Returns(new ProcessExecutionResult(0, "true\n", string.Empty));
+        var identityMock = new Mock<IHostUserIdentityResolver>();
+        identityMock.Setup(i => i.ResolveUserIdentity(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<string>())).Returns("1000:1000");
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+
+        var containerOptions = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-sandbox-5-task-42",
+            DefaultWorkingDirectory = "/workspace/task-42",
+            UserUidGid = "1000:1000",
+            UseWsl = true,
+            WslDistribution = "Ubuntu",
+            AutoStartContainer = false,
+            ExtraPathDirectories = [ContainerExecutorOptions.HostAgyContainerDirectory]
+        };
+        using var executor = new NightCodeForgeContainerExecutor(
+            containerOptions,
+            runnerMock.Object,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            identityMock.Object,
+            telemetryMock.Object);
+
+        var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(p => p.GetWslDistributionName()).Returns("Ubuntu");
+        pathResolverMock.Setup(p => p.GetAgentWorkingClonePath(5)).Returns("/home/dev/.nightcodeforge/wks/5/clone");
+
+        var launcher = new AcpProcessLauncher(
+            new SingleExecutionEnvironmentProvider(executor),
+            pathResolverMock.Object,
+            NullLogger<AcpProcessLauncher>.Instance);
+
+        var containerWs = new Workspace { Id = 5, ExecutionMode = ExecutionMode.ContainerSandbox, UseWslForContainers = true, WslDistribution = "Ubuntu" };
+        var containerScope = SandboxScopeDescriptor.ForWorkspace(
+            containerWs,
+            SandboxSecurityTier.Standard,
+            taskId: 42,
+            mountTable: SandboxMountTable.ForWorkspace("/host/wks/5", "/home/dev/.nightcodeforge/wks/5", false, 42),
+            defaultWorkingDirectory: "/workspace/task-42");
+
+        var containerContext = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 42, Title = "Container Task", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp, Mode = AgentMode.Full },
+            Workspace = containerWs,
+            SandboxScope = containerScope
+        };
+
+        var containerPlan = await launcher.PrepareLaunchAsync(
+            containerContext,
+            "agy",
+            "acp --dangerously-skip-permissions",
+            "/host/wks/5/task-42",
+            "/workspace",
+            "/host/wks/5/task-42",
+            600);
+
+        Assert.Equal("wsl.exe", containerPlan.ProcessSpec.FileName);
+        var argList = containerPlan.ProcessSpec.ArgumentList!.ToList();
+        Assert.Contains("docker", argList);
+        Assert.Contains("exec", argList);
+        Assert.Contains("-w", argList);
+        Assert.Contains("/workspace/task-42", argList);
+        Assert.Contains("/opt/ncf-acp/agy", argList);
+        Assert.Contains($"HOME={ContainerExecutorOptions.ContainerHomePath}", argList);
+        Assert.Contains(argList, a => a.StartsWith("PATH=/opt/ncf-acp:", StringComparison.Ordinal));
+        Assert.Equal("/workspace/task-42", containerPlan.SessionWorkingDirectory);
+
+        var wslContext = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 42, Title = "WSL Task", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp, Mode = AgentMode.Full },
+            Workspace = new Workspace
+            {
+                Id = 5,
+                ExecutionMode = ExecutionMode.WslDirect,
+                WslDistribution = "Ubuntu",
+                Ext4MirrorPath = "~/.nightcodeforge/wks/5/clone"
+            },
+            WorkspacePath = "~/.nightcodeforge/wks/5/task-42"
+        };
+
+        var wslPlan = await launcher.PrepareLaunchAsync(
+            wslContext,
+            "agy",
+            "acp --dangerously-skip-permissions",
+            "C:\\dummy",
+            "~/.nightcodeforge/wks/5/task-42",
+            "C:\\dummy",
+            600);
+
+        Assert.Equal("wsl.exe", wslPlan.ProcessSpec.FileName);
+        Assert.Equal("-d Ubuntu -- ~/.local/bin/agy acp --dangerously-skip-permissions", wslPlan.ProcessSpec.Arguments);
+        Assert.Equal("~/.nightcodeforge/wks/5/task-42", wslPlan.SessionWorkingDirectory);
+
+        var wslExeFallbackPlan = await launcher.PrepareLaunchAsync(
+            wslContext,
+            "C:\\Users\\dev\\.gemini\\bin\\agy.exe",
+            "acp --dangerously-skip-permissions",
+            "C:\\dummy",
+            "~/.nightcodeforge/wks/5/task-42",
+            "C:\\dummy",
+            600);
+        Assert.Equal("-d Ubuntu -- ~/.local/bin/agy acp --dangerously-skip-permissions", wslExeFallbackPlan.ProcessSpec.Arguments);
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_EndsHostRpcSessionWithServerSessionId_AndBroadcastsErrorWithActiveSessionId()
+    {
+        var mockHostRpc = new Mock<IAcpHostRpcHandler>();
+        mockHostRpc.Setup(h => h.CanHandle(It.IsAny<string>())).Returns(false);
+        var streamer = new TestActivityStreamer();
+
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            HostRpcHandler = mockHostRpc.Object,
+            ActivityStreamer = streamer
+        }.Build();
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 208, Title = "EndSession Test", Description = "Test activeSessionId cleanup" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() }
+        };
+
+        var acpOutput = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-assigned-99\"}}") + "\n";
+
+        using var session = new FakeProcessStreamSession(acpOutput, throwOnSecondLine: new IOException("transport dropped"));
+        var sw = Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<IOException>(() =>
+            harness.RunSessionStreamAsync(session.StandardInput, session.StandardOutput, context, "local-sess-99", sw));
+
+        mockHostRpc.Verify(h => h.EndSession("local-sess-99"), Times.Once);
+        mockHostRpc.Verify(h => h.EndSession("srv-assigned-99"), Times.Once);
+        Assert.Contains(streamer.Events, e => e.Kind == AgentActivityKind.Error && e.SessionId == "srv-assigned-99");
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_WslDirect_UsesWslWorktreeInSessionNewAndPromptEnvironment()
+    {
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder().Build();
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 42, Title = "WSL Direct PWD", Description = "Check WSL PWD" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace
+            {
+                Id = 5,
+                RepositoryPath = "C:\\repos\\proj",
+                ExecutionMode = ExecutionMode.WslDirect,
+                Ext4MirrorPath = "~/.nightcodeforge/wks/5/clone"
+            },
+            WorkspacePath = "C:\\repos\\proj"
+        };
+
+        var acpOutput = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-wsl-1\"}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}") + "\n";
+
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput));
+        using var reader = new StreamReader(inStream);
+        using var outStream = new MemoryStream();
+        using var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        var sw = Stopwatch.StartNew();
+        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-wsl", sw);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var sentLines = Encoding.UTF8.GetString(outStream.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => JsonNode.Parse(l.TrimStart('\uFEFF'))!)
+            .ToList();
+
+        var sessionReq = sentLines.First(n => n["id"]?.ToString() == "session-1");
+        Assert.Equal("~/.nightcodeforge/wks/5/task-42", sessionReq["params"]?["cwd"]?.ToString());
+
+        var promptReq = sentLines.First(n => n["id"]?.ToString() == "prompt-1");
+        Assert.Contains("Current Working Directory (PWD): ~/.nightcodeforge/wks/5/task-42", promptReq["params"]?["prompt"]?[0]?["text"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_SessionLoadSendsCwdAndMcpServers_AndFallsBackToSessionNewOnNonAuthError()
+    {
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder().Build();
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 209, Title = "Resume Fallback", Description = "Fallback to session/new" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() },
+            WorkspacePath = Directory.GetCurrentDirectory(),
+            SerializedStateJson = "stale-session-id"
+        };
+
+        var acpOutput = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"error\":{\"code\":-32000,\"message\":\"Session not found\"}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-fallback-1\",\"result\":{\"sessionId\":\"fresh-session-1\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"fresh-session-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Recovered via new session.\"}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}") + "\n";
+
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput));
+        using var reader = new StreamReader(inStream);
+        using var outStream = new MemoryStream();
+        using var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        var sw = Stopwatch.StartNew();
+        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-fallback", sw);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal("fresh-session-1", result.UpdatedState);
+        Assert.Equal("Recovered via new session.", result.Summary);
+
+        var sentLines = Encoding.UTF8.GetString(outStream.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => JsonNode.Parse(l.TrimStart('\uFEFF'))!)
+            .ToList();
+
+        var loadReq = sentLines.First(n => n["id"]?.ToString() == "session-1");
+        Assert.Equal("session/load", loadReq["method"]?.ToString());
+        Assert.Equal("stale-session-id", loadReq["params"]?["sessionId"]?.ToString());
+        Assert.NotNull(loadReq["params"]?["cwd"]);
+        Assert.NotNull(loadReq["params"]?["mcpServers"]);
+
+        var fallbackReq = sentLines.First(n => n["id"]?.ToString() == "session-fallback-1");
+        Assert.Equal("session/new", fallbackReq["method"]?.ToString());
+
+        var promptReq = sentLines.First(n => n["id"]?.ToString() == "prompt-1");
+        Assert.Equal("fresh-session-1", promptReq["params"]?["sessionId"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_IgnoresInProgressToolCallUpdates_AndSerializesCompactJsonArgs()
+    {
+        var streamer = new TestActivityStreamer();
+        var taskRepo = new InMemoryTaskRepository();
+        var task = await taskRepo.CreateAsync(new ForgeTask { Title = "Tool Update Filter", Description = "Desc" });
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            ActivityStreamer = streamer,
+            TaskRepository = taskRepo
+        }.Build();
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = task,
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Id = StandardStageIds.Implementation, Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() }
+        };
+
+        var acpOutput = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-tool-1\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-tool-1\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"tc-1\",\"name\":\"run_command\",\"args\":{\"CommandLine\":\"dotnet build\"}}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-tool-1\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\",\"status\":\"in_progress\",\"content\":[{\"type\":\"text\",\"text\":\"Building...\"}]}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-tool-1\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\",\"status\":\"pending\"}}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-tool-1\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\",\"status\":\"completed\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"Build succeeded.\"}}]}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}") + "\n";
+
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput));
+        using var reader = new StreamReader(inStream);
+        using var outStream = new MemoryStream();
+        using var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        var sw = Stopwatch.StartNew();
+        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-tool-filter", sw);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+
+        var started = Assert.Single(streamer.Events, e => e.Kind == AgentActivityKind.ToolStarted);
+        Assert.Equal("run_command: {\"CommandLine\":\"dotnet build\"}", started.Content);
+
+        var completed = Assert.Single(streamer.Events, e => e.Kind == AgentActivityKind.ToolCompleted);
+        Assert.Equal("run_command: completed: Build succeeded.", completed.Content);
+
+        var conv = Assert.Single(await taskRepo.GetConversationsAsync(task.Id));
+        var loaded = await taskRepo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(loaded);
+        var toolResultTurn = Assert.Single(loaded!.Turns, t => t.Role == StageTurnRole.ToolResult);
+        Assert.Equal("Build succeeded.", toolResultTurn.ToolResult);
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_ConfigOptionsWithoutThoughtLevel_AndCombinedAvailableModelsResolution()
+    {
+        // Case 1: configOptions has only "model" (no "thought_level") -> does not emit thought_level request
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder().Build();
+        var context1 = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 210, Title = "Config Guard", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp, ModelName = "gemini-4-argon", ThinkingEffort = ThinkingEffort.High },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() }
+        };
+
+        var acpOutput1 = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-cfg-1\",\"configOptions\":[{\"id\":\"model\",\"options\":[{\"value\":\"gemini-4-argon\"}]}]}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}") + "\n";
+
+        using (var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput1)))
+        using (var reader = new StreamReader(inStream))
+        using (var outStream = new MemoryStream())
+        using (var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true })
+        {
+            var res1 = await harness.RunSessionStreamAsync(writer, reader, context1, "sess-cfg-1", Stopwatch.StartNew());
+            Assert.Equal(AgentRunStatus.Completed, res1.Status);
+            var sent1 = Encoding.UTF8.GetString(outStream.ToArray());
+            Assert.Contains("\"configId\":\"model\",\"value\":\"gemini-4-argon\"", sent1);
+            Assert.DoesNotContain("thought_level", sent1);
+        }
+
+        // Case 2: no configOptions, only combined availableModels using "id" field -> resolves gemini-4-argon + High -> gemini-4-argon-high
+        var acpOutput2 = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-cfg-2\",\"models\":{\"availableModels\":[{\"id\":\"gemini-4-argon-low\"},{\"id\":\"gemini-4-argon-high\"}]}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}") + "\n";
+
+        using (var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput2)))
+        using (var reader = new StreamReader(inStream))
+        using (var outStream = new MemoryStream())
+        using (var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true })
+        {
+            var res2 = await harness.RunSessionStreamAsync(writer, reader, context1, "sess-cfg-2", Stopwatch.StartNew());
+            Assert.Equal(AgentRunStatus.Completed, res2.Status);
+            var sent2 = Encoding.UTF8.GetString(outStream.ToArray());
+            Assert.Contains("\"method\":\"session/set_model\"", sent2);
+            Assert.Contains("\"modelId\":\"gemini-4-argon-high\"", sent2);
+        }
+    }
+
     private sealed class FakeProcessStreamSession : IProcessStreamSession
     {
         private readonly MemoryStream _stdinStream = new();
@@ -677,6 +1245,12 @@ public class AcpAgentHarnessTests
         public StreamWriter StandardInput { get; }
         public StreamReader StandardOutput { get; }
         public StreamReader StandardError { get; }
+
+        public string GetCapturedStdinText()
+        {
+            StandardInput.Flush();
+            return Encoding.UTF8.GetString(_stdinStream.ToArray());
+        }
 
         public IAsyncEnumerable<ProcessStreamChunk> ReadAllAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

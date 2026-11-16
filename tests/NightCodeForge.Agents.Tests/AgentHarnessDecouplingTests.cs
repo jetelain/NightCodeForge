@@ -156,37 +156,6 @@ public class AgentHarnessDecouplingTests : IDisposable
     }
 
     [Fact]
-    public async Task PiRpcAgentHarness_WhenPipelineContextIsNull_ExtractsReviewerFeedbackIntoAgentRunResult()
-    {
-        var streamer = new InMemoryAgentActivityStreamer();
-        var harness = new TestPiRpcHarnessBuilder { ActivityStreamer = streamer }.Build();
-
-        var context = new AgentSessionContext
-        {
-            ForgeTask = new ForgeTask { Id = 15, Title = "Pi Review", Description = "Review stage" },
-            StageId = StandardStageIds.CodeReviewAndFix,
-            Profile = new AgentProfile { Name = "PiReviewer", ModelName = "qwen2.5-coder:7b" },
-            PipelineContext = null // Explicitly null
-        };
-
-        var piOutput = new StringBuilder();
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Code review complete.\\n<request_changes>\\nValidation logic is missing.\\n</request_changes>\"}}");
-        piOutput.AppendLine("{\"type\":\"agent_settled\"}");
-
-        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(piOutput.ToString()));
-        using var reader = new StreamReader(inStream);
-        using var outStream = new MemoryStream();
-        using var writer = new StreamWriter(outStream, Encoding.UTF8) { AutoFlush = true };
-
-        var sw = Stopwatch.StartNew();
-        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-pi-review", sw);
-
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
-        Assert.Equal("Validation logic is missing.", result.ReviewerFeedback);
-    }
-
-    [Fact]
     public async Task AcpAgentHarness_WhenPipelineContextIsNull_ExtractsReviewerFeedbackIntoAgentRunResult()
     {
         var streamer = new InMemoryAgentActivityStreamer();

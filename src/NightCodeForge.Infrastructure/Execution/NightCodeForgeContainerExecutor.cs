@@ -40,6 +40,9 @@ public class ContainerExecutorOptions
     public const string AlternateAgentBaseImage = "nightcodeforge-agent:v4";
     public const string ContainerHomePath = "/ncf-home";
     public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
+    public const string HostAgyContainerDirectory = "/opt/ncf-acp";
+    public const string HostAgyContainerBinaryPath = "/opt/ncf-acp/agy";
+    public const string ContainerGeminiConfigPath = "/ncf-home/.gemini";
 
     public const string DefaultAgentBaseDockerfile = """
 FROM ubuntu:24.04
@@ -84,7 +87,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
 """;
 
     public const string DefaultSharedMemorySize = "2g";
-    public static readonly IReadOnlyList<string> DefaultProcessKillWhitelist = ["csnav"];
+    public static readonly IReadOnlyList<string> DefaultProcessKillWhitelist = ["csnav", "agy"];
     public const int DefaultPidsLimit = 4096;
     public const int DefaultIdleContainerTimeoutMinutes = 30;
     public const string RestrictedReadOnlyUserUidGid = "1000:1000";

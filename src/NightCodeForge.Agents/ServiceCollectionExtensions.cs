@@ -9,7 +9,6 @@ using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Agents.Optimizations;
-using NightCodeForge.Agents.PiRpc;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
@@ -72,16 +71,16 @@ public static class ServiceCollectionExtensions
 
         // 5. Agent Harnesses
         services.AddOptions<Acp.AcpHarnessOptions>();
-        services.AddOptions<PiRpc.PiRpcHarnessOptions>();
         services.TryAddScoped<ExternalProcess.HarnessActivityRecorder>();
         services.TryAddScoped<ExternalProcess.IHarnessActivityRecorder>(sp => sp.GetRequiredService<ExternalProcess.HarnessActivityRecorder>());
+        services.TryAddSingleton<IAcpHarnessCatalogService, Acp.AcpHarnessCatalogService>();
+        services.TryAddScoped<Acp.IAcpProcessLauncher, Acp.AcpProcessLauncher>();
         services.TryAddScoped<Acp.IAcpHostRpcHandler, Acp.AcpHostRpcHandler>();
         services.TryAddScoped<ICanonicalToolsetFactory, CanonicalToolsetFactory>();
         services.TryAddScoped<IAgentWorkspaceContextService, AgentWorkspaceContextService>();
         services.TryAddScoped<IHarnessAgentFactory, HarnessAgentFactory>();
         services.TryAddScoped<ICrucibleConversationCoordinator, CrucibleConversationCoordinator>();
         services.TryAddScoped<CrucibleAgentHarness>();
-        services.TryAddScoped<PiRpcAgentHarness>();
         services.TryAddScoped<AcpAgentHarness>();
 
         // 6. Harness Registry
@@ -89,7 +88,6 @@ public static class ServiceCollectionExtensions
         {
             var registry = new HarnessRegistry();
             registry.RegisterHarness(sp.GetRequiredService<CrucibleAgentHarness>());
-            registry.RegisterHarness(sp.GetRequiredService<PiRpcAgentHarness>());
             registry.RegisterHarness(sp.GetRequiredService<AcpAgentHarness>());
             return registry;
         });

@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Core.Domain;
@@ -41,6 +42,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
     private readonly Mock<ITailscaleServeService> _tailscaleServeService;
     private readonly Mock<ITailscaleConfigurationWriter> _tailscaleConfigWriter;
     private readonly Mock<IOptionsMonitor<TailscaleOptions>> _tailscaleOptionsMonitor;
+    private readonly MockAcpHarnessCatalogService _acpCatalogService;
 
     public SettingsComponentTests()
     {
@@ -73,6 +75,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         _tailscaleServeService = new Mock<ITailscaleServeService>();
         _tailscaleConfigWriter = new Mock<ITailscaleConfigurationWriter>();
         _tailscaleOptionsMonitor = new Mock<IOptionsMonitor<TailscaleOptions>>();
+        _acpCatalogService = new MockAcpHarnessCatalogService();
 
         _tailscaleOptionsMonitor.SetupGet(m => m.CurrentValue).Returns(new TailscaleOptions());
         _tailscaleServeService.Setup(s => s.GetStatusSnapshotAsync(It.IsAny<CancellationToken>()))
@@ -95,6 +98,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<IWebSearchSettingsService>(_webSearchSettingsService);
         Services.AddSingleton<NightCodeForge.Agents.Tools.IWebSearchService>(_webSearchService);
         Services.AddSingleton<ILlmModelCatalogService>(_catalogService);
+        Services.AddSingleton<IAcpHarnessCatalogService>(_acpCatalogService);
         Services.AddSingleton<IHostSdkDiscoveryService>(_sdkService);
         Services.AddSingleton<ILlmGatewayService>(_gatewayService);
         Services.AddSingleton<IWslMetadataService>(_wslService);
@@ -811,6 +815,156 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("🧠 Reasoning: low, medium, xhigh", cut.Markup);
     }
 
+    [Fact]
+    public void AgentProfilesTab_DisplaysAntigravityAcpStatus_AndOpensLoginModal()
+    {
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        var badge = cut.Find("#acp-status-badge");
+        Assert.Contains("Antigravity ACP v1.5.3 Ready", badge.TextContent);
+        Assert.Contains("Google AI Ultra", badge.TextContent);
+
+        cut.Find("#btn-acp-login-hints").Click();
+        var modal = cut.Find("#acp-login-modal");
+        Assert.Contains("wsl -e ~/.local/bin/agy login", modal.TextContent);
+
+        _acpCatalogService.Status = new AcpCatalogProviderStatus(
+            KnownAcpCatalogIds.Antigravity,
+            AcpHarnessCatalogService.AntigravityDisplayName,
+            IsInstalled: true,
+            IsAuthenticated: false,
+            DetectedExecutablePath: "~/.local/bin/agy",
+            ExecutionTargetDescription: "WSL2",
+            ServerVersion: "1.5.3",
+            AccountTierName: null,
+            DiagnosticMessage: "Sign in required",
+            AvailableModels: AcpHarnessCatalogService.DefaultAntigravityModels);
+
+        cut.Find("#btn-refresh-acp").Click();
+        Assert.Contains("Authentication Required", cut.Find("#acp-status-badge").TextContent);
+    }
+
+    [Fact]
+    public void AgentProfilesTab_PipelineStagesAllowSwitchingToAcp_WhileTriageAndIdeationRemainPinnedToCrucible()
+    {
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        var triageCard = cut.Find("[data-profile-id='triage']");
+        Assert.Contains("Harness: crucible (Pinned)", triageCard.TextContent);
+        Assert.Empty(triageCard.QuerySelectorAll("select.harness-select"));
+
+        var ideationCard = cut.Find("[data-profile-id='ideation']");
+        Assert.Contains("Harness: crucible (Pinned)", ideationCard.TextContent);
+        Assert.Empty(ideationCard.QuerySelectorAll("select.harness-select"));
+
+        var implCard = cut.Find("[data-profile-id='implementation']");
+        var harnessSelect = implCard.QuerySelector("select.harness-select");
+        Assert.NotNull(harnessSelect);
+
+        harnessSelect!.Change(StandardHarnessIds.Acp);
+
+        var updatedImplCard = cut.Find("[data-profile-id='implementation']");
+        Assert.Contains("External Antigravity ACP", updatedImplCard.TextContent);
+        Assert.Contains("gemini-4-argon", updatedImplCard.InnerHtml);
+        Assert.DoesNotContain("OllamaRouter Target", updatedImplCard.TextContent);
+
+        var thinkingSelect = updatedImplCard.QuerySelectorAll("select")
+            .First(s => s.InnerHtml.Contains("thought_level: high"));
+        thinkingSelect.Change(nameof(ThinkingEffort.High));
+
+        var saveBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Save Profiles"));
+        saveBtn.Click();
+
+        using var db = new AppDbContext(_dbOptions);
+        var implAfter = db.AgentProfiles.First(p => p.WorkspaceId == null && p.Id == StandardStageIds.Implementation);
+        Assert.Equal(StandardHarnessIds.Acp, implAfter.HarnessId);
+        Assert.Equal("gemini-4-argon", implAfter.ModelName);
+        Assert.Equal(ThinkingEffort.High, implAfter.ThinkingEffort);
+    }
+
+    [Fact]
+    public void AgentProfileAcpPresentationHelper_EnforcesPinnedStages_FormatsBadges_AndSynchronizesHarnessFields()
+    {
+        Assert.False(AgentProfileAcpPresentationHelper.IsStageHarnessSelectable(StandardStageIds.Triage));
+        Assert.False(AgentProfileAcpPresentationHelper.IsStageHarnessSelectable("ws-42:ideation"));
+        Assert.True(AgentProfileAcpPresentationHelper.IsStageHarnessSelectable(StandardStageIds.Implementation));
+        Assert.True(AgentProfileAcpPresentationHelper.IsStageHarnessSelectable("ws-42:task-review"));
+
+        Assert.Contains("Not Detected", AgentProfileAcpPresentationHelper.FormatAntigravityBadge(null, false).Text);
+        Assert.Contains("Probing", AgentProfileAcpPresentationHelper.FormatAntigravityBadge(null, true).Text);
+
+        var globalImpl = new AgentProfile
+        {
+            Id = StandardStageIds.Implementation,
+            Name = "Impl",
+            HarnessId = StandardHarnessIds.Acp,
+            HarnessConfigurationJson = "{\"executablePath\":\"custom-agy\"}",
+            ModelName = "gemini-4-argon"
+        };
+
+        var cloned = AgentProfileAcpPresentationHelper.CloneToDedicatedProfile(globalImpl, 9, "MyRepo");
+        Assert.Equal(StandardHarnessIds.Acp, cloned.HarnessId);
+        Assert.Equal("{\"executablePath\":\"custom-agy\"}", cloned.HarnessConfigurationJson);
+    }
+
+    [Fact]
+    public void AgentProfilesTab_SelectingAcpModelWithRestrictedThoughtLevels_AndSecurityTierNormalization()
+    {
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        var taskReviewCard = cut.Find("[data-profile-id='task-review']");
+        var harnessSelect = taskReviewCard.QuerySelector("select.harness-select");
+        Assert.NotNull(harnessSelect);
+
+        harnessSelect!.Change(StandardHarnessIds.Acp);
+
+        var updatedCard = cut.Find("[data-profile-id='task-review']");
+        var modelSelect = updatedCard.QuerySelector("select.font-mono");
+        Assert.NotNull(modelSelect);
+        modelSelect!.Change("gpt-oss-120b-medium");
+
+        var refreshedCard = cut.Find("[data-profile-id='task-review']");
+        var thinkingSelect = refreshedCard.QuerySelectorAll("select")
+            .First(s => s.InnerHtml.Contains("thought_level:"));
+        var thinkingOptions = thinkingSelect.QuerySelectorAll("option");
+        Assert.Single(thinkingOptions);
+        Assert.Equal(nameof(ThinkingEffort.Medium), thinkingOptions[0].GetAttribute("value"));
+
+        var securitySelect = refreshedCard.QuerySelectorAll("select")
+            .First(s => s.InnerHtml.Contains("Standard (Full Sandbox)"));
+        Assert.True(securitySelect.HasAttribute("disabled"));
+        Assert.Empty(securitySelect.QuerySelectorAll("option[value='RestrictedReadOnly']"));
+
+        var saveBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Save Profiles"));
+        saveBtn.Click();
+
+        using var db = new AppDbContext(_dbOptions);
+        var saved = db.AgentProfiles.First(p => p.WorkspaceId == null && p.Id == StandardStageIds.TaskReview);
+        Assert.Equal(StandardHarnessIds.Acp, saved.HarnessId);
+        Assert.Equal("gpt-oss-120b-medium", saved.ModelName);
+        Assert.Equal(ThinkingEffort.Medium, saved.ThinkingEffort);
+        Assert.Equal(SandboxSecurityTier.Standard, saved.SecurityTier);
+    }
+
+    [Fact]
+    public async Task AppDbContext_EnsureDefaultGlobalAgentProfilesAsync_NormalizesLegacyPiRpcProfilesToCrucible()
+    {
+        await using (var db = new AppDbContext(_dbOptions))
+        {
+            var impl = await db.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Implementation);
+            impl.HarnessId = "PiRpc";
+            await db.SaveChangesAsync();
+
+            await db.EnsureDefaultGlobalAgentProfilesAsync("qwen2.5-coder:32b");
+        }
+
+        await using (var verifyDb = new AppDbContext(_dbOptions))
+        {
+            var impl = await verifyDb.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Implementation);
+            Assert.Equal(StandardHarnessIds.Crucible, impl.HarnessId);
+        }
+    }
+
     #endregion
 
     #region GlobalOptimizationSettingsTab Tests
@@ -1129,6 +1283,27 @@ public class SettingsComponentTests : BunitContext, IDisposable
             OnSettingsChanged?.Invoke(CurrentSettings);
             return Task.CompletedTask;
         }
+    }
+
+    private class MockAcpHarnessCatalogService : IAcpHarnessCatalogService
+    {
+        public AcpCatalogProviderStatus Status { get; set; } = new(
+            KnownAcpCatalogIds.Antigravity,
+            AcpHarnessCatalogService.AntigravityDisplayName,
+            IsInstalled: true,
+            IsAuthenticated: true,
+            DetectedExecutablePath: "~/.local/bin/agy",
+            ExecutionTargetDescription: "WSL2 + Container",
+            ServerVersion: "1.5.3",
+            AccountTierName: "Google AI Ultra",
+            DiagnosticMessage: null,
+            AvailableModels: AcpHarnessCatalogService.DefaultAntigravityModels);
+
+        public Task<IReadOnlyList<AcpCatalogProviderStatus>> GetCatalogStatusAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<AcpCatalogProviderStatus>>([Status]);
+
+        public Task<AcpCatalogProviderStatus> ProbeProviderAsync(string catalogId, bool forceRefresh = false, CancellationToken cancellationToken = default)
+            => Task.FromResult(Status);
     }
 
     #endregion

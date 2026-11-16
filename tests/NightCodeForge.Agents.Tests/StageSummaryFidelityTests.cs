@@ -4,7 +4,6 @@ using Microsoft.Extensions.AI;
 using Moq;
 using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Crucible;
-using NightCodeForge.Agents.PiRpc;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Streaming;
@@ -217,29 +216,32 @@ public class StageSummaryFidelityTests
     }
 
     [Fact]
-    public async Task PiRpcAgentHarness_MultiTurn_IsolatesIntermediateChatterAndThought_FromConcludingSummary()
+    public async Task AcpAgentHarness_MultiTurn_WithRequestChangesTag_ExtractsReviewerFeedbackAndIsolatesChatter()
     {
-        var harness = new TestPiRpcHarnessBuilder().Build();
+        var harness = new TestAcpHarnessBuilder().Build();
 
         var context = new AgentSessionContext
         {
-            ForgeTask = new ForgeTask { Id = 60, Title = "Pi Multi-Turn", Description = "Implement" },
-            StageId = "stage-2",
-            Profile = new AgentProfile { Name = "PiAgent" }
+            ForgeTask = new ForgeTask { Id = 60, Title = "ACP Multi-Turn Review", Description = "Review" },
+            StageId = "stage-3",
+            Profile = new AgentProfile { Name = "AcpAgent" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\test" }
         };
 
-        var piOutput = new StringBuilder();
-        // Turn 1: thinking, text chatter, tool execution start & end
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"thinking_delta\",\"delta\":\"Investigating repository...\"}}");
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Checking dependencies first.\"}}");
-        piOutput.AppendLine("{\"type\":\"tool_execution_start\",\"toolName\":\"read\",\"args\":\"{}\"}");
-        piOutput.AppendLine("{\"type\":\"tool_execution_end\",\"toolName\":\"read\",\"result\":\"done\"}");
+        var acpOutput = new StringBuilder();
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"s1\"}}");
+        // Turn 1: thinking, text chatter, tool call & update
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":{\"sessionUpdate\":\"agent_thought_chunk\",\"content\":{\"text\":\"Investigating repository...\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Checking dependencies first.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"tc-1\",\"name\":\"read_file\",\"args\":\"{}\"}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"tc-1\",\"status\":\"completed\",\"rawOutput\":\"done\"}}}");
         // Turn 2: thinking, concluding message with request-changes tag
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"thinking_delta\",\"delta\":\"Found flaw.\"}}");
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Completed inspection with List<string>.\\n<request-changes>Need unit tests for EdgeCases.</request-changes>\"}}");
-        piOutput.AppendLine("{\"type\":\"agent_settled\"}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":{\"sessionUpdate\":\"agent_thought_chunk\",\"content\":{\"text\":\"Found flaw.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Completed inspection with List<string>.\\n<request-changes>Need unit tests for EdgeCases.</request-changes>\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}");
 
-        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(piOutput.ToString()));
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput.ToString()));
         using var reader = new StreamReader(inStream);
         using var outStream = new MemoryStream();
         using var writer = new StreamWriter(outStream, Encoding.UTF8) { AutoFlush = true };
@@ -272,26 +274,29 @@ public class StageSummaryFidelityTests
     }
 
     [Fact]
-    public async Task PiRpcAgentHarness_RootTurnEnd_FlushesIntermediateTurns_AndPreservesConcludingSummary()
+    public async Task AcpAgentHarness_TurnEnd_WithoutToolCalls_FlushesIntermediateTurns_AndPreservesConcludingSummary()
     {
-        var harness = new TestPiRpcHarnessBuilder().Build();
+        var harness = new TestAcpHarnessBuilder().Build();
 
         var context = new AgentSessionContext
         {
-            ForgeTask = new ForgeTask { Id = 61, Title = "Pi Root TurnEnd", Description = "Implement" },
+            ForgeTask = new ForgeTask { Id = 61, Title = "ACP TurnEnd", Description = "Implement" },
             StageId = "stage-2",
-            Profile = new AgentProfile { Name = "PiAgent" }
+            Profile = new AgentProfile { Name = "AcpAgent" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = "C:\\test" }
         };
 
-        var piOutput = new StringBuilder();
-        // Turn 1 ending via root-level turn_end (without tool calls)
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Intermediate analysis.\"}}");
-        piOutput.AppendLine("{\"type\":\"turn_end\"}");
-        // Turn 2 ending via agent_settled with concluding message
-        piOutput.AppendLine("{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"Final synthesis completed successfully.\"}}");
-        piOutput.AppendLine("{\"type\":\"agent_settled\"}");
+        var acpOutput = new StringBuilder();
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"s2\"}}");
+        // Turn 1 ending via turn_end (without tool calls)
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s2\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Intermediate analysis.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s2\",\"update\":{\"sessionUpdate\":\"turn_end\"}}}");
+        // Turn 2 ending via prompt-1 with concluding message
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s2\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Final synthesis completed successfully.\"}}}}");
+        acpOutput.AppendLine("{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}");
 
-        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(piOutput.ToString()));
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput.ToString()));
         using var reader = new StreamReader(inStream);
         using var outStream = new MemoryStream();
         using var writer = new StreamWriter(outStream, Encoding.UTF8) { AutoFlush = true };

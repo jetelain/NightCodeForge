@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
 
 namespace NightCodeForge.Infrastructure.Execution;
 
@@ -14,9 +15,13 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
 {
     private const string TaskContainerInfix = "-task-";
     private const string DockerNoSuchContainerMessage = "No such container";
+    private const string WslAgyBinaryPath = "~/.local/bin/agy";
+    private const string WslGeminiConfigDir = "~/.gemini";
+    private const int AcpHostProbeTimeoutSeconds = 5;
 
     private readonly IProcessRunner _processRunner;
     private readonly ExecutionEnvironmentProviderOptions _options;
+    private readonly SecurityOptions _securityOptions;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IHostSdkDiscoveryService _sdkDiscoveryService;
     private readonly IHostUserIdentityResolver _userIdentityResolver;
@@ -24,11 +29,14 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
     private readonly ICompanionToolInstaller _companionToolInstaller;
     private readonly ILogger<NightCodeForgeContainerExecutor> _containerLogger;
     private readonly ConcurrentDictionary<(string Stack, bool UseWsl, string Distro), bool> _verifiedCompanionToolStacks = new();
+    private readonly ConcurrentDictionary<(bool UseWsl, string Distro), (bool HasAgyBinary, bool HasGeminiDir)> _verifiedAcpHostPaths = new();
     private readonly SemaphoreSlim _companionToolLock = new(1, 1);
+    private readonly SemaphoreSlim _acpProbeLock = new(1, 1);
 
     public ContainerEnvironmentFactory(
         IProcessRunner processRunner,
         IOptions<ExecutionEnvironmentProviderOptions> options,
+        IOptions<SecurityOptions> securityOptions,
         IWorkspacePathResolver pathResolver,
         IHostSdkDiscoveryService sdkDiscoveryService,
         IHostUserIdentityResolver userIdentityResolver,
@@ -38,6 +46,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
     {
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _options = (options ?? throw new ArgumentNullException(nameof(options))).Value ?? new ExecutionEnvironmentProviderOptions();
+        _securityOptions = (securityOptions ?? throw new ArgumentNullException(nameof(securityOptions))).Value ?? new SecurityOptions();
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _sdkDiscoveryService = sdkDiscoveryService ?? throw new ArgumentNullException(nameof(sdkDiscoveryService));
         _userIdentityResolver = userIdentityResolver ?? throw new ArgumentNullException(nameof(userIdentityResolver));
@@ -141,6 +150,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         await EnsureCompanionToolsOnceAsync(detectedStack, useWsl, targetDistro, cancellationToken);
 
         var additionalMounts = new List<ContainerVolumeMount>();
+        var extraPathDirectories = new List<string>();
 
         if (scope.ScopeKind != SandboxScopeKind.SystemNightwatch)
         {
@@ -178,6 +188,37 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             }
         }
 
+        if (scope.SecurityTier != SandboxSecurityTier.RestrictedReadOnly &&
+            scope.ScopeKind != SandboxScopeKind.SystemNightwatch &&
+            !_securityOptions.AirGappedMode)
+        {
+            var (hasAgyBinary, hasGeminiDir) = await ProbeAcpHostPathsOnceAsync(useWsl, targetDistro, cancellationToken);
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            if (hasAgyBinary)
+            {
+                var agySource = useWsl
+                    ? WslAgyBinaryPath
+                    : Path.Combine(userProfile, ".local", "bin", "agy");
+                additionalMounts.Add(new(
+                    hostPath: agySource,
+                    containerPath: ContainerExecutorOptions.HostAgyContainerBinaryPath,
+                    isReadOnly: true));
+                extraPathDirectories.Add(ContainerExecutorOptions.HostAgyContainerDirectory);
+            }
+
+            if (hasGeminiDir)
+            {
+                var geminiSource = useWsl
+                    ? WslGeminiConfigDir
+                    : Path.Combine(userProfile, ".gemini");
+                additionalMounts.Add(new(
+                    hostPath: geminiSource,
+                    containerPath: ContainerExecutorOptions.ContainerGeminiConfigPath,
+                    isReadOnly: false));
+            }
+        }
+
         var options = new ContainerExecutorOptions
         {
             Scope = scope,
@@ -192,6 +233,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             MountHostSdks = true,
             SdkMountPaths = sdkMountPaths?.ToList() ?? new List<string>(),
             AdditionalVolumeMounts = additionalMounts,
+            ExtraPathDirectories = extraPathDirectories,
             AutoStartContainer = true,
             IsRestrictedReadOnly = scope.SecurityTier == SandboxSecurityTier.RestrictedReadOnly,
             UseWsl = useWsl,
@@ -357,6 +399,84 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         finally
         {
             _companionToolLock.Release();
+        }
+    }
+
+    private async Task<(bool HasAgyBinary, bool HasGeminiDir)> ProbeAcpHostPathsOnceAsync(
+        bool useWsl,
+        string? targetDistro,
+        CancellationToken cancellationToken)
+    {
+        var key = (useWsl, (targetDistro ?? string.Empty).ToLowerInvariant());
+        if (_verifiedAcpHostPaths.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        await _acpProbeLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_verifiedAcpHostPaths.TryGetValue(key, out cached))
+            {
+                return cached;
+            }
+
+            bool hasAgyBinary;
+            bool hasGeminiDir;
+
+            if (useWsl)
+            {
+                hasAgyBinary = await ProbeWslPathExistsAsync(targetDistro, $"test -f {WslAgyBinaryPath}", cancellationToken);
+                hasGeminiDir = await ProbeWslPathExistsAsync(targetDistro, $"test -d {WslGeminiConfigDir}", cancellationToken);
+            }
+            else
+            {
+                var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                hasAgyBinary = !string.IsNullOrWhiteSpace(homeDir) && File.Exists(Path.Combine(homeDir, ".local", "bin", "agy"));
+                hasGeminiDir = !string.IsNullOrWhiteSpace(homeDir) && Directory.Exists(Path.Combine(homeDir, ".gemini"));
+            }
+
+            var result = (hasAgyBinary, hasGeminiDir);
+            _verifiedAcpHostPaths[key] = result;
+            return result;
+        }
+        finally
+        {
+            _acpProbeLock.Release();
+        }
+    }
+
+    private async Task<bool> ProbeWslPathExistsAsync(
+        string? targetDistro,
+        string shellTestCommand,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var args = new List<string>();
+            if (!string.IsNullOrWhiteSpace(targetDistro))
+            {
+                args.AddRange(["-d", targetDistro]);
+            }
+            args.AddRange(["--", "sh", "-c", shellTestCommand]);
+
+            var result = await _processRunner.RunAsync(new ProcessStartSpec
+            {
+                FileName = _options.WslExecutable,
+                ArgumentList = args,
+                TimeoutSeconds = AcpHostProbeTimeoutSeconds
+            }, cancellationToken);
+
+            return result is { ExitCode: 0 };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _containerLogger.LogDebug(ex, "Failed to probe WSL ACP host path with command '{Command}'", shellTestCommand);
+            return false;
         }
     }
 

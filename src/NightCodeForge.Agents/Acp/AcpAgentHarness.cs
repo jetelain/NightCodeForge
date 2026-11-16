@@ -3,37 +3,62 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
-
-using NightCodeForge.Agents.Context;
-using NightCodeForge.Core.Execution;
 
 namespace NightCodeForge.Agents.Acp;
 
 public class AcpHarnessOptions
 {
-    public string ExecutablePath { get; set; } = "gemini";
-    public string Arguments { get; set; } = "--experimental-acp";
+    public const string DefaultExecutable = "agy";
+    public const string DefaultArgumentsValue = $"acp {AcpProcessLauncher.DangerouslySkipPermissionsFlag}";
+
+    public string ExecutablePath { get; set; } = DefaultExecutable;
+    public string Arguments { get; set; } = DefaultArgumentsValue;
     public Func<Process>? CustomProcessFactory { get; set; }
 }
 
 /// <summary>
-/// Open Agent Client Protocol (ACP) adapter supporting ACP v2 negotiation with backward-compatible v1 fallback.
-/// Delegates host-side terminal and filesystem callbacks to <see cref="IAcpHostRpcHandler"/>,
-/// streaming live activity to IAgentActivityStreamer and persisting session markdown transcripts.
+/// Exception thrown when an ACP provider reports an authentication or session initialization failure.
+/// </summary>
+public class AcpAuthenticationException : InvalidOperationException
+{
+    public AcpAuthenticationException(string message) : base(message)
+    {
+    }
+
+    public AcpAuthenticationException(string message, Exception innerException) : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// Open Agent Client Protocol (ACP) adapter supporting <c>agy acp</c> wire negotiation,
+/// multi-environment execution (<see cref="ExecutionMode.BareHost"/>, <see cref="ExecutionMode.WslDirect"/>,
+/// <see cref="ExecutionMode.ContainerSandbox"/>), host-side callbacks, live activity streaming,
+/// and SQLite conversation/transcript persistence.
 /// </summary>
 public class AcpAgentHarness : ExternalProcessAgentHarnessBase
 {
     private const int JsonRpcInvalidParams = -32602;
+    private const int JsonRpcInvalidRequest = -32600;
+    private const int JsonRpcAuthRequired = -32001;
+    private const string InitRequestId = "init-1";
+    private const string SessionRequestId = "session-1";
+    private const string FallbackSessionRequestId = "session-fallback-1";
+    private const string PromptRequestId = "prompt-1";
+    private const string ConfigRequestPrefix = "cfg-";
 
     private readonly AcpHarnessOptions _options;
     private readonly IMcpClientManager _mcpManager;
     private readonly IAcpHostRpcHandler _hostRpcHandler;
+    private readonly IAcpProcessLauncher _processLauncher;
     private readonly ILogger<AcpAgentHarness> _logger;
 
     public override string HarnessId => StandardHarnessIds.Acp;
@@ -47,6 +72,7 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         Microsoft.Extensions.Options.IOptions<AcpHarnessOptions> options,
         IMcpClientManager mcpManager,
         IAcpHostRpcHandler hostRpcHandler,
+        IAcpProcessLauncher processLauncher,
         IHarnessActivityRecorder recorder,
         AgentsMdService agentsMdService,
         IWorkspacePathResolver pathResolver,
@@ -58,7 +84,29 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
         _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
         _hostRpcHandler = hostRpcHandler ?? throw new ArgumentNullException(nameof(hostRpcHandler));
-        _logger = logger;
+        _processLauncher = processLauncher ?? throw new ArgumentNullException(nameof(processLauncher));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    protected override async Task<ProcessStartSpec> CreateProcessStartSpecAsync(
+        AgentSessionContext context,
+        CancellationToken cancellationToken)
+    {
+        var (exePath, args) = ResolveLaunchCommand(context);
+        var defaultLaunchWorkingDir = ResolveLaunchWorkingDirectory(context);
+        var (defaultSessionWorkingDir, localWorkspaceRoot) = ResolveWorkspacePaths(context);
+
+        var launchPlan = await _processLauncher.PrepareLaunchAsync(
+            context,
+            exePath,
+            args,
+            defaultLaunchWorkingDir,
+            defaultSessionWorkingDir,
+            localWorkspaceRoot,
+            DefaultProcessTimeoutSeconds,
+            cancellationToken);
+
+        return launchPlan.ProcessSpec;
     }
 
     /// <summary>
@@ -75,103 +123,236 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
     {
         long promptTokens = 0;
         long completionTokens = 0;
+        long totalTokens = 0;
+        int? cachedInputTokens = null;
+        string activeSessionId = sessionId;
+
+        await Recorder.BeginConversationAsync(sessionId, HarnessId, context, cancellationToken);
+
         var (workspacePath, localWorkspaceRoot) = ResolveWorkspacePaths(context);
+        var sessionWorkingDir = ResolveEffectiveSessionWorkingDirectory(context, workspacePath);
         var sandboxPathResolver = context.SandboxScope != null
             ? new SandboxPathResolver(context.SandboxScope)
             : null;
-        var hostContext = new AcpHostRpcContext(sessionId, context, workspacePath, localWorkspaceRoot, sandboxPathResolver);
+        var hostContext = new AcpHostRpcContext(sessionId, context, sessionWorkingDir, localWorkspaceRoot, sandboxPathResolver);
 
         try
         {
-            // 1. Handshake & Protocol Negotiation (Negotiates v2, falls back to v1)
+            // 1. Handshake & Protocol Negotiation (protocolVersion 1, terminal = true)
             int negotiatedVersion = await NegotiateProtocolAsync(stdin, stdout, cancellationToken, _logger);
             _logger.LogInformation("Successfully negotiated ACP protocol version {Version}", negotiatedVersion);
 
             // 2. Initialize or Resume Session
-            string activeSessionId = sessionId;
             bool isReconstructedHistory = ConversationHistorySerializer.IsSerializedHistory(context.SerializedStateJson);
+            bool isResumeAttempt = !string.IsNullOrEmpty(context.SerializedStateJson) && !isReconstructedHistory;
+            var mcpServers = await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, localWorkspaceRoot, cancellationToken)
+                ?? Array.Empty<object>();
 
-            if (!string.IsNullOrEmpty(context.SerializedStateJson) && !isReconstructedHistory)
+            if (isResumeAttempt)
             {
                 var resumeMethod = negotiatedVersion >= 2 ? "session/resume" : "session/load";
                 var resumeReq = JsonSerializer.Serialize(new
                 {
                     jsonrpc = "2.0",
-                    id = "session-1",
+                    id = SessionRequestId,
                     method = resumeMethod,
                     @params = new
                     {
-                        sessionId = context.SerializedStateJson
+                        sessionId = context.SerializedStateJson,
+                        cwd = sessionWorkingDir,
+                        mcpServers
                     }
                 });
                 await stdin.WriteLineAsync(resumeReq.AsMemory(), cancellationToken);
-                activeSessionId = context.SerializedStateJson;
+                activeSessionId = context.SerializedStateJson!;
+                hostContext = hostContext with { SessionId = activeSessionId };
             }
             else
             {
-                var newSessionReq = JsonSerializer.Serialize(new
-                {
-                    jsonrpc = "2.0",
-                    id = "session-1",
-                    method = "session/new",
-                    @params = new
-                    {
-                        cwd = workspacePath,
-                        mcpServers = await _mcpManager.GetAcpMcpServersAsync(context.Workspace?.Id, localWorkspaceRoot, cancellationToken)
-                    }
-                });
+                var newSessionReq = BuildNewSessionRequestJson(SessionRequestId, sessionWorkingDir, mcpServers, context.Profile.SystemPrompt);
                 await stdin.WriteLineAsync(newSessionReq.AsMemory(), cancellationToken);
             }
 
-            // 3. Dispatch Prompt Request (incorporating human answer if resuming from permission request)
+            // 3. Prepare Enriched Prompt (and record User turn)
             var promptText = BuildEnrichedPrompt(context, localWorkspaceRoot);
+            await Recorder.RecordUserTurnAsync(sessionId, HarnessId, context, promptText, cancellationToken);
 
-            var promptReq = JsonSerializer.Serialize(new
+            // 4. Wait for session/new or session/load response (capturing server-assigned sessionId & applying config options),
+            //    while preserving compatibility with synthetic test streams that jump straight to prompt-phase events.
+            string? pendingLine = null;
+            bool promptDispatched = false;
+            string expectedSessionRequestId = SessionRequestId;
+            bool fallbackSessionSent = false;
+
+            async Task DispatchPromptAsync()
             {
-                jsonrpc = "2.0",
-                id = "prompt-1",
-                method = "session/prompt",
-                @params = new
+                if (promptDispatched)
                 {
-                    sessionId = activeSessionId,
-                    prompt = new[] { new { text = promptText } }
+                    return;
                 }
-            });
-            await stdin.WriteLineAsync(promptReq.AsMemory(), cancellationToken);
 
-            var currentTurnText = new StringBuilder();
-            string? lastTurnConcludingText = null;
-
-            void FlushTurn()
-            {
-                if (currentTurnText.Length > 0)
+                var promptReq = JsonSerializer.Serialize(new
                 {
-                    var text = currentTurnText.ToString();
-                    if (!string.IsNullOrWhiteSpace(text))
+                    jsonrpc = "2.0",
+                    id = PromptRequestId,
+                    method = "session/prompt",
+                    @params = new
                     {
-                        lastTurnConcludingText = text;
+                        sessionId = activeSessionId,
+                        prompt = new[]
+                        {
+                            new { type = "text", text = promptText }
+                        }
                     }
-                    currentTurnText.Clear();
-                }
+                });
+                await stdin.WriteLineAsync(promptReq.AsMemory(), cancellationToken);
+                promptDispatched = true;
             }
 
-            // 4. Message Handling Loop
             while (!cancellationToken.IsCancellationRequested)
             {
                 var line = await stdout.ReadLineAsync(cancellationToken);
-                if (line == null) break;
+                if (line == null)
+                {
+                    await DispatchPromptAsync();
+                    break;
+                }
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (!TryParseJsonNode(line, out var preNode) || preNode == null)
+                {
+                    continue;
+                }
+
+                var preId = preNode["id"]?.ToString();
+                var preMethod = preNode["method"]?.ToString();
+
+                if (string.Equals(preId, expectedSessionRequestId, StringComparison.Ordinal))
+                {
+                    if (preNode["error"] is JsonNode errNode)
+                    {
+                        if (isResumeAttempt && !fallbackSessionSent && !IsAuthenticationError(errNode))
+                        {
+                            _logger.LogWarning(
+                                "ACP session resumption for '{SavedSessionId}' returned non-auth error ({Error}); falling back to session/new.",
+                                context.SerializedStateJson,
+                                errNode["message"]?.ToString() ?? errNode.ToJsonString());
+
+                            fallbackSessionSent = true;
+                            expectedSessionRequestId = FallbackSessionRequestId;
+                            activeSessionId = sessionId;
+                            hostContext = hostContext with { SessionId = activeSessionId };
+
+                            var fallbackReq = BuildNewSessionRequestJson(expectedSessionRequestId, sessionWorkingDir, mcpServers, context.Profile.SystemPrompt);
+                            await stdin.WriteLineAsync(fallbackReq.AsMemory(), cancellationToken);
+                            continue;
+                        }
+
+                        var errMessage = errNode["message"]?.ToString() ?? errNode.ToJsonString();
+                        throw new AcpAuthenticationException(
+                            $"ACP session initialization failed: {errMessage}. Authenticate Antigravity in Settings or run 'agy login' / 'wsl -e ~/.local/bin/agy login'.");
+                    }
+
+                    var sessionResult = preNode["result"];
+                    var serverSessionId = sessionResult?["sessionId"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(serverSessionId))
+                    {
+                        activeSessionId = serverSessionId;
+                        hostContext = hostContext with { SessionId = activeSessionId };
+                    }
+
+                    await ApplySessionConfigurationAsync(stdin, sessionResult, activeSessionId, context, cancellationToken);
+                    await DispatchPromptAsync();
+                    break;
+                }
+
+                if (string.Equals(preMethod, "session/update", StringComparison.Ordinal))
+                {
+                    var preUpdateType = preNode["params"]?["update"]?["sessionUpdate"]?.ToString();
+                    if (preUpdateType is "available_commands_update" or "current_mode_update" or "config_option_update")
+                    {
+                        continue;
+                    }
+                }
+
+                if (IsPromptPhaseMessage(preNode, preMethod, preId))
+                {
+                    await DispatchPromptAsync();
+                    pendingLine = line;
+                    break;
+                }
+            }
+
+            if (!promptDispatched)
+            {
+                await DispatchPromptAsync();
+            }
+
+            var currentTurnText = new StringBuilder();
+            var currentTurnThought = new StringBuilder();
+            var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
+            string? lastTurnConcludingText = null;
+
+            async Task FlushTurnAsync()
+            {
+                var text = currentTurnText.Length > 0 ? currentTurnText.ToString() : null;
+                var thought = currentTurnThought.Length > 0 ? currentTurnThought.ToString() : null;
+                currentTurnText.Clear();
+                currentTurnThought.Clear();
+
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    lastTurnConcludingText = text;
+                }
+
+                if (!string.IsNullOrWhiteSpace(text) || !string.IsNullOrWhiteSpace(thought))
+                {
+                    await Recorder.RecordAssistantTurnAsync(sessionId, text, thought, cancellationToken);
+                }
+            }
+
+            // 5. Message Handling Loop
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                string? line;
+                if (pendingLine != null)
+                {
+                    line = pendingLine;
+                    pendingLine = null;
+                }
+                else
+                {
+                    line = await stdout.ReadLineAsync(cancellationToken);
+                    if (line == null) break;
+                }
+
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 try
                 {
                     var node = JsonNode.Parse(line);
-                    var method = node?["method"]?.ToString();
-                    var id = node?["id"]?.ToString();
+                    if (node == null) continue;
 
-                    // 4.1 Telemetry Notification: session/update
+                    var method = node["method"]?.ToString();
+                    var id = node["id"]?.ToString();
+
+                    if (id != null && id.StartsWith(ConfigRequestPrefix, StringComparison.Ordinal))
+                    {
+                        if (node["error"] is JsonNode cfgErr)
+                        {
+                            _logger.LogWarning("ACP configuration request '{RequestId}' returned an error: {Error}", id, cfgErr.ToJsonString());
+                        }
+                        continue;
+                    }
+
+                    // 5.1 Telemetry Notification: session/update
                     if (method == "session/update")
                     {
-                        var update = node?["params"]?["update"];
+                        var update = node["params"]?["update"];
                         var updateType = update?["sessionUpdate"]?.ToString();
 
                         if (updateType == "agent_thought_chunk")
@@ -179,6 +360,7 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                             var thought = update?["content"]?["text"]?.ToString() ?? update?["text"]?.ToString();
                             if (!string.IsNullOrEmpty(thought))
                             {
+                                currentTurnThought.Append(thought);
                                 await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ThinkingDelta, thought, cancellationToken);
                             }
                         }
@@ -193,33 +375,91 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                         }
                         else if (updateType == "tool_call")
                         {
-                            FlushTurn();
-                            var title = update?["title"]?.ToString() ?? update?["toolCallId"]?.ToString() ?? "tool";
-                            var rawInput = update?["rawInput"]?.ToString() ?? "";
-                            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolStarted, $"{title}: {rawInput}", cancellationToken);
+                            await FlushTurnAsync();
+                            var toolCallId = update?["toolCallId"]?.ToString() ?? string.Empty;
+                            var toolName = update?["name"]?.ToString()
+                                ?? update?["title"]?.ToString()
+                                ?? (!string.IsNullOrWhiteSpace(toolCallId) ? toolCallId : "tool");
+                            if (!string.IsNullOrWhiteSpace(toolCallId))
+                            {
+                                toolNamesByCallId[toolCallId] = toolName;
+                            }
+
+                            var rawInput = FormatJsonOrString(update?["args"] ?? update?["rawInput"]);
+                            var metadata = new Dictionary<string, object?>
+                            {
+                                [AgentActivityMetadataKeys.ToolName] = toolName
+                            };
+                            await BroadcastAsync(
+                                activeSessionId,
+                                context.ForgeTask.Id,
+                                context.StageId,
+                                AgentActivityKind.ToolStarted,
+                                $"{toolName}: {rawInput}",
+                                metadata,
+                                cancellationToken);
+                            await Recorder.RecordToolCallTurnAsync(sessionId, toolName, rawInput, toolCallId, cancellationToken);
                         }
                         else if (updateType == "tool_call_update")
                         {
+                            var toolCallId = update?["toolCallId"]?.ToString() ?? string.Empty;
+                            if (!string.IsNullOrWhiteSpace(toolCallId) &&
+                                !toolNamesByCallId.ContainsKey(toolCallId) &&
+                                (update?["name"]?.ToString() ?? update?["title"]?.ToString()) is { Length: > 0 } updatedName)
+                            {
+                                toolNamesByCallId[toolCallId] = updatedName;
+                            }
+
                             var status = update?["status"]?.ToString() ?? "completed";
-                            var rawOutput = update?["rawOutput"]?.ToString() ?? "";
-                            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.ToolCompleted, $"{status}: {rawOutput}", cancellationToken);
+                            if (IsNonTerminalToolStatus(status))
+                            {
+                                continue;
+                            }
+
+                            var toolName = (!string.IsNullOrWhiteSpace(toolCallId) && toolNamesByCallId.TryGetValue(toolCallId, out var trackedName))
+                                ? trackedName
+                                : (update?["name"]?.ToString() ?? update?["title"]?.ToString() ?? "tool");
+                            var rawOutput = FormatJsonOrString(update?["rawOutput"] ?? update?["output"] ?? update?["content"]);
+                            var isError = string.Equals(status, "failed", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(status, "error", StringComparison.OrdinalIgnoreCase);
+
+                            var metadata = new Dictionary<string, object?>
+                            {
+                                [AgentActivityMetadataKeys.ToolName] = toolName
+                            };
+                            await BroadcastAsync(
+                                activeSessionId,
+                                context.ForgeTask.Id,
+                                context.StageId,
+                                AgentActivityKind.ToolCompleted,
+                                $"{toolName}: {status}: {rawOutput}",
+                                metadata,
+                                cancellationToken);
+                            await Recorder.RecordToolResultTurnAsync(
+                                sessionId,
+                                toolName,
+                                rawOutput,
+                                isError,
+                                toolCallId,
+                                durationMs: null,
+                                cancellationToken);
                         }
                         else if (updateType is "turn_end" or "message_end")
                         {
-                            FlushTurn();
+                            await FlushTurnAsync();
                         }
                         continue;
                     }
 
-                    // 4.2 Host-side callbacks (terminal/* and fs/*)
+                    // 5.2 Host-side callbacks (terminal/* and fs/*)
                     if (method != null && _hostRpcHandler.CanHandle(method))
                     {
                         if (_hostRpcHandler.EndsAssistantTurn(method))
                         {
-                            FlushTurn();
+                            await FlushTurnAsync();
                         }
 
-                        var rpcResult = await _hostRpcHandler.HandleAsync(method, node?["params"], hostContext, cancellationToken);
+                        var rpcResult = await _hostRpcHandler.HandleAsync(method, node["params"], hostContext, cancellationToken);
                         var rpcResp = rpcResult.IsError
                             ? JsonSerializer.Serialize(new { jsonrpc = "2.0", id, error = new { code = JsonRpcInvalidParams, message = rpcResult.ErrorMessage } })
                             : JsonSerializer.Serialize(new { jsonrpc = "2.0", id, result = rpcResult.Result });
@@ -227,13 +467,26 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                         continue;
                     }
 
-                    // 4.3 Permission Request (Human-in-the-loop interruption)
+                    // 5.3 Permission Request (ReadOnly enforcement or Human-in-the-loop interruption)
                     if (method == "session/request_permission")
                     {
-                        FlushTurn();
-                        var prompt = node?["params"]?["prompt"]?.ToString();
-                        var toolCall = node?["params"]?["toolCall"]?.ToString();
-                        var rationale = node?["params"]?["rationale"]?.ToString();
+                        if (AcpProcessLauncher.IsReadOnlySession(context))
+                        {
+                            _logger.LogWarning("Rejected ACP session/request_permission in read-only session '{SessionId}'", activeSessionId);
+                            var denyResp = JsonSerializer.Serialize(new
+                            {
+                                jsonrpc = "2.0",
+                                id,
+                                error = new { code = JsonRpcInvalidRequest, message = "Permission denied: mutating operations are blocked in read-only plan mode." }
+                            });
+                            await stdin.WriteLineAsync(denyResp.AsMemory(), cancellationToken);
+                            continue;
+                        }
+
+                        await FlushTurnAsync();
+                        var prompt = node["params"]?["prompt"]?.ToString();
+                        var toolCall = node["params"]?["toolCall"]?.ToString();
+                        var rationale = node["params"]?["rationale"]?.ToString();
                         var finalPrompt = prompt ?? toolCall ?? "Permission requested by ACP agent";
 
                         if (!string.IsNullOrWhiteSpace(rationale))
@@ -242,7 +495,7 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                         }
 
                         string? optionsJson = null;
-                        if (node?["params"]?["options"] is JsonArray optsArr && optsArr.Count > 0)
+                        if (node["params"]?["options"] is JsonArray optsArr && optsArr.Count > 0)
                         {
                             finalPrompt += "\nOptions:\n" + string.Join("\n", optsArr.Select(o => $"- {o?["name"]?.ToString() ?? o?.ToString()}"));
                             optionsJson = JsonSerializer.Serialize(optsArr.Select(o => o?["name"]?.ToString() ?? o?.ToString()).Where(s => !string.IsNullOrEmpty(s)).ToList());
@@ -251,7 +504,18 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                         sw.Stop();
                         await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, finalPrompt, cancellationToken);
 
-                        await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, lastTurnConcludingText, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.WaitingForHuman, cancellationToken);
+                        await SaveTranscriptAsync(
+                            context,
+                            localWorkspaceRoot,
+                            promptText,
+                            lastTurnConcludingText,
+                            sw.ElapsedMilliseconds,
+                            promptTokens,
+                            completionTokens,
+                            AgentRunStatus.WaitingForHuman,
+                            cancellationToken,
+                            sessionId,
+                            cachedInputTokens);
 
                         var question = new Question
                         {
@@ -266,15 +530,16 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
 
                         return AgentRunResult.WaitingForHuman(
                             new[] { question },
-                            new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                            new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, totalTokens > 0 ? totalTokens : promptTokens + completionTokens, CachedInputTokens: cachedInputTokens),
                             updatedState: activeSessionId,
                             summary: "ACP agent paused awaiting developer permission");
                     }
 
-                    // 4.4 Prompt Response Completion
-                    if (node?["result"] != null && (id == "prompt-1" || node["result"]?["stopReason"] != null))
+                    // 5.4 Prompt Response Completion
+                    if (node["result"] != null && (id == PromptRequestId || node["result"]?["stopReason"] != null))
                     {
-                        FlushTurn();
+                        await FlushTurnAsync();
+                        ExtractTokenUsage(node["result"]?["usage"], ref promptTokens, ref completionTokens, ref totalTokens, ref cachedInputTokens);
                         break;
                     }
                 }
@@ -284,16 +549,28 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                 }
             }
 
-            FlushTurn();
+            await FlushTurnAsync();
             sw.Stop();
             var extraction = StageSummaryExtractor.Extract(lastTurnConcludingText, fallbackSummary: "ACP agent completed successfully.");
 
             await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageCompleted, extraction.Summary, cancellationToken);
 
-            await SaveTranscriptAsync(context, localWorkspaceRoot, promptText, extraction.Summary, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Completed, cancellationToken);
+            await SaveTranscriptAsync(
+                context,
+                localWorkspaceRoot,
+                promptText,
+                extraction.Summary,
+                sw.ElapsedMilliseconds,
+                promptTokens,
+                completionTokens,
+                AgentRunStatus.Completed,
+                cancellationToken,
+                sessionId,
+                cachedInputTokens);
 
+            var effectiveTotal = totalTokens > 0 ? totalTokens : promptTokens + completionTokens;
             return AgentRunResult.Completed(
-                new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, promptTokens + completionTokens),
+                new AgentRunMetrics(sw.ElapsedMilliseconds, promptTokens, completionTokens, effectiveTotal, CachedInputTokens: cachedInputTokens),
                 updatedState: activeSessionId,
                 summary: extraction.Summary,
                 targetRouting: extraction.TargetRouting,
@@ -301,6 +578,7 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         }
         catch (OperationCanceledException)
         {
+            sw.Stop();
             try
             {
                 var cancelReq = JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "session/cancel" });
@@ -310,50 +588,96 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
             {
                 _logger.LogDebug(ex, "Failed to send session/cancel to ACP process on cancellation");
             }
+
+            await SaveTranscriptAsync(
+                context,
+                localWorkspaceRoot,
+                string.Empty,
+                "ACP agent execution cancelled.",
+                sw.ElapsedMilliseconds,
+                promptTokens,
+                completionTokens,
+                AgentRunStatus.Cancelled,
+                CancellationToken.None,
+                sessionId,
+                cachedInputTokens);
             throw;
         }
         catch (Exception ex)
         {
             sw.Stop();
-            await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, cancellationToken);
-            await SaveTranscriptAsync(context, localWorkspaceRoot, "", ex.Message, sw.ElapsedMilliseconds, promptTokens, completionTokens, AgentRunStatus.Failed, cancellationToken);
+            await BroadcastAsync(activeSessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Error, ex.Message, CancellationToken.None);
+            await SaveTranscriptAsync(
+                context,
+                localWorkspaceRoot,
+                string.Empty,
+                ex.Message,
+                sw.ElapsedMilliseconds,
+                promptTokens,
+                completionTokens,
+                AgentRunStatus.Failed,
+                CancellationToken.None,
+                sessionId,
+                cachedInputTokens);
             throw;
         }
         finally
         {
             _hostRpcHandler.EndSession(sessionId);
+            if (!string.Equals(activeSessionId, sessionId, StringComparison.Ordinal))
+            {
+                _hostRpcHandler.EndSession(activeSessionId);
+            }
         }
     }
 
     public static async Task<int> NegotiateProtocolAsync(StreamWriter stdin, StreamReader stdout, CancellationToken cancellationToken, ILogger? logger = null)
     {
-        // Offer ACP v2 first
-        var initV2 = JsonSerializer.Serialize(new
+        var initReq = JsonSerializer.Serialize(new
         {
             jsonrpc = "2.0",
-            id = "init-1",
+            id = InitRequestId,
             method = "initialize",
             @params = new
             {
-                protocolVersion = 2,
+                protocolVersion = 1,
                 clientCapabilities = new
                 {
                     fs = new { readTextFile = true, writeTextFile = true },
-                    terminal = new { create = true, output = true }
+                    terminal = true
                 }
             }
         });
-        await stdin.WriteLineAsync(initV2.AsMemory(), cancellationToken);
+        await stdin.WriteLineAsync(initReq.AsMemory(), cancellationToken);
 
-        var responseLine = await stdout.ReadLineAsync(cancellationToken);
-        if (responseLine != null)
+        while (!cancellationToken.IsCancellationRequested)
         {
+            var responseLine = await stdout.ReadLineAsync(cancellationToken);
+            if (responseLine == null)
+            {
+                break;
+            }
+            if (string.IsNullOrWhiteSpace(responseLine))
+            {
+                continue;
+            }
+
             try
             {
                 var node = JsonNode.Parse(responseLine);
-                if (int.TryParse(node?["result"]?["protocolVersion"]?.ToString(), out var version))
+                if (node == null)
+                {
+                    continue;
+                }
+
+                if (int.TryParse(node["result"]?["protocolVersion"]?.ToString(), out var version))
                 {
                     return version;
+                }
+
+                if (string.Equals(node["id"]?.ToString(), InitRequestId, StringComparison.Ordinal))
+                {
+                    return 1;
                 }
             }
             catch (Exception ex)
@@ -362,7 +686,450 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
             }
         }
 
-        // Default negotiated to v1
         return 1;
+    }
+
+    private static async Task ApplySessionConfigurationAsync(
+        StreamWriter stdin,
+        JsonNode? sessionResult,
+        string activeSessionId,
+        AgentSessionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (sessionResult == null)
+        {
+            return;
+        }
+
+        var availableModels = sessionResult["models"]?["availableModels"] as JsonArray;
+        var configOptions = sessionResult["configOptions"] as JsonArray;
+        var hasAvailableModels = availableModels != null && availableModels.Count > 0;
+        var hasConfigOptions = configOptions != null && configOptions.Count > 0;
+        var isReadOnly = AcpProcessLauncher.IsReadOnlySession(context);
+
+        if (!hasAvailableModels && !hasConfigOptions && !isReadOnly)
+        {
+            return;
+        }
+
+        var modelName = context.Profile.ModelName?.Trim();
+        if (!string.IsNullOrWhiteSpace(modelName))
+        {
+            var mappedThoughtLevel = MapThinkingEffort(context.Profile.ThinkingEffort);
+            if (TryFindExactAvailableModelId(availableModels, modelName, out var exactModelId))
+            {
+                await WriteSetModelRequestAsync(stdin, activeSessionId, exactModelId, cancellationToken);
+            }
+            else if (HasConfigOption(configOptions, "model"))
+            {
+                await WriteSetConfigOptionRequestAsync(stdin, "cfg-opt-1", activeSessionId, "model", modelName, cancellationToken);
+
+                if (mappedThoughtLevel != null && HasConfigOption(configOptions, "thought_level"))
+                {
+                    var supportedThoughtLevels = GetConfigOptionValues(configOptions, "thought_level");
+                    var effectiveThoughtLevel = ResolveSupportedThoughtLevel(mappedThoughtLevel, supportedThoughtLevels);
+                    await WriteSetConfigOptionRequestAsync(stdin, "cfg-opt-2", activeSessionId, "thought_level", effectiveThoughtLevel, cancellationToken);
+                }
+            }
+            else if (hasAvailableModels && TryResolveAvailableModelId(availableModels, modelName, mappedThoughtLevel, out var resolvedModelId))
+            {
+                await WriteSetModelRequestAsync(stdin, activeSessionId, resolvedModelId, cancellationToken);
+            }
+        }
+
+        if (isReadOnly || HasConfigOption(configOptions, "mode"))
+        {
+            var targetMode = isReadOnly ? "plan" : "accept-edits";
+            await WriteSetConfigOptionRequestAsync(stdin, "cfg-opt-mode", activeSessionId, "mode", targetMode, cancellationToken);
+        }
+    }
+
+    private static Task WriteSetModelRequestAsync(
+        StreamWriter stdin,
+        string activeSessionId,
+        string modelId,
+        CancellationToken cancellationToken)
+    {
+        var req = JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = "cfg-model-1",
+            method = "session/set_model",
+            @params = new
+            {
+                sessionId = activeSessionId,
+                modelId
+            }
+        });
+        return stdin.WriteLineAsync(req.AsMemory(), cancellationToken);
+    }
+
+    private static Task WriteSetConfigOptionRequestAsync(
+        StreamWriter stdin,
+        string requestId,
+        string activeSessionId,
+        string configId,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        var req = JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = requestId,
+            method = "session/set_config_option",
+            @params = new
+            {
+                sessionId = activeSessionId,
+                configId,
+                value
+            }
+        });
+        return stdin.WriteLineAsync(req.AsMemory(), cancellationToken);
+    }
+
+    private string ResolveEffectiveSessionWorkingDirectory(AgentSessionContext context, string workspacePath)
+        => context.Workspace?.ExecutionMode switch
+        {
+            ExecutionMode.ContainerSandbox => ResolveContainerSessionWorkingDirectory(context),
+            ExecutionMode.WslDirect => ResolveWslDirectSessionWorkingDirectory(context),
+            _ => workspacePath
+        };
+
+    private static string BuildNewSessionRequestJson(
+        string requestId,
+        string sessionWorkingDir,
+        object mcpServers,
+        string? systemPrompt)
+    {
+        object sessionParams = !string.IsNullOrWhiteSpace(systemPrompt)
+            ? new
+            {
+                cwd = sessionWorkingDir,
+                mcpServers,
+                _meta = new
+                {
+                    antigravity = new
+                    {
+                        systemPrompt = new
+                        {
+                            append = systemPrompt
+                        }
+                    }
+                }
+            }
+            : new
+            {
+                cwd = sessionWorkingDir,
+                mcpServers
+            };
+
+        return JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id = requestId,
+            method = "session/new",
+            @params = sessionParams
+        });
+    }
+
+    private static bool IsAuthenticationError(JsonNode errNode)
+    {
+        if (int.TryParse(errNode["code"]?.ToString(), out var code) && code == JsonRpcAuthRequired)
+        {
+            return true;
+        }
+
+        var message = errNode["message"]?.ToString() ?? errNode.ToJsonString();
+        return message.Contains("auth", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("login", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("unauthenticated", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsNonTerminalToolStatus(string? status) =>
+        string.Equals(status, "in_progress", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "pending", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "running", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatJsonOrString(JsonNode? node)
+    {
+        if (node == null)
+        {
+            return string.Empty;
+        }
+
+        if (node is JsonValue val)
+        {
+            return val.TryGetValue<string>(out var str) ? str : val.ToJsonString();
+        }
+
+        if (node is JsonObject obj && TryExtractTextContentBlock(obj, out var objText))
+        {
+            return objText!;
+        }
+
+        if (node is JsonArray arr && arr.Count > 0)
+        {
+            var extractedTexts = new List<string>(arr.Count);
+            foreach (var item in arr)
+            {
+                if (item is JsonObject itemObj && TryExtractTextContentBlock(itemObj, out var itemText))
+                {
+                    extractedTexts.Add(itemText!);
+                }
+                else
+                {
+                    return arr.ToJsonString();
+                }
+            }
+
+            return string.Join("\n", extractedTexts);
+        }
+
+        return node.ToJsonString();
+    }
+
+    private static bool TryExtractTextContentBlock(JsonObject obj, out string? text)
+    {
+        if (obj["text"] is JsonValue textVal &&
+            textVal.TryGetValue<string>(out var directText) &&
+            (obj.Count == 1 || (obj.Count == 2 && string.Equals(obj["type"]?.ToString(), "text", StringComparison.OrdinalIgnoreCase))))
+        {
+            text = directText;
+            return true;
+        }
+
+        if (obj["content"] is JsonObject innerObj &&
+            (obj.Count == 1 || (obj.Count == 2 && string.Equals(obj["type"]?.ToString(), "content", StringComparison.OrdinalIgnoreCase))) &&
+            TryExtractTextContentBlock(innerObj, out var nestedText))
+        {
+            text = nestedText;
+            return true;
+        }
+
+        text = null;
+        return false;
+    }
+
+    private static string? ExtractAvailableModelId(JsonNode? item) =>
+        item is JsonValue
+            ? item.ToString()
+            : (item?["modelId"]?.ToString() ?? item?["id"]?.ToString());
+
+    private static bool TryFindExactAvailableModelId(JsonArray? availableModels, string modelName, out string modelId)
+    {
+        if (availableModels != null)
+        {
+            foreach (var item in availableModels)
+            {
+                var id = ExtractAvailableModelId(item);
+                if (!string.IsNullOrWhiteSpace(id) && string.Equals(id, modelName, StringComparison.OrdinalIgnoreCase))
+                {
+                    modelId = id;
+                    return true;
+                }
+            }
+        }
+
+        modelId = string.Empty;
+        return false;
+    }
+
+    private static bool TryResolveAvailableModelId(
+        JsonArray? availableModels,
+        string modelName,
+        string? mappedThoughtLevel,
+        out string modelId)
+    {
+        if (TryFindExactAvailableModelId(availableModels, modelName, out modelId))
+        {
+            return true;
+        }
+
+        if (availableModels != null)
+        {
+            var ids = availableModels
+                .Select(ExtractAvailableModelId)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Cast<string>()
+                .ToList();
+
+            if (!string.IsNullOrWhiteSpace(mappedThoughtLevel))
+            {
+                var preferred = $"{modelName}-{mappedThoughtLevel}";
+                var exactCombined = ids.FirstOrDefault(id => string.Equals(id, preferred, StringComparison.OrdinalIgnoreCase));
+                if (exactCombined != null)
+                {
+                    modelId = exactCombined;
+                    return true;
+                }
+            }
+
+            var prefix = $"{modelName}-";
+            var prefixedMatch = ids.FirstOrDefault(id => id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+            if (prefixedMatch != null)
+            {
+                modelId = prefixedMatch;
+                return true;
+            }
+        }
+
+        modelId = string.Empty;
+        return false;
+    }
+
+    private static IReadOnlyList<string> GetConfigOptionValues(JsonArray? configOptions, string configId)
+    {
+        if (configOptions == null)
+        {
+            return [];
+        }
+
+        var cfg = configOptions.FirstOrDefault(opt => string.Equals(opt?["id"]?.ToString(), configId, StringComparison.OrdinalIgnoreCase));
+        var choices = cfg?["options"] as JsonArray ?? cfg?["values"] as JsonArray;
+        if (choices == null)
+        {
+            return [];
+        }
+
+        var values = new List<string>();
+        foreach (var opt in choices)
+        {
+            var val = opt is JsonValue
+                ? opt.ToString()
+                : (opt?["value"]?.ToString() ?? opt?["id"]?.ToString());
+            if (!string.IsNullOrWhiteSpace(val))
+            {
+                values.Add(val);
+            }
+        }
+
+        return values;
+    }
+
+    private static string ResolveSupportedThoughtLevel(string mappedThoughtLevel, IReadOnlyList<string> supportedValues)
+    {
+        if (supportedValues.Count == 0)
+        {
+            return mappedThoughtLevel;
+        }
+
+        var match = supportedValues.FirstOrDefault(v => string.Equals(v, mappedThoughtLevel, StringComparison.OrdinalIgnoreCase));
+        return match ?? supportedValues[0];
+    }
+
+    private static bool HasConfigOption(JsonArray? configOptions, string configId)
+    {
+        if (configOptions == null)
+        {
+            return false;
+        }
+
+        return configOptions.Any(opt => string.Equals(opt?["id"]?.ToString(), configId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? MapThinkingEffort(ThinkingEffort effort) => effort switch
+    {
+        ThinkingEffort.Low => "low",
+        ThinkingEffort.Medium => "medium",
+        ThinkingEffort.High or ThinkingEffort.CustomBudget => "high",
+        _ => null
+    };
+
+    private static void ExtractTokenUsage(
+        JsonNode? usageNode,
+        ref long promptTokens,
+        ref long completionTokens,
+        ref long totalTokens,
+        ref int? cachedInputTokens)
+    {
+        if (usageNode == null)
+        {
+            return;
+        }
+
+        if (TryGetLong(usageNode["inputTokens"], out var input))
+        {
+            promptTokens = Math.Max(promptTokens, input);
+        }
+
+        if (TryGetLong(usageNode["cachedInputTokens"], out var cached))
+        {
+            cachedInputTokens = (int)Math.Min(int.MaxValue, cached);
+        }
+
+        long output = 0;
+        if (TryGetLong(usageNode["outputTokens"], out var outVal))
+        {
+            output += outVal;
+        }
+        if (TryGetLong(usageNode["thoughtTokens"], out var thoughtVal))
+        {
+            output += thoughtVal;
+        }
+        if (output > 0)
+        {
+            completionTokens = Math.Max(completionTokens, output);
+        }
+
+        if (TryGetLong(usageNode["totalTokens"], out var total))
+        {
+            totalTokens = Math.Max(totalTokens, total);
+        }
+    }
+
+    private static bool TryGetLong(JsonNode? node, out long value)
+    {
+        value = 0;
+        if (node == null)
+        {
+            return false;
+        }
+
+        return long.TryParse(node.ToString(), out value);
+    }
+
+    private static bool IsPromptPhaseMessage(JsonNode node, string? method, string? id)
+    {
+        if (string.Equals(id, PromptRequestId, StringComparison.Ordinal) ||
+            node["result"]?["stopReason"] != null)
+        {
+            return true;
+        }
+
+        if (string.Equals(method, "session/request_permission", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (method != null &&
+            (method.StartsWith("terminal/", StringComparison.Ordinal) ||
+             method.StartsWith("fs/", StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        if (string.Equals(method, "session/update", StringComparison.Ordinal))
+        {
+            var updateType = node["params"]?["update"]?["sessionUpdate"]?.ToString();
+            return updateType is "agent_thought_chunk" or "agent_message_chunk" or "tool_call" or "tool_call_update" or "turn_end" or "message_end";
+        }
+
+        return false;
+    }
+
+    private static bool TryParseJsonNode(string line, out JsonNode? node)
+    {
+        try
+        {
+            node = JsonNode.Parse(line);
+            return node != null;
+        }
+        catch (JsonException)
+        {
+            node = null;
+            return false;
+        }
     }
 }
