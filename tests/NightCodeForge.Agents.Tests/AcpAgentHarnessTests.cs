@@ -966,6 +966,24 @@ public class AcpAgentHarnessTests
             WorkspacePath = "~/.nightcodeforge/wks/5/task-42"
         };
 
+        // 1. Unconfigured WSL user falls back to sh -c exec $HOME/... for binary invocation
+        var wslPlanFallback = await launcher.PrepareLaunchAsync(
+            wslContext,
+            "agy",
+            "acp --dangerously-skip-permissions",
+            "C:\\dummy",
+            "~/.nightcodeforge/wks/5/task-42",
+            "C:\\dummy",
+            600);
+
+        Assert.Equal("wsl.exe", wslPlanFallback.ProcessSpec.FileName);
+        Assert.Equal(["-d", "Ubuntu", "--", "sh", "-c", "exec \"$HOME/.local/bin/agy\" acp --dangerously-skip-permissions"], wslPlanFallback.ProcessSpec.ArgumentList);
+        Assert.Equal("~/.nightcodeforge/wks/5/task-42", wslPlanFallback.SessionWorkingDirectory);
+
+        // 2. Resolved WSL user expands both executable (~/.local/bin/agy -> /home/dev/.local/bin/agy)
+        //    and session working directory (~/.nightcodeforge/... -> /home/dev/.nightcodeforge/...)
+        pathResolverMock.Setup(p => p.GetWslUserName()).Returns("dev");
+
         var wslPlan = await launcher.PrepareLaunchAsync(
             wslContext,
             "agy",
@@ -976,8 +994,8 @@ public class AcpAgentHarnessTests
             600);
 
         Assert.Equal("wsl.exe", wslPlan.ProcessSpec.FileName);
-        Assert.Equal("-d Ubuntu -- ~/.local/bin/agy acp --dangerously-skip-permissions", wslPlan.ProcessSpec.Arguments);
-        Assert.Equal("~/.nightcodeforge/wks/5/task-42", wslPlan.SessionWorkingDirectory);
+        Assert.Equal("-d Ubuntu -- /home/dev/.local/bin/agy acp --dangerously-skip-permissions", wslPlan.ProcessSpec.Arguments);
+        Assert.Equal("/home/dev/.nightcodeforge/wks/5/task-42", wslPlan.SessionWorkingDirectory);
 
         var wslExeFallbackPlan = await launcher.PrepareLaunchAsync(
             wslContext,
@@ -987,7 +1005,7 @@ public class AcpAgentHarnessTests
             "~/.nightcodeforge/wks/5/task-42",
             "C:\\dummy",
             600);
-        Assert.Equal("-d Ubuntu -- ~/.local/bin/agy acp --dangerously-skip-permissions", wslExeFallbackPlan.ProcessSpec.Arguments);
+        Assert.Equal("-d Ubuntu -- /home/dev/.local/bin/agy acp --dangerously-skip-permissions", wslExeFallbackPlan.ProcessSpec.Arguments);
     }
 
     [Fact]
@@ -1069,6 +1087,139 @@ public class AcpAgentHarnessTests
 
         var promptReq = sentLines.First(n => n["id"]?.ToString() == "prompt-1");
         Assert.Contains("Current Working Directory (PWD): ~/.nightcodeforge/wks/5/task-42", promptReq["params"]?["prompt"]?[0]?["text"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_WslDirect_WithResolvedWslUserName_ExpandsTildeWorkingDirectory()
+    {
+        var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(p => p.GetWslUserName()).Returns("dev");
+        pathResolverMock.Setup(p => p.GetWslDistributionName()).Returns("Ubuntu");
+        pathResolverMock.Setup(p => p.GetAgentWorkingClonePath(5)).Returns("/home/dev/.nightcodeforge/wks/5/clone");
+
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            PathResolver = pathResolverMock.Object
+        }.Build();
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 42, Title = "WSL Direct Expanded PWD", Description = "Check expanded WSL PWD" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace
+            {
+                Id = 5,
+                RepositoryPath = "C:\\repos\\proj",
+                ExecutionMode = ExecutionMode.WslDirect,
+                Ext4MirrorPath = "~/.nightcodeforge/wks/5/clone"
+            },
+            WorkspacePath = "C:\\repos\\proj"
+        };
+
+        var acpOutput = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-wsl-2\"}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"result\":{\"stopReason\":\"end_turn\"}}") + "\n";
+
+        using var inStream = new MemoryStream(Encoding.UTF8.GetBytes(acpOutput));
+        using var reader = new StreamReader(inStream);
+        using var outStream = new MemoryStream();
+        using var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true };
+
+        var result = await harness.RunSessionStreamAsync(writer, reader, context, "sess-wsl-expanded", Stopwatch.StartNew());
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        var sentLines = Encoding.UTF8.GetString(outStream.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => JsonNode.Parse(l.TrimStart('\uFEFF'))!)
+            .ToList();
+
+        var sessionReq = sentLines.First(n => n["id"]?.ToString() == "session-1");
+        Assert.Equal("/home/dev/.nightcodeforge/wks/5/task-42", sessionReq["params"]?["cwd"]?.ToString());
+
+        var promptReq = sentLines.First(n => n["id"]?.ToString() == "prompt-1");
+        Assert.Contains("Current Working Directory (PWD): /home/dev/.nightcodeforge/wks/5/task-42", promptReq["params"]?["prompt"]?[0]?["text"]?.ToString());
+    }
+
+    [Fact]
+    public async Task RunSessionStreamAsync_WhenInitializeOrPromptReturnsJsonRpcError_FailsFastAndMarksConversationFailed()
+    {
+        var streamer = new TestActivityStreamer();
+        var taskRepo = new InMemoryTaskRepository();
+        var task1 = await taskRepo.CreateAsync(new ForgeTask { Title = "Prompt Error", Description = "Desc" });
+        var task2 = await taskRepo.CreateAsync(new ForgeTask { Title = "Prompt Auth Error", Description = "Desc" });
+        var task3 = await taskRepo.CreateAsync(new ForgeTask { Title = "Init Error", Description = "Desc" });
+
+        var harness = new NightCodeForge.Agents.Tests.Fixtures.TestAcpHarnessBuilder
+        {
+            ActivityStreamer = streamer,
+            TaskRepository = taskRepo
+        }.Build();
+
+        AgentSessionContext BuildContext(ForgeTask task) => new()
+        {
+            ForgeTask = task,
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp },
+            Workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory(), ExecutionMode = ExecutionMode.BareHost }
+        };
+
+        // 1. prompt-1 non-auth error must throw InvalidOperationException, flush partial assistant output, and fail conversation
+        var promptErrStream = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-err-1\"}}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"srv-err-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"text\":\"Partial thought\"}}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"error\":{\"code\":-32000,\"message\":\"Quota exceeded\"}}") + "\n";
+
+        using (var inStream = new MemoryStream(Encoding.UTF8.GetBytes(promptErrStream)))
+        using (var reader = new StreamReader(inStream))
+        using (var outStream = new MemoryStream())
+        using (var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true })
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                harness.RunSessionStreamAsync(writer, reader, BuildContext(task1), "sess-prompt-err", Stopwatch.StartNew()));
+            Assert.Contains("Quota exceeded", ex.Message);
+        }
+
+        Assert.Contains(streamer.Events, e => e.TaskId == task1.Id && e.Kind == AgentActivityKind.Error && e.Content.Contains("Quota exceeded"));
+        var conv1 = Assert.Single(await taskRepo.GetConversationsAsync(task1.Id));
+        Assert.Equal(StageExecutionStatus.Failed, conv1.Status);
+        var loadedConv1 = await taskRepo.GetConversationWithTurnsAsync(conv1.Id);
+        Assert.Contains(loadedConv1!.Turns, t => t.Role == StageTurnRole.Assistant && t.Content == "Partial thought");
+
+        // 2. prompt-1 auth error throws AcpAuthenticationException
+        var promptAuthErrStream = string.Join('\n',
+            "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"result\":{\"protocolVersion\":1}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"srv-auth-2\"}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":\"prompt-1\",\"error\":{\"code\":-32001,\"message\":\"Token expired mid-session\"}}") + "\n";
+
+        using (var inStream = new MemoryStream(Encoding.UTF8.GetBytes(promptAuthErrStream)))
+        using (var reader = new StreamReader(inStream))
+        using (var outStream = new MemoryStream())
+        using (var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true })
+        {
+            await Assert.ThrowsAsync<AcpAuthenticationException>(() =>
+                harness.RunSessionStreamAsync(writer, reader, BuildContext(task2), "sess-prompt-auth-err", Stopwatch.StartNew()));
+        }
+
+        var conv2 = Assert.Single(await taskRepo.GetConversationsAsync(task2.Id));
+        Assert.Equal(StageExecutionStatus.Failed, conv2.Status);
+
+        // 3. init-1 JSON-RPC error throws instead of silently returning protocol version 1
+        var initErrStream = "{\"jsonrpc\":\"2.0\",\"id\":\"init-1\",\"error\":{\"code\":-32600,\"message\":\"Unsupported protocol version\"}}\n";
+        using (var inStream = new MemoryStream(Encoding.UTF8.GetBytes(initErrStream)))
+        using (var reader = new StreamReader(inStream))
+        using (var outStream = new MemoryStream())
+        using (var writer = new StreamWriter(outStream, new UTF8Encoding(false)) { AutoFlush = true })
+        {
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                harness.RunSessionStreamAsync(writer, reader, BuildContext(task3), "sess-init-err", Stopwatch.StartNew()));
+            Assert.Contains("Unsupported protocol version", ex.Message);
+        }
+
+        var conv3 = Assert.Single(await taskRepo.GetConversationsAsync(task3.Id));
+        Assert.Equal(StageExecutionStatus.Failed, conv3.Status);
     }
 
     [Fact]

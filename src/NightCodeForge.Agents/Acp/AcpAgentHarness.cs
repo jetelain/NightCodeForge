@@ -535,7 +535,20 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                             summary: "ACP agent paused awaiting developer permission");
                     }
 
-                    // 5.4 Prompt Response Completion
+                    // 5.4 Prompt Response Failure / Completion
+                    if (string.Equals(id, PromptRequestId, StringComparison.Ordinal) && node["error"] is JsonNode promptErr)
+                    {
+                        await FlushTurnAsync();
+                        var errMessage = promptErr["message"]?.ToString() ?? promptErr.ToJsonString();
+                        if (IsAuthenticationError(promptErr))
+                        {
+                            throw new AcpAuthenticationException(
+                                $"ACP prompt execution failed due to authentication error: {errMessage}. Authenticate Antigravity in Settings or run 'agy login' / 'wsl -e ~/.local/bin/agy login'.");
+                        }
+
+                        throw new InvalidOperationException($"ACP prompt execution failed: {errMessage}");
+                    }
+
                     if (node["result"] != null && (id == PromptRequestId || node["result"]?["stopReason"] != null))
                     {
                         await FlushTurnAsync();
@@ -662,27 +675,42 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                 continue;
             }
 
+            JsonNode? node;
             try
             {
-                var node = JsonNode.Parse(responseLine);
-                if (node == null)
-                {
-                    continue;
-                }
-
-                if (int.TryParse(node["result"]?["protocolVersion"]?.ToString(), out var version))
-                {
-                    return version;
-                }
-
-                if (string.Equals(node["id"]?.ToString(), InitRequestId, StringComparison.Ordinal))
-                {
-                    return 1;
-                }
+                node = JsonNode.Parse(responseLine);
             }
-            catch (Exception ex)
+            catch (JsonException ex)
             {
-                logger?.LogWarning(ex, "Failed to parse ACP protocol version negotiation response: '{ResponseLine}'. Defaulting to protocol v1.", responseLine);
+                logger?.LogWarning(ex, "Failed to parse ACP protocol version negotiation response: '{ResponseLine}'.", responseLine);
+                continue;
+            }
+
+            if (node == null)
+            {
+                continue;
+            }
+
+            if (string.Equals(node["id"]?.ToString(), InitRequestId, StringComparison.Ordinal) && node["error"] is JsonNode initErr)
+            {
+                var errMessage = initErr["message"]?.ToString() ?? initErr.ToJsonString();
+                if (IsAuthenticationError(initErr))
+                {
+                    throw new AcpAuthenticationException(
+                        $"ACP initialize handshake failed due to authentication error: {errMessage}. Authenticate Antigravity in Settings or run 'agy login' / 'wsl -e ~/.local/bin/agy login'.");
+                }
+
+                throw new InvalidOperationException($"ACP initialize handshake failed: {errMessage}");
+            }
+
+            if (int.TryParse(node["result"]?["protocolVersion"]?.ToString(), out var version))
+            {
+                return version;
+            }
+
+            if (string.Equals(node["id"]?.ToString(), InitRequestId, StringComparison.Ordinal))
+            {
+                return 1;
             }
         }
 

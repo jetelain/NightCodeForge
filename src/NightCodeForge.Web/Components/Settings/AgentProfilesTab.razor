@@ -444,7 +444,7 @@
                         {
                             <div>
                                 <label class="forge-field-label">Execution Harness</label>
-                                <select class="forge-input harness-select" style="width: 100%;" value="@profile.HarnessId" @onchange="(e) => OnHarnessChanged(profile, e.Value?.ToString())">
+                                <select class="forge-input harness-select" style="width: 100%;" value="@profile.HarnessId" @onchange="(e) => OnHarnessChangedAsync(profile, e.Value?.ToString())">
                                     <option value="@StandardHarnessIds.Crucible">@AgentProfileAcpPresentationHelper.CrucibleHarnessDisplayLabel</option>
                                     <option value="@StandardHarnessIds.Acp">@AgentProfileAcpPresentationHelper.AcpHarnessDisplayLabel</option>
                                 </select>
@@ -743,11 +743,20 @@
         }
     }
 
-    private void OnHarnessChanged(AgentProfile profile, string? selectedHarnessId)
+    private async Task OnHarnessChangedAsync(AgentProfile profile, string? selectedHarnessId)
     {
         var fallbackCrucibleModel = _availableModels.FirstOrDefault()?.ModelId ?? LlmOptions.Value.DefaultModelId;
         AgentProfileAcpPresentationHelper.ApplyHarnessChange(profile, selectedHarnessId, _acpStatus, fallbackCrucibleModel);
         _customModelProfiles.Remove(profile.Id);
+
+        if (!AgentProfileAcpPresentationHelper.IsAcpProfile(profile) &&
+            !string.IsNullOrWhiteSpace(profile.ModelName))
+        {
+            await ResolveModelContextWindowAsync(profile.ModelName);
+            profile.ContextWindowTokens = _discoveredContextWindows.TryGetValue(profile.ModelName, out var ctxTokens)
+                ? ctxTokens
+                : null;
+        }
     }
 
     private async Task DetectProviderAsync()
@@ -821,6 +830,8 @@
 
     private async Task OnProfileModelChangedAsync(AgentProfile profile)
     {
+        profile.ContextWindowTokens = null;
+
         if (AgentProfileAcpPresentationHelper.IsAcpProfile(profile))
         {
             AgentProfileAcpPresentationHelper.NormalizeAcpProfileSettings(profile, _acpStatus);
@@ -828,6 +839,11 @@
         }
 
         await ResolveModelContextWindowAsync(profile.ModelName);
+        if (!string.IsNullOrWhiteSpace(profile.ModelName) &&
+            _discoveredContextWindows.TryGetValue(profile.ModelName, out var ctxTokens))
+        {
+            profile.ContextWindowTokens = ctxTokens;
+        }
     }
 
     private async Task RefreshOllamaModelsAsync()
@@ -1077,6 +1093,7 @@
             !string.IsNullOrWhiteSpace(cell.ModelName))
         {
             await ResolveModelContextWindowAsync(cell.ModelName);
+            ApplyMatrixCell(cell);
         }
     }
 
@@ -1084,11 +1101,13 @@
     {
         var cell = BuildCurrentMatrixCell(difficulty, role);
         cell.ModelName = selectedModel ?? string.Empty;
+        cell.ContextWindowTokens = null;
         ApplyMatrixCell(cell);
         if (!string.Equals(cell.HarnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(cell.ModelName))
         {
             await ResolveModelContextWindowAsync(cell.ModelName);
+            ApplyMatrixCell(cell);
         }
     }
 

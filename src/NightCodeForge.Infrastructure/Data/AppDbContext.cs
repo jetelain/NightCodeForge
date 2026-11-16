@@ -817,7 +817,32 @@ VALUES ('" + AddTaskDifficultyAndProfileDifficultyOverridesMigrationId + @"', '1
             AgentProfiles.AddRange(missingProfiles);
         }
 
-        var standardById = standardProfiles.ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
+        var backfillOptions = options;
+        if (string.IsNullOrWhiteSpace(options.ArchitectModelId))
+        {
+            var existingArchitect = existingGlobalProfiles.FirstOrDefault(p =>
+                string.Equals(p.Id, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase));
+            if (existingArchitect != null &&
+                !string.Equals(existingArchitect.HarnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(existingArchitect.ModelName))
+            {
+                backfillOptions = new DefaultLlmProviderOptions(
+                    DefaultModelId: options.DefaultModelId,
+                    DefaultThinkingEffort: options.DefaultThinkingEffort,
+                    CoderModelId: options.CoderModelId,
+                    CoderThinkingEffort: options.CoderThinkingEffort,
+                    ArchitectModelId: existingArchitect.ModelName.Trim(),
+                    ArchitectThinkingEffort: options.ArchitectThinkingEffort,
+                    ProviderType: options.ProviderType,
+                    MaxConcurrentInferenceTasks: options.MaxConcurrentInferenceTasks,
+                    ExpertHarnessId: options.ExpertHarnessId,
+                    ExpertModelId: options.ExpertModelId,
+                    ExpertThinkingEffort: options.ExpertThinkingEffort);
+            }
+        }
+
+        var standardById = AgentProfile.CreateStandardGlobalProfiles(backfillOptions)
+            .ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
         foreach (var existing in existingGlobalProfiles)
         {
             if ((existing.DifficultyOverrides == null || existing.DifficultyOverrides.Count == 0) &&
@@ -840,13 +865,30 @@ VALUES ('" + AddTaskDifficultyAndProfileDifficultyOverridesMigrationId + @"', '1
     private async Task NormalizeLegacyPiRpcProfilesAsync(CancellationToken cancellationToken)
     {
         const string legacyPiRpcHarnessId = "pirpc";
-        var legacyProfiles = await AgentProfiles
-            .Where(p => p.HarnessId.ToLower() == legacyPiRpcHarnessId)
-            .ToListAsync(cancellationToken);
+        var allProfiles = await AgentProfiles.ToListAsync(cancellationToken);
 
-        foreach (var profile in legacyProfiles)
+        foreach (var profile in allProfiles)
         {
-            profile.HarnessId = StandardHarnessIds.Crucible;
+            if (string.Equals(profile.HarnessId, legacyPiRpcHarnessId, StringComparison.OrdinalIgnoreCase))
+            {
+                profile.HarnessId = StandardHarnessIds.Crucible;
+            }
+
+            if (profile.DifficultyOverrides is { Count: > 0 } &&
+                profile.DifficultyOverrides.Values.Any(ov =>
+                    ov != null && string.Equals(ov.HarnessId, legacyPiRpcHarnessId, StringComparison.OrdinalIgnoreCase)))
+            {
+                var updatedOverrides = profile.CloneDifficultyOverrides()!;
+                foreach (var ov in updatedOverrides.Values)
+                {
+                    if (ov != null && string.Equals(ov.HarnessId, legacyPiRpcHarnessId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ov.HarnessId = StandardHarnessIds.Crucible;
+                    }
+                }
+
+                profile.DifficultyOverrides = updatedOverrides;
+            }
         }
     }
 

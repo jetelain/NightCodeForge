@@ -660,6 +660,75 @@ public class SignalRActivityBridgeServiceTests
         Assert.DoesNotContain(fakeHubContext.AllClient.WorkerStatuses, ws => ws.ActiveTaskId == 0);
     }
 
+    [Fact]
+    public async Task DispatchActivityEventAsync_StageStarted_PreservesAntigravityAcpHardwareTargetUntilCrucibleOrDeterministic()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetry = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetry);
+
+        // 1. Orchestrator StageStarted with HarnessId = acp -> Antigravity ACP
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-acp-1",
+            88,
+            StandardStageIds.Implementation,
+            AgentActivityKind.StageStarted,
+            "Starting implementation on ACP",
+            DateTime.UtcNow,
+            new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.StageKind] = "Agentic",
+                [AgentActivityMetadataKeys.HarnessId] = StandardHarnessIds.Acp
+            }));
+
+        Assert.Equal(SignalRActivityBridgeService.AntigravityAcpHardwareTarget, telemetry.GetActiveTask(88)?.HardwareTarget);
+        Assert.Equal(SignalRActivityBridgeService.AntigravityAcpHardwareTarget, fakeHubContext.AllClient.WorkerStatuses[^1].HardwareTarget);
+
+        // 2. Secondary StageStarted for same task without HarnessId metadata -> preserves Antigravity ACP
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-acp-1",
+            88,
+            StandardStageIds.Implementation,
+            AgentActivityKind.StageStarted,
+            "Harness started",
+            DateTime.UtcNow));
+
+        Assert.Equal(SignalRActivityBridgeService.AntigravityAcpHardwareTarget, telemetry.GetActiveTask(88)?.HardwareTarget);
+        Assert.Equal(SignalRActivityBridgeService.AntigravityAcpHardwareTarget, fakeHubContext.AllClient.WorkerStatuses[^1].HardwareTarget);
+
+        // 3. Explicit Crucible stage -> switches to Local GPU
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-crucible-2",
+            88,
+            StandardStageIds.CodeReviewAndFix,
+            AgentActivityKind.StageStarted,
+            "Starting Crucible review",
+            DateTime.UtcNow,
+            new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.StageKind] = "Agentic",
+                [AgentActivityMetadataKeys.HarnessId] = StandardHarnessIds.Crucible
+            }));
+
+        Assert.Equal(SignalRActivityBridgeService.LocalGpuHardwareTarget, telemetry.GetActiveTask(88)?.HardwareTarget);
+        Assert.Equal(SignalRActivityBridgeService.LocalGpuHardwareTarget, fakeHubContext.AllClient.WorkerStatuses[^1].HardwareTarget);
+
+        // 4. Deterministic stage -> Deterministic CPU
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-det-3",
+            88,
+            StandardStageIds.PostImplementationGates,
+            AgentActivityKind.StageStarted,
+            "Running build",
+            DateTime.UtcNow,
+            new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.StageKind] = "Deterministic"
+            }));
+
+        Assert.Equal(SignalRActivityBridgeService.DeterministicCpuHardwareTarget, telemetry.GetActiveTask(88)?.HardwareTarget);
+    }
+
     private class FakeHubContext : IHubContext<OrchestratorHub, IOrchestratorHubClient>
     {
         private readonly FakeHubClients _clients = new();

@@ -54,7 +54,7 @@
                                 Run #@Conversation.AttemptIndex
                             </span>
                             <span class="forge-badge @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-indigo")" style="font-size: 0.72rem;">
-                                @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "Deterministic CPU" : "Agentic GPU")
+                                @TaskDifficultyPresentationHelper.FormatStageComputeLabel(Conversation.StageKind, Conversation.HarnessId)
                             </span>
                             @if (Task != null && Task.Difficulty > TaskDifficulty.Standard && Conversation.StageKind == WorkflowStageKind.Agentic)
                             {

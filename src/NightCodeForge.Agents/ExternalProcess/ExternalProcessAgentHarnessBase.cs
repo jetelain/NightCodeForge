@@ -77,7 +77,19 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         var sw = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid().ToString("N");
         await _recorder.BeginConversationAsync(sessionId, HarnessId, context, cancellationToken);
-        await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.StageStarted, $"Starting stage '{context.StageId}'", cancellationToken);
+        var stageStartedMetadata = new Dictionary<string, object?>
+        {
+            [AgentActivityMetadataKeys.HarnessId] = HarnessId,
+            [AgentActivityMetadataKeys.ModelName] = context.Profile.ModelName
+        };
+        await BroadcastAsync(
+            sessionId,
+            context.ForgeTask.Id,
+            context.StageId,
+            AgentActivityKind.StageStarted,
+            $"Starting stage '{context.StageId}'",
+            stageStartedMetadata,
+            cancellationToken);
 
         var customFactory = CustomProcessFactory;
         if (customFactory != null)
@@ -294,6 +306,66 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     }
 
     /// <summary>
+    /// Expands a leading tilde (<c>~</c>, <c>~/...</c>, or <c>~\...</c>) using the current host user's profile folder.
+    /// Bare command names (such as <c>agy</c>) and already-rooted paths are returned unchanged.
+    /// </summary>
+    public static string ExpandHostTildePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('~'))
+        {
+            return path;
+        }
+
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(userProfile))
+        {
+            return path;
+        }
+
+        if (string.Equals(path, "~", StringComparison.Ordinal))
+        {
+            return userProfile;
+        }
+
+        if (path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith(@"~\", StringComparison.Ordinal))
+        {
+            return Path.Combine(userProfile, path[2..]);
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Expands a leading POSIX tilde (<c>~</c> or <c>~/...</c>) into the WSL user's home directory
+    /// (<c>/home/&lt;user&gt;/...</c> or <c>/root/...</c>) when <paramref name="wslUserName"/> is known,
+    /// because direct process spawns without a shell and Go <c>os.Chdir</c> do not expand <c>~</c>.
+    /// </summary>
+    public static string ExpandWslTildePath(string path, string? wslUserName)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !path.StartsWith('~') || string.IsNullOrWhiteSpace(wslUserName))
+        {
+            return path;
+        }
+
+        var trimmedUser = wslUserName.Trim();
+        var homeDir = string.Equals(trimmedUser, "root", StringComparison.Ordinal)
+            ? "/root"
+            : $"/home/{trimmedUser}";
+
+        if (string.Equals(path, "~", StringComparison.Ordinal))
+        {
+            return homeDir;
+        }
+
+        if (path.StartsWith("~/", StringComparison.Ordinal))
+        {
+            return $"{homeDir}/{path[2..]}";
+        }
+
+        return path;
+    }
+
+    /// <summary>
     /// Resolves the WSL2-side working directory for <see cref="ExecutionMode.WslDirect"/> runs.
     /// </summary>
     public static string ResolveWslDirectSessionWorkingDirectory(AgentSessionContext context, IWorkspacePathResolver pathResolver)
@@ -301,18 +373,17 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(pathResolver);
 
+        string resolved;
         if (!string.IsNullOrWhiteSpace(context.WorkspacePath) &&
             (context.WorkspacePath.StartsWith('/') || context.WorkspacePath.StartsWith('~')))
         {
-            return context.WorkspacePath;
+            resolved = context.WorkspacePath;
         }
-
-        if (context.SandboxScope != null)
+        else if (context.SandboxScope != null)
         {
-            return new SandboxPathResolver(context.SandboxScope).ResolveBashWorkingDirectory(null, ExecutionTier.WslDirect);
+            resolved = new SandboxPathResolver(context.SandboxScope).ResolveBashWorkingDirectory(null, ExecutionTier.WslDirect);
         }
-
-        if (!string.IsNullOrWhiteSpace(context.Workspace?.Ext4MirrorPath))
+        else if (!string.IsNullOrWhiteSpace(context.Workspace?.Ext4MirrorPath))
         {
             var norm = context.Workspace.Ext4MirrorPath.Replace('\\', '/').TrimEnd('/');
             if (context.ForgeTask.Id > 0)
@@ -320,20 +391,25 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
                 var baseDir = norm.EndsWith("/clone", StringComparison.OrdinalIgnoreCase)
                     ? norm[..^"/clone".Length]
                     : norm;
-                return $"{baseDir}/task-{context.ForgeTask.Id}";
+                resolved = $"{baseDir}/task-{context.ForgeTask.Id}";
             }
-
-            return norm;
+            else
+            {
+                resolved = norm;
+            }
         }
-
-        if (context.Workspace != null)
+        else if (context.Workspace != null)
         {
-            return pathResolver.GetAgentWorkingClonePath(context.Workspace.Id);
+            resolved = pathResolver.GetAgentWorkingClonePath(context.Workspace.Id);
+        }
+        else
+        {
+            resolved = !string.IsNullOrWhiteSpace(context.WorkspacePath)
+                ? context.WorkspacePath
+                : Directory.GetCurrentDirectory();
         }
 
-        return !string.IsNullOrWhiteSpace(context.WorkspacePath)
-            ? context.WorkspacePath
-            : Directory.GetCurrentDirectory();
+        return ExpandWslTildePath(resolved, pathResolver.GetWslUserName());
     }
 
     protected string ResolveWslDirectSessionWorkingDirectory(AgentSessionContext context)

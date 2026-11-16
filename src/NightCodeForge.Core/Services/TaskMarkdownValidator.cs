@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 using YamlDotNet.Serialization;
 
@@ -89,6 +90,20 @@ public class TaskMarkdownValidator : ITaskMarkdownValidator
         }
 
         var frontmatter = TryReadFrontmatter(path, content);
+        if (!string.IsNullOrWhiteSpace(frontmatter?.Difficulty))
+        {
+            try
+            {
+                TaskMarkdownSyncService.ParseDifficulty(frontmatter.Difficulty, path);
+            }
+            catch (TaskMarkdownSyncException ex)
+            {
+                _logger.LogWarning("Rejected edit of '{Path}': invalid difficulty '{Difficulty}'.", path, frontmatter.Difficulty);
+                return TaskMarkdownValidationResult.Invalid(
+                    $"[ERROR] {ex.Message}{Environment.NewLine}The task specification update was rejected and the file was not modified.");
+            }
+        }
+
         if (frontmatter?.DependsOn == null || frontmatter.DependsOn.Count == 0)
         {
             return TaskMarkdownValidationResult.Valid;

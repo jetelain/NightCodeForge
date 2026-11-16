@@ -340,21 +340,11 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
                     : defaultModel;
 
                 var standardProfiles = AgentProfile.CreateStandardGlobalProfiles(dedicatedModel);
-                var dedicatedProfiles = standardProfiles.Select(p => new AgentProfile
+                var dedicatedProfiles = standardProfiles.Select(p =>
                 {
-                    Id = $"ws-{workspace.Id}:{p.Id}",
-                    WorkspaceId = workspace.Id,
-                    Name = $"{p.Name} ({workspace.Name})",
-                    HarnessId = p.HarnessId,
-                    ModelName = dedicatedModel,
-                    Mode = p.Mode,
-                    SecurityTier = p.SecurityTier,
-                    PermittedTools = p.PermittedTools,
-                    OptimizationFlags = p.OptimizationFlags,
-                    Temperature = p.Temperature,
-                    ThinkingEffort = p.ThinkingEffort,
-                    SystemPrompt = p.SystemPrompt,
-                    StageDirectives = new Dictionary<string, string> { [p.Id] = "Dedicated workspace override" }
+                    var cloned = AgentProfileAcpPresentationHelper.CloneToDedicatedProfile(p, workspace.Id, workspace.Name);
+                    cloned.StageDirectives = new Dictionary<string, string> { [p.Id] = "Dedicated workspace override" };
+                    return cloned;
                 }).ToList();
 
                 workspace.AgentProfiles = dedicatedProfiles;

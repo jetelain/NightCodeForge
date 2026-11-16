@@ -6,6 +6,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Acp;
 
@@ -220,7 +221,15 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         {
             int? offset = parameters?["offset"]?.GetValue<int?>();
             int? limit = parameters?["limit"]?.GetValue<int?>();
-            var content = ReadWorkspaceFile(context.LocalWorkspaceRoot, filePath, offset, limit, context.Session.Workspace?.Id, context.Session.ForgeTask.Id, context.SandboxPathResolver);
+            var content = ReadWorkspaceFile(
+                context.LocalWorkspaceRoot,
+                filePath,
+                offset,
+                limit,
+                context.Session.Workspace?.Id,
+                context.Session.ForgeTask.Id,
+                context.Session.Workspace?.ExecutionMode,
+                context.SandboxPathResolver);
             return AcpHostRpcResult.Success(new { content });
         }
         catch (Exception ex)
@@ -241,7 +250,15 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         var content = parameters?["content"]?.ToString() ?? "";
         try
         {
-            await WriteWorkspaceFileAsync(context.LocalWorkspaceRoot, filePath, content, context.Session.Workspace?.Id, context.Session.ForgeTask.Id, context.SandboxPathResolver, cancellationToken);
+            await WriteWorkspaceFileAsync(
+                context.LocalWorkspaceRoot,
+                filePath,
+                content,
+                context.Session.Workspace?.Id,
+                context.Session.ForgeTask.Id,
+                context.Session.Workspace?.ExecutionMode,
+                context.SandboxPathResolver,
+                cancellationToken);
             return AcpHostRpcResult.Success(new { });
         }
         catch (Exception ex)
@@ -251,57 +268,265 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         }
     }
 
-    private string ResolveFilePath(string workspacePath, string filePath, int? workspaceId, int? taskId, ISandboxPathResolver? sandboxPathResolver = null, bool forWrite = false)
+    private string ResolveFilePath(
+        string workspacePath,
+        string filePath,
+        int? workspaceId,
+        int? taskId,
+        ExecutionMode? executionMode,
+        ISandboxPathResolver? sandboxPathResolver = null,
+        bool forWrite = false)
     {
         if (sandboxPathResolver != null)
         {
             return sandboxPathResolver.ResolveHostPath(filePath, forWrite);
         }
 
-        if (string.IsNullOrWhiteSpace(filePath))
+        var trimmed = (filePath ?? string.Empty).Trim();
+        var normalized = trimmed.Replace('\\', '/');
+
+        if (forWrite && !string.IsNullOrWhiteSpace(trimmed) &&
+            (normalized.Equals("/workspace/skills", StringComparison.OrdinalIgnoreCase) ||
+             normalized.StartsWith("/workspace/skills/", StringComparison.OrdinalIgnoreCase) ||
+             normalized.Equals("/nightcodeforge", StringComparison.OrdinalIgnoreCase) ||
+             normalized.StartsWith("/nightcodeforge/", StringComparison.OrdinalIgnoreCase)))
         {
-            return workspaceId.HasValue
-                ? _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, taskId)
-                : workspacePath;
+            throw new UnauthorizedAccessException($"Access denied: Mount '{filePath}' is read-only.");
         }
 
-        if (filePath.StartsWith(@"\\") || (filePath.Length >= 2 && filePath[1] == ':'))
+        if ((normalized.Equals("/tmp", StringComparison.OrdinalIgnoreCase) ||
+             normalized.StartsWith("/tmp/", StringComparison.OrdinalIgnoreCase)) &&
+            !WorkspacePathResolver.TryResolveTmpSubPath(filePath, out _))
         {
-            return Path.GetFullPath(filePath);
+            throw new UnauthorizedAccessException($"Access denied: Path '{filePath}' resolves outside the allowed workspace sandbox.");
         }
 
-        if (workspaceId.HasValue)
+        var resolvedPath = ResolveRawHostFilePath(workspacePath, filePath ?? string.Empty, workspaceId, taskId, executionMode);
+        ValidateWithinWorkspace(resolvedPath, filePath ?? string.Empty, workspacePath, workspaceId, taskId, executionMode);
+        return resolvedPath;
+    }
+
+    private string ResolveRawHostFilePath(
+        string workspacePath,
+        string filePath,
+        int? workspaceId,
+        int? taskId,
+        ExecutionMode? executionMode)
+    {
+        var effectiveTaskId = (taskId.HasValue && taskId.Value > 0) ? taskId.Value : (int?)null;
+
+        if (workspaceId.HasValue && executionMode != ExecutionMode.BareHost)
         {
-            var cruciblePath = _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, taskId);
-            if (!string.IsNullOrWhiteSpace(cruciblePath))
+            var rootCrucibleDir = _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(rootCrucibleDir) && Directory.Exists(rootCrucibleDir))
             {
-                return cruciblePath;
+                var resolvedFromCrucibleRoot = _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, effectiveTaskId);
+                if (!string.IsNullOrWhiteSpace(resolvedFromCrucibleRoot))
+                {
+                    return resolvedFromCrucibleRoot;
+                }
+            }
+
+            if (WorkspacePathResolver.TryResolveTmpSubPath(filePath, out _))
+            {
+                var crucibleTmpDir = _pathResolver.ResolveCruciblePath(workspaceId.Value, "/tmp", effectiveTaskId);
+                if (!string.IsNullOrWhiteSpace(crucibleTmpDir) && Directory.Exists(crucibleTmpDir))
+                {
+                    var resolvedTmp = _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, effectiveTaskId);
+                    if (!string.IsNullOrWhiteSpace(resolvedTmp))
+                    {
+                        return resolvedTmp;
+                    }
+                }
+            }
+
+            var crucibleCandidate = _pathResolver.ResolveCruciblePath(workspaceId.Value, filePath, effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(crucibleCandidate) &&
+                (File.Exists(crucibleCandidate) || Directory.Exists(crucibleCandidate)))
+            {
+                return crucibleCandidate;
             }
         }
 
-        var normalized = filePath.Replace('\\', '/');
-        if (normalized.StartsWith(WorkspaceRootPrefix, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(workspacePath))
         {
-            return Path.GetFullPath(Path.Combine(workspacePath, normalized.Substring(WorkspaceRootPrefix.Length)));
+            var resolvedByRoot = _pathResolver.ResolveCruciblePath(workspacePath, filePath, effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(resolvedByRoot))
+            {
+                return resolvedByRoot;
+            }
         }
+
+        return ResolveLocalWorkspaceCandidate(workspacePath, filePath, effectiveTaskId);
+    }
+
+    private static string ResolveLocalWorkspaceCandidate(string workspacePath, string filePath, int? taskId)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return string.IsNullOrWhiteSpace(workspacePath) ? workspacePath : NormalizeLocalPath(workspacePath);
+        }
+
+        var normalized = filePath.Trim().Replace('\\', '/');
         if (string.Equals(normalized, WorkspaceRoot, StringComparison.OrdinalIgnoreCase) ||
             string.Equals(normalized, WorkspaceName, StringComparison.OrdinalIgnoreCase))
         {
-            return Path.GetFullPath(workspacePath);
+            return NormalizeLocalPath(workspacePath);
         }
+
+        if (normalized.StartsWith(WorkspaceRootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = normalized[WorkspaceRootPrefix.Length..].TrimStart('/');
+            if (taskId.HasValue)
+            {
+                var taskPrefix = $"task-{taskId.Value}/";
+                if (rel.StartsWith(taskPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    rel = rel[taskPrefix.Length..];
+                }
+            }
+            return NormalizeLocalPath(Path.Combine(workspacePath, rel));
+        }
+
         if (normalized.StartsWith(WorkspaceNamePrefix, StringComparison.OrdinalIgnoreCase))
         {
-            return Path.GetFullPath(Path.Combine(workspacePath, normalized.Substring(WorkspaceNamePrefix.Length)));
+            var rel = normalized[WorkspaceNamePrefix.Length..].TrimStart('/');
+            return NormalizeLocalPath(Path.Combine(workspacePath, rel));
         }
 
-        return Path.IsPathRooted(filePath)
-            ? Path.GetFullPath(filePath)
-            : Path.GetFullPath(Path.Combine(workspacePath, filePath));
+        if (WorkspacePathResolver.TryResolveTmpSubPath(filePath, out var tmpSubPath))
+        {
+            var tmpBase = Path.Combine(workspacePath, "tmp");
+            return string.IsNullOrEmpty(tmpSubPath)
+                ? NormalizeLocalPath(tmpBase)
+                : NormalizeLocalPath(Path.Combine(tmpBase, tmpSubPath));
+        }
+
+        if (filePath.StartsWith(@"\\") || (filePath.Length >= 2 && filePath[1] == ':') || Path.IsPathRooted(filePath))
+        {
+            return NormalizeLocalPath(filePath);
+        }
+
+        return NormalizeLocalPath(Path.Combine(workspacePath, filePath));
     }
 
-    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId, ISandboxPathResolver? sandboxPathResolver = null)
+    private void ValidateWithinWorkspace(
+        string fullPath,
+        string requestedPath,
+        string workspacePath,
+        int? workspaceId,
+        int? taskId,
+        ExecutionMode? executionMode)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, sandboxPathResolver, forWrite: false);
+        if (string.IsNullOrWhiteSpace(fullPath))
+        {
+            throw new UnauthorizedAccessException("Access denied: Empty path.");
+        }
+
+        var effectiveTaskId = (taskId.HasValue && taskId.Value > 0) ? taskId.Value : (int?)null;
+        var allowedRoots = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(workspacePath))
+        {
+            allowedRoots.Add(workspacePath);
+            allowedRoots.Add(Path.Combine(workspacePath, "tmp"));
+
+            var rootTmp = _pathResolver.ResolveCruciblePath(workspacePath, "/tmp", effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(rootTmp))
+            {
+                allowedRoots.Add(rootTmp);
+            }
+
+            var rootClone = _pathResolver.ResolveCruciblePath(workspacePath, "/workspace/clone", effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(rootClone))
+            {
+                allowedRoots.Add(rootClone);
+            }
+        }
+
+        if (workspaceId.HasValue && executionMode != ExecutionMode.BareHost)
+        {
+            var crucibleRoot = _pathResolver.ResolveCruciblePath(workspaceId.Value, string.Empty, effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(crucibleRoot))
+            {
+                allowedRoots.Add(crucibleRoot);
+            }
+
+            var crucibleTmp = _pathResolver.ResolveCruciblePath(workspaceId.Value, "/tmp", effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(crucibleTmp))
+            {
+                allowedRoots.Add(crucibleTmp);
+            }
+
+            var crucibleClone = _pathResolver.ResolveCruciblePath(workspaceId.Value, "/workspace/clone", effectiveTaskId);
+            if (!string.IsNullOrWhiteSpace(crucibleClone))
+            {
+                allowedRoots.Add(crucibleClone);
+            }
+        }
+
+        if (allowedRoots.Count == 0)
+        {
+            throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' has no workspace boundary.");
+        }
+
+        var normFullPath = NormalizeForSandbox(fullPath);
+        foreach (var root in allowedRoots)
+        {
+            var normRoot = NormalizeForSandbox(root);
+            if (!string.IsNullOrEmpty(normRoot) &&
+                (normFullPath.Equals(normRoot, StringComparison.OrdinalIgnoreCase) ||
+                 normFullPath.StartsWith(normRoot + "/", StringComparison.OrdinalIgnoreCase)))
+            {
+                return;
+            }
+        }
+
+        _logger.LogWarning("AcpHostRpcHandler: Path traversal outside workspace boundary detected: '{Path}' (resolved: '{FullPath}')", requestedPath, fullPath);
+        throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' resolves outside the allowed workspace sandbox.");
+    }
+
+    private static string NormalizeLocalPath(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return path;
+        }
+    }
+
+    private static string NormalizeForSandbox(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var normalized = path.Replace('\\', '/').TrimEnd('/');
+        if (Path.IsPathRooted(path) && !normalized.StartsWith("//") && !normalized.StartsWith(@"\\") &&
+            !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("/tmp", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                normalized = Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Retain normalized representation on non-standard virtual paths.
+            }
+        }
+
+        return normalized;
+    }
+
+    private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId, ExecutionMode? executionMode, ISandboxPathResolver? sandboxPathResolver = null)
+    {
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, executionMode, sandboxPathResolver, forWrite: false);
         if (!File.Exists(resolvedPath))
         {
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
@@ -318,9 +543,9 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         return string.Join(Environment.NewLine, lines.Skip(skip).Take(take));
     }
 
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, ISandboxPathResolver? sandboxPathResolver, CancellationToken ct)
+    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, ExecutionMode? executionMode, ISandboxPathResolver? sandboxPathResolver, CancellationToken ct)
     {
-        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, sandboxPathResolver, forWrite: true);
+        var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, executionMode, sandboxPathResolver, forWrite: true);
         var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {

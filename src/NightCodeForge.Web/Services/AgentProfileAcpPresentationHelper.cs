@@ -113,6 +113,7 @@ public static class AgentProfileAcpPresentationHelper
         profile.RoutingTarget = OllamaRoutingTarget.Auto;
         profile.SecurityTier = SandboxSecurityTier.Standard;
         profile.ThinkingTokenBudget = null;
+        profile.ContextWindowTokens = null;
 
         var supported = GetSupportedAcpThinkingEfforts(status, profile.ModelName);
         if (!supported.Any(o => o.Effort == profile.ThinkingEffort))
@@ -202,10 +203,13 @@ public static class AgentProfileAcpPresentationHelper
         }
         else
         {
-            if (acpModels.Any(m => string.Equals(m.ModelId, profile.ModelName, StringComparison.OrdinalIgnoreCase)) &&
-                !string.IsNullOrWhiteSpace(fallbackCrucibleModel))
+            if (acpModels.Any(m => string.Equals(m.ModelId, profile.ModelName, StringComparison.OrdinalIgnoreCase)))
             {
-                profile.ModelName = fallbackCrucibleModel;
+                if (!string.IsNullOrWhiteSpace(fallbackCrucibleModel))
+                {
+                    profile.ModelName = fallbackCrucibleModel;
+                }
+                profile.ContextWindowTokens = null;
             }
         }
     }
@@ -231,6 +235,7 @@ public static class AgentProfileAcpPresentationHelper
             ThinkingEffort = globalProfile.ThinkingEffort,
             ThinkingTokenBudget = globalProfile.ThinkingTokenBudget,
             MaxTurns = globalProfile.MaxTurns,
+            AllowNoTests = globalProfile.AllowNoTests,
             OptimizationFlags = globalProfile.OptimizationFlags?.Clone(),
             DifficultyOverrides = globalProfile.CloneDifficultyOverrides(),
             ContextWindowTokens = globalProfile.ContextWindowTokens,

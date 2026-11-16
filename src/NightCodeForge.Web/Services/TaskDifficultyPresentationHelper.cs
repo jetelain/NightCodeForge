@@ -79,9 +79,20 @@ public static class TaskDifficultyPresentationHelper
         };
     }
 
+    public const string DeterministicComputeLabel = "Deterministic CPU";
+    public const string AgenticGpuComputeLabel = "Agentic GPU";
+    public const string AntigravityAcpComputeLabel = "Antigravity ACP";
+
+    public static string FormatStageComputeLabel(WorkflowStageKind stageKind, string? harnessId) =>
+        stageKind == WorkflowStageKind.Deterministic
+            ? DeterministicComputeLabel
+            : (string.Equals(harnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase)
+                ? AntigravityAcpComputeLabel
+                : AgenticGpuComputeLabel);
+
     public static string FormatHarnessShortLabel(string? harnessId) =>
         string.Equals(harnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase)
-            ? "Antigravity ACP"
+            ? AntigravityAcpComputeLabel
             : "Crucible";
 
     public static string FormatEscalationBadge(TaskDifficulty difficulty, string? harnessId, string? modelName)

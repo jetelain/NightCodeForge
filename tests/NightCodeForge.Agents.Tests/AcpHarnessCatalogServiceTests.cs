@@ -43,9 +43,11 @@ public class AcpHarnessCatalogServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(0, "~/.local/bin/agy\n", string.Empty));
 
+        ProcessStartSpec? capturedTokenSpec = null;
         _processRunner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s =>
-                s.ArgumentList != null && s.ArgumentList.Contains("test")),
+                s.ArgumentList != null && s.ArgumentList.Any(a => a.StartsWith("test -f ", StringComparison.Ordinal))),
                 It.IsAny<CancellationToken>()))
+            .Callback<ProcessStartSpec, CancellationToken>((spec, _) => capturedTokenSpec = spec)
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
 
         var probeOutput = string.Join('\n',
@@ -53,10 +55,12 @@ public class AcpHarnessCatalogServiceTests
             "{\"jsonrpc\":\"2.0\",\"id\":\"session-1\",\"result\":{\"sessionId\":\"probe-1\",\"configOptions\":[{\"id\":\"thought_level\",\"options\":[{\"value\":\"low\"},{\"value\":\"medium\"},{\"value\":\"high\"}]},{\"id\":\"model\",\"options\":[{\"value\":\"gemini-4-argon\",\"name\":\"Gemini 4 Argon\"},{\"value\":\"claude-opus-5-5\",\"name\":\"Claude Opus 5.5\"}]}]}}") + "\n";
 
         var sessionStarts = 0;
+        ProcessStartSpec? capturedProbeSpec = null;
         _processRunner.Setup(r => r.StartSession(It.IsAny<ProcessStartSpec>()))
-            .Returns(() =>
+            .Returns<ProcessStartSpec>(spec =>
             {
                 sessionStarts++;
+                capturedProbeSpec = spec;
                 return new FakeProbeStreamSession(probeOutput);
             });
 
@@ -65,6 +69,19 @@ public class AcpHarnessCatalogServiceTests
 
         Assert.True(status.IsInstalled);
         Assert.True(status.IsAuthenticated);
+        Assert.NotNull(capturedTokenSpec);
+        Assert.Contains("sh", capturedTokenSpec!.ArgumentList!);
+        Assert.Contains("-c", capturedTokenSpec.ArgumentList!);
+        Assert.Contains("test -f ~/.gemini/antigravity-cli/antigravity-oauth-token", capturedTokenSpec.ArgumentList!);
+
+        Assert.NotNull(capturedProbeSpec);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("wsl.exe", capturedProbeSpec!.FileName);
+            Assert.Equal(
+                ["-d", "Ubuntu", "--", "sh", "-c", "exec \"$HOME/.local/bin/agy\" acp --dangerously-skip-permissions"],
+                capturedProbeSpec.ArgumentList);
+        }
         Assert.Equal("1.5.3", status.ServerVersion);
         Assert.Equal("Google AI Ultra", status.AccountTierName);
         Assert.Equal(2, status.AvailableModels.Count);
@@ -90,7 +107,7 @@ public class AcpHarnessCatalogServiceTests
             .ReturnsAsync(new ProcessExecutionResult(0, "~/.local/bin/agy\n", string.Empty));
 
         _processRunner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s =>
-                s.ArgumentList != null && s.ArgumentList.Contains("test")),
+                s.ArgumentList != null && s.ArgumentList.Any(a => a.StartsWith("test -f ", StringComparison.Ordinal))),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(1, string.Empty, string.Empty));
 
@@ -128,7 +145,7 @@ public class AcpHarnessCatalogServiceTests
             .ReturnsAsync(new ProcessExecutionResult(0, "~/.local/bin/agy\n", string.Empty));
 
         _processRunner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s =>
-                s.ArgumentList != null && s.ArgumentList.Contains("test")),
+                s.ArgumentList != null && s.ArgumentList.Any(a => a.StartsWith("test -f ", StringComparison.Ordinal))),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(1, string.Empty, string.Empty));
 

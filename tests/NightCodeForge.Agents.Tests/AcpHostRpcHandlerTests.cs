@@ -280,4 +280,108 @@ public class AcpHostRpcHandlerTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task FsReadAndWrite_WithoutSandboxPathResolver_RejectsPathTraversalAndOutsideWorkspacePaths()
+    {
+        var baseDir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var wsDir = Path.Combine(baseDir, "ws");
+            Directory.CreateDirectory(wsDir);
+            var outsideFile = Path.Combine(baseDir, "secret.txt");
+            await File.WriteAllTextAsync(outsideFile, "top-secret");
+
+            var handler = Create();
+            var ctx = Ctx("s-sandbox", new Workspace { Id = 1, RepositoryPath = wsDir, ExecutionMode = ExecutionMode.BareHost }, wsDir);
+
+            // Relative traversal
+            var readTraversal = await handler.HandleAsync(
+                AcpHostMethods.FsReadTextFile,
+                JsonNode.Parse("{\"path\":\"../secret.txt\"}"),
+                ctx,
+                CancellationToken.None);
+            Assert.True(readTraversal.IsError);
+            Assert.Contains("outside the allowed workspace sandbox", readTraversal.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+            // Absolute outside path
+            var readAbsolute = await handler.HandleAsync(
+                AcpHostMethods.FsReadTextFile,
+                JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(new { path = outsideFile })),
+                ctx,
+                CancellationToken.None);
+            Assert.True(readAbsolute.IsError);
+            Assert.Contains("outside the allowed workspace sandbox", readAbsolute.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+            // Traversal write attempt must not modify outside file
+            var escapedWriteTarget = Path.Combine(baseDir, "pwned.txt");
+            var writeTraversal = await handler.HandleAsync(
+                AcpHostMethods.FsWriteTextFile,
+                JsonNode.Parse("{\"path\":\"../pwned.txt\",\"content\":\"tamper\"}"),
+                ctx,
+                CancellationToken.None);
+            Assert.True(writeTraversal.IsError);
+            Assert.False(File.Exists(escapedWriteTarget));
+        }
+        finally
+        {
+            Directory.Delete(baseDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FsReadAndWrite_BareHostWorkspace_ResolvesLocalWorkspaceRootIgnoringCrucibleIdPath()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var localFile = Path.Combine(dir, "src", "Program.cs");
+            Directory.CreateDirectory(Path.GetDirectoryName(localFile)!);
+            await File.WriteAllTextAsync(localFile, "Console.WriteLine(\"hello\");");
+
+            var pathResolverMock = new Mock<IWorkspacePathResolver>();
+            // Simulate Windows BareHost where ResolveCruciblePath(workspaceId, ...) would point to WSL UNC mirror
+            pathResolverMock
+                .Setup(r => r.ResolveCruciblePath(7, It.IsAny<string>(), It.IsAny<int?>()))
+                .Returns(@"\\wsl.localhost\Ubuntu\home\dev\.nightcodeforge\wks\7\clone\nonexistent");
+            pathResolverMock
+                .Setup(r => r.ResolveCruciblePath(dir, It.IsAny<string>(), It.IsAny<int?>()))
+                .Returns((string root, string rel, int? _) =>
+                {
+                    var clean = (rel ?? string.Empty).Trim().Replace('\\', '/');
+                    if (clean.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase))
+                        clean = clean["/workspace/".Length..];
+                    return string.IsNullOrEmpty(clean) ? root : Path.GetFullPath(Path.Combine(root, clean));
+                });
+
+            var handler = new AcpHostRpcHandler(
+                new Mock<IExecutionEnvironmentProvider>().Object,
+                new EditorConfigService(),
+                new EditorConfigFileApplier(),
+                pathResolverMock.Object,
+                NullLogger<AcpHostRpcHandler>.Instance);
+
+            var ctx = Ctx("s-barehost", new Workspace { Id = 7, RepositoryPath = dir, ExecutionMode = ExecutionMode.BareHost }, dir);
+
+            var readRes = await handler.HandleAsync(
+                AcpHostMethods.FsReadTextFile,
+                JsonNode.Parse("{\"path\":\"/workspace/src/Program.cs\"}"),
+                ctx,
+                CancellationToken.None);
+            Assert.False(readRes.IsError, readRes.ErrorMessage);
+            Assert.Equal("Console.WriteLine(\"hello\");", readRes.Result!.GetType().GetProperty("content")!.GetValue(readRes.Result));
+
+            var writeRes = await handler.HandleAsync(
+                AcpHostMethods.FsWriteTextFile,
+                JsonNode.Parse("{\"path\":\"src/Added.cs\",\"content\":\"// ok\"}"),
+                ctx,
+                CancellationToken.None);
+            Assert.False(writeRes.IsError, writeRes.ErrorMessage);
+            Assert.Equal("// ok", (await File.ReadAllTextAsync(Path.Combine(dir, "src", "Added.cs"))).TrimEnd('\r', '\n'));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

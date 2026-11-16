@@ -368,6 +368,12 @@ public class WorkspaceProvisioningServiceTests : IDisposable
             Assert.Equal("deepseek-coder:33b", p.ModelName);
             Assert.StartsWith($"ws-{workspace.Id}:", p.Id);
         });
+
+        var dedicatedImpl = Assert.Single(workspace.AgentProfiles, p => p.Id == $"ws-{workspace.Id}:{StandardStageIds.Implementation}");
+        Assert.NotNull(dedicatedImpl.DifficultyOverrides);
+        Assert.True(dedicatedImpl.DifficultyOverrides!.ContainsKey(TaskDifficulty.Difficult));
+        Assert.True(dedicatedImpl.DifficultyOverrides.ContainsKey(TaskDifficulty.Expert));
+        Assert.Equal(AgentProfile.DefaultMaxTurns, dedicatedImpl.MaxTurns);
     }
 
     #region Test Fakes

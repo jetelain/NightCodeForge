@@ -147,4 +147,79 @@ public class Step125BDifficultyPersistenceTests : IDisposable
             Assert.Null(triage?.DifficultyOverrides);
         }
     }
+
+    [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_BackfillsFromCustomizedTaskReviewModel_AndNormalizesLegacyPiRpcOverrides()
+    {
+        var triageTemplate = AgentProfile.CreateStandardGlobalProfiles("coder-32b").Single(p => p.Id == StandardStageIds.Triage);
+        var ideationTemplate = AgentProfile.CreateDefaultIdeationProfile(null, "coder-32b");
+
+        await using (var db = new AppDbContext(_options))
+        {
+            db.AgentProfiles.AddRange(
+                triageTemplate,
+                ideationTemplate,
+                new AgentProfile
+                {
+                    Id = StandardStageIds.TaskReview,
+                    WorkspaceId = null,
+                    Name = "Arch",
+                    HarnessId = StandardHarnessIds.Crucible,
+                    ModelName = "deepseek-r1:70b",
+                    ThinkingEffort = ThinkingEffort.High,
+                    DifficultyOverrides = null
+                },
+                new AgentProfile
+                {
+                    Id = StandardStageIds.Implementation,
+                    WorkspaceId = null,
+                    Name = "Coder",
+                    HarnessId = StandardHarnessIds.Crucible,
+                    ModelName = "coder-32b",
+                    ThinkingEffort = ThinkingEffort.Medium,
+                    DifficultyOverrides = null
+                },
+                new AgentProfile
+                {
+                    Id = StandardStageIds.CodeReviewAndFix,
+                    WorkspaceId = null,
+                    Name = "Reviewer",
+                    HarnessId = "pirpc",
+                    ModelName = "deepseek-r1:70b",
+                    ThinkingEffort = ThinkingEffort.High,
+                    DifficultyOverrides = new Dictionary<TaskDifficulty, DifficultyStageOverride>
+                    {
+                        [TaskDifficulty.Difficult] = new()
+                        {
+                            HarnessId = "pirpc",
+                            ModelName = "deepseek-r1:70b",
+                            ThinkingEffort = ThinkingEffort.High
+                        }
+                    }
+                });
+            await db.SaveChangesAsync();
+        }
+
+        await using (var db2 = new AppDbContext(_options))
+        {
+            // ArchitectModelId is unset -> must preserve stored TaskReview model ("deepseek-r1:70b") instead of downgrading to DefaultModelId ("coder-32b")
+            await db2.EnsureDefaultGlobalAgentProfilesAsync(new DefaultLlmProviderOptions(
+                DefaultModelId: "coder-32b",
+                ArchitectModelId: null));
+        }
+
+        await using (var db3 = new AppDbContext(_options))
+        {
+            var impl = await db3.AgentProfiles.FindAsync(StandardStageIds.Implementation);
+            var review = await db3.AgentProfiles.FindAsync(StandardStageIds.CodeReviewAndFix);
+
+            Assert.NotNull(impl?.DifficultyOverrides);
+            Assert.Equal("deepseek-r1:70b", impl!.DifficultyOverrides![TaskDifficulty.Difficult].ModelName);
+            Assert.Equal("deepseek-r1:70b", impl.DifficultyOverrides[TaskDifficulty.Expert].ModelName);
+
+            Assert.NotNull(review);
+            Assert.Equal(StandardHarnessIds.Crucible, review!.HarnessId);
+            Assert.Equal(StandardHarnessIds.Crucible, review.DifficultyOverrides![TaskDifficulty.Difficult].HarnessId);
+        }
+    }
 }

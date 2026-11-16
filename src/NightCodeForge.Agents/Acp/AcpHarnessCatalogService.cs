@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
@@ -270,7 +271,7 @@ public class AcpHarnessCatalogService : IAcpHarnessCatalogService
             {
                 args.AddRange(["-d", wslDistro]);
             }
-            args.AddRange(["--", "test", "-f", WslOAuthTokenPath]);
+            args.AddRange(["--", "sh", "-c", $"test -f {WslOAuthTokenPath}"]);
 
             var result = await SafeRunAsync(new ProcessStartSpec
             {
@@ -316,7 +317,14 @@ public class AcpHarnessCatalogService : IAcpHarnessCatalogService
             {
                 args.AddRange(["-d", wslDistro]);
             }
-            args.AddRange(["--", detectedPath, "acp", AcpProcessLauncher.DangerouslySkipPermissionsFlag]);
+            if (detectedPath.StartsWith("~/", StringComparison.Ordinal))
+            {
+                args.AddRange(["--", "sh", "-c", $"exec \"$HOME/{detectedPath[2..]}\" acp {AcpProcessLauncher.DangerouslySkipPermissionsFlag}"]);
+            }
+            else
+            {
+                args.AddRange(["--", detectedPath, "acp", AcpProcessLauncher.DangerouslySkipPermissionsFlag]);
+            }
             spec = new ProcessStartSpec
             {
                 FileName = "wsl.exe",
@@ -328,7 +336,7 @@ public class AcpHarnessCatalogService : IAcpHarnessCatalogService
         {
             spec = new ProcessStartSpec
             {
-                FileName = detectedPath,
+                FileName = ExternalProcessAgentHarnessBase.ExpandHostTildePath(detectedPath),
                 ArgumentList = ["acp", AcpProcessLauncher.DangerouslySkipPermissionsFlag],
                 TimeoutSeconds = HandshakeProbeTimeoutSeconds
             };

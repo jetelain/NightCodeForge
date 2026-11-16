@@ -22,6 +22,7 @@ using NightCodeForge.Web.Components.Backlog;
 using NightCodeForge.Web.Components.Monitoring;
 using NightCodeForge.Web.Components.Pages;
 using NightCodeForge.Web.Components.Settings;
+using NightCodeForge.Web.Components.Triage;
 using NightCodeForge.Web.Services;
 using Xunit;
 
@@ -429,5 +430,167 @@ public class Step125BDifficultyUiTests : BunitContext
         Assert.Equal(2, createdRequests.Count);
         Assert.Equal(TaskDifficulty.Expert, createdRequests[0].Difficulty);
         Assert.Equal(TaskDifficulty.Standard, createdRequests[1].Difficulty);
+    }
+
+    [Fact]
+    public void AcpAndMatrixHelpers_ClearStaleContextWindowTokens_PreserveNullConfigJson_AndCopyAllowNoTests()
+    {
+        var profile = new AgentProfile
+        {
+            Id = StandardStageIds.Implementation,
+            Name = "Coder",
+            HarnessId = StandardHarnessIds.Crucible,
+            ModelName = "qwen3.5:35b",
+            ContextWindowTokens = 65536,
+            AllowNoTests = true
+        };
+
+        var cloned = AgentProfileAcpPresentationHelper.CloneToDedicatedProfile(profile, 4, "WS4");
+        Assert.True(cloned.AllowNoTests);
+
+        // Switching to ACP clears stale Crucible ContextWindowTokens
+        AgentProfileAcpPresentationHelper.ApplyHarnessChange(profile, StandardHarnessIds.Acp, acpStatus: null, fallbackCrucibleModel: "qwen3.5:35b");
+        Assert.Null(profile.ContextWindowTokens);
+
+        // Matrix Standard cell preserves null HarnessConfigurationJson and clears ContextWindowTokens for ACP
+        var profiles = AgentProfile.CreateStandardGlobalProfiles("qwen3.5:35b").ToList();
+        var stdCell = new DifficultyMatrixCellModel
+        {
+            Difficulty = TaskDifficulty.Standard,
+            Role = EscalationMatrixRole.CoderImplementation,
+            HarnessId = StandardHarnessIds.Crucible,
+            ModelName = "qwen3.5:35b",
+            ContextWindowTokens = 65536,
+            HarnessConfigurationJson = null
+        };
+        AgentProfileDifficultyMatrixHelper.ApplyCellToProfiles(profiles, stdCell, LlmProviderType.OllamaRouter, new Dictionary<string, int>(), null);
+        Assert.Null(profiles.Single(p => p.Id == StandardStageIds.Implementation).HarnessConfigurationJson);
+
+        AgentProfileDifficultyMatrixHelper.ApplyHarnessSwitch(stdCell, StandardHarnessIds.Acp, "qwen3.5:35b", null);
+        Assert.Null(stdCell.ContextWindowTokens);
+    }
+
+    [Fact]
+    public async Task AgentProfilesTab_ClearsStaleContextWindowWhenSwitchingToUncachedModelOrAcp()
+    {
+        using var conn = new SqliteConnection("DataSource=:memory:");
+        await conn.OpenAsync();
+        var dbOptions = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(conn).Options;
+        await using (var initDb = new AppDbContext(dbOptions))
+        {
+            await initDb.Database.EnsureCreatedAsync();
+            await initDb.EnsureDefaultGlobalAgentProfilesAsync("qwen3.5:35b");
+            var impl = await initDb.AgentProfiles.FindAsync(StandardStageIds.Implementation);
+            impl!.ContextWindowTokens = 65536;
+            await initDb.SaveChangesAsync();
+        }
+
+        Services.AddDbContextFactory<AppDbContext>(opts => opts.UseSqlite(conn));
+        Services.AddScoped(sp => sp.GetRequiredService<IDbContextFactory<AppDbContext>>().CreateDbContext());
+        Services.AddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
+        Services.AddScoped<IWorkflowRepository, EfCoreWorkflowRepository>();
+        Services.AddSingleton(new WorkspaceStateService());
+        Services.AddSingleton(TestServices.CreateToastService());
+        Services.AddSingleton<IGlobalOptimizationSettingsService>(new Mock<IGlobalOptimizationSettingsService>().Object);
+        Services.AddSingleton<IWebSearchSettingsService>(new Mock<IWebSearchSettingsService>().Object);
+        Services.AddSingleton<IWebSearchService>(new MockWebSearchService());
+
+        var modelCatalog = new Mock<ILlmModelCatalogService>();
+        modelCatalog.Setup(m => m.GetAvailableModelsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new AvailableModelInfo("qwen3.5:35b", "qwen3.5:35b", ContextWindowTokens: 65536),
+                new AvailableModelInfo("unprobed-custom:70b", "unprobed-custom:70b", ContextWindowTokens: null)
+            ]);
+        Services.AddSingleton(modelCatalog.Object);
+
+        var gateway = new Mock<ILlmGatewayService>();
+        gateway.SetupGet(g => g.ProviderType).Returns(LlmProviderType.OllamaRouter);
+        gateway.Setup(g => g.ResolveContextWindowAsync("unprobed-custom:70b", It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        Services.AddSingleton(gateway.Object);
+        Services.AddSingleton<IWslMetadataService>(new Mock<IWslMetadataService>().Object);
+        Services.AddSingleton<IGitMirrorSyncService>(new Mock<IGitMirrorSyncService>().Object);
+        Services.AddMemoryCache();
+        Services.AddSingleton<ILlmContextWindowCache, LlmContextWindowCache>();
+        Services.AddSingleton<ILlmConfigurationWriter>(new Mock<ILlmConfigurationWriter>().Object);
+        Services.AddSingleton(Options.Create(new LlmProviderOptions { DefaultModelId = "qwen3.5:35b" }));
+        Services.AddSingleton(Options.Create(new SecurityOptions()));
+        Services.AddSingleton(new Mock<IAcpHarnessCatalogService>().Object);
+
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        var stdCoderCell = cut.Find(".matrix-role-cell[data-difficulty='Standard'][data-matrix-role='CoderImplementation']");
+        var modelSelect = stdCoderCell.QuerySelector("select.matrix-model-select");
+        Assert.NotNull(modelSelect);
+        await cut.InvokeAsync(() => modelSelect!.Change("unprobed-custom:70b"));
+
+        var saveBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Save Profiles", StringComparison.Ordinal));
+        await cut.InvokeAsync(() => saveBtn.Click());
+
+        await using var verifyDb = new AppDbContext(dbOptions);
+        var savedImpl = await verifyDb.AgentProfiles.FindAsync(StandardStageIds.Implementation);
+        Assert.NotNull(savedImpl);
+        Assert.Equal("unprobed-custom:70b", savedImpl!.ModelName);
+        Assert.Null(savedImpl.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void StageConversationViewer_And_TriageTaskProposalCard_RenderAcpComputeBadgeAndProposalDifficultyBadge()
+    {
+        JSInterop.Mode = JSRuntimeMode.Loose;
+        Services.AddSingleton<ITaskOrchestrator>(new MockTaskOrchestrator());
+        Services.AddSingleton(TestServices.CreateToastService());
+        TestServices.AddDefaultWebUiServices(Services);
+
+        var acpConv = new Conversation
+        {
+            Id = 51,
+            TaskId = 9,
+            StageId = StandardStageIds.Implementation,
+            StageKind = WorkflowStageKind.Agentic,
+            HarnessId = StandardHarnessIds.Acp,
+            ModelName = "gemini-4-argon",
+            Status = StageExecutionStatus.Completed,
+            Turns = []
+        };
+        var acpCut = Render<StageConversationViewer>(p => p.Add(x => x.Conversation, acpConv));
+        Assert.Contains(TaskDifficultyPresentationHelper.AntigravityAcpComputeLabel, acpCut.Markup);
+        Assert.DoesNotContain(TaskDifficultyPresentationHelper.AgenticGpuComputeLabel, acpCut.Markup);
+
+        var crucibleConv = new Conversation
+        {
+            Id = 52,
+            TaskId = 9,
+            StageId = StandardStageIds.Implementation,
+            StageKind = WorkflowStageKind.Agentic,
+            HarnessId = StandardHarnessIds.Crucible,
+            ModelName = "qwen3.5:35b",
+            Status = StageExecutionStatus.Completed,
+            Turns = []
+        };
+        var crucibleCut = Render<StageConversationViewer>(p => p.Add(x => x.Conversation, crucibleConv));
+        Assert.Contains(TaskDifficultyPresentationHelper.AgenticGpuComputeLabel, crucibleCut.Markup);
+
+        var expertProposal = new ForgeTask
+        {
+            Id = 101,
+            WorkspaceId = 1,
+            Title = "Expert Proposal",
+            Difficulty = TaskDifficulty.Expert,
+            Priority = TaskPriority.High
+        };
+        var expertProposalCut = Render<TriageTaskProposalCard>(p => p.Add(x => x.Task, expertProposal));
+        var diffBadge = expertProposalCut.Find(".difficulty-badge");
+        Assert.Contains("Expert", diffBadge.TextContent);
+
+        var standardProposal = new ForgeTask
+        {
+            Id = 102,
+            WorkspaceId = 1,
+            Title = "Standard Proposal",
+            Difficulty = TaskDifficulty.Standard,
+            Priority = TaskPriority.Normal
+        };
+        var standardProposalCut = Render<TriageTaskProposalCard>(p => p.Add(x => x.Task, standardProposal));
+        Assert.Empty(standardProposalCut.FindAll(".difficulty-badge"));
     }
 }

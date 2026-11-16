@@ -95,10 +95,11 @@ public class AcpProcessLauncher : IAcpProcessLauncher
                 timeoutSeconds);
         }
 
+        var hostExecutable = ExternalProcessAgentHarnessBase.ExpandHostTildePath(configuredExecutablePath);
         return new AcpProcessLaunchPlan(
             new ProcessStartSpec
             {
-                FileName = configuredExecutablePath,
+                FileName = hostExecutable,
                 Arguments = effectiveArgs,
                 WorkingDirectory = defaultLaunchWorkingDir,
                 TimeoutSeconds = timeoutSeconds
@@ -213,19 +214,40 @@ public class AcpProcessLauncher : IAcpProcessLauncher
             : _pathResolver.GetWslDistributionName();
 
         var wslWorkDir = ExternalProcessAgentHarnessBase.ResolveWslDirectSessionWorkingDirectory(context, _pathResolver);
-        var wslExe = ResolveWslExecutable(configuredExecutablePath);
+        var rawWslExe = ResolveWslExecutable(configuredExecutablePath);
+        var wslExe = ExternalProcessAgentHarnessBase.ExpandWslTildePath(rawWslExe, _pathResolver.GetWslUserName());
 
-        var distroPrefix = !string.IsNullOrWhiteSpace(distro)
-            ? $"-d {distro} -- "
-            : "-- ";
-        var arguments = string.IsNullOrWhiteSpace(effectiveArgs)
-            ? $"{distroPrefix}{wslExe}"
-            : $"{distroPrefix}{wslExe} {effectiveArgs}";
+        var argList = new List<string>();
+        if (!string.IsNullOrWhiteSpace(distro))
+        {
+            argList.Add("-d");
+            argList.Add(distro);
+        }
+
+        if (wslExe.StartsWith("~/", StringComparison.Ordinal))
+        {
+            var shCommand = string.IsNullOrWhiteSpace(effectiveArgs)
+                ? $"exec \"$HOME/{wslExe[2..]}\""
+                : $"exec \"$HOME/{wslExe[2..]}\" {effectiveArgs}";
+            argList.Add("--");
+            argList.Add("sh");
+            argList.Add("-c");
+            argList.Add(shCommand);
+        }
+        else
+        {
+            argList.Add("--");
+            argList.Add(wslExe);
+            argList.AddRange(TokenizeArguments(effectiveArgs));
+        }
+
+        var arguments = FormatArguments(argList);
 
         return new AcpProcessLaunchPlan(
             new ProcessStartSpec
             {
                 FileName = WslExecutableName,
+                ArgumentList = argList,
                 Arguments = arguments,
                 WorkingDirectory = defaultLaunchWorkingDir,
                 TimeoutSeconds = timeoutSeconds

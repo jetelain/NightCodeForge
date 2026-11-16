@@ -135,6 +135,7 @@ public static class AgentProfileDifficultyMatrixHelper
             ? StandardHarnessIds.Acp
             : StandardHarnessIds.Crucible;
 
+        var harnessChanged = !string.Equals(cell.HarnessId, normalizedHarness, StringComparison.OrdinalIgnoreCase);
         cell.HarnessId = normalizedHarness;
         var acpModels = AgentProfileAcpPresentationHelper.GetEffectiveAcpModels(acpStatus);
 
@@ -149,6 +150,7 @@ public static class AgentProfileDifficultyMatrixHelper
             cell.IsCustomModel = false;
             cell.RoutingTarget = OllamaRoutingTarget.Auto;
             cell.ThinkingTokenBudget = null;
+            cell.ContextWindowTokens = null;
             cell.ThinkingEffort = NormalizeAcpThinkingEffort(acpStatus, cell.ModelName, cell.ThinkingEffort);
         }
         else
@@ -158,6 +160,11 @@ public static class AgentProfileDifficultyMatrixHelper
             {
                 cell.ModelName = fallbackCrucibleModel;
                 cell.IsCustomModel = false;
+                cell.ContextWindowTokens = null;
+            }
+            else if (harnessChanged)
+            {
+                cell.ContextWindowTokens = null;
             }
         }
     }
@@ -185,6 +192,7 @@ public static class AgentProfileDifficultyMatrixHelper
         if (isAcp)
         {
             cell.ThinkingTokenBudget = null;
+            cell.ContextWindowTokens = null;
             cell.ThinkingEffort = NormalizeAcpThinkingEffort(acpStatus, cell.ModelName, cell.ThinkingEffort);
         }
         else if (!string.IsNullOrWhiteSpace(cell.ModelName) &&
@@ -211,7 +219,7 @@ public static class AgentProfileDifficultyMatrixHelper
                 profile.RoutingTarget = cell.RoutingTarget;
                 profile.ContextWindowTokens = cell.ContextWindowTokens;
                 profile.MaxOutputTokens = cell.MaxOutputTokens;
-                profile.HarnessConfigurationJson = cell.HarnessConfigurationJson ?? string.Empty;
+                profile.HarnessConfigurationJson = cell.HarnessConfigurationJson;
                 if (isAcp)
                 {
                     profile.OptimizationFlags = null;
@@ -396,6 +404,7 @@ public static class AgentProfileDifficultyMatrixHelper
             if (isAcp)
             {
                 ov.ThinkingTokenBudget = null;
+                ov.ContextWindowTokens = null;
                 ov.ThinkingEffort = NormalizeAcpThinkingEffort(
                     acpStatus,
                     effectiveModel,

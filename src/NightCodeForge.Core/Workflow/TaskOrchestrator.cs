@@ -552,11 +552,14 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 ? DeterministicStageConstants.CpuDeterministicQueue
                                 : DeterministicStageConstants.LlmInferenceQueue
                         };
-                        if (stage.Kind == WorkflowStageKind.Agentic && profile != null && task.Difficulty > TaskDifficulty.Standard)
+                        if (stage.Kind == WorkflowStageKind.Agentic && profile != null)
                         {
-                            stageStartedMetadata[AgentActivityMetadataKeys.Difficulty] = task.Difficulty.ToString();
                             stageStartedMetadata[AgentActivityMetadataKeys.HarnessId] = profile.HarnessId;
                             stageStartedMetadata[AgentActivityMetadataKeys.ModelName] = profile.ModelName;
+                            if (task.Difficulty > TaskDifficulty.Standard)
+                            {
+                                stageStartedMetadata[AgentActivityMetadataKeys.Difficulty] = task.Difficulty.ToString();
+                            }
                         }
 
                         await _streamer.BroadcastAsync(new AgentActivityEvent(

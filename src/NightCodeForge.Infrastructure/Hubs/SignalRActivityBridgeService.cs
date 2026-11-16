@@ -15,6 +15,10 @@ namespace NightCodeForge.Infrastructure.Hubs;
 /// </summary>
 public class SignalRActivityBridgeService : BackgroundService
 {
+    public const string DeterministicCpuHardwareTarget = "Deterministic CPU";
+    public const string LocalGpuHardwareTarget = "Local GPU";
+    public const string AntigravityAcpHardwareTarget = "Antigravity ACP";
+
     private readonly IAgentActivityStreamer _streamer;
     private readonly IHubContext<OrchestratorHub, IOrchestratorHubClient> _hubContext;
     private readonly IOperationsTelemetryService _telemetryService;
@@ -178,7 +182,7 @@ public class SignalRActivityBridgeService : BackgroundService
                                 ? oldQObj.ToString()!
                                 : (existing != null ? existing.QueueType : (kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "cpu-deterministic" : "llm-inference")));
                         var startedAt = existing != null ? existing.StartedAt : evt.Timestamp;
-                        var hardwareTarget = kind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase) ? "Deterministic CPU" : "Local GPU";
+                        var hardwareTarget = ResolveHardwareTarget(kind, evt.Metadata, existing);
 
                         _telemetryService.RecordActiveTask(new ActiveTaskSummary(
                             evt.TaskId,
@@ -206,7 +210,7 @@ public class SignalRActivityBridgeService : BackgroundService
                         else
                         {
                             await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, LocalGpuHardwareTarget);
                         }
                     }
                     break;
@@ -227,7 +231,7 @@ public class SignalRActivityBridgeService : BackgroundService
                         {
                             var workerStatus = isPauseInterruption ? WorkerStatusConstants.Idle : WorkerStatusConstants.WaitingForHuman;
                             await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(workerStatus, evt.TaskId, evt.StageId, "Local GPU");
+                                .ReceiveWorkerStatus(workerStatus, evt.TaskId, evt.StageId, LocalGpuHardwareTarget);
                         }
 
                         if (!string.IsNullOrWhiteSpace(evt.StageId))
@@ -265,7 +269,7 @@ public class SignalRActivityBridgeService : BackgroundService
                         else
                         {
                             await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, "Local GPU");
+                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, LocalGpuHardwareTarget);
                         }
                     }
                     await _hubContext.Clients.Group(groupName)
@@ -318,5 +322,35 @@ public class SignalRActivityBridgeService : BackgroundService
         }
 
         return _telemetryService.GetActiveTask();
+    }
+
+    private static string ResolveHardwareTarget(
+        string stageKind,
+        IReadOnlyDictionary<string, object?>? metadata,
+        ActiveTaskSummary? existing)
+    {
+        if (stageKind.Equals("Deterministic", StringComparison.OrdinalIgnoreCase))
+        {
+            return DeterministicCpuHardwareTarget;
+        }
+
+        if (metadata != null &&
+            metadata.TryGetValue(AgentActivityMetadataKeys.HarnessId, out var harnessObj) &&
+            harnessObj != null &&
+            !string.IsNullOrWhiteSpace(harnessObj.ToString()))
+        {
+            return string.Equals(harnessObj.ToString(), StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase)
+                ? AntigravityAcpHardwareTarget
+                : LocalGpuHardwareTarget;
+        }
+
+        if (existing != null &&
+            !string.IsNullOrWhiteSpace(existing.HardwareTarget) &&
+            !string.Equals(existing.HardwareTarget, DeterministicCpuHardwareTarget, StringComparison.OrdinalIgnoreCase))
+        {
+            return existing.HardwareTarget;
+        }
+
+        return LocalGpuHardwareTarget;
     }
 }

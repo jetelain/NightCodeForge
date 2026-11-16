@@ -738,4 +738,80 @@ public class Step125BTaskDifficultyTests : IDisposable
         Assert.Equal(TaskDifficulty.Expert, validFollowup.Difficulty);
         Assert.Equal(TaskDifficulty.Standard, fallbackFollowup.Difficulty);
     }
+
+    [Fact]
+    public async Task TaskMarkdownValidator_ValidatesDifficultyFrontmatterEvenWithoutDependencies()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var depEngine = new DependencyResolutionEngine(new InMemoryTaskDependencyStore());
+        var validator = new TaskMarkdownValidator(taskRepo, depEngine, NullLogger<TaskMarkdownValidator>.Instance);
+
+        const string invalidMd = "---\nid: 1\ntitle: \"Bad Tier\"\ndifficulty: extreme\n---\n\nBody";
+        var invalidRes = await validator.ValidateAsync(1, 1, "docs/tasks/001-bad-tier.md", invalidMd);
+        Assert.False(invalidRes.IsValid);
+        Assert.Contains("[ERROR]", invalidRes.ErrorMessage);
+        Assert.Contains("extreme", invalidRes.ErrorMessage);
+
+        const string validMd = "---\nid: 1\ntitle: \"Valid Tier\"\ndifficulty: expert\n---\n\nBody";
+        var validRes = await validator.ValidateAsync(1, 1, "docs/tasks/001-valid-tier.md", validMd);
+        Assert.True(validRes.IsValid);
+    }
+
+    [Fact]
+    public async Task TaskOrchestrator_StandardAcpStage_EmitsHarnessIdAndModelNameOnStageStarted()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var streamer = new CapturingActivityStreamer();
+
+        var profiles = AgentProfile.CreateStandardGlobalProfiles("local-32b").ToList();
+        var impl = profiles.Single(p => p.Id == StandardStageIds.Implementation);
+        impl.HarnessId = StandardHarnessIds.Acp;
+        impl.ModelName = "gemini-4-argon";
+        workspaceRepo.SeedGlobalProfiles(profiles);
+
+        var workspace = new Workspace
+        {
+            Id = 1,
+            Name = "StdAcpWS",
+            RepositoryPath = _tempWorkspaceDir,
+            ExecutionMode = ExecutionMode.BareHost
+        };
+        await workspaceRepo.CreateAsync(workspace);
+
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 77,
+            WorkspaceId = 1,
+            Title = "Standard ACP Task",
+            Status = TaskOverallStatus.Open,
+            Difficulty = TaskDifficulty.Standard,
+            CurrentStageId = StandardStageIds.Implementation,
+            CreatedAt = DateTime.UtcNow
+        });
+        depStore.AddTask(77, 1, TaskOverallStatus.Open);
+
+        var harnessRegistry = new HarnessRegistry();
+        harnessRegistry.RegisterHarness(new CapturingHarness(StandardHarnessIds.Acp));
+
+        var pipeline = new WorkflowPipeline([TestWorkflowPipelines.CreateImplementationStage()]);
+        var orchestrator = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            WorkspaceRepository = workspaceRepo,
+            DependencyStore = depStore,
+            GitWorkspaceManager = new FakeGitWorkspaceManager(),
+            PipelineProvider = new DefaultWorkflowPipelineProvider(pipeline),
+            HarnessRegistry = harnessRegistry,
+            Streamer = streamer
+        }.Build();
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var stageStarted = Assert.Single(streamer.Events, e => e.TaskId == 77 && e.Kind == AgentActivityKind.StageStarted);
+        Assert.NotNull(stageStarted.Metadata);
+        Assert.Equal(StandardHarnessIds.Acp, stageStarted.Metadata![AgentActivityMetadataKeys.HarnessId]);
+        Assert.Equal("gemini-4-argon", stageStarted.Metadata[AgentActivityMetadataKeys.ModelName]);
+    }
 }
