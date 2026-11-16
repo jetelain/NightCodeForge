@@ -37,6 +37,18 @@
                 </div>
 
                 <div class="form-group">
+                    <label for="promotion-difficulty-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                        Difficulty
+                    </label>
+                    <select id="promotion-difficulty-select" class="form-control-dark" @bind="_selectedDifficulty" disabled="@_isSubmitting">
+                        @foreach (var difficulty in TaskDifficultyPresentationHelper.AllDifficulties)
+                        {
+                            <option value="@difficulty">@TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label for="merge-mode-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
                         Merge Mode
                     </label>
@@ -88,6 +100,7 @@
     [Parameter] public EventCallback OnPromoted { get; set; }
 
     private int _selectedPriority = TaskPriority.Normal;
+    private TaskDifficulty _selectedDifficulty = TaskDifficulty.Standard;
     private MergeMode _selectedMergeMode = MergeMode.Automatic;
     private string _selectedBaseBranch = string.Empty;
     private bool _isSubmitting;
@@ -98,6 +111,7 @@
         if (TargetTask != null)
         {
             _selectedPriority = TargetTask.Priority > 0 ? TargetTask.Priority : TaskPriority.Normal;
+            _selectedDifficulty = TargetTask.Difficulty;
             _selectedMergeMode = TargetTask.MergeMode;
             _selectedBaseBranch = TargetTask.BaseBranch ?? string.Empty;
             _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(ServiceProvider, TargetTask.WorkspaceId);
@@ -123,7 +137,8 @@
                 TaskOverallStatus.Open,
                 _selectedPriority,
                 _selectedMergeMode,
-                baseBranch);
+                baseBranch,
+                _selectedDifficulty);
 
             ToastService.Show("ForgeTask Promoted", $"ForgeTask #{TargetTask.Id} is now Open with Priority {_selectedPriority}.", ToastLevel.Success);
             await OnPromoted.InvokeAsync();

@@ -127,6 +127,21 @@ public class LlmProviderOptions : ILlmProviderOptions
     public ThinkingEffort? ArchitectThinkingEffort { get; set; }
 
     /// <summary>
+    /// Optional execution harness identifier for Expert difficulty tasks (e.g. "acp" or "crucible").
+    /// </summary>
+    public string? ExpertHarnessId { get; set; }
+
+    /// <summary>
+    /// Optional model identifier for Expert difficulty tasks (e.g. "gemini-4-argon").
+    /// </summary>
+    public string? ExpertModelId { get; set; }
+
+    /// <summary>
+    /// Optional thinking effort level for Expert difficulty tasks.
+    /// </summary>
+    public ThinkingEffort? ExpertThinkingEffort { get; set; }
+
+    /// <summary>
     /// Provider-specific settings for OpenAI-compatible endpoints.
     /// </summary>
     public OpenAiCompatibleOptions OpenAiCompatible { get; set; } = new();

@@ -26,7 +26,8 @@ public sealed record TaskEditRequest(
     int? Priority = null,
     IReadOnlyList<int>? DependsOnIds = null,
     string? MergeMode = null,
-    string? BaseBranch = null);
+    string? BaseBranch = null,
+    string? Difficulty = null);
 
 /// <summary>Single entry of a batched priority rework.</summary>
 public sealed record TaskPriorityUpdate(int TaskId, int Priority);
@@ -120,6 +121,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             status = task.Status,
             hasExecutionRun = task.HasExecutionRun,
             priority = task.Priority,
+            difficulty = task.Difficulty,
             mergeMode = task.MergeMode,
             baseBranch = task.BaseBranch,
             externalSource = task.ExternalSource,
@@ -157,6 +159,12 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         if (request.MergeMode != null)
         {
             mergeMode = await ParseAndValidateMergeModeAsync(scope, request.MergeMode, nameof(request), cancellationToken);
+        }
+
+        TaskDifficulty? difficulty = null;
+        if (request.Difficulty != null)
+        {
+            difficulty = ParseDifficulty(request.Difficulty, nameof(request));
         }
 
         var baseBranch = request.BaseBranch?.Trim();
@@ -201,6 +209,12 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         {
             changes.Add($"mergeMode {task.MergeMode} -> {mergeMode.Value}");
             task.MergeMode = mergeMode.Value;
+        }
+
+        if (difficulty.HasValue && task.Difficulty != difficulty.Value)
+        {
+            changes.Add($"difficulty {task.Difficulty} -> {difficulty.Value}");
+            task.Difficulty = difficulty.Value;
         }
 
         if (baseBranch != null && !string.Equals(task.BaseBranch, baseBranch, StringComparison.Ordinal))
@@ -354,6 +368,11 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 await ParseAndValidateMergeModeAsync(scope, proposal.MergeMode, nameof(proposals), cancellationToken);
             }
 
+            if (!string.IsNullOrWhiteSpace(proposal.Difficulty))
+            {
+                ParseDifficulty(proposal.Difficulty, nameof(proposals));
+            }
+
             if (proposal.DependsOnIds is { Count: > 0 })
             {
                 var distinctIds = proposal.DependsOnIds.Distinct().OrderBy(id => id).ToList();
@@ -376,6 +395,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 single.Priority,
                 singleDeps,
                 single.MergeMode,
+                single.Difficulty,
                 cancellationToken);
             return singleJson;
         }
@@ -395,6 +415,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 p.Priority,
                 deps,
                 p.MergeMode,
+                p.Difficulty,
                 cancellationToken);
 
             createdEntities.Add(created);
@@ -471,6 +492,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
+        string? difficulty = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scope);
@@ -488,6 +510,10 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             ? await ParseAndValidateMergeModeAsync(scope, mergeMode, nameof(mergeMode), cancellationToken)
             : MergeMode.ManualReviewRequired;
 
+        var effDifficulty = !string.IsNullOrWhiteSpace(difficulty)
+            ? ParseDifficulty(difficulty, nameof(difficulty))
+            : TaskDifficulty.Standard;
+
         IReadOnlyList<int>? validDependencies = null;
         if (dependsOnIds != null && dependsOnIds.Count > 0)
         {
@@ -503,6 +529,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             Description = description?.Trim() ?? string.Empty,
             Status = TaskOverallStatus.Draft,
             Priority = effPriority,
+            Difficulty = effDifficulty,
             MergeMode = effMergeMode,
             BaseBranch = WorkflowDefaults.DefaultBaseBranch,
             CreatedAt = DateTime.UtcNow,
@@ -561,6 +588,22 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         }
 
         return parsedMergeMode;
+    }
+
+    private static TaskDifficulty ParseDifficulty(string rawDifficulty, string paramName)
+    {
+        var normalizedDifficulty = rawDifficulty.Trim();
+        if (string.IsNullOrEmpty(normalizedDifficulty) ||
+            int.TryParse(normalizedDifficulty, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
+            !Enum.TryParse<TaskDifficulty>(normalizedDifficulty, ignoreCase: true, out var parsedDifficulty) ||
+            !Enum.IsDefined(parsedDifficulty))
+        {
+            throw new ArgumentException(
+                $"Invalid difficulty '{rawDifficulty}'. Expected one of: {string.Join(", ", Enum.GetNames<TaskDifficulty>())}.",
+                paramName);
+        }
+
+        return parsedDifficulty;
     }
 
     private IDisposable AcquireTaskLockOrThrow(int workspaceId, int taskId)

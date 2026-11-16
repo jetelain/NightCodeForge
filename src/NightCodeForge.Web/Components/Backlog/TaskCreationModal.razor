@@ -79,6 +79,18 @@
                     </div>
 
                     <div class="form-group">
+                        <label for="task-difficulty-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
+                            Difficulty
+                        </label>
+                        <select id="task-difficulty-select" class="form-control-dark" @bind="_selectedDifficulty" disabled="@_isSubmitting">
+                            @foreach (var difficulty in TaskDifficultyPresentationHelper.AllDifficulties)
+                            {
+                                <option value="@difficulty">@TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="form-group">
                         <label for="task-mergemode-select" style="display: block; margin-bottom: 0.4rem; font-size: 0.85rem; font-weight: 500; color: var(--text-primary);">
                             Merge Mode
                         </label>
@@ -135,6 +147,7 @@
     private string _description = string.Empty;
     private int? _selectedWorkflowId;
     private int _selectedPriority = TaskPriority.Normal;
+    private TaskDifficulty _selectedDifficulty = TaskDifficulty.Standard;
     private MergeMode _selectedMergeMode = MergeMode.ManualReviewRequired;
     private string _baseBranch = "main";
     private bool _isSubmitting;
@@ -198,11 +211,13 @@
                 InitialStatus: TaskOverallStatus.Open,
                 PrerequisiteIds: null,
                 LaunchImmediately: false,
-                AuditReason: "Initial task creation via modal"));
+                AuditReason: "Initial task creation via modal",
+                Difficulty: _selectedDifficulty));
 
             ToastService.Show("Task Created", $"Task #{result.Task.Id} created in Open status.", ToastLevel.Success);
             _title = string.Empty;
             _description = string.Empty;
+            _selectedDifficulty = TaskDifficulty.Standard;
             await OnTaskCreated.InvokeAsync(result.Task);
             await Close();
         }

@@ -13,6 +13,7 @@ public class ForgeTaskHistory
     public TaskOverallStatus Status { get; set; }
     public int Priority { get; set; }
     public MergeMode MergeMode { get; set; }
+    public TaskDifficulty Difficulty { get; set; } = TaskDifficulty.Standard;
     public string BaseBranch { get; set; } = string.Empty;
     public string? FeatureBranch { get; set; }
     public string? CurrentStageId { get; set; }

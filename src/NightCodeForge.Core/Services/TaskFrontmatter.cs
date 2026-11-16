@@ -22,6 +22,9 @@ public class TaskFrontmatter
     [YamlMember(Alias = "merge_mode")]
     public string? MergeMode { get; set; }
 
+    [YamlMember(Alias = "difficulty")]
+    public string? Difficulty { get; set; }
+
     [YamlMember(Alias = "waiting_for_human")]
     public bool WaitingForHuman { get; set; } = false;
 

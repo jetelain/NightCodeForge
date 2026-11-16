@@ -121,6 +121,15 @@ public class AppDbContext : DbContext
             c => c == null ? 0 : JsonSerializer.Serialize(c, (JsonSerializerOptions?)null).GetHashCode(),
             c => c == null ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(JsonSerializer.Serialize(c, (JsonSerializerOptions?)null), (JsonSerializerOptions?)null));
 
+        var difficultyOverridesConverter = new ValueConverter<Dictionary<TaskDifficulty, DifficultyStageOverride>?, string?>(
+            v => v == null ? null : JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+            v => string.IsNullOrWhiteSpace(v) ? null : JsonSerializer.Deserialize<Dictionary<TaskDifficulty, DifficultyStageOverride>>(v, (JsonSerializerOptions?)null));
+
+        var difficultyOverridesComparer = new ValueComparer<Dictionary<TaskDifficulty, DifficultyStageOverride>?>(
+            (c1, c2) => JsonSerializer.Serialize(c1, (JsonSerializerOptions?)null) == JsonSerializer.Serialize(c2, (JsonSerializerOptions?)null),
+            c => c == null ? 0 : JsonSerializer.Serialize(c, (JsonSerializerOptions?)null).GetHashCode(),
+            c => c == null ? null : JsonSerializer.Deserialize<Dictionary<TaskDifficulty, DifficultyStageOverride>>(JsonSerializer.Serialize(c, (JsonSerializerOptions?)null), (JsonSerializerOptions?)null));
+
         modelBuilder.Entity<AgentProfile>(b =>
         {
             b.HasKey(p => p.Id);
@@ -144,6 +153,10 @@ public class AppDbContext : DbContext
             b.Property(p => p.StageDirectives)
                 .HasConversion(stageDirectivesConverter)
                 .Metadata.SetValueComparer(stageDirectivesComparer);
+
+            b.Property(p => p.DifficultyOverrides)
+                .HasConversion(difficultyOverridesConverter)
+                .Metadata.SetValueComparer(difficultyOverridesComparer);
         });
 
         // 3. ForgeTask
@@ -156,6 +169,7 @@ public class AppDbContext : DbContext
             b.Property(i => i.HasExecutionRun).HasDefaultValue(false);
             b.Property(i => i.MaxExecutedStageOrder).HasDefaultValue(0);
             b.Property(i => i.MergeMode).HasConversion<int>();
+            b.Property(i => i.Difficulty).HasConversion<int>().HasDefaultValue(TaskDifficulty.Standard);
             b.Property(i => i.IsWaitingForHuman).HasDefaultValue(false);
             b.Property(i => i.IsDeferredByPause).HasDefaultValue(false);
             b.Property(i => i.InterruptedAgentProfileId).HasMaxLength(128);
@@ -399,6 +413,7 @@ public class AppDbContext : DbContext
             b.Property(h => h.Status).HasConversion<int>();
             b.Property(h => h.Priority).IsRequired();
             b.Property(h => h.MergeMode).HasConversion<int>();
+            b.Property(h => h.Difficulty).HasConversion<int>().HasDefaultValue(TaskDifficulty.Standard);
             b.Property(h => h.BaseBranch).IsRequired().HasMaxLength(128);
             b.Property(h => h.FeatureBranch).HasMaxLength(256);
             b.Property(h => h.CurrentStageId).HasMaxLength(128);
@@ -492,6 +507,11 @@ public class AppDbContext : DbContext
     /// Migration identifier for ForgeTaskHistory GitHub external source and Pull Request audit fields.
     /// </summary>
     public const string AddTaskHistoryGitHubFieldsMigrationId = "20261114185639_AddTaskHistoryGitHubFields";
+
+    /// <summary>
+    /// Migration identifier for task difficulty classification and agent profile difficulty overrides.
+    /// </summary>
+    public const string AddTaskDifficultyAndProfileDifficultyOverridesMigrationId = "20261116180000_AddTaskDifficultyAndProfileDifficultyOverrides";
 
     /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
@@ -689,6 +709,17 @@ VALUES ('" + AddForgeTaskGitHubPullRequestFieldsMigrationId + @"', '10.0.12');";
 VALUES ('" + AddTaskHistoryGitHubFieldsMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Tasks') WHERE name = 'Difficulty';";
+                var hasDifficultyColumn = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasDifficultyColumn)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddTaskDifficultyAndProfileDifficultyOverridesMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
             }
         }
         finally
@@ -769,18 +800,32 @@ VALUES ('" + AddTaskHistoryGitHubFieldsMigrationId + @"', '10.0.12');";
     {
         ArgumentNullException.ThrowIfNull(options);
         var standardProfiles = AgentProfile.CreateStandardGlobalProfiles(options);
-        var existingGlobalIds = await AgentProfiles
+        var existingGlobalProfiles = await AgentProfiles
             .Where(p => p.WorkspaceId == null)
-            .Select(p => p.Id)
             .ToListAsync(cancellationToken);
 
+        var existingGlobalIds = existingGlobalProfiles
+            .Select(p => p.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var missingProfiles = standardProfiles
-            .Where(p => !existingGlobalIds.Contains(p.Id, StringComparer.OrdinalIgnoreCase))
+            .Where(p => !existingGlobalIds.Contains(p.Id))
             .ToList();
 
         if (missingProfiles.Count > 0)
         {
             AgentProfiles.AddRange(missingProfiles);
+        }
+
+        var standardById = standardProfiles.ToDictionary(p => p.Id, StringComparer.OrdinalIgnoreCase);
+        foreach (var existing in existingGlobalProfiles)
+        {
+            if ((existing.DifficultyOverrides == null || existing.DifficultyOverrides.Count == 0) &&
+                standardById.TryGetValue(existing.Id, out var template) &&
+                template.DifficultyOverrides is { Count: > 0 })
+            {
+                existing.DifficultyOverrides = template.CloneDifficultyOverrides();
+            }
         }
 
         await ReconcileIdeationProfilesAsync(cancellationToken);

@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
@@ -159,6 +160,7 @@ public class IdeationProposalViewModel
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public int Priority { get; set; } = TaskPriority.Normal;
+    public TaskDifficulty Difficulty { get; set; } = TaskDifficulty.Standard;
     public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public List<int> SelectedDependencyIds { get; set; } = new();
     public List<string> DependsOnTitles { get; set; } = new();
@@ -173,6 +175,7 @@ public class IdeationProposalViewModel
             Title = proposal.Title ?? string.Empty,
             Description = proposal.Description ?? string.Empty,
             Priority = proposal.Priority > 0 ? proposal.Priority : TaskPriority.Normal,
+            Difficulty = TaskMarkdownSyncService.ParseDifficultyOrDefault(proposal.Difficulty),
             MergeMode = ParseProposalMergeMode(proposal.MergeMode),
             CreatedTaskId = proposal.TaskId
         };
@@ -220,6 +223,7 @@ public class IdeationProposalViewModel
         Title = task.Title ?? string.Empty;
         Description = task.Description ?? string.Empty;
         Priority = task.Priority > 0 ? task.Priority : TaskPriority.Normal;
+        Difficulty = task.Difficulty;
         MergeMode = task.MergeMode;
         IsAdded = task.Status != TaskOverallStatus.Draft &&
                   task.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected);

@@ -55,6 +55,9 @@ public static class NightCodeForgeToolDispatcher
     private static readonly string[] PriorityAliases =
         ["prio", "order", "rank", "importance", "new_priority", "newPriority"];
 
+    private static readonly string[] DifficultyAliases =
+        ["task_difficulty", "taskDifficulty", "complexity", "tier"];
+
     private static readonly string[] DependsOnIdsAliases =
         ["dependsOnIds", "depends_on", "dependsOn", "dependencies", "dependency_ids", "dependencyIds", "prerequisites", "prerequisite_ids", "deps"];
 
@@ -321,12 +324,14 @@ public static class NightCodeForgeToolDispatcher
         mapping.AddParameterAliases("description", ["desc", "details", "body", "prompt", "specification", "spec", "content"]);
         mapping.AddParameterAliases("priority", ["prio", "order", "rank", "importance"]);
         mapping.AddParameterAliases("depends_on_ids", DependsOnIdsAliases);
+        mapping.AddParameterAliases("difficulty", DifficultyAliases);
 
         mapping.AddNestedParameterAlias("tasks", "title", "name", "summary", "task_title", "header");
         mapping.AddNestedParameterAlias("tasks", "description", "desc", "details", "body", "content", "spec", "specification", "prompt");
         mapping.AddNestedParameterAlias("tasks", "priority", "prio", "order", "rank", "importance");
         mapping.AddNestedParameterAlias("tasks", "dependsOnTitles", "depends_on_titles", "dependsOnIndices", "depends_on_indices", "depends_on", "dependsOn", "dependencies", "deps");
         mapping.AddNestedParameterAlias("tasks", "depends_on_ids", DependsOnIdsAliases);
+        mapping.AddNestedParameterAlias("tasks", "difficulty", DifficultyAliases);
 
         config.Tools[CanonicalToolNames.ProposeTasks] = mapping;
     }
@@ -372,6 +377,7 @@ public static class NightCodeForgeToolDispatcher
         editTask.AddParameterAliases("depends_on_ids", DependsOnIdsAliases);
         editTask.AddParameterAliases("merge_mode", ["mergeMode", "merge", "merge_strategy", "mergeStrategy"]);
         editTask.AddParameterAliases("base_branch", ["baseBranch", "branch", "target_branch", "targetBranch"]);
+        editTask.AddParameterAliases("difficulty", DifficultyAliases);
         config.Tools[CanonicalToolNames.EditTask] = editTask;
 
         // set_task_priority

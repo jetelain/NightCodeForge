@@ -70,4 +70,7 @@ public static class AgentActivityMetadataKeys
     public const string ActualCloudCost = "actualCloudCost";
     public const string CloudSavings = "cloudSavings";
     public const string CachedInputTokens = "cachedInputTokens";
+    public const string Difficulty = "difficulty";
+    public const string HarnessId = "harnessId";
+    public const string ModelName = "modelName";
 }

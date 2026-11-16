@@ -85,9 +85,24 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
 
         if (profile == null)
         {
-            profile = workspace.AgentProfiles?.FirstOrDefault(p =>
-                string.Equals(p.Id, stageId, StringComparison.OrdinalIgnoreCase) ||
-                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stageId)));
+            profile = workspace.AgentProfiles?.FirstOrDefault(p => p.MatchesStage(stageId, workspace.Id));
+        }
+
+        if (profile != null && task.Difficulty != TaskDifficulty.Standard)
+        {
+            AgentProfile? fallbackArchitectProfile = null;
+            if (profile.RequiresArchitectFallbackForDifficulty(task.Difficulty))
+            {
+                fallbackArchitectProfile = await _workspaceRepository.GetEffectiveAgentProfileAsync(
+                    workspace.Id,
+                    StandardStageIds.TaskReview,
+                    cancellationToken);
+
+                fallbackArchitectProfile ??= workspace.AgentProfiles?.FirstOrDefault(p =>
+                    p.MatchesStage(StandardStageIds.TaskReview, workspace.Id));
+            }
+
+            profile = profile.ResolveForDifficulty(task.Difficulty, fallbackArchitectProfile);
         }
 
         return profile;
@@ -235,6 +250,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
                 var preResumeVersion = task.Version;
                 var preResumeDescription = task.Description;
                 var preResumeTitle = task.Title;
+                var preResumeDifficulty = task.Difficulty;
                 var preserveActor = AuditActors.GetActorForStage(stage.StageId);
                 var preResumeTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
                     workspace,
@@ -249,6 +265,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
                 if (preResumeTask != null)
                 {
                     if (preResumeTask.Version > preResumeVersion ||
+                        preResumeTask.Difficulty != preResumeDifficulty ||
                         !string.Equals(preResumeTask.Description?.Trim(), preResumeDescription?.Trim(), StringComparison.Ordinal) ||
                         !string.Equals(preResumeTask.Title?.Trim(), preResumeTitle?.Trim(), StringComparison.Ordinal))
                     {
@@ -610,6 +627,7 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         target.Description = source.Description;
         target.Priority = source.Priority;
         target.MergeMode = source.MergeMode;
+        target.Difficulty = source.Difficulty;
         target.BaseBranch = source.BaseBranch;
         target.FeatureBranch = source.FeatureBranch;
         target.Origin = source.Origin;

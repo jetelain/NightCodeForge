@@ -12,7 +12,7 @@
 @inject ILlmModelCatalogService ModelCatalogService
 @inject ILlmGatewayService GatewayService
 @inject ILlmContextWindowCache ContextWindowCache
-@inject IAcpHarnessCatalogService AcpCatalogService
+@inject IServiceProvider ServiceProvider
 @inject IOptions<LlmProviderOptions> LlmOptions
 @inject ToastService ToastService
 @inject ILogger<AgentProfilesTab> Logger
@@ -173,6 +173,221 @@
     }
     else
     {
+        @if (_profiles.Count > 0)
+        {
+            var crucibleModelIds = _availableModels.Select(m => m.ModelId).ToList();
+            var acpModels = AgentProfileAcpPresentationHelper.GetEffectiveAcpModels(_acpStatus);
+
+            <!-- Role-Based Task Difficulty Escalation Matrix -->
+            <div id="difficulty-escalation-matrix" class="forge-subcard" style="padding: 1.5rem; margin-bottom: 2rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
+                    <div>
+                        <h4 style="margin: 0 0 0.25rem 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);">
+                            ⚡ Role-Based Task Difficulty Escalation Matrix
+                        </h4>
+                        <p style="margin: 0; font-size: 0.84rem; color: var(--text-secondary);">
+                            Configure automatic model &amp; harness escalation by task complexity. Architecture &amp; Review drives Task Review + Code Review Fix; Coder drives Implementation.
+                        </p>
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 1rem;">
+                    @foreach (var difficulty in TaskDifficultyPresentationHelper.AllDifficulties)
+                    {
+                        var isStandardTier = difficulty == TaskDifficulty.Standard;
+                        var isSameAsArch = !isStandardTier && AgentProfileDifficultyMatrixHelper.IsCoderSameAsArchitect(_profiles, difficulty);
+
+                        <div class="matrix-tier-row" data-difficulty="@difficulty" style="padding: 1rem 1.15rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-card);">
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap;">
+                                <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+                                    <span class="forge-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(difficulty)" style="@TaskDifficultyPresentationHelper.GetBadgeStyle(difficulty)">
+                                        @TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)
+                                    </span>
+                                    <span style="font-size: 0.82rem; color: var(--text-secondary);">
+                                        @TaskDifficultyPresentationHelper.GetShortDescription(difficulty)
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
+                                @foreach (var role in AgentProfileDifficultyMatrixHelper.AllRoles)
+                                {
+                                    var cell = AgentProfileDifficultyMatrixHelper.BuildCell(_profiles, difficulty, role, crucibleModelIds, _acpStatus);
+                                    var cellIsAcp = string.Equals(cell.HarnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase);
+                                    var cellCustomMode = IsMatrixCellCustomModel(difficulty, role, cell);
+
+                                    <div class="matrix-role-cell" data-difficulty="@difficulty" data-matrix-role="@role" style="padding: 0.9rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); background: var(--bg-input); display: flex; flex-direction: column; gap: 0.7rem;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                                            <div>
+                                                <div style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary);">
+                                                    @AgentProfileDifficultyMatrixHelper.GetRoleTitle(role)
+                                                </div>
+                                                <div style="font-size: 0.74rem; color: var(--text-muted);">
+                                                    @AgentProfileDifficultyMatrixHelper.GetRoleStageHint(role)
+                                                </div>
+                                            </div>
+                                            @if (!isStandardTier && role == EscalationMatrixRole.CoderImplementation)
+                                            {
+                                                <button type="button"
+                                                        class="forge-btn forge-btn-secondary btn-xs matrix-copy-arch-btn"
+                                                        style="font-size: 0.74rem; padding: 0.22rem 0.55rem;"
+                                                        @onclick="() => CopyMatrixArchitectToCoder(difficulty)"
+                                                        disabled="@isSameAsArch"
+                                                        title="Copy Architecture &amp; Review settings for @difficulty">
+                                                    @(isSameAsArch ? "✓ Same as Architecture & Review" : "Same as Architecture & Review")
+                                                </button>
+                                            }
+                                        </div>
+
+                                        <div style="display: grid; grid-template-columns: 1fr 1.4fr; gap: 0.6rem;">
+                                            <div>
+                                                <label class="forge-field-label" style="font-size: 0.75rem;">Harness</label>
+                                                <select class="forge-input matrix-harness-select"
+                                                        style="width: 100%; font-size: 0.82rem;"
+                                                        value="@cell.HarnessId"
+                                                        @onchange="(e) => OnMatrixHarnessChangedAsync(difficulty, role, e.Value?.ToString())">
+                                                    <option value="@StandardHarnessIds.Crucible">Crucible</option>
+                                                    <option value="@StandardHarnessIds.Acp">Antigravity ACP</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                                    <label class="forge-field-label" style="font-size: 0.75rem;">Model</label>
+                                                    @if ((cellIsAcp && acpModels.Count > 0) || (!cellIsAcp && _availableModels.Count > 0))
+                                                    {
+                                                        <button type="button"
+                                                                class="forge-btn forge-btn-secondary btn-xs"
+                                                                style="font-size: 0.68rem; padding: 1px 5px;"
+                                                                @onclick="() => ToggleMatrixCustomModel(difficulty, role, cell)">
+                                                            @(cellCustomMode ? "List" : "Custom")
+                                                        </button>
+                                                    }
+                                                </div>
+                                                @if (cellIsAcp)
+                                                {
+                                                    @if (acpModels.Count > 0 && !cellCustomMode)
+                                                    {
+                                                        <select class="forge-input matrix-model-select"
+                                                                style="width: 100%; font-size: 0.82rem; font-family: var(--font-mono);"
+                                                                value="@cell.ModelName"
+                                                                @onchange="(e) => OnMatrixModelChangedAsync(difficulty, role, e.Value?.ToString())">
+                                                            @if (!string.IsNullOrWhiteSpace(cell.ModelName) && !acpModels.Any(m => string.Equals(m.ModelId, cell.ModelName, StringComparison.OrdinalIgnoreCase)))
+                                                            {
+                                                                <option value="@cell.ModelName">@cell.ModelName (Configured)</option>
+                                                            }
+                                                            @foreach (var m in acpModels)
+                                                            {
+                                                                <option value="@m.ModelId">@m.DisplayName (@m.ModelId)</option>
+                                                            }
+                                                        </select>
+                                                    }
+                                                    else
+                                                    {
+                                                        <input type="text"
+                                                               class="forge-input matrix-model-input"
+                                                               style="width: 100%; font-size: 0.82rem; font-family: var(--font-mono);"
+                                                               value="@cell.ModelName"
+                                                               @onchange="(e) => OnMatrixModelChangedAsync(difficulty, role, e.Value?.ToString())"
+                                                               placeholder="e.g. gemini-4-argon" />
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    @if (_availableModels.Count > 0 && !cellCustomMode)
+                                                    {
+                                                        <select class="forge-input matrix-model-select"
+                                                                style="width: 100%; font-size: 0.82rem; font-family: var(--font-mono);"
+                                                                value="@cell.ModelName"
+                                                                @onchange="(e) => OnMatrixModelChangedAsync(difficulty, role, e.Value?.ToString())">
+                                                            @if (!string.IsNullOrWhiteSpace(cell.ModelName) && !_availableModels.Any(m => string.Equals(m.ModelId, cell.ModelName, StringComparison.OrdinalIgnoreCase)))
+                                                            {
+                                                                <option value="@cell.ModelName">@cell.ModelName (Configured)</option>
+                                                            }
+                                                            @foreach (var m in _availableModels)
+                                                            {
+                                                                <option value="@m.ModelId">@m.DisplayName</option>
+                                                            }
+                                                        </select>
+                                                    }
+                                                    else
+                                                    {
+                                                        <input type="text"
+                                                               class="forge-input matrix-model-input"
+                                                               style="width: 100%; font-size: 0.82rem; font-family: var(--font-mono);"
+                                                               value="@cell.ModelName"
+                                                               @onchange="(e) => OnMatrixModelChangedAsync(difficulty, role, e.Value?.ToString())"
+                                                               placeholder="e.g. qwen3.5:35b-a3b" />
+                                                    }
+                                                }
+                                            </div>
+                                        </div>
+
+                                        <div style="display: grid; grid-template-columns: @(!cellIsAcp && _providerType == LlmProviderType.OllamaRouter ? "1fr 1fr" : "1fr"); gap: 0.6rem;">
+                                            <div>
+                                                <label class="forge-field-label" style="font-size: 0.75rem;">Thinking Effort</label>
+                                                <select class="forge-input matrix-thinking-select"
+                                                        style="width: 100%; font-size: 0.82rem;"
+                                                        value="@cell.ThinkingEffort"
+                                                        @onchange="(e) => OnMatrixThinkingEffortChanged(difficulty, role, e.Value?.ToString())">
+                                                    @if (cellIsAcp)
+                                                    {
+                                                        @foreach (var opt in AgentProfileAcpPresentationHelper.GetSupportedAcpThinkingEfforts(_acpStatus, cell.ModelName))
+                                                        {
+                                                            <option value="@opt.Effort">@opt.DisplayLabel</option>
+                                                        }
+                                                    }
+                                                    else
+                                                    {
+                                                        <option value="@ThinkingEffort.None">None (Instant)</option>
+                                                        <option value="@ThinkingEffort.Low">Low (~1k tokens)</option>
+                                                        <option value="@ThinkingEffort.Medium">Medium (~4k tokens)</option>
+                                                        <option value="@ThinkingEffort.High">High (~8k tokens)</option>
+                                                        <option value="@ThinkingEffort.CustomBudget">Custom Token Budget</option>
+                                                    }
+                                                </select>
+                                            </div>
+
+                                            @if (!cellIsAcp && _providerType == LlmProviderType.OllamaRouter)
+                                            {
+                                                <div>
+                                                    <label class="forge-field-label" style="font-size: 0.75rem;">OllamaRouter Target</label>
+                                                    <select class="forge-input matrix-routing-select"
+                                                            style="width: 100%; font-size: 0.82rem;"
+                                                            value="@cell.RoutingTarget"
+                                                            @onchange="(e) => OnMatrixRoutingTargetChanged(difficulty, role, e.Value?.ToString())">
+                                                        <option value="@OllamaRoutingTarget.Auto">Auto</option>
+                                                        <option value="@OllamaRoutingTarget.Local">Host GPU (Local)</option>
+                                                        <option value="@OllamaRoutingTarget.Remote">LAN GPU Server (Remote)</option>
+                                                        <option value="@OllamaRoutingTarget.Cloud">Cloud Overflow</option>
+                                                    </select>
+                                                </div>
+                                            }
+                                        </div>
+
+                                        @if (!cellIsAcp && cell.ThinkingEffort == ThinkingEffort.CustomBudget)
+                                        {
+                                            <div>
+                                                <label class="forge-field-label" style="font-size: 0.75rem;">Custom Thinking Token Budget</label>
+                                                <input type="number"
+                                                       min="100"
+                                                       max="64000"
+                                                       step="500"
+                                                       class="forge-input matrix-budget-input"
+                                                       style="width: 100%; font-size: 0.82rem; font-family: var(--font-mono);"
+                                                       value="@cell.ThinkingTokenBudget"
+                                                       @onchange="(e) => OnMatrixThinkingBudgetChanged(difficulty, role, e.Value?.ToString())"
+                                                       placeholder="e.g. 8192" />
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+
         <!-- Profile Cards List -->
         <div style="display: flex; flex-direction: column; gap: 2rem;">
             @foreach (var profile in _profiles)
@@ -496,7 +711,7 @@
         _isLoadingAcp = true;
         try
         {
-            _acpStatus = await AcpCatalogService.ProbeProviderAsync(KnownAcpCatalogIds.Antigravity, forceRefresh);
+            _acpStatus = await AgentProfileDifficultyMatrixHelper.TryGetAcpStatusAsync(ServiceProvider, forceRefresh);
         }
         catch (Exception ex)
         {
@@ -676,11 +891,7 @@
                 }
             }
 
-            var distinctModels = _profiles
-                .Where(p => !AgentProfileAcpPresentationHelper.IsAcpProfile(p) && !string.IsNullOrWhiteSpace(p.ModelName))
-                .Select(p => p.ModelName!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var distinctModels = AgentProfileDifficultyMatrixHelper.GetDistinctCrucibleModelNames(_profiles);
 
             var probeTasks = new List<Task>();
             foreach (var modelName in distinctModels)
@@ -817,12 +1028,112 @@
     }
 
     private readonly HashSet<string> _customModelProfiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<(TaskDifficulty, EscalationMatrixRole)> _customMatrixCells = new();
+
+    private bool IsMatrixCellCustomModel(
+        TaskDifficulty difficulty,
+        EscalationMatrixRole role,
+        DifficultyMatrixCellModel cell)
+    {
+        if (_customMatrixCells.Contains((difficulty, role)) || cell.ModelName == AgentProfileAcpPresentationHelper.CustomModelSentinel)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private void ToggleMatrixCustomModel(TaskDifficulty difficulty, EscalationMatrixRole role, DifficultyMatrixCellModel cell)
+    {
+        var key = (difficulty, role);
+        if (!_customMatrixCells.Remove(key) && cell.ModelName != AgentProfileAcpPresentationHelper.CustomModelSentinel)
+        {
+            _customMatrixCells.Add(key);
+        }
+        else if (cell.ModelName == AgentProfileAcpPresentationHelper.CustomModelSentinel)
+        {
+            cell.ModelName = string.Empty;
+            ApplyMatrixCell(cell);
+        }
+    }
+
+    private DifficultyMatrixCellModel BuildCurrentMatrixCell(TaskDifficulty difficulty, EscalationMatrixRole role)
+    {
+        var crucibleModelIds = _availableModels.Select(m => m.ModelId).ToList();
+        return AgentProfileDifficultyMatrixHelper.BuildCell(_profiles, difficulty, role, crucibleModelIds, _acpStatus);
+    }
+
+    private void ApplyMatrixCell(DifficultyMatrixCellModel cell) =>
+        AgentProfileDifficultyMatrixHelper.ApplyCellToProfiles(_profiles, cell, _providerType, _discoveredContextWindows, _acpStatus);
+
+    private async Task OnMatrixHarnessChangedAsync(TaskDifficulty difficulty, EscalationMatrixRole role, string? selectedHarnessId)
+    {
+        var cell = BuildCurrentMatrixCell(difficulty, role);
+        var fallbackCrucibleModel = _availableModels.FirstOrDefault()?.ModelId ?? LlmOptions.Value.DefaultModelId;
+        AgentProfileDifficultyMatrixHelper.ApplyHarnessSwitch(cell, selectedHarnessId, fallbackCrucibleModel, _acpStatus);
+        _customMatrixCells.Remove((difficulty, role));
+        ApplyMatrixCell(cell);
+        if (!string.Equals(cell.HarnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(cell.ModelName))
+        {
+            await ResolveModelContextWindowAsync(cell.ModelName);
+        }
+    }
+
+    private async Task OnMatrixModelChangedAsync(TaskDifficulty difficulty, EscalationMatrixRole role, string? selectedModel)
+    {
+        var cell = BuildCurrentMatrixCell(difficulty, role);
+        cell.ModelName = selectedModel ?? string.Empty;
+        ApplyMatrixCell(cell);
+        if (!string.Equals(cell.HarnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(cell.ModelName))
+        {
+            await ResolveModelContextWindowAsync(cell.ModelName);
+        }
+    }
+
+    private void OnMatrixThinkingEffortChanged(TaskDifficulty difficulty, EscalationMatrixRole role, string? rawEffort)
+    {
+        if (!Enum.TryParse<ThinkingEffort>(rawEffort, ignoreCase: true, out var effort))
+        {
+            return;
+        }
+
+        var cell = BuildCurrentMatrixCell(difficulty, role);
+        cell.ThinkingEffort = effort;
+        ApplyMatrixCell(cell);
+    }
+
+    private void OnMatrixThinkingBudgetChanged(TaskDifficulty difficulty, EscalationMatrixRole role, string? rawBudget)
+    {
+        var cell = BuildCurrentMatrixCell(difficulty, role);
+        cell.ThinkingTokenBudget = int.TryParse(rawBudget, out var parsed) ? parsed : null;
+        ApplyMatrixCell(cell);
+    }
+
+    private void OnMatrixRoutingTargetChanged(TaskDifficulty difficulty, EscalationMatrixRole role, string? rawTarget)
+    {
+        if (!Enum.TryParse<OllamaRoutingTarget>(rawTarget, ignoreCase: true, out var target))
+        {
+            return;
+        }
+
+        var cell = BuildCurrentMatrixCell(difficulty, role);
+        cell.RoutingTarget = target;
+        ApplyMatrixCell(cell);
+    }
+
+    private void CopyMatrixArchitectToCoder(TaskDifficulty difficulty)
+    {
+        AgentProfileDifficultyMatrixHelper.CopyArchitectToCoder(_profiles, difficulty, _providerType, _discoveredContextWindows, _acpStatus);
+        _customMatrixCells.Remove((difficulty, EscalationMatrixRole.CoderImplementation));
+    }
 
     private bool IsCustomModel(string profileId)
     {
         if (_customModelProfiles.Contains(profileId)) return true;
         var p = _profiles.FirstOrDefault(x => x.Id == profileId);
-        return p != null && p.ModelName == "__custom__";
+        return p != null && p.ModelName == AgentProfileAcpPresentationHelper.CustomModelSentinel;
     }
 
     private void ToggleCustomModel(string profileId)
@@ -831,7 +1142,7 @@
         {
             _customModelProfiles.Add(profileId);
             var p = _profiles.FirstOrDefault(x => x.Id == profileId);
-            if (p != null && p.ModelName == "__custom__")
+            if (p != null && p.ModelName == AgentProfileAcpPresentationHelper.CustomModelSentinel)
             {
                 p.ModelName = string.Empty;
             }

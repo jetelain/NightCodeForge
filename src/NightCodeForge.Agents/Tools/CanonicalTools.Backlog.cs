@@ -35,16 +35,38 @@ public partial class CanonicalTools
         BacklogModule.ProposeTasks(tasks, title, description, priority, dependsOnIds);
 
     public Task<string> ProposeTasksAsync(
+        object? tasks,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        CancellationToken cancellationToken) =>
+        BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, cancellationToken);
+
+    public Task<string> ProposeTasksAsync(
         object? tasks = null,
         string? title = null,
         string? description = null,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
+        string? mergeMode = null,
+        string? difficulty = null,
         CancellationToken cancellationToken = default) =>
-        BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, cancellationToken);
+        BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, cancellationToken);
 
     public Task<string> GetTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
         BacklogModule.GetTaskAsync(taskId, cancellationToken);
+
+    public Task<string> EditTaskAsync(
+        int taskId,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        string? mergeMode,
+        string? baseBranch,
+        CancellationToken cancellationToken) =>
+        BacklogModule.EditTaskAsync(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, cancellationToken);
 
     public Task<string> EditTaskAsync(
         int taskId,
@@ -54,8 +76,9 @@ public partial class CanonicalTools
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
         string? baseBranch = null,
+        string? difficulty = null,
         CancellationToken cancellationToken = default) =>
-        BacklogModule.EditTaskAsync(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, cancellationToken);
+        BacklogModule.EditTaskAsync(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, difficulty, cancellationToken);
 
     public Task<string> SetTaskPriorityAsync(int taskId, int priority, CancellationToken cancellationToken = default) =>
         BacklogModule.SetTaskPriorityAsync(taskId, priority, cancellationToken);

@@ -105,6 +105,7 @@ public static class IdeationPresentationHelper
                 existing.Title = proposal.Title.Trim();
                 existing.Description = proposal.Description.Trim();
                 existing.Priority = proposal.Priority;
+                existing.Difficulty = proposal.Difficulty;
                 existing.MergeMode = proposal.MergeMode;
                 existing.Status = TaskOverallStatus.Suggested;
                 if ((!existing.WorkflowId.HasValue || existing.WorkflowId.Value <= 0) && workflowId.HasValue)
@@ -137,6 +138,7 @@ public static class IdeationPresentationHelper
             Description = proposal.Description.Trim(),
             Status = TaskOverallStatus.Suggested,
             Priority = proposal.Priority,
+            Difficulty = proposal.Difficulty,
             MergeMode = proposal.MergeMode,
             BaseBranch = effectiveBaseBranch,
             CreatedAt = DateTime.UtcNow,

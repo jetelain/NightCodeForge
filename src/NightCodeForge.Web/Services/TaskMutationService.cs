@@ -15,6 +15,8 @@ public interface ITaskMutationService
     Task UpdateTitleAsync(ForgeTask task, string newTitle, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateDescriptionAsync(ForgeTask task, string newDescription, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdatePriorityAsync(ForgeTask task, int newPriority, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
+    Task UpdateDifficultyAsync(ForgeTask task, TaskDifficulty newDifficulty, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
+    Task UpdateDifficultyAsync(int taskId, TaskDifficulty newDifficulty, CancellationToken cancellationToken = default);
     Task UpdateMergeModeAsync(ForgeTask task, MergeMode newMergeMode, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
     Task UpdateMergeModeAsync(int taskId, MergeMode newMergeMode, CancellationToken cancellationToken = default);
     Task UpdateBaseBranchAsync(ForgeTask task, string newBaseBranch, IEnumerable<int>? prerequisiteIds = null, CancellationToken cancellationToken = default);
@@ -152,6 +154,47 @@ public class TaskMutationService : ITaskMutationService
             cancellationToken);
 
         await SyncMarkdownToDiskAsync(task, prerequisiteIds, cancellationToken);
+    }
+
+    public async Task UpdateDifficultyAsync(
+        ForgeTask task,
+        TaskDifficulty newDifficulty,
+        IEnumerable<int>? prerequisiteIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        if (!Enum.IsDefined(newDifficulty))
+        {
+            throw new ArgumentOutOfRangeException(nameof(newDifficulty), $"Invalid task difficulty: {newDifficulty}");
+        }
+
+        if (task.Difficulty == newDifficulty)
+        {
+            return;
+        }
+
+        var oldDifficulty = task.Difficulty;
+        task.Difficulty = newDifficulty;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            prerequisiteIds,
+            AuditActors.User,
+            $"Updated Difficulty from {oldDifficulty} to {newDifficulty}",
+            cancellationToken);
+
+        await SyncMarkdownToDiskAsync(task, prerequisiteIds, cancellationToken);
+    }
+
+    public async Task UpdateDifficultyAsync(
+        int taskId,
+        TaskDifficulty newDifficulty,
+        CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        await UpdateDifficultyAsync(task, newDifficulty, null, cancellationToken);
     }
 
     public async Task UpdateMergeModeAsync(

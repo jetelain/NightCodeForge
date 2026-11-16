@@ -136,9 +136,8 @@ public partial class DeterministicBuildStage : IWorkflowStage
                 if (nextStage != null)
                 {
                     nextProfile = context.Workspace?.AgentProfiles?.FirstOrDefault(p =>
-                        string.Equals(p.Id, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(p.Name, nextStage.StageId, StringComparison.OrdinalIgnoreCase) ||
-                        (p.StageDirectives != null && p.StageDirectives.ContainsKey(nextStage.StageId)));
+                        p.MatchesStage(nextStage.StageId, context.Workspace?.Id) ||
+                        string.Equals(p.Name, nextStage.StageId, StringComparison.OrdinalIgnoreCase));
 
                     if (nextProfile == null && _workspaceRepository != null && context.Workspace != null)
                     {
@@ -163,13 +162,46 @@ public partial class DeterministicBuildStage : IWorkflowStage
                 }
             }
 
-            var effectiveProfile = nextProfile ?? context.CurrentProfile;
+            var baseEffectiveProfile = nextProfile ?? context.CurrentProfile;
+            var taskDifficulty = context.ForgeTask?.Difficulty ?? TaskDifficulty.Standard;
+            var effectiveProfile = baseEffectiveProfile;
+            if (baseEffectiveProfile != null && taskDifficulty != TaskDifficulty.Standard)
+            {
+                AgentProfile? fallbackArchitect = null;
+                if (baseEffectiveProfile.RequiresArchitectFallbackForDifficulty(taskDifficulty))
+                {
+                    fallbackArchitect = context.Workspace?.AgentProfiles?.FirstOrDefault(p =>
+                        p.MatchesStage(StandardStageIds.TaskReview, context.Workspace?.Id) ||
+                        string.Equals(p.Name, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase));
+
+                    if (fallbackArchitect == null && _workspaceRepository != null && context.Workspace != null)
+                    {
+                        try
+                        {
+                            fallbackArchitect = await _workspaceRepository.GetEffectiveAgentProfileAsync(
+                                context.Workspace.Id,
+                                StandardStageIds.TaskReview,
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "Failed resolving architect fallback profile for difficulty escalation via workspace repository.");
+                        }
+                    }
+                }
+
+                effectiveProfile = baseEffectiveProfile.ResolveForDifficulty(taskDifficulty, fallbackArchitect);
+            }
+
             var effectiveOptimizationFlags = effectiveProfile?.OptimizationFlags
                 ?? bag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
                 ?? _globalOptimizationSettings?.GetFlags();
             var isPreloadEnabled = effectiveOptimizationFlags?.JitModelPreload ?? true;
+            var isCrucibleHarness = effectiveProfile != null &&
+                (string.IsNullOrWhiteSpace(effectiveProfile.HarnessId) ||
+                 string.Equals(effectiveProfile.HarnessId, StandardHarnessIds.Crucible, StringComparison.OrdinalIgnoreCase));
 
-            if (isPreloadEnabled && effectiveProfile != null && !string.IsNullOrWhiteSpace(effectiveProfile.ModelName))
+            if (isPreloadEnabled && isCrucibleHarness && effectiveProfile != null && !string.IsNullOrWhiteSpace(effectiveProfile.ModelName))
             {
                 var modelToPreload = effectiveProfile.ModelName;
                 int? contextIntent = effectiveProfile.ContextWindowTokens is > 0 ? effectiveProfile.ContextWindowTokens : null;

@@ -425,12 +425,21 @@ public class TaskOrchestrator : ITaskOrchestrator
                 task.MaxExecutedStageOrder = Math.Max(task.MaxExecutedStageOrder, stageOrder);
                 await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
 
+                // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
+                var profile = await _workspacePreparer.ResolveAgentProfileAsync(workspace, task, stage.StageId, cancellationToken);
+                currentExecutingProfile = profile;
+                pipelineContext.CurrentProfile = profile;
+
                 // Record active executing task authoritatively in telemetry
                 var isDeterministic = stage.Kind == WorkflowStageKind.Deterministic;
                 var queueName = isDeterministic
                     ? DeterministicStageConstants.CpuDeterministicQueue
                     : DeterministicStageConstants.LlmInferenceQueue;
-                var hardwareTarget = isDeterministic ? "Deterministic CPU" : "Local GPU";
+                var hardwareTarget = isDeterministic
+                    ? "Deterministic CPU"
+                    : (string.Equals(profile?.HarnessId, StandardHarnessIds.Acp, StringComparison.OrdinalIgnoreCase)
+                        ? "Antigravity ACP"
+                        : "Local GPU");
 
                 _telemetryService.RecordActiveTask(new ActiveTaskSummary(
                     task.Id,
@@ -441,10 +450,18 @@ public class TaskOrchestrator : ITaskOrchestrator
                     DateTime.UtcNow,
                     hardwareTarget));
 
-                // Resolve Agent Profile matching interrupted profile or current stage, or fallback to first
-                var profile = await _workspacePreparer.ResolveAgentProfileAsync(workspace, task, stage.StageId, cancellationToken);
-                currentExecutingProfile = profile;
-                pipelineContext.CurrentProfile = profile;
+                if (stage.Kind == WorkflowStageKind.Agentic && profile != null && task.Difficulty > TaskDifficulty.Standard)
+                {
+                    await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                    {
+                        TaskId = task.Id,
+                        StageId = stage.StageId,
+                        Level = LogLevel.Information,
+                        Source = AuditActors.TaskOrchestrator,
+                        Message = $"Task #{task.Id} [{task.Difficulty}]: running stage '{stage.StageId}' with harness '{profile.HarnessId}', model '{profile.ModelName}' (thinking: {profile.ThinkingEffort}).",
+                        Timestamp = DateTime.UtcNow
+                    }, cancellationToken);
+                }
 
                 if (stage.Kind == WorkflowStageKind.Agentic && !HasCustomHandler(stage))
                 {
@@ -526,6 +543,22 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     try
                     {
+                        var stageStartedMetadata = new Dictionary<string, object?>
+                        {
+                            [AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
+                            [AgentActivityMetadataKeys.TaskTitle] = task.Title,
+                            [AgentActivityMetadataKeys.Priority] = task.Priority,
+                            [AgentActivityMetadataKeys.QueueType] = stage.Kind == WorkflowStageKind.Deterministic
+                                ? DeterministicStageConstants.CpuDeterministicQueue
+                                : DeterministicStageConstants.LlmInferenceQueue
+                        };
+                        if (stage.Kind == WorkflowStageKind.Agentic && profile != null && task.Difficulty > TaskDifficulty.Standard)
+                        {
+                            stageStartedMetadata[AgentActivityMetadataKeys.Difficulty] = task.Difficulty.ToString();
+                            stageStartedMetadata[AgentActivityMetadataKeys.HarnessId] = profile.HarnessId;
+                            stageStartedMetadata[AgentActivityMetadataKeys.ModelName] = profile.ModelName;
+                        }
+
                         await _streamer.BroadcastAsync(new AgentActivityEvent(
                             Guid.NewGuid().ToString("N"),
                             task.Id,
@@ -533,15 +566,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             AgentActivityKind.StageStarted,
                             $"Starting stage '{stage.StageId}'",
                             DateTime.UtcNow,
-                            new Dictionary<string, object?>
-                            {
-                                [AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
-                                [AgentActivityMetadataKeys.TaskTitle] = task.Title,
-                                [AgentActivityMetadataKeys.Priority] = task.Priority,
-                                [AgentActivityMetadataKeys.QueueType] = stage.Kind == WorkflowStageKind.Deterministic
-                                    ? DeterministicStageConstants.CpuDeterministicQueue
-                                    : DeterministicStageConstants.LlmInferenceQueue
-                            }), cancellationToken);
+                            stageStartedMetadata), cancellationToken);
                     }
                     catch (Exception sex)
                     {
@@ -1079,6 +1104,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             Description = p.Description,
                             Status = TaskOverallStatus.Suggested,
                             MergeMode = MergeMode.ManualReviewRequired,
+                            Difficulty = Services.TaskMarkdownSyncService.ParseDifficultyOrDefault(p.Difficulty),
                             BaseBranch = workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch,
                             Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
                             CreatedAt = DateTime.UtcNow,
@@ -1212,7 +1238,9 @@ public class TaskOrchestrator : ITaskOrchestrator
                         bool modifiedInThisStage = false;
                         if (baselineSnapshot != null && baselineSnapshot.TryGetValue(task.Id, out var baseEntry))
                         {
+                            var baselineDifficulty = Services.TaskMarkdownSyncService.ParseDifficulty(baseEntry.Frontmatter.Difficulty) ?? TaskDifficulty.Standard;
                             if (task.Version > baseEntry.Version ||
+                                task.Difficulty != baselineDifficulty ||
                                 !string.Equals(task.Description?.Trim(), baseEntry.Description?.Trim(), StringComparison.Ordinal) ||
                                 !string.Equals(task.Title?.Trim(), baseEntry.Frontmatter.Title?.Trim(), StringComparison.Ordinal))
                             {
@@ -2204,6 +2232,16 @@ public class TaskOrchestrator : ITaskOrchestrator
         string? baseBranch = null,
         CancellationToken cancellationToken = default) =>
         _lifecycleMutationCoordinator.PromoteSuggestedTaskAsync(taskId, targetStatus, priority, mergeMode, baseBranch, cancellationToken);
+
+    public Task PromoteSuggestedTaskAsync(
+        int taskId,
+        TaskOverallStatus targetStatus,
+        int priority,
+        MergeMode mergeMode,
+        string? baseBranch,
+        TaskDifficulty? difficulty,
+        CancellationToken cancellationToken = default) =>
+        _lifecycleMutationCoordinator.PromoteSuggestedTaskAsync(taskId, targetStatus, priority, mergeMode, baseBranch, difficulty, cancellationToken);
 
     public Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default) =>
         _lifecycleMutationCoordinator.RejectTaskAsync(taskId, reason, cancellationToken);

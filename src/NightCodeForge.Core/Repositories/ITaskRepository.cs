@@ -265,6 +265,7 @@ public class InMemoryTaskRepository : ITaskRepository
                 Status = task.Status,
                 Priority = task.Priority,
                 MergeMode = task.MergeMode,
+                Difficulty = task.Difficulty,
                 BaseBranch = task.BaseBranch,
                 FeatureBranch = task.FeatureBranch,
                 CurrentStageId = task.CurrentStageId,
@@ -317,6 +318,7 @@ public class InMemoryTaskRepository : ITaskRepository
                 {
                     task.Version = existing.Version;
                     task.MergeMode = existing.MergeMode;
+                    task.Difficulty = existing.Difficulty;
                     task.Priority = existing.Priority;
                     task.Title = existing.Title;
                     task.Description = existing.Description;
@@ -394,6 +396,7 @@ public class InMemoryTaskRepository : ITaskRepository
                 Status = task.Status,
                 Priority = task.Priority,
                 MergeMode = task.MergeMode,
+                Difficulty = task.Difficulty,
                 BaseBranch = task.BaseBranch,
                 FeatureBranch = task.FeatureBranch,
                 CurrentStageId = task.CurrentStageId,

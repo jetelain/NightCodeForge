@@ -6,6 +6,7 @@ namespace NightCodeForge.Web.Tests;
 public class MockTaskOrchestrator : ITaskOrchestrator
 {
     public (int TaskId, TaskOverallStatus TargetStatus, int Priority, MergeMode MergeMode, string? BaseBranch)? LastPromotedCall { get; private set; }
+    public TaskDifficulty? LastPromotedDifficulty { get; private set; }
     public (int QuestionId, string Answer)? LastSubmitHumanAnswerCall { get; private set; }
     public (int TaskId, IReadOnlyDictionary<int, string> Answers)? LastSubmitAnswersCall { get; private set; }
     public (int TaskId, string RevisionNotes)? LastRequestChangesCall { get; private set; }
@@ -33,8 +34,12 @@ public class MockTaskOrchestrator : ITaskOrchestrator
     }
 
     public Task PromoteSuggestedTaskAsync(int taskId, TaskOverallStatus targetStatus, int priority, MergeMode mergeMode, string? baseBranch = null, CancellationToken cancellationToken = default)
+        => PromoteSuggestedTaskAsync(taskId, targetStatus, priority, mergeMode, baseBranch, difficulty: null, cancellationToken);
+
+    public Task PromoteSuggestedTaskAsync(int taskId, TaskOverallStatus targetStatus, int priority, MergeMode mergeMode, string? baseBranch, TaskDifficulty? difficulty, CancellationToken cancellationToken = default)
     {
         LastPromotedCall = (taskId, targetStatus, priority, mergeMode, baseBranch);
+        LastPromotedDifficulty = difficulty;
         return Task.CompletedTask;
     }
 

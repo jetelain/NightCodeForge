@@ -15,6 +15,9 @@ public interface ILlmProviderOptions
     ThinkingEffort? CoderThinkingEffort { get; }
     string? ArchitectModelId { get; }
     ThinkingEffort? ArchitectThinkingEffort { get; }
+    string? ExpertHarnessId => null;
+    string? ExpertModelId => null;
+    ThinkingEffort? ExpertThinkingEffort => null;
 }
 
 /// <summary>
@@ -28,4 +31,7 @@ public record DefaultLlmProviderOptions(
     string? ArchitectModelId = null,
     ThinkingEffort? ArchitectThinkingEffort = null,
     LlmProviderType ProviderType = LlmProviderType.OllamaRouter,
-    int MaxConcurrentInferenceTasks = 1) : ILlmProviderOptions;
+    int MaxConcurrentInferenceTasks = 1,
+    string? ExpertHarnessId = null,
+    string? ExpertModelId = null,
+    ThinkingEffort? ExpertThinkingEffort = null) : ILlmProviderOptions;

@@ -63,6 +63,7 @@ public class TaskHistoryRevisionModel
     public string Description { get; set; } = string.Empty;
     public TaskOverallStatus Status { get; set; }
     public int Priority { get; set; }
+    public TaskDifficulty Difficulty { get; set; }
     public MergeMode MergeMode { get; set; }
     public string BaseBranch { get; set; } = string.Empty;
     public string? FeatureBranch { get; set; }
@@ -128,6 +129,7 @@ public class TaskHistoryDiffService : ITaskHistoryDiffService
                 Description = curr.Description,
                 Status = curr.Status,
                 Priority = curr.Priority,
+                Difficulty = curr.Difficulty,
                 MergeMode = curr.MergeMode,
                 BaseBranch = curr.BaseBranch,
                 FeatureBranch = curr.FeatureBranch,
@@ -165,6 +167,11 @@ public class TaskHistoryDiffService : ITaskHistoryDiffService
                 if (prev.MergeMode != curr.MergeMode)
                 {
                     model.FieldChanges.Add(new TaskFieldChange("MergeMode", MergeModeHelper.GetLabel(prev.MergeMode), MergeModeHelper.GetLabel(curr.MergeMode), "badge-purple"));
+                }
+
+                if (prev.Difficulty != curr.Difficulty)
+                {
+                    model.FieldChanges.Add(new TaskFieldChange("Difficulty", prev.Difficulty.ToString(), curr.Difficulty.ToString(), "badge-purple"));
                 }
 
                 if (!string.Equals(prev.BaseBranch, curr.BaseBranch, StringComparison.Ordinal))

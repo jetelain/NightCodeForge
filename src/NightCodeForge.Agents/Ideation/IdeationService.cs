@@ -304,8 +304,8 @@ When planning or proposing tasks:
 
 <backlog_management_guidelines>
 You cannot edit repository files or 'docs/tasks/*.md' directly. Existing backlog tasks are managed exclusively through these host-level tools, which are audited and keep the markdown specifications in sync:
-- 'get_task' (task_id): fetch the full details (description, status, priority, merge mode, base branch, prerequisites, dependents) of a task listed in <existing_workspace_tasks>. Call it before refining a task, instead of guessing its content.
-- 'edit_task' (task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?): refine an existing task. Omitted arguments are unchanged; 'description' and 'depends_on_ids' replace the existing value, so start from the 'get_task' output. Resolve functional questions with the maintainer ('ask') BEFORE calling it.
+- 'get_task' (task_id): fetch the full details (description, status, priority, difficulty, merge mode, base branch, prerequisites, dependents) of a task listed in <existing_workspace_tasks>. Call it before refining a task, instead of guessing its content.
+- 'edit_task' (task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?, difficulty?): refine an existing task. Omitted arguments are unchanged; 'description' and 'depends_on_ids' replace the existing value, so start from the 'get_task' output. Resolve functional questions with the maintainer ('ask') BEFORE calling it.
 - 'set_task_priority' (task_id, priority) and 'rework_priorities' (updates: [{ task_id, priority }]): change priority tiers (1 Critical to 5 Trivial) of one or several tasks; prefer 'rework_priorities' when reordering several tasks.
 - 'remove_task' (task_id, reason): cancel a task that is obsolete or duplicated. It is refused while active tasks depend on it; re-link or remove those dependents first.
 Only tasks that are Draft, Suggested or Open, never executed, and not currently running can be changed. Tasks that already entered the pipeline (or are Reviewed, Implemented, Ready, Closed, Rejected, Cancelled) are rejected with an error: do not retry, create a follow-up task via 'propose_tasks' instead. Never mutate the backlog without the maintainer's agreement; summarize every change you made afterwards.
@@ -546,7 +546,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                             {
                                 if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
-                                    var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds, p.MergeMode);
+                                    var ideationProp = ToIdeationProposal(p);
                                     sessionProposals.Add(ideationProp);
                                     yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                                     await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -623,7 +623,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                         {
                             if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                             {
-                                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds, p.MergeMode);
+                                var ideationProp = ToIdeationProposal(p);
                                 sessionProposals.Add(ideationProp);
                                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                                 await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -670,7 +670,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         {
             if (!sessionProposals.Any(existing => string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
             {
-                var ideationProp = new IdeationProposal(p.Title, p.Description, p.Priority, p.DependsOnTitles, p.TaskId, p.DependsOnIds, p.MergeMode);
+                var ideationProp = ToIdeationProposal(p);
                 sessionProposals.Add(ideationProp);
                 yield return new IdeationStreamUpdate(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: ideationProp);
                 await BroadcastAsync(sessionId, 0, StandardStageIds.Ideation, AgentActivityKind.ToolCompleted, $"Proposed task: {ideationProp.Title}", cancellationToken, metadata);
@@ -881,7 +881,8 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                         p.Title ?? "Untitled Proposal",
                         p.Description ?? string.Empty,
                         p.Priority <= 0 ? TaskPriority.Normal : p.Priority,
-                        deps));
+                        deps,
+                        Difficulty: p.Difficulty));
                 }
             }
         }
@@ -918,12 +919,24 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         return null;
     }
 
+    private static IdeationProposal ToIdeationProposal(TaskProposal proposal) =>
+        new(
+            proposal.Title,
+            proposal.Description,
+            proposal.Priority,
+            proposal.DependsOnTitles,
+            proposal.TaskId,
+            proposal.DependsOnIds,
+            proposal.MergeMode,
+            proposal.Difficulty);
+
     public class IdeationProposalDto
     {
         public string? Title { get; set; }
         public string? Description { get; set; }
         public int Priority { get; set; } = 1;
         public List<string>? DependsOnTitles { get; set; }
+        public string? Difficulty { get; set; }
     }
 }
 

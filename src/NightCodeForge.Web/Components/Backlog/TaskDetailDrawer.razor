@@ -29,6 +29,11 @@
                             <span class="font-mono text-secondary" style="font-weight: 700; font-size: 1rem;">#@Task.Id</span>
                             <span class="forge-badge @GetStatusBadgeClass(Task.Status)">@Task.Status</span>
                             <span class="forge-badge badge-priority-@Task.Priority">P@(Task.Priority)</span>
+                            <span class="forge-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(Task.Difficulty)"
+                                  style="@TaskDifficultyPresentationHelper.GetBadgeStyle(Task.Difficulty)"
+                                  title="@TaskDifficultyPresentationHelper.GetDescription(Task.Difficulty)">
+                                @TaskDifficultyPresentationHelper.GetDisplayLabel(Task.Difficulty)
+                            </span>
                             <span class="forge-badge @MergeModeHelper.GetBadgeClass(Task.MergeMode)">
                                 @MergeModeHelper.GetBadgeLabel(Task.MergeMode)
                             </span>
@@ -184,6 +189,27 @@
                             <small class="text-secondary" style="display: block; margin-top: 0.3rem; font-size: 0.75rem;">
                                 @MergeModeHelper.GetLabel(Task.MergeMode)
                             </small>
+                        </div>
+                    </div>
+
+                    <!-- Editable Difficulty -->
+                    <div style="margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle);">
+                        <label class="meta-label" style="display: block; margin-bottom: 0.35rem; font-weight: 600; color: var(--text-primary); font-size: 0.82rem;">
+                            Difficulty Tier
+                        </label>
+                        <div class="difficulty-chip-row" style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                            @foreach (var difficulty in TaskDifficultyPresentationHelper.AllDifficulties)
+                            {
+                                var isSelected = Task.Difficulty == difficulty;
+                                <button type="button"
+                                        class="forge-btn btn-xs difficulty-chip-btn @(isSelected ? "selected" : "")"
+                                        style="cursor: pointer; padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-size: 0.78rem; @TaskDifficultyPresentationHelper.GetChipStyle(difficulty, isSelected)"
+                                        @onclick="() => UpdateDifficultyAsync(difficulty)"
+                                        disabled="@_isUpdatingDifficulty"
+                                        title="@TaskDifficultyPresentationHelper.GetDescription(difficulty)">
+                                    @TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)
+                                </button>
+                            }
                         </div>
                     </div>
                 </div>
@@ -468,6 +494,7 @@
 
     private bool _showRejectModal;
     private bool _isUpdatingPriority;
+    private bool _isUpdatingDifficulty;
     private bool _isUpdatingMergeMode;
     private bool _isPrDeliveryAvailable;
     private bool _isPrActionBusy;
@@ -549,6 +576,28 @@
         finally
         {
             _isUpdatingMergeMode = false;
+        }
+    }
+
+    private async Task UpdateDifficultyAsync(TaskDifficulty newDifficulty)
+    {
+        if (Task == null || Task.Difficulty == newDifficulty || _isUpdatingDifficulty) return;
+
+        _isUpdatingDifficulty = true;
+        try
+        {
+            await TaskMutationService.UpdateDifficultyAsync(Task, newDifficulty, PrerequisiteIds);
+            ToastService.Show("Difficulty Updated", $"Task #{Task.Id} difficulty set to {TaskDifficultyPresentationHelper.GetLabel(newDifficulty)}.", ToastLevel.Success);
+            await OnTaskUpdated.InvokeAsync(Task);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to update Difficulty for Task #{TaskId}", Task.Id);
+            ToastService.Show("Difficulty Update Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isUpdatingDifficulty = false;
         }
     }
 

@@ -217,6 +217,7 @@ Please inspect the codebase and check existing backlog tasks in docs/tasks/, det
                     MergeMode = MergeMode.ManualReviewRequired,
                     BaseBranch = baseBranch,
                     Priority = p.Priority > 0 ? p.Priority : TaskPriority.Normal,
+                    Difficulty = TaskMarkdownSyncService.ParseDifficultyOrDefault(p.Difficulty),
                     CurrentStageId = string.Empty,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow

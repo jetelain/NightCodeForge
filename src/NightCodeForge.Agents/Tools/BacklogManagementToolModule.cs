@@ -86,9 +86,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null,
              [Description("Prerequisite task IDs")] IReadOnlyList<int>? depends_on_ids = null,
              [Description("Merge mode if single proposal: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
+             [Description("Task difficulty if single proposal: standard, difficult, or expert")] string? difficulty = null,
              CancellationToken ct = default) =>
                 module != null
-                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, ct)
+                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, difficulty, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.ProposeTasks,
             "Proposes structured backlog tasks for triage and discovery. Returns the draft task(s) created with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description. Subsequent tasks can reference earlier created IDs in depends_on_ids."),
@@ -100,7 +101,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     ? module.GetTaskAsync(task_id, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.GetTask,
-            "Fetches the complete details of one backlog task (description, status, priority, prerequisites, dependents) on demand."),
+            "Fetches the complete details of one backlog task (description, status, priority, difficulty, prerequisites, dependents) on demand."),
 
         AIFunctionFactory.Create(
             ([Description("Numeric ID of the unstarted task to edit")] int task_id,
@@ -110,9 +111,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("Complete new list of prerequisite task IDs (replaces the existing list; cycles are rejected)")] int[]? depends_on_ids = null,
              [Description("New merge mode: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
              [Description("New base branch")] string? base_branch = null,
+             [Description("New task difficulty: standard, difficult, or expert")] string? difficulty = null,
              CancellationToken ct = default) =>
                 module != null
-                    ? module.EditTaskAsync(task_id, title, description, priority, depends_on_ids, merge_mode, base_branch, ct)
+                    ? module.EditTaskAsync(task_id, title, description, priority, depends_on_ids, merge_mode, base_branch, difficulty, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.EditTask,
             "Edits an unstarted (Suggested or Open, never executed) backlog task. Omitted arguments are left unchanged. Only functionally resolved changes agreed with the maintainer should be applied."),
@@ -215,16 +217,28 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
 
     public Task<string> EditTaskAsync(
         int taskId,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        string? mergeMode,
+        string? baseBranch,
+        CancellationToken cancellationToken) =>
+        EditTaskAsync(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, null, cancellationToken);
+
+    public Task<string> EditTaskAsync(
+        int taskId,
         string? title = null,
         string? description = null,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
         string? baseBranch = null,
+        string? difficulty = null,
         CancellationToken cancellationToken = default)
     {
         var scope = RequireBacklogScope(CanonicalToolNames.EditTask);
-        var request = new TaskEditRequest(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch);
+        var request = new TaskEditRequest(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, difficulty);
         return ExecuteWithBacklogServiceAsync(
             CanonicalToolNames.EditTask,
             scope,
@@ -283,7 +297,17 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         int? priority,
         IReadOnlyList<int>? dependsOnIds,
         CancellationToken cancellationToken) =>
-        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, null, cancellationToken);
+        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, null, null, cancellationToken);
+
+    public Task<string> ProposeTasksAsync(
+        object? tasks,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        string? mergeMode,
+        CancellationToken cancellationToken) =>
+        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, null, cancellationToken);
 
     public async Task<string> ProposeTasksAsync(
         object? tasks = null,
@@ -292,9 +316,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
+        string? difficulty = null,
         CancellationToken cancellationToken = default)
     {
-        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds, mergeMode);
+        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty);
         if (discovered.Count == 0)
         {
             return "No tasks proposed.";
@@ -385,7 +410,8 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         string? description = null,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
-        string? mergeMode = null)
+        string? mergeMode = null,
+        string? difficulty = null)
     {
         var discovered = new List<TaskProposal>();
 
@@ -394,18 +420,19 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             var effectiveTitle = !IsGenericOrEmptyTitle(title)
                 ? title!.Trim()
                 : DeriveTitleFromDescription(description);
-            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds, mergeMode: mergeMode));
+            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds, mergeMode: mergeMode, difficulty: difficulty));
         }
 
         if (tasks != null)
         {
+            var batchProposals = new List<TaskProposal>();
             if (tasks is IEnumerable<TaskProposal> enumProposals)
             {
-                discovered.AddRange(enumProposals);
+                batchProposals.AddRange(enumProposals);
             }
             else if (tasks is JsonElement je)
             {
-                discovered.AddRange(ParseJsonElementTasks(je));
+                batchProposals.AddRange(ParseJsonElementTasks(je));
             }
             else if (tasks is string str)
             {
@@ -414,7 +441,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     try
                     {
                         using var doc = JsonDocument.Parse(str);
-                        discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
+                        batchProposals.AddRange(ParseJsonElementTasks(doc.RootElement));
                     }
                     catch (JsonException)
                     {
@@ -428,13 +455,36 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 {
                     var jsonStr = JsonSerializer.Serialize(tasks);
                     using var doc = JsonDocument.Parse(jsonStr);
-                    discovered.AddRange(ParseJsonElementTasks(doc.RootElement));
+                    batchProposals.AddRange(ParseJsonElementTasks(doc.RootElement));
                 }
                 catch (JsonException)
                 {
                     // Ignore non-JSON serialized input
                 }
             }
+
+            if (!string.IsNullOrWhiteSpace(mergeMode) || !string.IsNullOrWhiteSpace(difficulty))
+            {
+                var fallbackMergeMode = string.IsNullOrWhiteSpace(mergeMode) ? null : mergeMode;
+                var fallbackDifficulty = string.IsNullOrWhiteSpace(difficulty) ? null : difficulty;
+                for (int i = 0; i < batchProposals.Count; i++)
+                {
+                    var proposal = batchProposals[i];
+                    var effectiveMergeMode = proposal.MergeMode ?? fallbackMergeMode;
+                    var effectiveDifficulty = proposal.Difficulty ?? fallbackDifficulty;
+                    if (!string.Equals(effectiveMergeMode, proposal.MergeMode, StringComparison.Ordinal) ||
+                        !string.Equals(effectiveDifficulty, proposal.Difficulty, StringComparison.Ordinal))
+                    {
+                        batchProposals[i] = proposal with
+                        {
+                            MergeMode = effectiveMergeMode,
+                            Difficulty = effectiveDifficulty
+                        };
+                    }
+                }
+            }
+
+            discovered.AddRange(batchProposals);
         }
 
         return discovered;
@@ -571,7 +621,17 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             mergeMode = mm.GetString();
         }
 
-        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds, null, mergeMode);
+        string? difficulty = null;
+        if ((item.TryGetProperty("difficulty", out var diffProp) ||
+             item.TryGetProperty("task_difficulty", out diffProp) ||
+             item.TryGetProperty("taskDifficulty", out diffProp) ||
+             item.TryGetProperty("complexity", out diffProp)) &&
+            diffProp.ValueKind == JsonValueKind.String)
+        {
+            difficulty = diffProp.GetString();
+        }
+
+        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds, null, mergeMode, difficulty);
     }
 
     private static int? TryReadIntProperty(JsonElement obj, string propertyName) =>

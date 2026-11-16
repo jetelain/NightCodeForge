@@ -100,6 +100,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             CurrentStage = task.CurrentStageId,
             Priority = task.Priority,
             MergeMode = FormatMergeMode(task.MergeMode),
+            Difficulty = FormatDifficulty(task.Difficulty),
             WaitingForHuman = task.IsWaitingForHuman,
             Version = task.Version > 0 ? task.Version : 1,
             BaseBranch = task.BaseBranch,
@@ -157,7 +158,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             ? string.Join(",", frontmatter.DependsOn.Select(d => d?.ToString()?.Trim() ?? string.Empty))
             : string.Empty;
         var normDesc = (NormalizeLineEndings(description) ?? string.Empty).Trim();
-        var lines = new List<string>(15)
+        var lines = new List<string>(16)
         {
             $"id:{frontmatter.Id}",
             $"title:{(frontmatter.Title ?? string.Empty).Trim()}",
@@ -165,6 +166,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             $"origin:{(frontmatter.Origin ?? string.Empty).Trim()}",
             $"priority:{frontmatter.Priority}",
             $"merge_mode:{(frontmatter.MergeMode ?? string.Empty).Trim()}",
+            $"difficulty:{(frontmatter.Difficulty ?? string.Empty).Trim()}",
             $"base_branch:{(frontmatter.BaseBranch ?? string.Empty).Trim()}",
             $"feature_branch:{(frontmatter.FeatureBranch ?? string.Empty).Trim()}",
             $"agent_profile:{(frontmatter.AgentProfile ?? string.Empty).Trim()}",
@@ -1522,6 +1524,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 finalDepIds = finalDepIds.Distinct().ToList();
 
                 var mergeMode = ParseMergeMode(nt.Item.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
+                var difficulty = ParseDifficulty(nt.Item.Frontmatter.Difficulty, nt.Item.FilePath) ?? TaskDifficulty.Standard;
 
                 var newTask = new ForgeTask
                 {
@@ -1530,6 +1533,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     Description = !string.IsNullOrWhiteSpace(nt.Item.Description) ? nt.Item.Description : nt.Item.Body,
                     Priority = nt.Item.Frontmatter.Priority > 0 ? nt.Item.Frontmatter.Priority : TaskSyncConstants.DefaultPriority,
                     MergeMode = mergeMode,
+                    Difficulty = difficulty,
                     IsWaitingForHuman = nt.Item.Frontmatter.WaitingForHuman,
                     BaseBranch = !string.IsNullOrWhiteSpace(nt.Item.Frontmatter.BaseBranch) ? nt.Item.Frontmatter.BaseBranch : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch),
                     FeatureBranch = nt.Item.Frontmatter.FeatureBranch ?? string.Empty,
@@ -1559,6 +1563,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 nt.Item.Frontmatter.Status = created.Status.ToString();
                 nt.Item.Frontmatter.Origin = FormatOrigin(created.Origin);
                 nt.Item.Frontmatter.MergeMode = FormatMergeMode(created.MergeMode);
+                nt.Item.Frontmatter.Difficulty = FormatDifficulty(created.Difficulty);
                 nt.Item.Frontmatter.WaitingForHuman = created.IsWaitingForHuman;
                 nt.Item.Frontmatter.CurrentStage = created.CurrentStageId;
                 nt.Item.Frontmatter.ExternalSource = created.ExternalSource;
@@ -1709,6 +1714,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 string newDesc;
                 int newPriority;
                 Domain.MergeMode newMergeMode;
+                TaskDifficulty newDifficulty;
                 string newBaseBranch;
                 List<int>? finalDepIds = null;
 
@@ -1747,14 +1753,20 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     bool diskMergeModeChanged = diskMergeMode.HasValue && diskMergeMode != baselineMergeMode;
                     newMergeMode = diskMergeModeChanged && diskMergeMode.HasValue ? diskMergeMode.Value : task.MergeMode;
 
-                    // 5. BaseBranch: DB takes precedence if DB modified base branch; otherwise disk modification takes effect if disk altered it relative to baseline
+                    // 5. Difficulty: disk modification takes effect only if disk altered it relative to baseline
+                    var diskDifficulty = ParseDifficulty(item.Frontmatter.Difficulty, item.FilePath, taskId);
+                    var baselineDifficulty = ParseDifficulty(baseline.Frontmatter.Difficulty, item.FilePath, taskId) ?? TaskDifficulty.Standard;
+                    bool diskDifficultyChanged = diskDifficulty.HasValue && diskDifficulty.Value != baselineDifficulty;
+                    newDifficulty = diskDifficultyChanged ? diskDifficulty!.Value : task.Difficulty;
+
+                    // 6. BaseBranch: DB takes precedence if DB modified base branch; otherwise disk modification takes effect if disk altered it relative to baseline
                     var fallbackBaseBranch = task.BaseBranch ?? workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch;
                     bool dbBaseBranchChanged = !string.Equals(task.BaseBranch?.Trim(), baseline.Frontmatter.BaseBranch?.Trim(), StringComparison.Ordinal);
                     bool diskBaseBranchChanged = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) &&
                         !string.Equals(item.Frontmatter.BaseBranch.Trim(), baseline.Frontmatter.BaseBranch?.Trim(), StringComparison.Ordinal);
                     newBaseBranch = dbBaseBranchChanged ? fallbackBaseBranch : (diskBaseBranchChanged ? item.Frontmatter.BaseBranch!.Trim() : fallbackBaseBranch);
 
-                    // 6. Dependencies: if disk frontmatter did not alter dependencies relative to baseline, preserve DB dependencies
+                    // 7. Dependencies: if disk frontmatter did not alter dependencies relative to baseline, preserve DB dependencies
                     if (finalDepIds != null)
                     {
                         var baselineDepIds = baseline.Frontmatter.DependsOn?
@@ -1777,7 +1789,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         item.Frontmatter.Version.HasValue && task.Version > item.Frontmatter.Version.Value)
                     {
                         // Maintainer updated DB while agent refined task on disk:
-                        // Keep authoritative DB values for maintainer fields (MergeMode, Priority, BaseBranch),
+                        // Keep authoritative DB values for maintainer fields (MergeMode, Priority, Difficulty, BaseBranch),
                         // but take the agent's refined description and title from disk!
                         bool diskDescChanged = !string.IsNullOrWhiteSpace(item.Description) &&
                             !string.Equals(NormalizeLineEndings(item.Description)?.Trim(), NormalizeLineEndings(task.Description)?.Trim(), StringComparison.Ordinal);
@@ -1789,6 +1801,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
                         newPriority = task.Priority;
                         newMergeMode = task.MergeMode;
+                        newDifficulty = task.Difficulty;
                         newBaseBranch = task.BaseBranch ?? workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch;
                     }
                     else
@@ -1797,6 +1810,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         newDesc = !string.IsNullOrWhiteSpace(item.Description) ? item.Description : task.Description;
                         newPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : task.Priority;
                         newMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? task.MergeMode;
+                        newDifficulty = ParseDifficulty(item.Frontmatter.Difficulty, item.FilePath, taskId) ?? task.Difficulty;
                         newBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : task.BaseBranch;
                     }
                 }
@@ -1811,6 +1825,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
                 bool priorityChanged = newPriority != task.Priority;
                 bool mergeModeChanged = newMergeMode != task.MergeMode;
+                bool difficultyChanged = newDifficulty != task.Difficulty;
                 bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
                 bool originChanged = newOrigin != task.Origin;
                 bool externalSourceChanged = !string.Equals(newExternalSource, task.ExternalSource, StringComparison.Ordinal);
@@ -1821,7 +1836,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var currentDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
                 bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
 
-                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged ||
+                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || difficultyChanged || baseBranchChanged || originChanged ||
                                        externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged;
                 if (anyFieldChanged)
                 {
@@ -1829,6 +1844,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     task.Description = newDesc;
                     task.Priority = newPriority;
                     task.MergeMode = newMergeMode;
+                    task.Difficulty = newDifficulty;
                     task.BaseBranch = newBaseBranch;
                     task.ExternalSource = newExternalSource;
                     task.ExternalReferenceId = newExternalRefId;
@@ -1867,6 +1883,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                                       !string.Equals(item.Frontmatter.Status.Trim(), task.Status.ToString(), StringComparison.OrdinalIgnoreCase);
 
                 var effectiveDiskMergeMode = ParseMergeMode(item.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
+                var effectiveDiskDifficulty = ParseDifficulty(item.Frontmatter.Difficulty, item.FilePath, taskId) ?? TaskDifficulty.Standard;
                 var effectiveDiskPriority = item.Frontmatter.Priority > 0 ? item.Frontmatter.Priority : TaskSyncConstants.DefaultPriority;
                 var effectiveDiskBaseBranch = !string.IsNullOrWhiteSpace(item.Frontmatter.BaseBranch) ? item.Frontmatter.BaseBranch.Trim() : (workspace.DefaultBaseBranch ?? WorkflowDefaults.DefaultBaseBranch);
 
@@ -1878,6 +1895,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
                 bool maintainerFieldsSynced = (baselineSnapshot != null || (currentTaskId.HasValue && taskId == currentTaskId.Value)) &&
                                               (task.MergeMode != effectiveDiskMergeMode ||
+                                               task.Difficulty != effectiveDiskDifficulty ||
                                                task.Priority != effectiveDiskPriority ||
                                                !string.Equals(task.BaseBranch, effectiveDiskBaseBranch, StringComparison.Ordinal) ||
                                                !string.Equals(task.Title?.Trim(), item.Frontmatter.Title?.Trim(), StringComparison.Ordinal) ||
@@ -2300,6 +2318,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
                 var effectiveMergeMode = ParseMergeMode(frontmatter.MergeMode);
                 var newMergeMode = effectiveMergeMode ?? task.MergeMode;
+                var newDifficulty = ParseDifficulty(frontmatter.Difficulty, filePath, task.Id) ?? task.Difficulty;
                 var newBaseBranch = !string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? frontmatter.BaseBranch.Trim() : task.BaseBranch;
                 var newOrigin = ParseOrigin(frontmatter.Origin);
                 var newExternalSource = !string.IsNullOrWhiteSpace(frontmatter.ExternalSource) ? frontmatter.ExternalSource.Trim() : task.ExternalSource;
@@ -2314,6 +2333,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 bool descChanged = !string.Equals(newDesc, task.Description, StringComparison.Ordinal);
                 bool priorityChanged = newPriority != task.Priority;
                 bool mergeModeChanged = newMergeMode != task.MergeMode;
+                bool difficultyChanged = newDifficulty != task.Difficulty;
                 bool baseBranchChanged = !string.Equals(newBaseBranch, task.BaseBranch, StringComparison.Ordinal);
                 bool originChanged = newOrigin != task.Origin;
                 bool externalSourceChanged = !string.Equals(newExternalSource, task.ExternalSource, StringComparison.Ordinal);
@@ -2321,7 +2341,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 bool prNumberChanged = newPrNumber != task.PullRequestNumber;
                 bool prUrlChanged = !string.Equals(newPrUrl, task.PullRequestUrl, StringComparison.Ordinal);
 
-                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || baseBranchChanged || originChanged ||
+                bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || difficultyChanged || baseBranchChanged || originChanged ||
                                        externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged;
                 if (anyFieldChanged)
                 {
@@ -2329,6 +2349,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     task.Description = newDesc;
                     task.Priority = newPriority;
                     task.MergeMode = newMergeMode;
+                    task.Difficulty = newDifficulty;
                     task.BaseBranch = newBaseBranch;
                     task.ExternalSource = newExternalSource;
                     task.ExternalReferenceId = newExternalRefId;
@@ -2398,6 +2419,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             }
 
             var mergeMode = ParseMergeMode(frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
+            var difficulty = ParseDifficulty(frontmatter.Difficulty, filePath) ?? TaskDifficulty.Standard;
 
             string defaultBaseBranch = WorkflowDefaults.DefaultBaseBranch;
             if (string.IsNullOrWhiteSpace(frontmatter.BaseBranch))
@@ -2420,6 +2442,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 Description = !string.IsNullOrWhiteSpace(description) ? description : body,
                 Priority = frontmatter.Priority > 0 ? frontmatter.Priority : TaskSyncConstants.DefaultPriority,
                 MergeMode = mergeMode,
+                Difficulty = difficulty,
                 IsWaitingForHuman = frontmatter.WaitingForHuman,
                 BaseBranch = string.IsNullOrWhiteSpace(frontmatter.BaseBranch) ? defaultBaseBranch : frontmatter.BaseBranch.Trim(),
                 ExternalSource = string.IsNullOrWhiteSpace(frontmatter.ExternalSource) ? null : frontmatter.ExternalSource.Trim(),
@@ -2446,6 +2469,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             frontmatter.Status = created.Status.ToString();
             frontmatter.Origin = FormatOrigin(created.Origin);
             frontmatter.MergeMode = FormatMergeMode(created.MergeMode);
+            frontmatter.Difficulty = FormatDifficulty(created.Difficulty);
             frontmatter.WaitingForHuman = created.IsWaitingForHuman;
             frontmatter.CurrentStage = created.CurrentStageId;
             frontmatter.ExternalSource = created.ExternalSource;
@@ -2722,6 +2746,49 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             "manual_review_required" or "manualreviewrequired" => Domain.MergeMode.ManualReviewRequired,
             _ => Domain.MergeMode.ManualReviewRequired
         };
+    }
+
+    public static string FormatDifficulty(TaskDifficulty difficulty) => difficulty switch
+    {
+        TaskDifficulty.Difficult => "difficult",
+        TaskDifficulty.Expert => "expert",
+        _ => "standard"
+    };
+
+    public static TaskDifficulty? ParseDifficulty(string? difficultyStr, string? filePath = null, int? taskId = null)
+    {
+        if (string.IsNullOrWhiteSpace(difficultyStr))
+        {
+            return null;
+        }
+
+        return difficultyStr.Trim().ToLowerInvariant() switch
+        {
+            "standard" => TaskDifficulty.Standard,
+            "difficult" => TaskDifficulty.Difficult,
+            "expert" => TaskDifficulty.Expert,
+            _ => throw new TaskMarkdownSyncException(
+                $"Invalid task difficulty '{difficultyStr}' in '{filePath ?? "task markdown"}'. Expected one of: standard, difficult, expert.",
+                filePath,
+                taskId)
+        };
+    }
+
+    public static TaskDifficulty ParseDifficultyOrDefault(
+        string? difficultyStr,
+        TaskDifficulty defaultValue = TaskDifficulty.Standard)
+    {
+        if (string.IsNullOrWhiteSpace(difficultyStr))
+        {
+            return defaultValue;
+        }
+
+        var normalized = difficultyStr.Trim();
+        return !int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) &&
+               Enum.TryParse<TaskDifficulty>(normalized, ignoreCase: true, out var parsed) &&
+               Enum.IsDefined(parsed)
+            ? parsed
+            : defaultValue;
     }
 
     public void Dispose()

@@ -31,6 +31,18 @@
                 </select>
             </div>
             <div style="display: flex; align-items: center; gap: 0.35rem;">
+                <label class="form-label-sm">Difficulty:</label>
+                <select class="form-control-dark proposal-difficulty-select"
+                        @bind="Proposal.Difficulty"
+                        disabled="@Proposal.IsAdded"
+                        aria-label="Task Difficulty">
+                    @foreach (var difficulty in TaskDifficultyPresentationHelper.AllDifficulties)
+                    {
+                        <option value="@difficulty">@TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)</option>
+                    }
+                </select>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.35rem;">
                 <label class="form-label-sm">Merge:</label>
                 <select class="form-control-dark proposal-mergemode-select font-mono"
                         @bind="Proposal.MergeMode"

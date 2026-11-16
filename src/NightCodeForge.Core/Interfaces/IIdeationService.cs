@@ -9,7 +9,8 @@ public record IdeationProposal(
     IReadOnlyList<string>? DependsOnTitles = null,
     int? TaskId = null,
     IReadOnlyList<int>? DependsOnIds = null,
-    string? MergeMode = null);
+    string? MergeMode = null,
+    string? Difficulty = null);
 
 public record IdeationToolCallInfo(
     string ToolCallId,

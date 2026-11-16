@@ -56,6 +56,13 @@
                             <span class="forge-badge @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "badge-teal" : "badge-indigo")" style="font-size: 0.72rem;">
                                 @(Conversation.StageKind == WorkflowStageKind.Deterministic ? "Deterministic CPU" : "Agentic GPU")
                             </span>
+                            @if (Task != null && Task.Difficulty > TaskDifficulty.Standard && Conversation.StageKind == WorkflowStageKind.Agentic)
+                            {
+                                <span class="forge-badge escalation-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(Task.Difficulty)"
+                                      style="font-size: 0.72rem; @TaskDifficultyPresentationHelper.GetBadgeStyle(Task.Difficulty)">
+                                    @TaskDifficultyPresentationHelper.FormatEscalationBadge(Task.Difficulty, Conversation.HarnessId, Conversation.ModelName)
+                                </span>
+                            }
                             @if (Conversation.Status == StageExecutionStatus.WaitingForHuman)
                             {
                                 @if (IsStageWaitingForAnswer)

@@ -154,6 +154,7 @@ public class EfCoreTaskRepository : ITaskRepository
             Status = task.Status,
             Priority = task.Priority,
             MergeMode = task.MergeMode,
+            Difficulty = task.Difficulty,
             BaseBranch = task.BaseBranch,
             FeatureBranch = task.FeatureBranch,
             CurrentStageId = task.CurrentStageId,
@@ -186,6 +187,7 @@ public class EfCoreTaskRepository : ITaskRepository
             // a background execution state update must never regress them.
             var authoritativeVersion = existing.Version;
             var authoritativeMergeMode = existing.MergeMode;
+            var authoritativeDifficulty = existing.Difficulty;
             var authoritativePriority = existing.Priority;
             var authoritativeTitle = existing.Title;
             var authoritativeDescription = existing.Description;
@@ -224,6 +226,7 @@ public class EfCoreTaskRepository : ITaskRepository
             {
                 existing.Version = authoritativeVersion;
                 existing.MergeMode = authoritativeMergeMode;
+                existing.Difficulty = authoritativeDifficulty;
                 existing.Priority = authoritativePriority;
                 existing.Title = authoritativeTitle;
                 existing.Description = authoritativeDescription;
@@ -233,6 +236,7 @@ public class EfCoreTaskRepository : ITaskRepository
                 // Sync latest maintainer values back to caller's in-memory instance
                 task.Version = authoritativeVersion;
                 task.MergeMode = authoritativeMergeMode;
+                task.Difficulty = authoritativeDifficulty;
                 task.Priority = authoritativePriority;
                 task.Title = authoritativeTitle;
                 task.Description = authoritativeDescription;
@@ -357,6 +361,7 @@ public class EfCoreTaskRepository : ITaskRepository
             Status = task.Status,
             Priority = task.Priority,
             MergeMode = task.MergeMode,
+            Difficulty = task.Difficulty,
             BaseBranch = task.BaseBranch,
             FeatureBranch = task.FeatureBranch,
             CurrentStageId = task.CurrentStageId,

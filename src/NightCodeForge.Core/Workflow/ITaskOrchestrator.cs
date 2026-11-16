@@ -37,6 +37,11 @@ public interface ITaskOrchestrator
     Task PromoteSuggestedTaskAsync(int taskId, Domain.TaskOverallStatus targetStatus, int priority, Domain.MergeMode mergeMode, string? baseBranch = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Promotes a suggested task to Open (with priority, merge mode, optional base branch, and optional difficulty override) or Rejected.
+    /// </summary>
+    Task PromoteSuggestedTaskAsync(int taskId, Domain.TaskOverallStatus targetStatus, int priority, Domain.MergeMode mergeMode, string? baseBranch, Domain.TaskDifficulty? difficulty, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Completes a task by squash-merging its branch into base branch and cascades unblocking to dependent DAG tasks.
     /// Returns the typed CompleteTaskResult indicating whether squash succeeded or conflict resolution was dispatched.
     /// </summary>

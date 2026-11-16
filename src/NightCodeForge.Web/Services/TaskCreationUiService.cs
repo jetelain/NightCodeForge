@@ -23,7 +23,8 @@ public sealed record TaskCreationRequest(
     TaskOverallStatus InitialStatus,
     IReadOnlyList<int>? PrerequisiteIds,
     bool LaunchImmediately,
-    string AuditReason);
+    string AuditReason,
+    TaskDifficulty Difficulty = TaskDifficulty.Standard);
 
 public sealed record TaskCreationResult(ForgeTask Task, bool WasDispatched);
 
@@ -223,6 +224,7 @@ public class TaskCreationUiService : ITaskCreationUiService
             Title = trimmedTitle,
             Description = request.Description?.Trim() ?? string.Empty,
             Priority = request.Priority,
+            Difficulty = request.Difficulty,
             MergeMode = request.MergeMode,
             BaseBranch = string.IsNullOrWhiteSpace(request.BaseBranch) ? "main" : request.BaseBranch.Trim(),
             FeatureBranch = string.IsNullOrWhiteSpace(request.FeatureBranch) ? string.Empty : request.FeatureBranch.Trim(),

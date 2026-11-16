@@ -43,6 +43,11 @@
                     <span class="forge-badge @GetStatusBadgeClass(_task.Status)" style="font-size: 0.78rem;">
                         @_task.Status
                     </span>
+                    <span class="forge-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(_task.Difficulty)"
+                          style="font-size: 0.78rem; @TaskDifficultyPresentationHelper.GetBadgeStyle(_task.Difficulty)"
+                          title="@TaskDifficultyPresentationHelper.GetDescription(_task.Difficulty)">
+                        @TaskDifficultyPresentationHelper.GetDisplayLabel(_task.Difficulty)
+                    </span>
                     @if (_task.Workflow != null)
                     {
                         <span class="forge-badge badge-indigo" style="font-size: 0.78rem; display: inline-flex; align-items: center; gap: 0.35rem;" title="Active Workflow Pipeline">

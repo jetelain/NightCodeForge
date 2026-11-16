@@ -27,6 +27,14 @@ public interface ITaskLifecycleMutationCoordinator
         MergeMode mergeMode,
         string? baseBranch = null,
         CancellationToken cancellationToken = default);
+    Task PromoteSuggestedTaskAsync(
+        int taskId,
+        TaskOverallStatus targetStatus,
+        int priority,
+        MergeMode mergeMode,
+        string? baseBranch,
+        TaskDifficulty? difficulty,
+        CancellationToken cancellationToken = default);
     Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default);
     Task<bool> RestartTaskPipelineAsync(
         int taskId,

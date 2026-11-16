@@ -14,6 +14,7 @@ public class ForgeTask
     public bool HasExecutionRun { get; set; } = false;
     public int MaxExecutedStageOrder { get; set; } = 0;
     public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
+    public TaskDifficulty Difficulty { get; set; } = TaskDifficulty.Standard;
     public bool IsWaitingForHuman { get; set; } = false;
     public bool IsDeferredByPause { get; set; } = false;
     public string? InterruptedAgentProfileId { get; set; }
@@ -70,7 +71,8 @@ public record TaskProposal
         IReadOnlyList<string>? dependsOnTitles = null,
         IReadOnlyList<int>? dependsOnIds = null,
         int? taskId = null,
-        string? mergeMode = null)
+        string? mergeMode = null,
+        string? difficulty = null)
     {
         Title = title;
         Description = description;
@@ -82,10 +84,11 @@ public record TaskProposal
         DependsOnIds = dependsOnIds;
         TaskId = taskId;
         MergeMode = mergeMode;
+        Difficulty = difficulty;
     }
 
     public TaskProposal(string title, string description, int priority, IReadOnlyList<string>? dependsOnTitles = null)
-        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null, null)
+        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null, null, null)
     {
     }
 
@@ -99,5 +102,6 @@ public record TaskProposal
     public IReadOnlyList<int>? DependsOnIds { get; init; }
     public int? TaskId { get; init; }
     public string? MergeMode { get; init; }
+    public string? Difficulty { get; init; }
 }
 

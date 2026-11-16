@@ -57,9 +57,19 @@
                 }
             </div>
         </div>
-        <span class="forge-badge @MergeModeHelper.GetBadgeClass(Task.MergeMode)" style="font-size: 0.7rem; padding: 2px 6px;">
-            @MergeModeHelper.GetShortLabel(Task.MergeMode)
-        </span>
+        <div style="display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;">
+            @if (Task.Difficulty > TaskDifficulty.Standard)
+            {
+                <span class="forge-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(Task.Difficulty)"
+                      style="font-size: 0.7rem; padding: 2px 6px; @TaskDifficultyPresentationHelper.GetBadgeStyle(Task.Difficulty)"
+                      title="@TaskDifficultyPresentationHelper.GetDescription(Task.Difficulty)">
+                    @TaskDifficultyPresentationHelper.GetDisplayLabel(Task.Difficulty)
+                </span>
+            }
+            <span class="forge-badge @MergeModeHelper.GetBadgeClass(Task.MergeMode)" style="font-size: 0.7rem; padding: 2px 6px;">
+                @MergeModeHelper.GetShortLabel(Task.MergeMode)
+            </span>
+        </div>
     </div>
 
     <!-- Title & Description Preview -->

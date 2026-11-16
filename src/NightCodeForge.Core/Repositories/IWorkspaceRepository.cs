@@ -21,6 +21,12 @@ public interface IWorkspaceRepository
     Task<AgentProfile?> GetEffectiveAgentProfileAsync(int? workspaceId, string stageId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Resolves the effective agent profile for a stage within a workspace and applies
+    /// difficulty-tiered harness, model, and reasoning overrides.
+    /// </summary>
+    Task<AgentProfile?> GetEffectiveAgentProfileAsync(int? workspaceId, string stageId, TaskDifficulty difficulty, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets all global agent profiles (WorkspaceId == null).
     /// </summary>
     Task<IReadOnlyList<AgentProfile>> GetGlobalAgentProfilesAsync(CancellationToken cancellationToken = default);
@@ -122,21 +128,32 @@ public class InMemoryWorkspaceRepository : IWorkspaceRepository
         {
             if (workspaceId.HasValue && _workspaces.TryGetValue(workspaceId.Value, out var ws))
             {
-                var dedicated = ws.AgentProfiles?.FirstOrDefault(p =>
-                    string.Equals(p.Id, stageId, StringComparison.OrdinalIgnoreCase) ||
-                    (p.StageDirectives != null && p.StageDirectives.ContainsKey(stageId)));
+                var dedicated = ws.AgentProfiles?.FirstOrDefault(p => p.MatchesStage(stageId, workspaceId.Value));
                 if (dedicated != null)
                 {
                     return Task.FromResult<AgentProfile?>(dedicated);
                 }
             }
 
-            var global = _globalProfiles.FirstOrDefault(p =>
-                string.Equals(p.Id, stageId, StringComparison.OrdinalIgnoreCase) ||
-                (p.StageDirectives != null && p.StageDirectives.ContainsKey(stageId)));
+            var global = _globalProfiles.FirstOrDefault(p => p.MatchesStage(stageId));
 
             return Task.FromResult<AgentProfile?>(global);
         }
+    }
+
+    public async Task<AgentProfile?> GetEffectiveAgentProfileAsync(int? workspaceId, string stageId, TaskDifficulty difficulty, CancellationToken cancellationToken = default)
+    {
+        var baseProfile = await GetEffectiveAgentProfileAsync(workspaceId, stageId, cancellationToken);
+        if (baseProfile == null || difficulty == TaskDifficulty.Standard)
+        {
+            return baseProfile;
+        }
+
+        AgentProfile? fallbackArchitect = baseProfile.RequiresArchitectFallbackForDifficulty(difficulty)
+            ? await GetEffectiveAgentProfileAsync(workspaceId, StandardStageIds.TaskReview, cancellationToken)
+            : null;
+
+        return baseProfile.ResolveForDifficulty(difficulty, fallbackArchitect);
     }
 
     public Task<IReadOnlyList<AgentProfile>> GetGlobalAgentProfilesAsync(CancellationToken cancellationToken = default)

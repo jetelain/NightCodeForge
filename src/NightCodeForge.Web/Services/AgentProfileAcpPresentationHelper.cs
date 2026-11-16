@@ -11,6 +11,7 @@ public static class AgentProfileAcpPresentationHelper
 {
     public const string CrucibleHarnessDisplayLabel = "Crucible (Local / Open-Weight & API)";
     public const string AcpHarnessDisplayLabel = "Antigravity ACP (Google AI / Gemini CLI)";
+    public const string CustomModelSentinel = "__custom__";
     public const string TriagePinnedReason = "Untrusted Stage 0 intake triage must run inside the sandboxed Crucible harness (--network none).";
     public const string IdeationPinnedReason = "Interactive codebase ideation uses the Crucible agent factory and host backlog mutation tools.";
 
@@ -224,13 +225,14 @@ public static class AgentProfileAcpPresentationHelper
             Mode = globalProfile.Mode,
             SecurityTier = globalProfile.SecurityTier,
             RoutingTarget = globalProfile.RoutingTarget,
-            PermittedTools = globalProfile.PermittedTools,
-            StageDirectives = globalProfile.StageDirectives,
+            PermittedTools = globalProfile.PermittedTools?.ToList(),
+            StageDirectives = globalProfile.StageDirectives != null ? new Dictionary<string, string>(globalProfile.StageDirectives) : null,
             Temperature = globalProfile.Temperature,
             ThinkingEffort = globalProfile.ThinkingEffort,
             ThinkingTokenBudget = globalProfile.ThinkingTokenBudget,
             MaxTurns = globalProfile.MaxTurns,
             OptimizationFlags = globalProfile.OptimizationFlags?.Clone(),
+            DifficultyOverrides = globalProfile.CloneDifficultyOverrides(),
             ContextWindowTokens = globalProfile.ContextWindowTokens,
             MaxOutputTokens = globalProfile.MaxOutputTokens,
             SystemPrompt = globalProfile.SystemPrompt
@@ -275,6 +277,12 @@ public static class AgentProfileAcpPresentationHelper
             source.ContextWindowTokens = ctxTokens;
         }
 
+        AgentProfileDifficultyMatrixHelper.NormalizeDifficultyOverridesForSave(
+            source,
+            providerType,
+            discoveredContextWindows,
+            acpStatus);
+
         existing.HarnessId = effectiveHarnessId;
         existing.HarnessConfigurationJson = source.HarnessConfigurationJson;
         existing.ModelName = source.ModelName;
@@ -286,6 +294,7 @@ public static class AgentProfileAcpPresentationHelper
         existing.SecurityTier = source.SecurityTier;
         existing.SystemPrompt = source.SystemPrompt;
         existing.OptimizationFlags = source.OptimizationFlags;
+        existing.DifficultyOverrides = source.CloneDifficultyOverrides();
         existing.ContextWindowTokens = source.ContextWindowTokens;
         existing.MaxOutputTokens = source.MaxOutputTokens;
     }

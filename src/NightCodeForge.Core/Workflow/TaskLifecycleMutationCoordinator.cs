@@ -496,12 +496,22 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
     }
 
-    public async Task PromoteSuggestedTaskAsync(
+    public Task PromoteSuggestedTaskAsync(
         int taskId,
         TaskOverallStatus targetStatus,
         int priority,
         MergeMode mergeMode,
         string? baseBranch = null,
+        CancellationToken cancellationToken = default) =>
+        PromoteSuggestedTaskAsync(taskId, targetStatus, priority, mergeMode, baseBranch, difficulty: null, cancellationToken);
+
+    public async Task PromoteSuggestedTaskAsync(
+        int taskId,
+        TaskOverallStatus targetStatus,
+        int priority,
+        MergeMode mergeMode,
+        string? baseBranch,
+        TaskDifficulty? difficulty,
         CancellationToken cancellationToken = default)
     {
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
@@ -515,6 +525,10 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             task.Status = TaskOverallStatus.Open;
             task.Priority = priority;
             task.MergeMode = mergeMode;
+            if (difficulty.HasValue)
+            {
+                task.Difficulty = difficulty.Value;
+            }
             if (!string.IsNullOrWhiteSpace(baseBranch))
             {
                 task.BaseBranch = baseBranch.Trim();
@@ -525,7 +539,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
                 task,
                 dependsOn: null,
                 changedBy: AuditActors.User,
-                reason: $"Promoted task from Suggested to Open with Priority P{priority}, {mergeMode}, and BaseBranch '{task.BaseBranch}'.",
+                reason: $"Promoted task from Suggested to Open with Priority P{priority}, {mergeMode}, Difficulty {task.Difficulty}, and BaseBranch '{task.BaseBranch}'.",
                 cancellationToken: cancellationToken);
             await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Open, cancellationToken);
 
