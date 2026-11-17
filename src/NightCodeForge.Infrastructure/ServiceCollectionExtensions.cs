@@ -16,6 +16,7 @@ using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
 using NightCodeForge.Infrastructure.Git;
 using NightCodeForge.Infrastructure.Resilience;
+using Pmad.Markitdown;
 
 namespace NightCodeForge.Infrastructure;
 
@@ -46,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IWorkspaceRepository, EfCoreWorkspaceRepository>();
         services.TryAddScoped<IWorkflowRepository, EfCoreWorkflowRepository>();
         services.TryAddScoped<ITaskDependencyStore, EfCoreTaskDependencyStore>();
+        services.TryAddScoped<ITaskAttachmentRepository, EfCoreTaskAttachmentRepository>();
         services.TryAddSingleton<IGlobalOptimizationSettingsService, GlobalOptimizationSettingsService>();
         services.TryAddSingleton<IWebSearchSettingsService, WebSearchSettingsService>();
         services.TryAddSingleton<IOperationsStateStore, OperationsStateStore>();
@@ -145,6 +147,20 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<TimeProvider>());
         });
         services.TryAddSingleton<ICompanionTriageDraftStore, CompanionTriageDraftStore>();
+
+        // 13. Workspace Attachments Intake & MarkItDown Conversion
+        services.BindConfigurationSectionAsDefault<AttachmentIntakeOptions>(AttachmentIntakeOptions.SectionName);
+        services.TryAddSingleton<IMarkitdown>(_ => new Markitdown(new MarkitdownOptions
+        {
+            IncludeTitle = true,
+            CleanHtml = true,
+            FilterHiddenText = true
+        }));
+        services.AddHttpClient<IAttachmentIntakeService, AttachmentIntakeService>()
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false
+            });
 
         return services;
     }

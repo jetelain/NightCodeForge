@@ -83,7 +83,7 @@ public class DatabaseMigrationTests : IDisposable
             historyRows.Add((reader.GetString(0), reader.GetString(1)));
         }
 
-        Assert.Equal(13, historyRows.Count);
+        Assert.Equal(14, historyRows.Count);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.InitialCreateMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddAgentProfileContextWindowTokensMigrationId);
@@ -97,6 +97,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddForgeTaskGitHubPullRequestFieldsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddTaskHistoryGitHubFieldsMigrationId);
         Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddTaskDifficultyAndProfileDifficultyOverridesMigrationId);
+        Assert.Contains(historyRows, h => h.MigrationId == AppDbContext.AddTaskAttachmentsAndLinksMigrationId);
     }
 
     [Fact]
@@ -151,7 +152,7 @@ public class DatabaseMigrationTests : IDisposable
         using var context = new AppDbContext(options);
         await context.EnsureDatabaseCreatedAndWalAsync();
 
-        // Act & Assert - verify all 14 DbSets are queryable and empty initially
+        // Act & Assert - verify all 16 DbSets are queryable and empty initially
         Assert.Equal(0, await context.Workspaces.CountAsync());
         Assert.Equal(0, await context.AgentProfiles.CountAsync());
         Assert.Equal(0, await context.Tasks.CountAsync());
@@ -166,6 +167,8 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Equal(0, await context.WorkflowDefinitions.CountAsync());
         Assert.Equal(0, await context.StageDefinitions.CountAsync());
         Assert.Equal(0, await context.TaskHistories.CountAsync());
+        Assert.Equal(0, await context.TaskAttachments.CountAsync());
+        Assert.Equal(0, await context.TaskAttachmentLinks.CountAsync());
 
         // Insert and verify entities across key tables
         var ws = new Workspace
@@ -258,7 +261,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Null(ex);
 
         var appliedMigrations = (await context.Database.GetAppliedMigrationsAsync()).ToList();
-        Assert.Equal(13, appliedMigrations.Count);
+        Assert.Equal(14, appliedMigrations.Count);
         Assert.Contains(AppDbContext.InitialCreateMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddPortalScopingAndExecutionFlagsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddAgentProfileContextWindowTokensMigrationId, appliedMigrations);
@@ -272,6 +275,7 @@ public class DatabaseMigrationTests : IDisposable
         Assert.Contains(AppDbContext.AddForgeTaskGitHubPullRequestFieldsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddTaskHistoryGitHubFieldsMigrationId, appliedMigrations);
         Assert.Contains(AppDbContext.AddTaskDifficultyAndProfileDifficultyOverridesMigrationId, appliedMigrations);
+        Assert.Contains(AppDbContext.AddTaskAttachmentsAndLinksMigrationId, appliedMigrations);
     }
 
     [Fact]

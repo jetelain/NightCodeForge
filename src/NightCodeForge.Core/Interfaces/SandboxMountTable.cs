@@ -141,6 +141,12 @@ public sealed class SandboxMountTable
     {
         VirtualRootPath = VirtualMountEntry.NormalizeVirtualPath(virtualRootPath);
         _sortedEntries = (entries ?? [])
+            .Select(e => string.Equals(
+                VirtualMountEntry.NormalizeVirtualPath(e.VirtualMountPath),
+                AttachmentConstants.VirtualAttachmentsMountPath,
+                StringComparison.OrdinalIgnoreCase)
+                ? e with { IsReadOnly = true }
+                : e)
             .OrderByDescending(e => e.VirtualMountPath.Length)
             .ThenBy(e => e.VirtualMountPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -191,7 +197,9 @@ public sealed class SandboxMountTable
         string? wslCloneDirectory = null,
         string? hostTmpDirectory = null,
         string? wslTmpDirectory = null,
-        IEnumerable<VirtualMountEntry>? additionalEntries = null)
+        IEnumerable<VirtualMountEntry>? additionalEntries = null,
+        string? hostAttachmentsDirectory = null,
+        string? wslAttachmentsDirectory = null)
     {
         var effectiveWslWorking = !string.IsNullOrWhiteSpace(wslWorkingDirectory)
             ? wslWorkingDirectory
@@ -230,6 +238,25 @@ public sealed class SandboxMountTable
                 hostDirectoryPath: hostWorkingDirectory,
                 wslTargetDirectoryPath: effectiveWslWorking,
                 isReadOnly: isReadOnly));
+        }
+
+        if ((!string.IsNullOrWhiteSpace(hostAttachmentsDirectory) || !string.IsNullOrWhiteSpace(wslAttachmentsDirectory)) &&
+            (additionalEntries == null || !additionalEntries.Any(e =>
+                string.Equals(VirtualMountEntry.NormalizeVirtualPath(e.VirtualMountPath), AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase))))
+        {
+            var effectiveHostAttachments = !string.IsNullOrWhiteSpace(hostAttachmentsDirectory)
+                ? hostAttachmentsDirectory
+                : wslAttachmentsDirectory!;
+            var effectiveWslAttachments = !string.IsNullOrWhiteSpace(wslAttachmentsDirectory)
+                ? wslAttachmentsDirectory
+                : VirtualMountEntry.ToDefaultWslPath(hostAttachmentsDirectory);
+
+            entries.Add(new VirtualMountEntry(
+                virtualSubPath: AttachmentConstants.AttachmentsDirectoryName,
+                virtualMountPath: AttachmentConstants.VirtualAttachmentsMountPath,
+                hostDirectoryPath: effectiveHostAttachments,
+                wslTargetDirectoryPath: effectiveWslAttachments,
+                isReadOnly: true));
         }
 
         entries.Add(new VirtualMountEntry(
@@ -490,7 +517,8 @@ public sealed record SandboxScopeDescriptor
         string? clonePath = null,
         string? taskWorktreePath = null,
         string? skillsDirectoryPath = null,
-        string? tmpDirectoryPath = null)
+        string? tmpDirectoryPath = null,
+        string? attachmentsDirectoryPath = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         var effectiveTaskId = taskId is > 0 ? taskId : null;
@@ -525,7 +553,11 @@ public sealed record SandboxScopeDescriptor
             wslCloneDirectory: VirtualMountEntry.ToDefaultWslPath(clonePath),
             hostTmpDirectory: isReadOnly ? null : tmpDirectoryPath,
             wslTmpDirectory: isReadOnly ? null : VirtualMountEntry.ToDefaultWslPath(tmpDirectoryPath),
-            additionalEntries: additionalEntries);
+            additionalEntries: additionalEntries,
+            hostAttachmentsDirectory: attachmentsDirectoryPath,
+            wslAttachmentsDirectory: !string.IsNullOrWhiteSpace(attachmentsDirectoryPath)
+                ? VirtualMountEntry.ToDefaultWslPath(attachmentsDirectoryPath)
+                : null);
 
         var defaultWorkDir = effectiveTaskId.HasValue
             ? $"{SandboxMountTable.WorkspaceVirtualRoot}/task-{effectiveTaskId.Value}"

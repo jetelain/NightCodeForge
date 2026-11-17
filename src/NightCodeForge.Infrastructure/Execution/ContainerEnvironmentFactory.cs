@@ -75,6 +75,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             rawTmpDir = EnsureHostTmpDirectory(hostWorkspacePath);
         }
 
+        var rawAttachmentsDir = EnsureHostAttachmentsDirectory(workspace.Id, hostWorkspacePath);
+
         string? rawTaskWorktreePath = null;
         if (normalizedTaskId.HasValue && !string.IsNullOrWhiteSpace(hostWorkspacePath))
         {
@@ -109,7 +111,9 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             wslCloneDirectory: !string.IsNullOrWhiteSpace(canonicalClonePath) ? Git.WslPathConverter.ToWslPath(canonicalClonePath) : null,
             hostTmpDirectory: !string.IsNullOrWhiteSpace(rawTmpDir) ? ResolveHostAccessiblePath(rawTmpDir) : null,
             wslTmpDirectory: !string.IsNullOrWhiteSpace(rawTmpDir) ? Git.WslPathConverter.ToWslPath(rawTmpDir) : null,
-            additionalEntries: additionalEntries);
+            additionalEntries: additionalEntries,
+            hostAttachmentsDirectory: !string.IsNullOrWhiteSpace(rawAttachmentsDir) ? ResolveHostAccessiblePath(rawAttachmentsDir) : null,
+            wslAttachmentsDirectory: !string.IsNullOrWhiteSpace(rawAttachmentsDir) ? Git.WslPathConverter.ToWslPath(rawAttachmentsDir) : null);
 
         var defaultWorkDir = normalizedTaskId.HasValue
             ? $"{SandboxMountTable.WorkspaceVirtualRoot}/task-{normalizedTaskId.Value}"
@@ -219,6 +223,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             }
         }
 
+        var attachmentsPath = ResolveContainerAttachmentsPath(scope);
+
         var options = new ContainerExecutorOptions
         {
             Scope = scope,
@@ -227,6 +233,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             ContainerImage = ResolveContainerImageName(scope.ContainerImage),
             HostWorkspacePath = scope.HostWorkspacePath,
             CanonicalClonePath = scope.CanonicalClonePath,
+            AttachmentsPath = attachmentsPath,
             ContainerWorkspacePath = scope.VirtualRootPath,
             DefaultWorkingDirectory = scope.DefaultWorkingDirectory,
             MountPackageCaches = true,
@@ -589,6 +596,76 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         }
 
         return hostTmpDir;
+    }
+
+    private string? ResolveContainerAttachmentsPath(SandboxScopeDescriptor scope)
+    {
+        if (scope.ScopeKind == SandboxScopeKind.SystemNightwatch)
+        {
+            return null;
+        }
+
+        var entry = scope.MountTable.Entries.FirstOrDefault(e =>
+            string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
+        if (entry != null)
+        {
+            var entryPath = !string.IsNullOrWhiteSpace(entry.WslTargetDirectoryPath)
+                ? entry.WslTargetDirectoryPath
+                : entry.HostDirectoryPath;
+            if (!string.IsNullOrWhiteSpace(entryPath))
+            {
+                return entryPath;
+            }
+        }
+
+        return EnsureHostAttachmentsDirectory(scope.WorkspaceId ?? 0, scope.HostWorkspacePath);
+    }
+
+    private string? EnsureHostAttachmentsDirectory(int workspaceId, string? hostWorkspacePath)
+    {
+        var resolvedFromResolver = workspaceId > 0 ? _pathResolver.GetAttachmentsPath(workspaceId) : null;
+        string? rawAttachmentsDir;
+        if (!string.IsNullOrWhiteSpace(resolvedFromResolver))
+        {
+            rawAttachmentsDir = resolvedFromResolver.TrimEnd('/', '\\').Replace('\\', '/');
+        }
+        else if (!string.IsNullOrWhiteSpace(hostWorkspacePath))
+        {
+            rawAttachmentsDir = $"{hostWorkspacePath.TrimEnd('/', '\\').Replace('\\', '/')}/{AttachmentConstants.AttachmentsDirectoryName}";
+        }
+        else
+        {
+            return null;
+        }
+
+        var hostAccessibleWorkspaceDir = !string.IsNullOrWhiteSpace(hostWorkspacePath)
+            ? _pathResolver.ToHostPath(hostWorkspacePath)
+            : null;
+        var hostAccessibleAttachmentsDir = _pathResolver.ToHostPath(rawAttachmentsDir);
+        if (string.IsNullOrWhiteSpace(hostAccessibleAttachmentsDir))
+        {
+            hostAccessibleAttachmentsDir = rawAttachmentsDir;
+        }
+
+        var attachmentsParentDir = Path.GetDirectoryName(hostAccessibleAttachmentsDir);
+        var canCreateAttachmentsDir =
+            (!string.IsNullOrWhiteSpace(hostAccessibleWorkspaceDir) && Directory.Exists(hostAccessibleWorkspaceDir)) ||
+            (!string.IsNullOrWhiteSpace(attachmentsParentDir) && Directory.Exists(attachmentsParentDir));
+
+        if (canCreateAttachmentsDir &&
+            !Directory.Exists(hostAccessibleAttachmentsDir))
+        {
+            try
+            {
+                Directory.CreateDirectory(hostAccessibleAttachmentsDir);
+            }
+            catch (Exception ex)
+            {
+                _containerLogger.LogWarning(ex, "Failed to create host attachments directory at {HostAttachmentsDir}", hostAccessibleAttachmentsDir);
+            }
+        }
+
+        return rawAttachmentsDir;
     }
 
     private bool ShouldUseWslForContainers(Workspace workspace) =>

@@ -45,6 +45,7 @@ public class ForgeTask
     public ICollection<ExecutionLog> ExecutionLogs { get; set; } = new List<ExecutionLog>();
     public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
     public ICollection<ForgeTaskHistory> History { get; set; } = new List<ForgeTaskHistory>();
+    public ICollection<TaskAttachmentLink> AttachmentLinks { get; set; } = new List<TaskAttachmentLink>();
 
     /// <summary>
     /// Determines whether the task is in an active runnable state and not blocked by human input or global pause.

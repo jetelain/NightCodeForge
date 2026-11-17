@@ -121,6 +121,11 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         return $"{GetAgentWorkspaceRootPath(workspaceId)}/task-{taskId}";
     }
 
+    public string GetAttachmentsPath(int workspaceId)
+    {
+        return $"{GetAgentWorkspaceRootPath(workspaceId)}/attachments";
+    }
+
     public string GetHostRemoteUrl(string repositoryPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
@@ -264,6 +269,20 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             return FormatPath(parentDir, tmpRel);
         }
 
+        if (!isAlreadyUnderParent)
+        {
+            var embeddedAttachMatch = Regex.Match(
+                normalized,
+                @"\.nightcodeforge/wks/(\d+)/(attachments(?:/.*)?)$",
+                RegexOptions.IgnoreCase);
+            if (embeddedAttachMatch.Success &&
+                normParent.EndsWith($".nightcodeforge/wks/{embeddedAttachMatch.Groups[1].Value}", StringComparison.OrdinalIgnoreCase))
+            {
+                raw = "/workspace/" + embeddedAttachMatch.Groups[2].Value;
+                normalized = raw;
+            }
+        }
+
         if (Path.IsPathRooted(raw) &&
             !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
             !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase))
@@ -321,7 +340,19 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
                 return FormatPath(workspaceRoot, string.Empty);
             }
 
-            // In container, agent has "/workspace/clone" and "/workspace/task-nnn"
+            // In container, agent has "/workspace/clone", "/workspace/attachments", and "/workspace/task-nnn"
+            if (rel.StartsWith("attachments/", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(rel, "attachments", StringComparison.OrdinalIgnoreCase))
+            {
+                var attachRel = rel.Length > "attachments".Length
+                    ? rel[("attachments".Length + 1)..].TrimStart('/')
+                    : string.Empty;
+                var attachSub = string.IsNullOrEmpty(attachRel)
+                    ? "attachments"
+                    : $"attachments/{attachRel}";
+                return FormatPath(parentDir, attachSub);
+            }
+
             if (rel.StartsWith("clone/", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(rel, "clone", StringComparison.OrdinalIgnoreCase))
             {

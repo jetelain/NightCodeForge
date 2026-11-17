@@ -477,6 +477,16 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
                     resolvedHostPath = ResolveVirtualTmpPath("/" + afterMarker, forWrite);
                     return true;
                 }
+
+                if (afterMarker.Equals(AttachmentConstants.AttachmentsDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+                    afterMarker.StartsWith(AttachmentConstants.AttachmentsDirectoryName + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var canonicalVirtual = CanonicalizeExplicitVirtualPath(
+                        $"{SandboxMountTable.WorkspaceVirtualRoot}/{afterMarker}",
+                        raw);
+                    resolvedHostPath = ResolveCanonicalVirtualPathToHost(canonicalVirtual, raw, forWrite);
+                    return true;
+                }
             }
         }
 

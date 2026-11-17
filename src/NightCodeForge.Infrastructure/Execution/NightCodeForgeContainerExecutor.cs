@@ -157,6 +157,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
     public string? CanonicalClonePath { get; set; }
 
     /// <summary>
+    /// Host or WSL path to the workspace attachments directory (~/.nightcodeforge/wks/{workspaceId}/attachments) mounted read-only at /workspace/attachments.
+    /// </summary>
+    public string? AttachmentsPath { get; set; }
+
+    /// <summary>
     /// Virtual container path where the workspace is mounted (defaults to "/workspace").
     /// </summary>
     public string ContainerWorkspacePath { get; set; } = "/workspace";

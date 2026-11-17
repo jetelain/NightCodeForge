@@ -23,6 +23,12 @@ public interface IWorkspacePathResolver
         $"{GetAgentWorkspaceRootPath(workspaceId)}/task-{taskId}";
 
     /// <summary>
+    /// Gets the canonical path to the workspace's read-only attachments directory (~/.nightcodeforge/wks/{workspaceId}/attachments).
+    /// </summary>
+    string GetAttachmentsPath(int workspaceId) =>
+        $"{GetAgentWorkspaceRootPath(workspaceId)}/attachments";
+
+    /// <summary>
     /// Gets the Git remote URL for host-origin (converts Windows path to /mnt/... mount path on Windows, raw path on Unix).
     /// </summary>
     string GetHostRemoteUrl(string repositoryPath);

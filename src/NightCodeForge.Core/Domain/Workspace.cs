@@ -39,4 +39,5 @@ public class Workspace
     public ICollection<AgentProfile> AgentProfiles { get; set; } = new List<AgentProfile>();
     public ICollection<WorkflowDefinition> Workflows { get; set; } = new List<WorkflowDefinition>();
     public ICollection<Conversation> Conversations { get; set; } = new List<Conversation>();
+    public ICollection<TaskAttachment> Attachments { get; set; } = new List<TaskAttachment>();
 }

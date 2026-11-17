@@ -88,6 +88,16 @@ public class ContainerMountAndDriftBuilder
         {
             foreach (var entry in options.MountTable.Entries)
             {
+                var isAttachmentsEntry = string.Equals(
+                    NormalizeContainerPath(entry.VirtualMountPath),
+                    AttachmentConstants.VirtualAttachmentsMountPath,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (isAttachmentsEntry && !string.IsNullOrWhiteSpace(options.AttachmentsPath))
+                {
+                    continue;
+                }
+
                 var sourcePath = !string.IsNullOrWhiteSpace(entry.WslTargetDirectoryPath)
                     ? entry.WslTargetDirectoryPath
                     : entry.HostDirectoryPath;
@@ -100,7 +110,7 @@ public class ContainerMountAndDriftBuilder
                 AddMount(
                     ResolveHostPath(sourcePath, options),
                     entry.VirtualMountPath,
-                    isReadOnly: options.IsRestrictedReadOnly || entry.IsReadOnly);
+                    isReadOnly: options.IsRestrictedReadOnly || entry.IsReadOnly || isAttachmentsEntry);
             }
         }
 
@@ -159,7 +169,17 @@ public class ContainerMountAndDriftBuilder
 
                     var resolvedSource = ResolveHostPath(sourcePath, options);
                     var normSource = resolvedSource.TrimEnd('/', '\\');
-                    var effectiveReadOnly = options.IsRestrictedReadOnly || entry.IsReadOnly;
+                    var isAttachmentsMount = string.Equals(
+                        NormalizeContainerPath(entry.VirtualMountPath),
+                        AttachmentConstants.VirtualAttachmentsMountPath,
+                        StringComparison.OrdinalIgnoreCase);
+
+                    if (isAttachmentsMount && !string.IsNullOrWhiteSpace(options.AttachmentsPath))
+                    {
+                        continue;
+                    }
+
+                    var effectiveReadOnly = options.IsRestrictedReadOnly || entry.IsReadOnly || isAttachmentsMount;
 
                     var isInsideHostWorkspace =
                         normSource.Equals(normHost, StringComparison.OrdinalIgnoreCase) ||
@@ -170,7 +190,8 @@ public class ContainerMountAndDriftBuilder
                         normSource.Equals(normCloneResolved, StringComparison.OrdinalIgnoreCase);
 
                     // Skip subpaths already exposed identically through the parent /workspace bind mount
-                    if ((isInsideHostWorkspace || isCanonicalClone) && effectiveReadOnly == options.IsRestrictedReadOnly)
+                    // (but always keep explicit read-only /workspace/attachments mount even in RestrictedReadOnly mode).
+                    if (!isAttachmentsMount && (isInsideHostWorkspace || isCanonicalClone) && effectiveReadOnly == options.IsRestrictedReadOnly)
                     {
                         continue;
                     }
@@ -178,6 +199,15 @@ public class ContainerMountAndDriftBuilder
                     AddMount(resolvedSource, entry.VirtualMountPath, isReadOnly: effectiveReadOnly);
                 }
             }
+        }
+
+        // 1D. Explicit workspace attachments directory bind-mounted strictly read-only at /workspace/attachments
+        if (!string.IsNullOrWhiteSpace(options.AttachmentsPath))
+        {
+            AddMount(
+                ResolveHostPath(options.AttachmentsPath, options),
+                AttachmentConstants.VirtualAttachmentsMountPath,
+                isReadOnly: true);
         }
 
         // 2. Package caches (NuGet, npm, pnpm, uv, Maven, Playwright)
@@ -467,6 +497,19 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
+        var normAttachments = NormalizeContainerPath(AttachmentConstants.VirtualAttachmentsMountPath);
+        var attachmentsSourceValidated = false;
+        if (!string.IsNullOrWhiteSpace(options.AttachmentsPath) &&
+            actual.TryGetValue(normAttachments, out var attachmentsMount))
+        {
+            var expectedAttachmentsSource = NormalizeMountSourcePath(ResolveHostPath(options.AttachmentsPath, options));
+            if (!string.Equals(attachmentsMount.Source, expectedAttachmentsSource, StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"{AttachmentConstants.VirtualAttachmentsMountPath} (source '{attachmentsMount.Source}' vs '{expectedAttachmentsSource}')");
+            }
+            attachmentsSourceValidated = true;
+        }
+
         if (options.MountTable != null)
         {
             var inspectAllMountTableEntries =
@@ -488,6 +531,11 @@ public class ContainerMountAndDriftBuilder
 
                 var normDest = NormalizeContainerPath(entry.VirtualMountPath);
                 if (!expectedDestSet.Contains(normDest))
+                {
+                    continue;
+                }
+
+                if (attachmentsSourceValidated && string.Equals(normDest, normAttachments, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -635,43 +683,29 @@ public class ContainerMountAndDriftBuilder
 
         var normTarget = targetDir.Replace('\\', '/').TrimEnd('/');
 
-        if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath))
+        if (!string.IsNullOrWhiteSpace(options.AttachmentsPath) &&
+            TryMatchHostOrWslPrefix(normTarget, options.AttachmentsPath, out var attachRel))
         {
-            var normClone = options.CanonicalClonePath.Replace('\\', '/').TrimEnd('/');
-            if (normTarget.Equals(normClone, StringComparison.OrdinalIgnoreCase))
-            {
-                return defaultDir;
-            }
-            if (normTarget.StartsWith(normClone + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = normTarget[(normClone.Length + 1)..];
-                return $"{defaultDir}/{rel}";
-            }
+            return string.IsNullOrEmpty(attachRel)
+                ? AttachmentConstants.VirtualAttachmentsMountPath
+                : $"{AttachmentConstants.VirtualAttachmentsMountPath}/{attachRel}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.CanonicalClonePath) &&
+            TryMatchHostOrWslPrefix(normTarget, options.CanonicalClonePath, out var cloneRelFromHost))
+        {
+            return string.IsNullOrEmpty(cloneRelFromHost)
+                ? defaultDir
+                : $"{defaultDir}/{cloneRelFromHost}";
         }
 
         var hostWks = options.HostWorkspacePath;
-        if (!string.IsNullOrWhiteSpace(hostWks))
+        if (!string.IsNullOrWhiteSpace(hostWks) &&
+            TryMatchHostOrWslPrefix(normTarget, hostWks, out var wksRel))
         {
-            var normHost = hostWks.Replace('\\', '/').TrimEnd('/');
-            var normHostWsl = Git.WslPathConverter.ToWslPath(hostWks).Replace('\\', '/').TrimEnd('/');
-
-            if (normTarget.Equals(normHost, StringComparison.OrdinalIgnoreCase) ||
-                normTarget.Equals(normHostWsl, StringComparison.OrdinalIgnoreCase))
-            {
-                return defaultDir;
-            }
-
-            if (normTarget.StartsWith(normHost + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = normTarget[(normHost.Length + 1)..];
-                return $"{containerWks}/{rel}";
-            }
-
-            if (normTarget.StartsWith(normHostWsl + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = normTarget[(normHostWsl.Length + 1)..];
-                return $"{containerWks}/{rel}";
-            }
+            return string.IsNullOrEmpty(wksRel)
+                ? defaultDir
+                : $"{containerWks}/{wksRel}";
         }
 
         if (targetDir.Contains(":\\") || targetDir.Contains(":/") || targetDir.StartsWith("/mnt/") || targetDir.StartsWith("/home/"))
@@ -1216,6 +1250,46 @@ public class ContainerMountAndDriftBuilder
             norm = "/mnt/" + norm["/run/desktop/mnt/host/".Length..];
         }
         return Git.WslPathConverter.ToWslPath(norm).TrimEnd('/');
+    }
+
+    private static bool TryMatchHostOrWslPrefix(string normTarget, string basePath, out string relativeSubPath)
+    {
+        var normBase = basePath.Replace('\\', '/').TrimEnd('/');
+        var normBaseWsl = Git.WslPathConverter.ToWslPath(basePath).Replace('\\', '/').TrimEnd('/');
+        var normTargetWsl = Git.WslPathConverter.ToWslPath(normTarget).Replace('\\', '/').TrimEnd('/');
+
+        if (normTarget.Equals(normBase, StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrEmpty(normBaseWsl) &&
+             (normTarget.Equals(normBaseWsl, StringComparison.OrdinalIgnoreCase) ||
+              normTargetWsl.Equals(normBaseWsl, StringComparison.OrdinalIgnoreCase))))
+        {
+            relativeSubPath = string.Empty;
+            return true;
+        }
+
+        if (normTarget.StartsWith(normBase + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            relativeSubPath = normTarget[(normBase.Length + 1)..];
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(normBaseWsl))
+        {
+            if (normTarget.StartsWith(normBaseWsl + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                relativeSubPath = normTarget[(normBaseWsl.Length + 1)..];
+                return true;
+            }
+
+            if (normTargetWsl.StartsWith(normBaseWsl + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                relativeSubPath = normTargetWsl[(normBaseWsl.Length + 1)..];
+                return true;
+            }
+        }
+
+        relativeSubPath = string.Empty;
+        return false;
     }
 }
 

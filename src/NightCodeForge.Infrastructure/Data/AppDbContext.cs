@@ -27,6 +27,8 @@ public class AppDbContext : DbContext
     public DbSet<WorkflowDefinition> WorkflowDefinitions => Set<WorkflowDefinition>();
     public DbSet<StageDefinition> StageDefinitions => Set<StageDefinition>();
     public DbSet<ForgeTaskHistory> TaskHistories => Set<ForgeTaskHistory>();
+    public DbSet<TaskAttachment> TaskAttachments => Set<TaskAttachment>();
+    public DbSet<TaskAttachmentLink> TaskAttachmentLinks => Set<TaskAttachmentLink>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -90,6 +92,11 @@ public class AppDbContext : DbContext
             b.HasMany(w => w.Conversations)
                 .WithOne(c => c.Workspace)
                 .HasForeignKey(c => c.WorkspaceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasMany(w => w.Attachments)
+                .WithOne(a => a.Workspace)
+                .HasForeignKey(a => a.WorkspaceId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -233,6 +240,11 @@ public class AppDbContext : DbContext
             b.HasMany(i => i.History)
                 .WithOne(h => h.ForgeTask)
                 .HasForeignKey(h => h.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasMany(i => i.AttachmentLinks)
+                .WithOne(l => l.ForgeTask)
+                .HasForeignKey(l => l.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -434,6 +446,57 @@ public class AppDbContext : DbContext
                 .HasForeignKey(h => h.TaskId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        // 15. TaskAttachment
+        modelBuilder.Entity<TaskAttachment>(b =>
+        {
+            b.HasKey(a => a.Id);
+            b.Property(a => a.Title).IsRequired().HasMaxLength(512);
+            b.Property(a => a.Slug).IsRequired().HasMaxLength(128);
+            b.Property(a => a.RelativePath).IsRequired().HasMaxLength(512);
+            b.Property(a => a.MarkdownPath).HasMaxLength(512);
+            b.Property(a => a.ContentKind).HasConversion<int>();
+            b.Property(a => a.MediaType).IsRequired().HasMaxLength(128);
+            b.Property(a => a.WidthPx);
+            b.Property(a => a.HeightPx);
+            b.Property(a => a.SourceKind).HasConversion<int>();
+            b.Property(a => a.SourceRef).IsRequired().HasMaxLength(2048);
+            b.Property(a => a.IsSymlink).HasDefaultValue(false);
+            b.Property(a => a.Sha256).IsRequired().HasMaxLength(64);
+            b.Property(a => a.SizeBytes).IsRequired();
+            b.Property(a => a.CreatedAt).IsRequired();
+
+            b.HasIndex(a => a.WorkspaceId);
+            b.HasIndex(a => new { a.WorkspaceId, a.Sha256 }).IsUnique();
+
+            b.HasOne(a => a.Workspace)
+                .WithMany(w => w.Attachments)
+                .HasForeignKey(a => a.WorkspaceId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasMany(a => a.TaskLinks)
+                .WithOne(l => l.TaskAttachment)
+                .HasForeignKey(l => l.TaskAttachmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // 16. TaskAttachmentLink
+        modelBuilder.Entity<TaskAttachmentLink>(b =>
+        {
+            b.HasKey(l => l.Id);
+            b.HasIndex(l => l.TaskAttachmentId);
+            b.HasIndex(l => new { l.TaskId, l.TaskAttachmentId }).IsUnique();
+
+            b.HasOne(l => l.ForgeTask)
+                .WithMany(t => t.AttachmentLinks)
+                .HasForeignKey(l => l.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasOne(l => l.TaskAttachment)
+                .WithMany(a => a.TaskLinks)
+                .HasForeignKey(l => l.TaskAttachmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
     }
 
     /// <summary>
@@ -512,6 +575,11 @@ public class AppDbContext : DbContext
     /// Migration identifier for task difficulty classification and agent profile difficulty overrides.
     /// </summary>
     public const string AddTaskDifficultyAndProfileDifficultyOverridesMigrationId = "20261116180000_AddTaskDifficultyAndProfileDifficultyOverrides";
+
+    /// <summary>
+    /// Migration identifier for workspace TaskAttachments and TaskAttachmentLinks tables.
+    /// </summary>
+    public const string AddTaskAttachmentsAndLinksMigrationId = "20261117104908_AddTaskAttachmentsAndLinks";
 
     /// <summary>
     /// Ensures database migrations are applied and enables SQLite Write-Ahead Logging (WAL) and optimal concurrency pragmas.
@@ -718,6 +786,17 @@ VALUES ('" + AddTaskHistoryGitHubFieldsMigrationId + @"', '10.0.12');";
                 {
                     cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
 VALUES ('" + AddTaskDifficultyAndProfileDifficultyOverridesMigrationId + @"', '10.0.12');";
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                cmd.Parameters.Clear();
+                cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'TaskAttachments';";
+                var hasTaskAttachmentsTable = Convert.ToInt64(await cmd.ExecuteScalarAsync(cancellationToken)) > 0;
+
+                if (hasTaskAttachmentsTable)
+                {
+                    cmd.CommandText = @"INSERT OR IGNORE INTO ""__EFMigrationsHistory"" (""MigrationId"", ""ProductVersion"")
+VALUES ('" + AddTaskAttachmentsAndLinksMigrationId + @"', '10.0.12');";
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
             }

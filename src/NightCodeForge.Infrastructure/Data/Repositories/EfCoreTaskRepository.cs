@@ -44,6 +44,8 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.ExecutionLogs)
             .Include(i => i.Conversations)
             .Include(i => i.History)
+            .Include(i => i.AttachmentLinks)
+                .ThenInclude(l => l.TaskAttachment)
             .FirstOrDefaultAsync(i => i.Id == id, cancellationToken);
     }
 
@@ -62,6 +64,8 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.Questions)
             .Include(i => i.ExecutionRecords)
             .Include(i => i.ExecutionLogs)
+            .Include(i => i.AttachmentLinks)
+                .ThenInclude(l => l.TaskAttachment)
             .Where(i => idList.Contains(i.Id))
             .ToListAsync(cancellationToken);
     }
@@ -78,6 +82,8 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.Questions)
             .Include(i => i.ExecutionRecords)
             .Include(i => i.ExecutionLogs)
+            .Include(i => i.AttachmentLinks)
+                .ThenInclude(l => l.TaskAttachment)
             .Where(i => i.WorkspaceId == workspaceId)
             .OrderBy(i => i.Priority)
             .ThenBy(i => i.CreatedAt)
@@ -96,6 +102,8 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.Questions)
             .Include(i => i.ExecutionRecords)
             .Include(i => i.ExecutionLogs)
+            .Include(i => i.AttachmentLinks)
+                .ThenInclude(l => l.TaskAttachment)
             .Where(t => t.WorkspaceId == workspaceId && t.HasExecutionRun)
             .OrderByDescending(t => t.UpdatedAt)
             .ToListAsync(cancellationToken);
@@ -603,6 +611,8 @@ public class EfCoreTaskRepository : ITaskRepository
             .Include(i => i.Workspace)
             .Include(i => i.Checkpoints)
             .Include(i => i.ExecutionRecords)
+            .Include(i => i.AttachmentLinks)
+                .ThenInclude(l => l.TaskAttachment)
             .Where(i => i.Status == status)
             .ToListAsync(cancellationToken);
     }
