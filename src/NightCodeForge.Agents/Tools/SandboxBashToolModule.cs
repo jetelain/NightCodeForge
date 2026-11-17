@@ -49,13 +49,25 @@ public sealed class SandboxBashToolModule : IAgentToolModule
     public static IReadOnlyList<AIFunction> CreateFunctions(SandboxBashToolModule? module) =>
     [
         AIFunctionFactory.Create(
-            ([Description("Shell command line to execute")] string command,
+            async ([Description("Shell command line to execute")] string command,
              [Description("Timeout in seconds")] int? timeout = null,
              [Description("Working directory relative to repo root")] string? working_directory = null,
              CancellationToken ct = default) =>
-                module != null
-                    ? module.BashAsync(command, timeout, working_directory, ct)
-                    : throw new InvalidOperationException(MissingModuleInstanceMessage),
+            {
+                if (module == null)
+                {
+                    throw new InvalidOperationException(MissingModuleInstanceMessage);
+                }
+
+                try
+                {
+                    return await module.BashAsync(command, timeout, working_directory, ct);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return $"Error: {ex.Message}";
+                }
+            },
             CanonicalToolNames.Bash,
             "Executes a bash or shell command within the workspace sandbox.")
     ];
@@ -65,6 +77,25 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         if (string.IsNullOrWhiteSpace(command))
         {
             return "[Empty bash command]";
+        }
+
+        try
+        {
+            ReadOnlyCommandValidator.EnsureMountAccessAllowed(
+                command,
+                SandboxPathResolver?.MountTable,
+                SandboxPathResolver?.Scope?.ScopeCacheKey,
+                workingDirectory,
+                SandboxPathResolver?.Scope?.DefaultWorkingDirectory);
+        }
+        catch (UnauthorizedAccessException ex) when (
+            !Core.Interfaces.SandboxPathResolver.IsAttachmentsPathOrReference(
+                workingDirectory,
+                SandboxPathResolver?.MountTable,
+                SandboxPathResolver?.Scope?.DefaultWorkingDirectory) &&
+            !Core.Interfaces.SandboxPathResolver.ContainsAttachmentsReference(command, SandboxPathResolver?.MountTable))
+        {
+            return $"Error: {ex.Message}";
         }
 
         if (IsEffectiveReadOnly)
@@ -80,11 +111,16 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         string? workDir;
         try
         {
-            var resolvedWorkDir = SandboxPathResolver.ResolveBashWorkingDirectory(workingDirectory, _executionEnv.Tier);
+            var resolvedWorkDir = SandboxPathResolver!.ResolveBashWorkingDirectory(workingDirectory, _executionEnv.Tier);
             workDir = string.IsNullOrEmpty(resolvedWorkDir) ? null : resolvedWorkDir;
             command = SandboxPathResolver.TranslateBashCommand(command, _executionEnv.Tier);
         }
-        catch (UnauthorizedAccessException ex)
+        catch (UnauthorizedAccessException ex) when (
+            !Core.Interfaces.SandboxPathResolver.IsAttachmentsPathOrReference(
+                workingDirectory,
+                SandboxPathResolver?.MountTable,
+                SandboxPathResolver?.Scope?.DefaultWorkingDirectory) &&
+            !Core.Interfaces.SandboxPathResolver.ContainsAttachmentsReference(command, SandboxPathResolver?.MountTable))
         {
             return $"Error: {ex.Message}";
         }

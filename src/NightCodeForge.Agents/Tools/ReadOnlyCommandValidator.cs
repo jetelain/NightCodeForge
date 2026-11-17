@@ -1,5 +1,6 @@
 namespace NightCodeForge.Agents.Tools;
 
+using NightCodeForge.Core.Interfaces;
 using Pmad.AI.Guardrails;
 
 /// <summary>
@@ -94,5 +95,24 @@ public static class ReadOnlyCommandValidator
     {
         var result = Validate(command);
         return (result.IsAllowed, result.Reason);
+    }
+
+    /// <summary>
+    /// Enforces mount-table visibility and read-only attachment protection for bash commands,
+    /// throwing <see cref="UnauthorizedAccessException"/> if an unmounted or mutating <c>/workspace/attachments</c> access is attempted.
+    /// </summary>
+    public static void EnsureMountAccessAllowed(
+        string? command,
+        SandboxMountTable? mountTable,
+        string? scopeCacheKey = null,
+        string? workingDirectory = null,
+        string? defaultWorkingDirectory = null)
+    {
+        SandboxPathResolver.ValidateBashAttachmentsAccess(
+            command,
+            mountTable,
+            scopeCacheKey,
+            workingDirectory,
+            defaultWorkingDirectory);
     }
 }

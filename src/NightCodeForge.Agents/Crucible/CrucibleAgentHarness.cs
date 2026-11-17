@@ -182,6 +182,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
             backlogDigest = await _workspaceContext.BuildBacklogDigestAsync(workspace.Id, taskId, cancellationToken);
         }
 
+        string? taskAttachmentsDigest = null;
+        if (!string.Equals(context.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase))
+        {
+            taskAttachmentsDigest = await _workspaceContext.BuildTaskAttachmentsDigestAsync(context.ForgeTask, cancellationToken);
+        }
+
         var stabilizedPrefix = prefixStabilizer.BuildStabilizedPrefix(
             stageDirective,
             taskScope,
@@ -192,7 +198,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             customRulesPrompt: harnessConfig.CustomSystemRules,
             customRolePersona: customPersona,
             workingDirectory: locations.AgentWorkingDir,
-            backlogDigest: backlogDigest);
+            backlogDigest: backlogDigest,
+            taskAttachmentsDigest: taskAttachmentsDigest);
 
         // 6. Assemble the agent and its middlewares.
         string latestSerializedState = SerializeSession(chatHistory);

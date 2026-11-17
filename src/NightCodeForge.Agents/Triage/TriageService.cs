@@ -148,7 +148,7 @@ public partial class TriageService : ITriageService
         {
             ForgeTask = triageTask,
             Workspace = workspace,
-            SandboxScope = SandboxScopeDescriptor.ForWorkspace(workspace, SandboxSecurityTier.RestrictedReadOnly),
+            SandboxScope = BuildTriageSandboxScope(workspace, repoPath),
             Profile = profile,
             StageId = StandardStageIds.Triage,
             StageDirective = stageDirective,
@@ -456,6 +456,29 @@ Please inspect the codebase and check existing backlog tasks in docs/tasks/, det
         }
 
         return deps.Count > 0 ? deps.Distinct().OrderBy(id => id).ToList() : null;
+    }
+
+    private static SandboxScopeDescriptor BuildTriageSandboxScope(Workspace workspace, string repoPath)
+    {
+        var rawRoot = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
+            ? workspace.Ext4MirrorPath
+            : (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) ? workspace.RepositoryPath : repoPath);
+
+        // Stage 0 Untrusted Intake Triage explicitly omits /workspace/attachments from MountTable
+        var mountTable = SandboxMountTable.ForWorkspace(
+            hostWorkingDirectory: rawRoot,
+            wslWorkingDirectory: VirtualMountEntry.ToDefaultWslPath(rawRoot),
+            isReadOnly: true,
+            taskId: null,
+            hostAttachmentsDirectory: null,
+            wslAttachmentsDirectory: null);
+
+        return SandboxScopeDescriptor.ForWorkspace(
+            workspace,
+            SandboxSecurityTier.RestrictedReadOnly,
+            taskId: null,
+            mountTable: mountTable,
+            scopeCacheKey: $"ws:{workspace.Id}:triage:tier:{SandboxSecurityTier.RestrictedReadOnly}");
     }
 
     private static string EscapeUntrustedReportTags(string content) =>

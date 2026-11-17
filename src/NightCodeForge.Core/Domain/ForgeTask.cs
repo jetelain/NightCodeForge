@@ -73,7 +73,8 @@ public record TaskProposal
         IReadOnlyList<int>? dependsOnIds = null,
         int? taskId = null,
         string? mergeMode = null,
-        string? difficulty = null)
+        string? difficulty = null,
+        IReadOnlyList<int>? attachmentIds = null)
     {
         Title = title;
         Description = description;
@@ -86,10 +87,11 @@ public record TaskProposal
         TaskId = taskId;
         MergeMode = mergeMode;
         Difficulty = difficulty;
+        AttachmentIds = attachmentIds;
     }
 
     public TaskProposal(string title, string description, int priority, IReadOnlyList<string>? dependsOnTitles = null)
-        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null, null, null)
+        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null, null, null, null)
     {
     }
 
@@ -104,5 +106,6 @@ public record TaskProposal
     public int? TaskId { get; init; }
     public string? MergeMode { get; init; }
     public string? Difficulty { get; init; }
+    public IReadOnlyList<int>? AttachmentIds { get; init; }
 }
 

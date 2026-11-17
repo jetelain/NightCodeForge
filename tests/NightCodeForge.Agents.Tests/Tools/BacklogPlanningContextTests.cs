@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Agents.Tools;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Agents.Tests;
@@ -78,5 +80,87 @@ public class BacklogPlanningContextTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             emptyContext.BuildBacklogDigestAsync(1, null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task BuildAttachmentDigests_ResolveScopedRepositoryPerCall_AndFailFastWhenUnregistered()
+    {
+        var services = new ServiceCollection();
+        int instancesCreated = 0;
+        services.AddScoped<ITaskAttachmentRepository>(_ =>
+        {
+            var callNumber = Interlocked.Increment(ref instancesCreated);
+            var repoMock = new Mock<ITaskAttachmentRepository>();
+            repoMock.Setup(r => r.GetByWorkspaceIdAsync(42, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(
+                [
+                    new TaskAttachment
+                    {
+                        Id = callNumber,
+                        WorkspaceId = 42,
+                        Title = $"Spec {callNumber}",
+                        RelativePath = $"{callNumber}-spec.md",
+                        ContentKind = TaskAttachmentContentKind.PlainText,
+                        MediaType = "text/markdown"
+                    }
+                ]);
+            repoMock.Setup(r => r.GetByTaskIdAsync(7, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(
+                [
+                    new TaskAttachment
+                    {
+                        Id = 10,
+                        WorkspaceId = 42,
+                        Title = "Linked Spec",
+                        RelativePath = "10-linked.md",
+                        ContentKind = TaskAttachmentContentKind.PlainText,
+                        MediaType = "text/markdown"
+                    },
+                    new TaskAttachment
+                    {
+                        Id = 99,
+                        WorkspaceId = 99,
+                        Title = "Foreign Spec",
+                        RelativePath = "99-foreign.md",
+                        ContentKind = TaskAttachmentContentKind.PlainText,
+                        MediaType = "text/markdown"
+                    }
+                ]);
+            return repoMock.Object;
+        });
+
+        await using var provider = services.BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+
+        var context = new BacklogPlanningContext(
+            new Mock<IWorkspaceBacklogSummaryService>().Object,
+            new Mock<ITaskMarkdownValidator>().Object,
+            new Mock<IBacklogMutationToolService>().Object,
+            NullLogger<CanonicalTools>.Instance,
+            scopeFactory);
+
+        var wsDigest1 = await context.BuildWorkspaceAttachmentsDigestAsync(42, CancellationToken.None);
+        var wsDigest2 = await context.BuildWorkspaceAttachmentsDigestAsync(42, CancellationToken.None);
+        var taskDigest = await context.BuildTaskAttachmentsDigestAsync(42, 7, CancellationToken.None);
+
+        Assert.Contains("Spec 1", wsDigest1);
+        Assert.Contains("Spec 2", wsDigest2);
+        Assert.Contains("10-linked.md", taskDigest);
+        Assert.DoesNotContain("99-foreign.md", taskDigest);
+        Assert.Equal(3, instancesCreated);
+
+        // Fails fast when ITaskAttachmentRepository is not registered in the scope
+        await using var emptyProvider = new ServiceCollection().BuildServiceProvider();
+        var emptyContext = new BacklogPlanningContext(
+            new Mock<IWorkspaceBacklogSummaryService>().Object,
+            new Mock<ITaskMarkdownValidator>().Object,
+            new Mock<IBacklogMutationToolService>().Object,
+            NullLogger<CanonicalTools>.Instance,
+            emptyProvider.GetRequiredService<IServiceScopeFactory>());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            emptyContext.BuildWorkspaceAttachmentsDigestAsync(1, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            emptyContext.BuildTaskAttachmentsDigestAsync(1, 5, CancellationToken.None));
     }
 }

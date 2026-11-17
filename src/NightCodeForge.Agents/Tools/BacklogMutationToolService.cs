@@ -27,7 +27,8 @@ public sealed record TaskEditRequest(
     IReadOnlyList<int>? DependsOnIds = null,
     string? MergeMode = null,
     string? BaseBranch = null,
-    string? Difficulty = null);
+    string? Difficulty = null,
+    IReadOnlyList<int>? AttachmentIds = null);
 
 /// <summary>Single entry of a batched priority rework.</summary>
 public sealed record TaskPriorityUpdate(int TaskId, int Priority);
@@ -78,6 +79,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     private readonly IAgentActivityStreamer _activityStreamer;
     private readonly IGitHubPullRequestDeliveryService _pullRequestDeliveryService;
     private readonly IOptions<SecurityOptions> _securityOptions;
+    private readonly ITaskAttachmentRepository _attachmentRepository;
     private readonly ILogger<BacklogMutationToolService> _logger;
 
     public BacklogMutationToolService(
@@ -89,6 +91,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         IAgentActivityStreamer activityStreamer,
         IGitHubPullRequestDeliveryService pullRequestDeliveryService,
         IOptions<SecurityOptions> securityOptions,
+        ITaskAttachmentRepository attachmentRepository,
         ILogger<BacklogMutationToolService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -99,6 +102,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
         _pullRequestDeliveryService = pullRequestDeliveryService ?? throw new ArgumentNullException(nameof(pullRequestDeliveryService));
         _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
+        _attachmentRepository = attachmentRepository ?? throw new ArgumentNullException(nameof(attachmentRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -107,6 +111,10 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         var task = await LoadTaskAsync(scope, taskId, cancellationToken);
         var prerequisites = await _taskRepository.GetDependenciesAsync(taskId, cancellationToken);
         var graph = await _taskRepository.GetWorkspaceDependenciesAsync(scope.WorkspaceId, cancellationToken);
+        var attachmentIds = (await _attachmentRepository.GetByTaskIdAsync(taskId, cancellationToken))
+            .Select(a => a.Id)
+            .OrderBy(id => id)
+            .ToList();
         var dependents = graph
             .Where(kv => kv.Value.Contains(taskId))
             .Select(kv => kv.Key)
@@ -129,7 +137,8 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             pullRequestNumber = task.PullRequestNumber,
             pullRequestUrl = task.PullRequestUrl,
             prerequisites = prerequisites.OrderBy(id => id).ToList(),
-            dependentTaskIds = dependents
+            dependentTaskIds = dependents,
+            attachmentIds
         }, JsonOptions);
     }
 
@@ -187,6 +196,47 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             }
         }
 
+        IReadOnlyList<int>? newAttachmentIds = null;
+        if (request.AttachmentIds != null || description != null)
+        {
+            var effectiveDescription = description ?? task.Description;
+            IReadOnlyList<int> requestedAttachmentIds;
+            if (request.AttachmentIds != null)
+            {
+                requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                    scope.WorkspaceId,
+                    request.AttachmentIds,
+                    effectiveDescription,
+                    cancellationToken);
+            }
+            else
+            {
+                var currentAttachments = (await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken))
+                    .Select(a => a.Id)
+                    .ToList();
+                var oldCitedIds = AttachmentCitationParser.ExtractAttachmentIds(task.Description).ToHashSet();
+                var retainedExplicitIds = currentAttachments
+                    .Where(id => !oldCitedIds.Contains(id))
+                    .ToList();
+                requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                    scope.WorkspaceId,
+                    retainedExplicitIds,
+                    effectiveDescription,
+                    cancellationToken);
+            }
+
+            var existingIds = (await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken))
+                .Select(a => a.Id)
+                .OrderBy(id => id)
+                .ToList();
+
+            if (!existingIds.SequenceEqual(requestedAttachmentIds))
+            {
+                newAttachmentIds = requestedAttachmentIds;
+                changes.Add($"attachments [{string.Join(", ", existingIds)}] -> [{string.Join(", ", requestedAttachmentIds)}]");
+            }
+        }
+
         if (title != null && !string.Equals(task.Title, title, StringComparison.Ordinal))
         {
             changes.Add($"title \"{task.Title}\" -> \"{title}\"");
@@ -231,6 +281,11 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         task.UpdatedAt = DateTime.UtcNow;
         var reason = $"Ideation agent edited task: {string.Join("; ", changes)}";
         await _taskRepository.UpdateWithHistoryAsync(task, newDependencies, AuditActors.IdeationAgent, reason, cancellationToken);
+        if (newAttachmentIds != null)
+        {
+            await _attachmentRepository.SetTaskAttachmentLinksAsync(task.Id, newAttachmentIds, cancellationToken);
+        }
+
         await SyncMarkdownAsync(scope, task, cancellationToken);
         await BroadcastAsync(task, $"Ideation agent edited task #{task.Id}: {string.Join("; ", changes)}", CanonicalToolNames.EditTask, cancellationToken);
 
@@ -378,6 +433,12 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 var distinctIds = proposal.DependsOnIds.Distinct().OrderBy(id => id).ToList();
                 await ValidateDependenciesAsync(scope, taskId: 0, distinctIds, cancellationToken);
             }
+
+            await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                scope.WorkspaceId,
+                proposal.AttachmentIds,
+                proposal.Description,
+                cancellationToken);
         }
 
         IReadOnlyList<ForgeTask>? workspaceTasks = proposals.Any(p => p.DependsOnTitles is { Count: > 0 })
@@ -396,6 +457,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 singleDeps,
                 single.MergeMode,
                 single.Difficulty,
+                single.AttachmentIds,
                 cancellationToken);
             return singleJson;
         }
@@ -416,6 +478,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 deps,
                 p.MergeMode,
                 p.Difficulty,
+                p.AttachmentIds,
                 cancellationToken);
 
             createdEntities.Add(created);
@@ -493,6 +556,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
         string? difficulty = null,
+        IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(scope);
@@ -522,11 +586,18 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             validDependencies = distinct;
         }
 
+        var trimmedDescription = description?.Trim() ?? string.Empty;
+        var resolvedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+            scope.WorkspaceId,
+            attachmentIds,
+            trimmedDescription,
+            cancellationToken);
+
         var task = new ForgeTask
         {
             WorkspaceId = scope.WorkspaceId,
             Title = trimmedTitle,
-            Description = description?.Trim() ?? string.Empty,
+            Description = trimmedDescription,
             Status = TaskOverallStatus.Draft,
             Priority = effPriority,
             Difficulty = effDifficulty,
@@ -543,12 +614,29 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             "Proposed draft task from ideation",
             cancellationToken);
 
+        if (resolvedAttachmentIds.Count > 0)
+        {
+            await _attachmentRepository.SetTaskAttachmentLinksAsync(created.Id, resolvedAttachmentIds, cancellationToken);
+        }
+
         await SyncMarkdownAsync(scope, created, cancellationToken);
         await BroadcastAsync(created, $"Ideation agent proposed draft task #{created.Id}: {created.Title}", CanonicalToolNames.ProposeTasks, cancellationToken);
 
         var json = await GetTaskAsync(scope, created.Id, cancellationToken);
         return (created, json);
     }
+
+    private Task<IReadOnlyList<int>> ValidateAndResolveWorkspaceAttachmentIdsAsync(
+        int workspaceId,
+        IReadOnlyList<int>? explicitIds,
+        string? description,
+        CancellationToken cancellationToken) =>
+        AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+            _attachmentRepository,
+            workspaceId,
+            explicitIds,
+            description,
+            cancellationToken);
 
     private async Task<MergeMode> ParseAndValidateMergeModeAsync(
         BacklogToolScope scope,

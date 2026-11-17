@@ -25,6 +25,7 @@ public class TaskOrchestrator : ITaskOrchestrator
     private readonly IAgentActivityStreamer _streamer;
     private readonly IOperationsControlService _operationsControlService;
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly ITaskAttachmentRepository _attachmentRepository;
     private readonly ILogger<TaskOrchestrator> _logger;
 
     private static readonly TimeSpan PauseAbortTimeout = TimeSpan.FromSeconds(5);
@@ -38,6 +39,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         IAgentActivityStreamer streamer,
         IOperationsControlService operationsControlService,
         IOperationsTelemetryService telemetryService,
+        ITaskAttachmentRepository attachmentRepository,
         ILogger<TaskOrchestrator> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -48,6 +50,7 @@ public class TaskOrchestrator : ITaskOrchestrator
         _streamer = streamer ?? throw new ArgumentNullException(nameof(streamer));
         _operationsControlService = operationsControlService ?? throw new ArgumentNullException(nameof(operationsControlService));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _attachmentRepository = attachmentRepository ?? throw new ArgumentNullException(nameof(attachmentRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -1098,8 +1101,21 @@ public class TaskOrchestrator : ITaskOrchestrator
                     : null;
                 if (pendingProposals != null && pendingProposals.Count > 0)
                 {
+                    var proposalAttachments = new List<IReadOnlyList<int>>(pendingProposals.Count);
                     foreach (var p in pendingProposals)
                     {
+                        var validatedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                            workspace.Id,
+                            p.AttachmentIds,
+                            p.Description,
+                            cancellationToken);
+                        proposalAttachments.Add(validatedAttachmentIds);
+                    }
+
+                    for (var proposalIndex = 0; proposalIndex < pendingProposals.Count; proposalIndex++)
+                    {
+                        var p = pendingProposals[proposalIndex];
+                        var attachmentIds = proposalAttachments[proposalIndex];
                         var suggestedTask = new ForgeTask
                         {
                             WorkspaceId = workspace.Id,
@@ -1119,6 +1135,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                             createdBy: AuditActors.GetActorForStage(stage.StageId),
                             reason: $"Proposed by stage '{stage.StageId}' during execution of task #{task.Id}",
                             cancellationToken: cancellationToken);
+                        if (attachmentIds.Count > 0)
+                        {
+                            await _attachmentRepository.SetTaskAttachmentLinksAsync(suggestedTask.Id, attachmentIds, cancellationToken);
+                        }
                         _logger.LogInformation("Triage/Discovery created suggested task #{NewTaskId}: {Title}", suggestedTask.Id, suggestedTask.Title);
                         await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, suggestedTask, cancellationToken);
                     }
@@ -1218,6 +1238,10 @@ public class TaskOrchestrator : ITaskOrchestrator
                             break;
                         }
                         catch (TaskMarkdownSyncException)
+                        {
+                            throw;
+                        }
+                        catch (AttachmentNotFoundException)
                         {
                             throw;
                         }
@@ -2926,4 +2950,16 @@ public class TaskOrchestrator : ITaskOrchestrator
                 DurationMs: duration));
         }
     }
+
+    private Task<IReadOnlyList<int>> ValidateAndResolveWorkspaceAttachmentIdsAsync(
+        int workspaceId,
+        IReadOnlyList<int>? explicitIds,
+        string? description,
+        CancellationToken cancellationToken) =>
+        AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+            _attachmentRepository,
+            workspaceId,
+            explicitIds,
+            description,
+            cancellationToken);
 }

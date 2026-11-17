@@ -56,6 +56,9 @@ public class TaskFrontmatter
     
     [YamlMember(Alias = "depends_on")]
     public TaskDependencyReferenceList? DependsOn { get; set; } = null;
+
+    [YamlMember(Alias = "attachment_ids")]
+    public List<int>? AttachmentIds { get; set; } = null;
     
     [YamlMember(Alias = "agent_profile")]
     public string? AgentProfile { get; set; }

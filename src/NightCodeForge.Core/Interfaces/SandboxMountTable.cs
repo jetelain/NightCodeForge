@@ -23,6 +23,7 @@ public record VirtualMountEntry
     public string HostDirectoryPath { get; init; } = string.Empty;
     public string WslTargetDirectoryPath { get; init; } = string.Empty;
     public bool IsReadOnly { get; init; }
+    public bool AllowWriteInReadOnlyScope { get; init; }
 
     public VirtualMountEntry() { }
 
@@ -31,7 +32,8 @@ public record VirtualMountEntry
         string virtualMountPath,
         string hostDirectoryPath,
         string wslTargetDirectoryPath,
-        bool isReadOnly = false)
+        bool isReadOnly = false,
+        bool allowWriteInReadOnlyScope = false)
     {
         VirtualSubPath = NormalizeSubPath(virtualSubPath);
         VirtualMountPath = NormalizeVirtualPath(virtualMountPath);
@@ -40,6 +42,7 @@ public record VirtualMountEntry
             ? wslTargetDirectoryPath
             : ToDefaultWslPath(hostDirectoryPath);
         IsReadOnly = isReadOnly;
+        AllowWriteInReadOnlyScope = allowWriteInReadOnlyScope;
     }
 
     /// <summary>
@@ -132,6 +135,8 @@ public sealed class SandboxMountTable
     public IReadOnlyList<VirtualMountEntry> Entries => _sortedEntries;
     public VirtualMountEntry? SandboxTmpMount { get; }
     public string? NonContainerFallbackWorkingDirectory { get; }
+    public bool HasAttachmentsMount => _sortedEntries.Any(e =>
+        string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
 
     public SandboxMountTable(
         string virtualRootPath,
@@ -145,7 +150,7 @@ public sealed class SandboxMountTable
                 VirtualMountEntry.NormalizeVirtualPath(e.VirtualMountPath),
                 AttachmentConstants.VirtualAttachmentsMountPath,
                 StringComparison.OrdinalIgnoreCase)
-                ? e with { IsReadOnly = true }
+                ? e with { IsReadOnly = true, AllowWriteInReadOnlyScope = false }
                 : e)
             .OrderByDescending(e => e.VirtualMountPath.Length)
             .ThenBy(e => e.VirtualMountPath, StringComparer.OrdinalIgnoreCase)
@@ -462,7 +467,8 @@ public sealed record SandboxScopeDescriptor
         SandboxMountTable? mountTable,
         string? defaultWorkingDirectory = null,
         string? hostWorkspacePath = null,
-        string? canonicalClonePath = null)
+        string? canonicalClonePath = null,
+        string? scopeCacheKey = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         var effectiveTaskId = taskId is > 0 ? taskId : null;
@@ -504,6 +510,7 @@ public sealed record SandboxScopeDescriptor
             ext4MirrorPath: workspace.Ext4MirrorPath,
             virtualRootPath: SandboxMountTable.WorkspaceVirtualRoot,
             defaultWorkingDirectory: effectiveDefaultWorkDir,
+            scopeCacheKey: scopeCacheKey,
             workspace: workspace,
             hostWorkspacePath: effectiveHostWorkspacePath,
             canonicalClonePath: canonicalClonePath);

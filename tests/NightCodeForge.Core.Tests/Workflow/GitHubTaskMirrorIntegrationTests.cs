@@ -588,6 +588,7 @@ public class GitHubTaskMirrorIntegrationTests : IDisposable
             builder.Streamer,
             opsControlMock.Object,
             builder.TelemetryService,
+            new InMemoryTaskAttachmentRepository(builder.TaskRepository),
             builder.Logger);
 
         var closedIds = await orchestrator.SyncMergedPullRequestsAsync(1);

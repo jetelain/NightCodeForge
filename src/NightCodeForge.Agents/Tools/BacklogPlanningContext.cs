@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Agents.Tools;
@@ -27,6 +29,12 @@ public interface IBacklogPlanningContext
 
     /// <summary>Builds the <c>&lt;existing_workspace_tasks&gt;</c> digest (empty when the backlog has no active task).</summary>
     Task<string> BuildBacklogDigestAsync(int workspaceId, int? excludeTaskId, CancellationToken cancellationToken);
+
+    /// <summary>Builds the <c>&lt;workspace_attachments&gt;</c> digest (empty when no workspace attachments exist).</summary>
+    Task<string> BuildWorkspaceAttachmentsDigestAsync(int workspaceId, CancellationToken cancellationToken = default);
+
+    /// <summary>Builds the <c>&lt;task_attachments&gt;</c> digest for one task (empty when no attachments are linked).</summary>
+    Task<string> BuildTaskAttachmentsDigestAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -61,5 +69,29 @@ public sealed class BacklogPlanningContext : IBacklogPlanningContext
         await using var scope = ScopeFactory.CreateAsyncScope();
         var scopedSummary = scope.ServiceProvider.GetRequiredService<IWorkspaceBacklogSummaryService>();
         return await scopedSummary.BuildDigestAsync(workspaceId, excludeTaskId, cancellationToken);
+    }
+
+    public async Task<string> BuildWorkspaceAttachmentsDigestAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var attachmentRepository = scope.ServiceProvider.GetRequiredService<ITaskAttachmentRepository>();
+        var attachments = await attachmentRepository.GetByWorkspaceIdAsync(workspaceId, cancellationToken);
+        return AttachmentDigestFormatter.FormatWorkspaceAttachmentsDigest(attachments);
+    }
+
+    public async Task<string> BuildTaskAttachmentsDigestAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default)
+    {
+        if (taskId <= 0)
+        {
+            return string.Empty;
+        }
+
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var attachmentRepository = scope.ServiceProvider.GetRequiredService<ITaskAttachmentRepository>();
+        var attachments = await attachmentRepository.GetByTaskIdAsync(taskId, cancellationToken);
+        var workspaceAttachments = workspaceId > 0
+            ? attachments.Where(a => a.WorkspaceId == workspaceId)
+            : attachments;
+        return AttachmentDigestFormatter.FormatTaskAttachmentsDigest(workspaceAttachments);
     }
 }

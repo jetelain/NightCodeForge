@@ -37,8 +37,19 @@ public interface ISandboxPathResolver
 /// Default implementation of <see cref="ISandboxPathResolver"/> performing longest-prefix virtual mount matching,
 /// strict path traversal boundary validation, read-only enforcement, and non-container bash command path rewriting.
 /// </summary>
-public sealed class SandboxPathResolver : ISandboxPathResolver
+public sealed partial class SandboxPathResolver : ISandboxPathResolver
 {
+    [GeneratedRegex(
+        @"(?<=^|[\s'""=:;(\[{,+|&><`-])(?:/workspace/attachments|workspace/attachments|[^\s'""]*\.nightcodeforge/wks/\d+/attachments)(?=$|/|[\s'""=:;)\]}},|&><`])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex AttachmentsReferenceRegex();
+
+    private static readonly HashSet<string> MutatingBashBinaries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "rm", "rmdir", "mv", "touch", "mkdir", "chmod", "chown", "chgrp",
+        "ln", "truncate", "dd", "tee", "install", "unlink", "shred", "mktemp", "cpio"
+    };
+
     private readonly ConcurrentDictionary<ExecutionTier, (Regex? Pattern, IReadOnlyList<(string VirtualPrefix, string TargetPrefix)> OrderedMappings)> _compiledTierPatterns = new();
 
     public SandboxScopeDescriptor Scope { get; }
@@ -162,6 +173,11 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
                 norm.StartsWith("/clone/", StringComparison.OrdinalIgnoreCase))
             {
                 var canonical = CanonicalizeExplicitVirtualPath(norm, workingDirectory);
+                if (IsVirtualAttachmentsPath(canonical) && !MountTable.HasAttachmentsMount)
+                {
+                    throw new UnauthorizedAccessException(
+                        $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{Scope.ScopeCacheKey}'.");
+                }
                 if (!MountTable.TryMatchLongestPrefix(canonical, out _, out _))
                 {
                     throw new UnauthorizedAccessException(
@@ -188,6 +204,11 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
                 }
 
                 var candidateVirtual = $"{Scope.DefaultWorkingDirectory.TrimEnd('/')}/{cleanRel}";
+                if (IsVirtualAttachmentsPath(candidateVirtual) && !MountTable.HasAttachmentsMount)
+                {
+                    throw new UnauthorizedAccessException(
+                        $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{Scope.ScopeCacheKey}'.");
+                }
                 if (!MountTable.TryMatchLongestPrefix(candidateVirtual, out _, out _))
                 {
                     throw new UnauthorizedAccessException(
@@ -233,7 +254,14 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
 
     public string TranslateBashCommand(string command, ExecutionTier targetTier)
     {
-        if (string.IsNullOrWhiteSpace(command) || targetTier == ExecutionTier.ContainerSandbox)
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return command;
+        }
+
+        ValidateBashAttachmentsAccess(command, MountTable, Scope.ScopeCacheKey);
+
+        if (targetTier == ExecutionTier.ContainerSandbox)
         {
             return command;
         }
@@ -368,6 +396,12 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
 
     private string ResolveCanonicalVirtualPathToHost(string canonicalVirtualPath, string originalPath, bool forWrite)
     {
+        if (IsVirtualAttachmentsPath(canonicalVirtualPath) && !MountTable.HasAttachmentsMount)
+        {
+            throw new UnauthorizedAccessException(
+                $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{Scope.ScopeCacheKey}'.");
+        }
+
         if (!MountTable.TryMatchLongestPrefix(canonicalVirtualPath, out var matchedMount, out var remainder) ||
             matchedMount == null)
         {
@@ -471,18 +505,24 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
             if (wksIdx >= 0)
             {
                 var afterMarker = normalized[(wksIdx + wksMarker.Length)..].TrimStart('/');
-                if (afterMarker.Equals("tmp", StringComparison.OrdinalIgnoreCase) ||
-                    afterMarker.StartsWith("tmp/", StringComparison.OrdinalIgnoreCase))
+                if (!TryNormalizeRelativeSegments(afterMarker, out var normalizedAfterMarker))
                 {
-                    resolvedHostPath = ResolveVirtualTmpPath("/" + afterMarker, forWrite);
+                    throw new UnauthorizedAccessException(
+                        $"Access denied: Path '{raw}' resolves outside the allowed workspace sandbox.");
+                }
+
+                if (normalizedAfterMarker.Equals("tmp", StringComparison.OrdinalIgnoreCase) ||
+                    normalizedAfterMarker.StartsWith("tmp/", StringComparison.OrdinalIgnoreCase))
+                {
+                    resolvedHostPath = ResolveVirtualTmpPath("/" + normalizedAfterMarker, forWrite);
                     return true;
                 }
 
-                if (afterMarker.Equals(AttachmentConstants.AttachmentsDirectoryName, StringComparison.OrdinalIgnoreCase) ||
-                    afterMarker.StartsWith(AttachmentConstants.AttachmentsDirectoryName + "/", StringComparison.OrdinalIgnoreCase))
+                if (normalizedAfterMarker.Equals(AttachmentConstants.AttachmentsDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+                    normalizedAfterMarker.StartsWith(AttachmentConstants.AttachmentsDirectoryName + "/", StringComparison.OrdinalIgnoreCase))
                 {
                     var canonicalVirtual = CanonicalizeExplicitVirtualPath(
-                        $"{SandboxMountTable.WorkspaceVirtualRoot}/{afterMarker}",
+                        $"{SandboxMountTable.WorkspaceVirtualRoot}/{normalizedAfterMarker}",
                         raw);
                     resolvedHostPath = ResolveCanonicalVirtualPathToHost(canonicalVirtual, raw, forWrite);
                     return true;
@@ -500,6 +540,22 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
         {
             if (TryMatchBackingDirectory(raw, normalized, entry.HostDirectoryPath, out var relFromHost))
             {
+                if (string.Equals(entry.VirtualMountPath, SandboxMountTable.WorkspaceVirtualRoot, StringComparison.OrdinalIgnoreCase) &&
+                    IsRelativeAttachmentsSubPath(relFromHost))
+                {
+                    if (!MountTable.HasAttachmentsMount)
+                    {
+                        throw new UnauthorizedAccessException(
+                            $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{Scope.ScopeCacheKey}'.");
+                    }
+
+                    if (forWrite)
+                    {
+                        throw new UnauthorizedAccessException(
+                            $"Access denied: Mount '{AttachmentConstants.VirtualAttachmentsMountPath}' is read-only.");
+                    }
+                }
+
                 if (forWrite && (Scope.IsReadOnly || entry.IsReadOnly))
                 {
                     throw new UnauthorizedAccessException(
@@ -513,6 +569,22 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
                 !string.Equals(entry.WslTargetDirectoryPath, "/tmp", StringComparison.OrdinalIgnoreCase) &&
                 TryMatchBackingDirectory(raw, normalized, entry.WslTargetDirectoryPath, out var relFromWsl))
             {
+                if (string.Equals(entry.VirtualMountPath, SandboxMountTable.WorkspaceVirtualRoot, StringComparison.OrdinalIgnoreCase) &&
+                    IsRelativeAttachmentsSubPath(relFromWsl))
+                {
+                    if (!MountTable.HasAttachmentsMount)
+                    {
+                        throw new UnauthorizedAccessException(
+                            $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{Scope.ScopeCacheKey}'.");
+                    }
+
+                    if (forWrite)
+                    {
+                        throw new UnauthorizedAccessException(
+                            $"Access denied: Mount '{AttachmentConstants.VirtualAttachmentsMountPath}' is read-only.");
+                    }
+                }
+
                 if (forWrite && (Scope.IsReadOnly || entry.IsReadOnly))
                 {
                     throw new UnauthorizedAccessException(
@@ -808,6 +880,790 @@ public sealed class SandboxPathResolver : ISandboxPathResolver
         }
 
         return TryNormalizeRelativeSegments(remainder, out subPath);
+    }
+
+    public static bool IsVirtualAttachmentsPath(string? virtualPath)
+    {
+        if (string.IsNullOrWhiteSpace(virtualPath))
+        {
+            return false;
+        }
+
+        var normalized = virtualPath.Trim().Replace('\\', '/');
+        while (normalized.StartsWith("./", StringComparison.Ordinal))
+        {
+            normalized = normalized[2..].TrimStart('/');
+        }
+
+        if (string.IsNullOrEmpty(normalized))
+        {
+            return false;
+        }
+
+        var trimmed = normalized.Length > 1 ? normalized.TrimEnd('/') : normalized;
+        var withLeadingSlash = trimmed.StartsWith('/') ? trimmed : "/" + trimmed;
+
+        if (withLeadingSlash.Equals(AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase) ||
+            withLeadingSlash.StartsWith(AttachmentConstants.VirtualAttachmentsMountPath + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var workspacePrefix = SandboxMountTable.WorkspaceVirtualRoot + "/";
+        if (withLeadingSlash.StartsWith(workspacePrefix, StringComparison.OrdinalIgnoreCase) &&
+            TryNormalizeRelativeSegments(withLeadingSlash[workspacePrefix.Length..], out var collapsedUnderWorkspace) &&
+            IsRelativeAttachmentsSubPath(collapsedUnderWorkspace))
+        {
+            return true;
+        }
+
+        const string wksSegment = ".nightcodeforge/wks/";
+        var wksIdx = normalized.IndexOf(wksSegment, StringComparison.OrdinalIgnoreCase);
+        if (wksIdx >= 0)
+        {
+            var afterWks = normalized[(wksIdx + wksSegment.Length)..];
+            var slashIdx = afterWks.IndexOf('/');
+            if (slashIdx > 0 &&
+                long.TryParse(afterWks[..slashIdx], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+            {
+                var afterId = afterWks[(slashIdx + 1)..];
+                if (IsRelativeAttachmentsSubPath(afterId))
+                {
+                    return true;
+                }
+
+                if (TryNormalizeRelativeSegments(afterId, out var collapsedAfterId) &&
+                    IsRelativeAttachmentsSubPath(collapsedAfterId))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public static bool IsAttachmentsPathOrReference(
+        string? path,
+        SandboxMountTable? mountTable = null,
+        string? defaultWorkingDirectory = null)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var trimmed = path.Trim();
+        if (IsVirtualAttachmentsPath(trimmed) || IsAttachmentsToken(trimmed, mountTable))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(defaultWorkingDirectory))
+        {
+            var norm = trimmed.Replace('\\', '/');
+            if (!IsRootedNonVirtualPath(trimmed, norm))
+            {
+                var combined = $"{defaultWorkingDirectory.TrimEnd('/')}/{norm.TrimStart('/')}";
+                if (IsVirtualAttachmentsPath(combined))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    public static bool ContainsAttachmentsReference(string? command, SandboxMountTable? mountTable = null)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return false;
+        }
+
+        if (AttachmentsReferenceRegex().IsMatch(command) ||
+            ReferencesMountedAttachmentsBackingDir(command, mountTable))
+        {
+            return true;
+        }
+
+        foreach (var segment in SplitShellSegments(command))
+        {
+            foreach (var token in TokenizeShellSegment(segment))
+            {
+                if (IsAttachmentsToken(token, mountTable))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsRelativeAttachmentsSubPath(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var normalized = relativePath.Trim().Replace('\\', '/').TrimStart('/');
+        return normalized.Equals(AttachmentConstants.AttachmentsDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith(AttachmentConstants.AttachmentsDirectoryName + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static void ValidateBashAttachmentsAccess(
+        string? command,
+        SandboxMountTable? mountTable,
+        string? scopeCacheKey = null,
+        string? workingDirectory = null,
+        string? defaultWorkingDirectory = null)
+    {
+        var workingDirIsAttachments = IsAttachmentsPathOrReference(workingDirectory, mountTable, defaultWorkingDirectory);
+        if (workingDirIsAttachments && mountTable != null && !mountTable.HasAttachmentsMount)
+        {
+            throw new UnauthorizedAccessException(
+                $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{scopeCacheKey ?? "default"}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return;
+        }
+
+        var hasAttachmentsRef = workingDirIsAttachments ||
+                                ContainsAttachmentsReference(command, mountTable);
+        if (!hasAttachmentsRef)
+        {
+            return;
+        }
+
+        if (mountTable != null && !mountTable.HasAttachmentsMount)
+        {
+            throw new UnauthorizedAccessException(
+                $"Access denied: '{AttachmentConstants.VirtualAttachmentsMountPath}' is not mounted in scope '{scopeCacheKey ?? "default"}'.");
+        }
+
+        var initialVirtualWorkingDir = workingDirIsAttachments
+            ? NormalizeInitialVirtualAttachmentsDir(workingDirectory, defaultWorkingDirectory)
+            : null;
+
+        if (TargetsAttachmentsForMutation(command, mountTable, workingDirIsAttachments, initialVirtualWorkingDir))
+        {
+            throw new UnauthorizedAccessException(
+                $"Access denied: Mount '{AttachmentConstants.VirtualAttachmentsMountPath}' is read-only.");
+        }
+    }
+
+    private static string? NormalizeInitialVirtualAttachmentsDir(string? workingDirectory, string? defaultWorkingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            return null;
+        }
+
+        var norm = workingDirectory.Trim().Replace('\\', '/');
+        while (norm.StartsWith("./", StringComparison.Ordinal))
+        {
+            norm = norm[2..].TrimStart('/');
+        }
+
+        if (!IsRootedNonVirtualPath(workingDirectory.Trim(), norm) && !string.IsNullOrWhiteSpace(defaultWorkingDirectory))
+        {
+            norm = $"{defaultWorkingDirectory.TrimEnd('/')}/{norm.TrimStart('/')}";
+        }
+
+        var withSlash = norm.StartsWith('/') ? norm : "/" + norm;
+        if (withSlash.StartsWith(SandboxMountTable.WorkspaceVirtualRoot + "/", StringComparison.OrdinalIgnoreCase) &&
+            TryNormalizeRelativeSegments(withSlash[(SandboxMountTable.WorkspaceVirtualRoot.Length + 1)..], out var collapsed) &&
+            IsRelativeAttachmentsSubPath(collapsed))
+        {
+            return $"{SandboxMountTable.WorkspaceVirtualRoot}/{collapsed}";
+        }
+
+        return null;
+    }
+
+    private static bool ReferencesMountedAttachmentsBackingDir(string command, SandboxMountTable? mountTable)
+    {
+        var attachEntry = mountTable?.Entries.FirstOrDefault(e =>
+            string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
+        if (attachEntry == null)
+        {
+            return false;
+        }
+
+        var normCommand = command.Replace('\\', '/');
+        return ContainsPathPrefix(normCommand, attachEntry.HostDirectoryPath) ||
+               ContainsPathPrefix(normCommand, attachEntry.WslTargetDirectoryPath);
+    }
+
+    private static bool ContainsPathPrefix(string normalizedCommand, string? dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir))
+        {
+            return false;
+        }
+
+        var normDir = dir.Replace('\\', '/').TrimEnd('/');
+        if (normDir.Length <= 1)
+        {
+            return false;
+        }
+
+        var idx = 0;
+        while ((idx = normalizedCommand.IndexOf(normDir, idx, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            var endIdx = idx + normDir.Length;
+            var hasValidBoundaryAfter = endIdx == normalizedCommand.Length ||
+                                        normalizedCommand[endIdx] is '/' or ' ' or '\t' or '\r' or '\n' or '\'' or '"' or '=' or ':' or ';' or ')' or ']' or '}' or ',' or '|' or '&' or '>' or '<' or '`';
+            if (hasValidBoundaryAfter)
+            {
+                return true;
+            }
+
+            idx = endIdx;
+        }
+
+        return false;
+    }
+
+    private static bool TargetsAttachmentsForMutation(
+        string command,
+        SandboxMountTable? mountTable,
+        bool workingDirectoryIsAttachments = false,
+        string? currentVirtualAttachmentsDir = null)
+    {
+        bool inAttachmentsWorkingDir = workingDirectoryIsAttachments;
+        var activeVirtualDir = currentVirtualAttachmentsDir;
+
+        foreach (var segment in SplitShellSegments(command))
+        {
+            var tokens = TokenizeShellSegment(segment);
+            if (tokens.Count == 0)
+            {
+                continue;
+            }
+
+            // 1. Output redirections (> / >> / 1> / 1>>) targeting attachments
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                var token = tokens[i];
+                if (IsRedirectOperatorToken(token))
+                {
+                    if (i + 1 < tokens.Count &&
+                        TokenTargetsAttachments(tokens[i + 1], mountTable, inAttachmentsWorkingDir))
+                    {
+                        return true;
+                    }
+                }
+                else if (TryExtractInlineRedirectTarget(token, out var inlineTarget) &&
+                         TokenTargetsAttachments(inlineTarget, mountTable, inAttachmentsWorkingDir))
+                {
+                    return true;
+                }
+            }
+
+            // 2. Command binary & arguments
+            var cmdIndex = 0;
+            while (cmdIndex < tokens.Count && IsEnvironmentAssignmentToken(tokens[cmdIndex]))
+            {
+                cmdIndex++;
+            }
+
+            if (cmdIndex >= tokens.Count)
+            {
+                continue;
+            }
+
+            var binaryToken = tokens[cmdIndex];
+            var binaryName = binaryToken.Contains('/')
+                ? binaryToken[(binaryToken.LastIndexOf('/') + 1)..]
+                : binaryToken;
+
+            var args = tokens.Skip(cmdIndex + 1).ToList();
+
+            if (string.Equals(binaryName, "cd", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(binaryName, "pushd", StringComparison.OrdinalIgnoreCase))
+            {
+                var targetDir = args.FirstOrDefault(a => !a.StartsWith('-'));
+                (inAttachmentsWorkingDir, activeVirtualDir) = ResolveWorkingDirectoryTransition(
+                    targetDir,
+                    mountTable,
+                    inAttachmentsWorkingDir,
+                    activeVirtualDir);
+                continue;
+            }
+
+            if (!args.Any(a => TokenTargetsAttachments(a, mountTable, inAttachmentsWorkingDir)))
+            {
+                continue;
+            }
+
+            if (MutatingBashBinaries.Contains(binaryName))
+            {
+                return true;
+            }
+
+            if (string.Equals(binaryName, "sed", StringComparison.OrdinalIgnoreCase) &&
+                args.Any(IsSedInPlaceFlag))
+            {
+                return true;
+            }
+
+            if (string.Equals(binaryName, "perl", StringComparison.OrdinalIgnoreCase) &&
+                args.Any(a => a.StartsWith("-", StringComparison.Ordinal) &&
+                              !a.StartsWith("--", StringComparison.Ordinal) &&
+                              a.Contains('i')))
+            {
+                return true;
+            }
+
+            if (string.Equals(binaryName, "find", StringComparison.OrdinalIgnoreCase) &&
+                IsMutatingFindCommand(args))
+            {
+                return true;
+            }
+
+            if (string.Equals(binaryName, "cp", StringComparison.OrdinalIgnoreCase))
+            {
+                for (int i = 0; i < args.Count; i++)
+                {
+                    var arg = args[i];
+                    if ((arg == "-t" || arg == "--target-directory") &&
+                        i + 1 < args.Count &&
+                        TokenTargetsAttachments(args[i + 1], mountTable, inAttachmentsWorkingDir))
+                    {
+                        return true;
+                    }
+                    if (arg.StartsWith("--target-directory=", StringComparison.Ordinal) &&
+                        TokenTargetsAttachments(arg["--target-directory=".Length..], mountTable, inAttachmentsWorkingDir))
+                    {
+                        return true;
+                    }
+                }
+
+                var positionalArgs = args.Where(a => !a.StartsWith('-')).ToList();
+                if (positionalArgs.Count >= 1 &&
+                    TokenTargetsAttachments(positionalArgs[^1], mountTable, inAttachmentsWorkingDir))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static (bool InAttachments, string? VirtualDir) ResolveWorkingDirectoryTransition(
+        string? targetDir,
+        SandboxMountTable? mountTable,
+        bool currentlyInAttachments,
+        string? currentVirtualDir)
+    {
+        if (string.IsNullOrWhiteSpace(targetDir))
+        {
+            return (false, null);
+        }
+
+        if (IsAttachmentsToken(targetDir, mountTable))
+        {
+            return (true, NormalizeInitialVirtualAttachmentsDir(targetDir, null) ?? AttachmentConstants.VirtualAttachmentsMountPath);
+        }
+
+        if (!currentlyInAttachments)
+        {
+            return (false, null);
+        }
+
+        var norm = targetDir.Trim().Replace('\\', '/');
+        if (IsRootedNonVirtualPath(targetDir.Trim(), norm) || norm.StartsWith('~'))
+        {
+            return (false, null);
+        }
+
+        if (!string.IsNullOrWhiteSpace(currentVirtualDir))
+        {
+            var combined = $"{currentVirtualDir.TrimEnd('/')}/{norm}";
+            var workspacePrefix = SandboxMountTable.WorkspaceVirtualRoot + "/";
+            if (combined.StartsWith(workspacePrefix, StringComparison.OrdinalIgnoreCase) &&
+                TryNormalizeRelativeSegments(combined[workspacePrefix.Length..], out var collapsed) &&
+                IsRelativeAttachmentsSubPath(collapsed))
+            {
+                return (true, $"{SandboxMountTable.WorkspaceVirtualRoot}/{collapsed}");
+            }
+
+            return (false, null);
+        }
+
+        return !norm.StartsWith("..", StringComparison.Ordinal)
+            ? (true, null)
+            : (false, null);
+    }
+
+    private static bool TokenTargetsAttachments(string token, SandboxMountTable? mountTable, bool inAttachmentsWorkingDir)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        if (IsAttachmentsToken(token, mountTable))
+        {
+            return true;
+        }
+
+        if (!inAttachmentsWorkingDir)
+        {
+            return false;
+        }
+
+        if (token.StartsWith('-'))
+        {
+            var eqInFlag = token.IndexOf('=');
+            if (eqInFlag > 0)
+            {
+                var flagValue = token[(eqInFlag + 1)..];
+                return IsRelativeWorkingDirTarget(flagValue);
+            }
+            return false;
+        }
+
+        var eqIdx = token.IndexOf('=');
+        if (eqIdx > 0 && !token.StartsWith('/'))
+        {
+            return IsRelativeWorkingDirTarget(token[(eqIdx + 1)..]);
+        }
+
+        return IsRelativeWorkingDirTarget(token);
+    }
+
+    private static bool IsRelativeWorkingDirTarget(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        var norm = trimmed.Replace('\\', '/');
+        return !norm.StartsWith('/') &&
+               !norm.StartsWith('~') &&
+               !IsRootedNonVirtualPath(trimmed, norm);
+    }
+
+    private static bool IsSedInPlaceFlag(string arg) =>
+        arg.StartsWith("--in-place", StringComparison.Ordinal) ||
+        (arg.StartsWith("-", StringComparison.Ordinal) &&
+         !arg.StartsWith("--", StringComparison.Ordinal) &&
+         !arg.StartsWith("-e", StringComparison.Ordinal) &&
+         !arg.StartsWith("-f", StringComparison.Ordinal) &&
+         arg.Contains('i'));
+
+    private static bool IsMutatingFindCommand(IReadOnlyList<string> args)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            var arg = args[i];
+            if (arg.Equals("-delete", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if ((arg.Equals("-exec", StringComparison.Ordinal) ||
+                 arg.Equals("-execdir", StringComparison.Ordinal) ||
+                 arg.Equals("-ok", StringComparison.Ordinal) ||
+                 arg.Equals("-okdir", StringComparison.Ordinal)) &&
+                i + 1 < args.Count)
+            {
+                var execBinary = args[i + 1];
+                var execName = execBinary.Contains('/')
+                    ? execBinary[(execBinary.LastIndexOf('/') + 1)..]
+                    : execBinary;
+                if (MutatingBashBinaries.Contains(execName) ||
+                    string.Equals(execName, "sed", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(execName, "perl", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAttachmentsToken(string token, SandboxMountTable? mountTable)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return false;
+        }
+
+        if (TryExtractInlineRedirectTarget(token, out var inlineTarget))
+        {
+            token = inlineTarget;
+        }
+        else if (!token.StartsWith('/') && !token.StartsWith('\\'))
+        {
+            var eqIdx = token.IndexOf('=');
+            if (eqIdx > 0 && eqIdx < token.Length - 1)
+            {
+                token = token[(eqIdx + 1)..];
+            }
+        }
+
+        if (IsVirtualAttachmentsPath(token) || AttachmentsReferenceRegex().IsMatch(token))
+        {
+            return true;
+        }
+
+        var normToken = token.Replace('\\', '/');
+        var attachEntry = mountTable?.Entries.FirstOrDefault(e =>
+            string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
+        if (attachEntry == null)
+        {
+            return false;
+        }
+
+        if (ContainsPathPrefix(normToken, attachEntry.HostDirectoryPath) ||
+            ContainsPathPrefix(normToken, attachEntry.WslTargetDirectoryPath))
+        {
+            return true;
+        }
+
+        if (normToken.Contains("/../", StringComparison.Ordinal) ||
+            normToken.Contains("/./", StringComparison.Ordinal) ||
+            normToken.EndsWith("/..", StringComparison.Ordinal))
+        {
+            if (TryCollapseRootedPath(normToken, out var collapsedToken) &&
+                (ContainsPathPrefix(collapsedToken, attachEntry.HostDirectoryPath) ||
+                 ContainsPathPrefix(collapsedToken, attachEntry.WslTargetDirectoryPath)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryCollapseRootedPath(string normalizedPath, out string collapsedPath)
+    {
+        collapsedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            return false;
+        }
+
+        if (normalizedPath.StartsWith("//", StringComparison.Ordinal))
+        {
+            var afterLeading = normalizedPath[2..];
+            var serverEnd = afterLeading.IndexOf('/');
+            if (serverEnd <= 0 || serverEnd >= afterLeading.Length - 1)
+            {
+                return false;
+            }
+            var shareEnd = afterLeading.IndexOf('/', serverEnd + 1);
+            if (shareEnd <= 0)
+            {
+                return false;
+            }
+            var rootPrefix = normalizedPath[..(2 + shareEnd)];
+            var rest = afterLeading[(shareEnd + 1)..];
+            if (!TryNormalizeRelativeSegments(rest, out var cleanRest))
+            {
+                return false;
+            }
+            collapsedPath = string.IsNullOrEmpty(cleanRest) ? rootPrefix : $"{rootPrefix}/{cleanRest}";
+            return true;
+        }
+
+        if (normalizedPath.StartsWith('/'))
+        {
+            if (!TryNormalizeRelativeSegments(normalizedPath[1..], out var cleanRest))
+            {
+                return false;
+            }
+            collapsedPath = string.IsNullOrEmpty(cleanRest) ? "/" : "/" + cleanRest;
+            return true;
+        }
+
+        if (normalizedPath.Length >= 3 && char.IsAsciiLetter(normalizedPath[0]) && normalizedPath[1] == ':' && normalizedPath[2] == '/')
+        {
+            if (!TryNormalizeRelativeSegments(normalizedPath[3..], out var cleanRest))
+            {
+                return false;
+            }
+            collapsedPath = normalizedPath[..3] + cleanRest;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsRedirectOperatorToken(string token) =>
+        token is ">" or ">>" or "1>" or "1>>" or "&>" or "&>>" or ">|" or "2>" or "2>>";
+
+    private static bool TryExtractInlineRedirectTarget(string token, out string target)
+    {
+        target = string.Empty;
+        string[] prefixes = ["1>>", "2>>", "&>>", "1>", "2>", "&>", ">>", ">|", ">"];
+        foreach (var prefix in prefixes)
+        {
+            if (token.StartsWith(prefix, StringComparison.Ordinal) && token.Length > prefix.Length)
+            {
+                target = token[prefix.Length..];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsEnvironmentAssignmentToken(string token)
+    {
+        var eqIdx = token.IndexOf('=');
+        return eqIdx > 0 && !token.StartsWith('/') && !token.StartsWith('-');
+    }
+
+    private static List<string> SplitShellSegments(string command)
+    {
+        var segments = new List<string>();
+        var current = new System.Text.StringBuilder();
+        char quote = '\0';
+
+        for (int i = 0; i < command.Length; i++)
+        {
+            char c = command[i];
+            if (quote != '\0')
+            {
+                if (c == '\\' && quote == '"' && i + 1 < command.Length)
+                {
+                    current.Append(c);
+                    current.Append(command[++i]);
+                    continue;
+                }
+                if (c == quote)
+                {
+                    quote = '\0';
+                }
+                current.Append(c);
+                continue;
+            }
+
+            if (c == '\\' && i + 1 < command.Length && command[i + 1] is ';' or '|' or '&' or '(' or ')')
+            {
+                current.Append(c);
+                current.Append(command[++i]);
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+                current.Append(c);
+                continue;
+            }
+
+            if (c is ';' or '\n' or '\r' or '|' or '(' or ')')
+            {
+                if (c == '|' && i + 1 < command.Length && command[i + 1] == '|')
+                {
+                    i++;
+                }
+                segments.Add(current.ToString());
+                current.Clear();
+                continue;
+            }
+
+            if (c == '&')
+            {
+                if (i + 1 < command.Length && command[i + 1] == '&')
+                {
+                    i++;
+                    segments.Add(current.ToString());
+                    current.Clear();
+                    continue;
+                }
+
+                var isRedirectionAmp = (i + 1 < command.Length && command[i + 1] == '>') ||
+                                       (i > 0 && command[i - 1] == '>');
+                if (!isRedirectionAmp)
+                {
+                    segments.Add(current.ToString());
+                    current.Clear();
+                    continue;
+                }
+            }
+
+            current.Append(c);
+        }
+
+        if (current.Length > 0)
+        {
+            segments.Add(current.ToString());
+        }
+
+        return segments;
+    }
+
+    private static List<string> TokenizeShellSegment(string segment)
+    {
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        char quote = '\0';
+
+        for (int i = 0; i < segment.Length; i++)
+        {
+            char c = segment[i];
+            if (quote != '\0')
+            {
+                if (c == '\\' && quote == '"' && i + 1 < segment.Length)
+                {
+                    current.Append(segment[++i]);
+                    continue;
+                }
+                if (c == quote)
+                {
+                    quote = '\0';
+                    continue;
+                }
+                current.Append(c);
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c))
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+                continue;
+            }
+
+            if (c is '\'' or '"')
+            {
+                quote = c;
+                continue;
+            }
+
+            if (c == '>' && current.Length > 0 && current.ToString() is not ("1" or "2" or "&" or ">"))
+            {
+                tokens.Add(current.ToString());
+                current.Clear();
+            }
+
+            current.Append(c);
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
     }
 }
 

@@ -64,7 +64,8 @@ public class PromptPrefixStabilizer
         string taskScopeAndPlan,
         string? workingDirectory = null,
         string? discoveredSymbols = null,
-        string? backlogDigest = null)
+        string? backlogDigest = null,
+        string? taskAttachmentsDigest = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<task_scope>");
@@ -76,6 +77,12 @@ public class PromptPrefixStabilizer
         {
             sb.AppendLine();
             sb.AppendLine(backlogDigest.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(taskAttachmentsDigest))
+        {
+            sb.AppendLine();
+            sb.AppendLine(taskAttachmentsDigest.Trim());
         }
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
@@ -106,11 +113,12 @@ public class PromptPrefixStabilizer
         string? customRulesPrompt = null,
         string? customRolePersona = null,
         string? workingDirectory = null,
-        string? backlogDigest = null)
+        string? backlogDigest = null,
+        string? taskAttachmentsDigest = null)
     {
         var layer1 = BuildLayer1GlobalRules(projectGuidelines, skillsCatalog, customRulesPrompt, customRolePersona);
         var layer2 = BuildLayer2StagePersona(stagePersonaDirective);
-        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest);
+        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest, taskAttachmentsDigest);
         return new PromptLayers(layer1, layer2, layer3);
     }
 
@@ -124,7 +132,8 @@ public class PromptPrefixStabilizer
         string? customRulesPrompt = null,
         string? customRolePersona = null,
         string? workingDirectory = null,
-        string? backlogDigest = null)
+        string? backlogDigest = null,
+        string? taskAttachmentsDigest = null)
     {
         var layers = BuildLayers(
             stagePersonaDirective,
@@ -136,7 +145,8 @@ public class PromptPrefixStabilizer
             customRulesPrompt,
             customRolePersona,
             workingDirectory,
-            backlogDigest);
+            backlogDigest,
+            taskAttachmentsDigest);
 
         var sb = new StringBuilder();
         sb.AppendLine(layers.Layer1GlobalRules);

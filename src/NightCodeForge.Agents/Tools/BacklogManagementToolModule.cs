@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Repositories;
 
 namespace NightCodeForge.Agents.Tools;
 
@@ -87,9 +88,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("Prerequisite task IDs")] IReadOnlyList<int>? depends_on_ids = null,
              [Description("Merge mode if single proposal: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
              [Description("Task difficulty if single proposal: standard, difficult, or expert")] string? difficulty = null,
+             [Description("Linked workspace attachment IDs")] IReadOnlyList<int>? attachment_ids = null,
              CancellationToken ct = default) =>
                 module != null
-                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, difficulty, ct)
+                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, difficulty, attachment_ids, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.ProposeTasks,
             "Proposes structured backlog tasks for triage and discovery. Returns the draft task(s) created with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description. Subsequent tasks can reference earlier created IDs in depends_on_ids."),
@@ -112,9 +114,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("New merge mode: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
              [Description("New base branch")] string? base_branch = null,
              [Description("New task difficulty: standard, difficult, or expert")] string? difficulty = null,
+             [Description("Complete new list of linked workspace attachment IDs")] int[]? attachment_ids = null,
              CancellationToken ct = default) =>
                 module != null
-                    ? module.EditTaskAsync(task_id, title, description, priority, depends_on_ids, merge_mode, base_branch, difficulty, ct)
+                    ? module.EditTaskAsync(task_id, title, description, priority, depends_on_ids, merge_mode, base_branch, difficulty, attachment_ids, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.EditTask,
             "Edits an unstarted (Suggested or Open, never executed) backlog task. Omitted arguments are left unchanged. Only functionally resolved changes agreed with the maintainer should be applied."),
@@ -200,7 +203,8 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         {
             return await action();
         }
-        catch (Exception ex) when (ex is TaskCannotBeModifiedException or TaskNotFoundException or CircularDependencyException or InvalidOperationException or ArgumentException or KeyNotFoundException)
+        catch (Exception ex) when (ex is not AttachmentNotFoundException &&
+            ex is TaskCannotBeModifiedException or TaskNotFoundException or CircularDependencyException or InvalidOperationException or ArgumentException or KeyNotFoundException)
         {
             return $"Error: {ex.Message}";
         }
@@ -228,6 +232,18 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
 
     public Task<string> EditTaskAsync(
         int taskId,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        string? mergeMode,
+        string? baseBranch,
+        string? difficulty,
+        CancellationToken cancellationToken) =>
+        EditTaskAsync(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, difficulty, null, cancellationToken);
+
+    public Task<string> EditTaskAsync(
+        int taskId,
         string? title = null,
         string? description = null,
         int? priority = null,
@@ -235,10 +251,11 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         string? mergeMode = null,
         string? baseBranch = null,
         string? difficulty = null,
+        IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default)
     {
         var scope = RequireBacklogScope(CanonicalToolNames.EditTask);
-        var request = new TaskEditRequest(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, difficulty);
+        var request = new TaskEditRequest(taskId, title, description, priority, dependsOnIds, mergeMode, baseBranch, difficulty, attachmentIds);
         return ExecuteWithBacklogServiceAsync(
             CanonicalToolNames.EditTask,
             scope,
@@ -309,6 +326,17 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         CancellationToken cancellationToken) =>
         ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, null, cancellationToken);
 
+    public Task<string> ProposeTasksAsync(
+        object? tasks,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        string? mergeMode,
+        string? difficulty,
+        CancellationToken cancellationToken) =>
+        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, null, cancellationToken);
+
     public async Task<string> ProposeTasksAsync(
         object? tasks = null,
         string? title = null,
@@ -317,9 +345,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
         string? difficulty = null,
+        IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default)
     {
-        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty);
+        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, attachmentIds);
         if (discovered.Count == 0)
         {
             return "No tasks proposed.";
@@ -333,7 +362,12 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             {
                 deps.Add(discovered[i - 1].Title);
             }
-            discovered[i] = task with { DependsOnTitles = deps };
+            var unionAttachments = AttachmentCitationParser.UnionAttachmentIds(task.AttachmentIds, task.Description);
+            discovered[i] = task with
+            {
+                DependsOnTitles = deps,
+                AttachmentIds = unionAttachments.Count > 0 ? unionAttachments : null
+            };
         }
 
         if (IsBacklogMutationAvailable && _workspaceId.HasValue)
@@ -390,6 +424,24 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 });
         }
 
+        if (ScopeFactory != null && _workspaceId.HasValue)
+        {
+            await using var serviceScope = ScopeFactory.CreateAsyncScope();
+            var attachmentRepository = serviceScope.ServiceProvider.GetService<ITaskAttachmentRepository>();
+            if (attachmentRepository != null)
+            {
+                foreach (var proposal in discovered)
+                {
+                    await AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+                        attachmentRepository,
+                        _workspaceId.Value,
+                        proposal.AttachmentIds,
+                        proposal.Description,
+                        cancellationToken);
+                }
+            }
+        }
+
         for (int i = 0; i < discovered.Count; i++)
         {
             PendingProposals.Add(discovered[i]);
@@ -411,7 +463,8 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
         string? mergeMode = null,
-        string? difficulty = null)
+        string? difficulty = null,
+        IReadOnlyList<int>? attachmentIds = null)
     {
         var discovered = new List<TaskProposal>();
 
@@ -420,7 +473,15 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             var effectiveTitle = !IsGenericOrEmptyTitle(title)
                 ? title!.Trim()
                 : DeriveTitleFromDescription(description);
-            discovered.Add(new TaskProposal(effectiveTitle, description ?? string.Empty, priority: priority ?? TaskPriority.Normal, dependsOnIds: dependsOnIds, mergeMode: mergeMode, difficulty: difficulty));
+            var unionAttachments = AttachmentCitationParser.UnionAttachmentIds(attachmentIds, description);
+            discovered.Add(new TaskProposal(
+                effectiveTitle,
+                description ?? string.Empty,
+                priority: priority ?? TaskPriority.Normal,
+                dependsOnIds: dependsOnIds,
+                mergeMode: mergeMode,
+                difficulty: difficulty,
+                attachmentIds: unionAttachments.Count > 0 ? unionAttachments : null));
         }
 
         if (tasks != null)
@@ -463,7 +524,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(mergeMode) || !string.IsNullOrWhiteSpace(difficulty))
+            if (!string.IsNullOrWhiteSpace(mergeMode) || !string.IsNullOrWhiteSpace(difficulty) || attachmentIds is { Count: > 0 })
             {
                 var fallbackMergeMode = string.IsNullOrWhiteSpace(mergeMode) ? null : mergeMode;
                 var fallbackDifficulty = string.IsNullOrWhiteSpace(difficulty) ? null : difficulty;
@@ -472,13 +533,24 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     var proposal = batchProposals[i];
                     var effectiveMergeMode = proposal.MergeMode ?? fallbackMergeMode;
                     var effectiveDifficulty = proposal.Difficulty ?? fallbackDifficulty;
+                    IReadOnlyList<int>? effectiveAttachmentIds = proposal.AttachmentIds;
+                    if (attachmentIds is { Count: > 0 })
+                    {
+                        var combined = AttachmentCitationParser.UnionAttachmentIds(
+                            proposal.AttachmentIds != null ? proposal.AttachmentIds.Concat(attachmentIds) : attachmentIds,
+                            proposal.Description);
+                        effectiveAttachmentIds = combined.Count > 0 ? combined : null;
+                    }
+
                     if (!string.Equals(effectiveMergeMode, proposal.MergeMode, StringComparison.Ordinal) ||
-                        !string.Equals(effectiveDifficulty, proposal.Difficulty, StringComparison.Ordinal))
+                        !string.Equals(effectiveDifficulty, proposal.Difficulty, StringComparison.Ordinal) ||
+                        !ReferenceEquals(effectiveAttachmentIds, proposal.AttachmentIds))
                     {
                         batchProposals[i] = proposal with
                         {
                             MergeMode = effectiveMergeMode,
-                            Difficulty = effectiveDifficulty
+                            Difficulty = effectiveDifficulty,
+                            AttachmentIds = effectiveAttachmentIds
                         };
                     }
                 }
@@ -631,7 +703,55 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             difficulty = diffProp.GetString();
         }
 
-        return new TaskProposal(title, desc, type, null, null, priority, deps, depIds, null, mergeMode, difficulty);
+        List<int>? explicitAttachmentIds = null;
+        if ((item.TryGetProperty("attachment_ids", out var attProp) ||
+             item.TryGetProperty("attachmentIds", out attProp) ||
+             item.TryGetProperty("AttachmentIds", out attProp)) &&
+            attProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var el in attProp.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var parsedId))
+                {
+                    explicitAttachmentIds ??= new List<int>();
+                    explicitAttachmentIds.Add(parsedId);
+                }
+                else if (el.ValueKind == JsonValueKind.String)
+                {
+                    var rawId = el.GetString()?.Trim();
+                    if (int.TryParse(rawId?.TrimStart('#'), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedStrId))
+                    {
+                        explicitAttachmentIds ??= new List<int>();
+                        explicitAttachmentIds.Add(parsedStrId);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(rawId))
+                    {
+                        explicitAttachmentIds ??= new List<int>();
+                        explicitAttachmentIds.Add(-1);
+                    }
+                }
+                else if (el.ValueKind != JsonValueKind.Null && el.ValueKind != JsonValueKind.Undefined)
+                {
+                    explicitAttachmentIds ??= new List<int>();
+                    explicitAttachmentIds.Add(-1);
+                }
+            }
+        }
+
+        var unionAttachmentIds = AttachmentCitationParser.UnionAttachmentIds(explicitAttachmentIds, desc);
+        return new TaskProposal(
+            title,
+            desc,
+            type,
+            null,
+            null,
+            priority,
+            deps,
+            depIds,
+            null,
+            mergeMode,
+            difficulty,
+            unionAttachmentIds.Count > 0 ? unionAttachmentIds : null);
     }
 
     private static int? TryReadIntProperty(JsonElement obj, string propertyName) =>

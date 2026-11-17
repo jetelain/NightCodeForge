@@ -698,6 +698,7 @@ public class TaskOrchestratorConversationResumptionTests
             builder.Streamer,
             builder.OperationsControlService,
             builder.TelemetryService,
+            new InMemoryTaskAttachmentRepository(repo),
             builder.Logger);
 
         var task = new ForgeTask

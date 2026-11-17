@@ -303,6 +303,10 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         {
             throw;
         }
+        catch (AttachmentNotFoundException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             throw new TaskMarkdownSyncException($"Pre-stage task synchronization failed for task #{task.Id}: {ex.Message}", ex, taskId: task.Id);
@@ -638,5 +642,9 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         target.UpdatedAt = source.UpdatedAt;
         target.Version = source.Version;
         target.Dependencies = source.Dependencies;
+        if (source.AttachmentLinks != null)
+        {
+            target.AttachmentLinks = source.AttachmentLinks;
+        }
     }
 }

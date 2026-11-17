@@ -370,6 +370,7 @@ public class WorkflowSpecIntegrationTests
         services.AddSingleton<ILlmModelPreloadService>(new Mock<ILlmModelPreloadService>().Object);
         services.AddSingleton<IAgentActivityStreamer, InMemoryAgentActivityStreamer>();
         services.AddSingleton<ITaskRepository>(taskRepo);
+        services.AddSingleton<ITaskAttachmentRepository>(new EfCoreTaskAttachmentRepository(dbFactory));
         services.AddSingleton<IWorkflowRepository>(new EfCoreWorkflowRepository(dbFactory));
         services.AddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
         services.AddSingleton<IWorkflowStageFactory, WorkflowStageFactory>();
@@ -470,6 +471,7 @@ public class WorkflowSpecIntegrationTests
             streamer,
             opsService,
             new Mock<IOperationsTelemetryService>().Object,
+            sp.GetRequiredService<ITaskAttachmentRepository>(),
             NullLogger<TaskOrchestrator>.Instance);
         return new TestWorkflowEnvironment
         {

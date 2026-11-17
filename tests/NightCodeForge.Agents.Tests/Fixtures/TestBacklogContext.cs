@@ -19,6 +19,10 @@ public static class TestBacklogContext
         context.SetupGet(c => c.CanonicalToolsLogger).Returns(NullLogger<CanonicalTools>.Instance);
         context.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(string.Empty);
+        context.Setup(c => c.BuildWorkspaceAttachmentsDigestAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(string.Empty);
+        context.Setup(c => c.BuildTaskAttachmentsDigestAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(string.Empty);
         return context.Object;
     }
 }

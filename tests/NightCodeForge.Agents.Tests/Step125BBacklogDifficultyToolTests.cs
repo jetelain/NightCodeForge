@@ -56,6 +56,7 @@ public class Step125BBacklogDifficultyToolTests : IDisposable
             _streamer.Object,
             _prDelivery.Object,
             Options.Create(new SecurityOptions()),
+            new InMemoryTaskAttachmentRepository(_repository),
             NullLogger<BacklogMutationToolService>.Instance);
     }
 

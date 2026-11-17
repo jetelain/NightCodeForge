@@ -84,11 +84,24 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         return GenerateMarkdownWithFrontmatter(task, dependencies, agentProfileId).Markdown;
     }
 
-    internal (string Markdown, TaskFrontmatter Frontmatter) GenerateMarkdownWithFrontmatter(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
+    internal (string Markdown, TaskFrontmatter Frontmatter) GenerateMarkdownWithFrontmatter(
+        ForgeTask task,
+        IReadOnlyList<int>? dependencies = null,
+        string? agentProfileId = null,
+        IReadOnlyList<int>? attachmentIds = null)
     {
         var depList = dependencies != null
             ? dependencies.ToList()
             : task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
+
+        var resolvedAttachmentIds = attachmentIds != null
+            ? attachmentIds.Where(id => id > 0).Distinct().OrderBy(id => id).ToList()
+            : task.AttachmentLinks?
+                .Select(l => l.TaskAttachmentId)
+                .Where(id => id > 0)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToList();
 
         var frontmatter = new TaskFrontmatter
         {
@@ -110,6 +123,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             PullRequestNumber = task.PullRequestNumber,
             PullRequestUrl = string.IsNullOrWhiteSpace(task.PullRequestUrl) ? null : task.PullRequestUrl,
             DependsOn = new TaskDependencyReferenceList(depList),
+            AttachmentIds = resolvedAttachmentIds is { Count: > 0 } ? resolvedAttachmentIds : null,
             AgentProfile = agentProfileId,
             CreatedAt = task.CreatedAt,
             UpdatedAt = task.UpdatedAt
@@ -189,6 +203,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         if (!string.IsNullOrWhiteSpace(frontmatter.PullRequestUrl))
         {
             lines.Add($"pull_request_url:{frontmatter.PullRequestUrl.Trim()}");
+        }
+        if (frontmatter.AttachmentIds is { Count: > 0 })
+        {
+            var attIds = string.Join(",", frontmatter.AttachmentIds.Distinct().OrderBy(id => id));
+            lines.Add($"attachment_ids:{attIds}");
         }
 
         var payload = string.Join("\n", lines);
@@ -461,7 +480,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         var targetFile = ResolveTargetFilePathFromIndex(effectiveTargetIndex, task, oppositeTargetIndex);
         CleanupOtherFilesForTaskId(effectiveTargetIndex, oppositeTargetIndex, task.Id, targetFile);
 
-        var markdown = GenerateMarkdown(task, dependencies, agentProfileId);
+        var attachmentIds = await ResolvePersistedAttachmentIdsForTaskAsync(task, cancellationToken);
+        var markdown = GenerateMarkdownWithFrontmatter(task, dependencies, agentProfileId, attachmentIds).Markdown;
         var normalizedMarkdown = markdown.Replace("\r\n", "\n");
         var hash = ComputeContentHash(normalizedMarkdown);
         _suppressedHashes[hash] = 1;
@@ -631,6 +651,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
             var allTasks = await taskRepo.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
             var workspaceDeps = await taskRepo.GetWorkspaceDependenciesAsync(workspace.Id, cancellationToken);
+            var scopedAttachmentRepo = scope.ServiceProvider.GetService<ITaskAttachmentRepository>();
 
             var writtenPaths = new Dictionary<int, string>();
             var baseline = new Dictionary<int, TaskBaselineEntry>();
@@ -668,7 +689,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
                 CleanupOtherFilesForTaskId(effectiveTargetIndex, oppositeTargetIndex, task.Id, targetFile);
 
-                var (markdown, frontmatter) = GenerateMarkdownWithFrontmatter(task, depIds);
+                var taskAttachmentIds = await ResolvePersistedAttachmentIdsForTaskAsync(task, scopedAttachmentRepo, cancellationToken);
+                var (markdown, frontmatter) = GenerateMarkdownWithFrontmatter(task, depIds, attachmentIds: taskAttachmentIds);
                 var normalizedMarkdown = markdown.Replace("\r\n", "\n");
                 var hash = ComputeContentHash(normalizedMarkdown);
 
@@ -1525,12 +1547,20 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
                 var mergeMode = ParseMergeMode(nt.Item.Frontmatter.MergeMode) ?? Domain.MergeMode.ManualReviewRequired;
                 var difficulty = ParseDifficulty(nt.Item.Frontmatter.Difficulty, nt.Item.FilePath) ?? TaskDifficulty.Standard;
+                var newTaskDescription = !string.IsNullOrWhiteSpace(nt.Item.Description) ? nt.Item.Description : nt.Item.Body;
+
+                var resolvedAttachmentIds = await ValidateAndResolveMarkdownAttachmentsAsync(
+                    scope.ServiceProvider,
+                    workspace.Id,
+                    nt.Item.Frontmatter.AttachmentIds,
+                    newTaskDescription,
+                    cancellationToken);
 
                 var newTask = new ForgeTask
                 {
                     WorkspaceId = workspace.Id,
                     Title = nt.Item.Frontmatter.Title.Trim(),
-                    Description = !string.IsNullOrWhiteSpace(nt.Item.Description) ? nt.Item.Description : nt.Item.Body,
+                    Description = newTaskDescription,
                     Priority = nt.Item.Frontmatter.Priority > 0 ? nt.Item.Frontmatter.Priority : TaskSyncConstants.DefaultPriority,
                     MergeMode = mergeMode,
                     Difficulty = difficulty,
@@ -1556,6 +1586,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     changeReason ?? TaskSyncConstants.TaskCreatedFromDisk,
                     cancellationToken);
 
+                if (resolvedAttachmentIds.Count > 0)
+                {
+                    var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
+                    await attachmentRepo.SetTaskAttachmentLinksAsync(created.Id, resolvedAttachmentIds, cancellationToken);
+                }
+
                 newTaskIdMap[newIdx] = created.Id;
 
                 nt.Item.Frontmatter.Id = created.Id;
@@ -1571,8 +1607,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 nt.Item.Frontmatter.PullRequestNumber = created.PullRequestNumber;
                 nt.Item.Frontmatter.PullRequestUrl = created.PullRequestUrl;
                 nt.Item.Frontmatter.DependsOn = new TaskDependencyReferenceList(finalDepIds);
+                nt.Item.Frontmatter.AttachmentIds = resolvedAttachmentIds.Count > 0 ? resolvedAttachmentIds.ToList() : null;
 
-                var rewrittenMarkdown = GenerateMarkdown(created, finalDepIds, nt.Item.Frontmatter.AgentProfile);
+                var rewrittenMarkdown = GenerateMarkdownWithFrontmatter(created, finalDepIds, nt.Item.Frontmatter.AgentProfile, resolvedAttachmentIds).Markdown;
                 var rewrittenHash = ComputeContentHash(rewrittenMarkdown);
                 _suppressedHashes[rewrittenHash] = 1;
 
@@ -1657,7 +1694,8 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             hostTasksIndex);
                         CleanupOtherFilesForTaskId(archiveIndex, tasksIndex, task.Id, archivedTargetFile);
 
-                        var authoritativeMarkdown = GenerateMarkdown(task, archivedDeps, item.Frontmatter.AgentProfile);
+                        var archivedAttachmentIds = await ResolvePersistedAttachmentIdsForTaskAsync(task, cancellationToken);
+                        var authoritativeMarkdown = GenerateMarkdownWithFrontmatter(task, archivedDeps, item.Frontmatter.AgentProfile, archivedAttachmentIds).Markdown;
                         var authHash = ComputeContentHash(authoritativeMarkdown);
 
                         bool archMatches = archiveIndex.TryGetEntryByPath(archivedTargetFile, out var exArch) &&
@@ -1836,8 +1874,24 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var currentDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
                 bool depsChanged = finalDepIds != null && !finalDepIds.OrderBy(x => x).SequenceEqual(currentDeps);
 
+                IReadOnlyList<int>? baselineAttachmentIds = null;
+                if (baselineSnapshot != null && baselineSnapshot.TryGetValue(taskId, out var baselineEntryForAtt) && baselineEntryForAtt != null)
+                {
+                    baselineAttachmentIds = baselineEntryForAtt.Frontmatter.AttachmentIds;
+                }
+
+                var attachmentUpdate = await ResolveExistingTaskAttachmentUpdateAsync(
+                    scope.ServiceProvider,
+                    taskRepo,
+                    workspace.Id,
+                    task,
+                    item.Frontmatter.AttachmentIds,
+                    baselineAttachmentIds,
+                    newDesc,
+                    cancellationToken);
+
                 bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || difficultyChanged || baseBranchChanged || originChanged ||
-                                       externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged;
+                                       externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged || attachmentUpdate.Changed;
                 if (anyFieldChanged)
                 {
                     task.Title = newTitle;
@@ -1866,6 +1920,19 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         changeActor,
                         changeReason ?? TaskSyncConstants.DiskModificationsSync,
                         cancellationToken);
+
+                    if (attachmentUpdate.Changed)
+                    {
+                        var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
+                        await attachmentRepo.SetTaskAttachmentLinksAsync(task.Id, attachmentUpdate.TargetAttachmentIds, cancellationToken);
+                        task.AttachmentLinks = attachmentUpdate.TargetAttachmentIds
+                            .Select(attId => new TaskAttachmentLink
+                            {
+                                TaskId = task.Id,
+                                TaskAttachmentId = attId
+                            })
+                            .ToList();
+                    }
 
                     if (finalDepIds != null)
                     {
@@ -1914,7 +1981,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 {
                     Directory.CreateDirectory(effectiveTargetIndex.DirectoryPath);
                     var effectiveDeps = finalDepIds ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
-                    var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, item.Frontmatter.AgentProfile);
+                    item.Frontmatter.AttachmentIds = attachmentUpdate.TargetAttachmentIds.Count > 0
+                        ? attachmentUpdate.TargetAttachmentIds.ToList()
+                        : null;
+                    var normalizedMarkdown = GenerateMarkdownWithFrontmatter(
+                        task,
+                        effectiveDeps,
+                        item.Frontmatter.AgentProfile,
+                        attachmentUpdate.TargetAttachmentIds).Markdown;
                     var normHash = ComputeContentHash(normalizedMarkdown);
                     CleanupOtherFilesForTaskId(effectiveTargetIndex, oppositeTargetIndex, task.Id, targetWritePath);
                     _suppressedHashes[normHash] = 1;
@@ -2341,8 +2415,18 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 bool prNumberChanged = newPrNumber != task.PullRequestNumber;
                 bool prUrlChanged = !string.Equals(newPrUrl, task.PullRequestUrl, StringComparison.Ordinal);
 
+                var attachmentUpdate = await ResolveExistingTaskAttachmentUpdateAsync(
+                    scope.ServiceProvider,
+                    taskRepo,
+                    workspaceId,
+                    task,
+                    frontmatter.AttachmentIds,
+                    baselineAttachmentIds: null,
+                    newDesc,
+                    cancellationToken);
+
                 bool anyFieldChanged = titleChanged || descChanged || priorityChanged || depsChanged || mergeModeChanged || difficultyChanged || baseBranchChanged || originChanged ||
-                                       externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged;
+                                       externalSourceChanged || externalRefChanged || prNumberChanged || prUrlChanged || attachmentUpdate.Changed;
                 if (anyFieldChanged)
                 {
                     task.Title = newTitle;
@@ -2372,6 +2456,19 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             TaskSyncConstants.DiskModificationsSync,
                             cancellationToken);
 
+                        if (attachmentUpdate.Changed)
+                        {
+                            var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
+                            await attachmentRepo.SetTaskAttachmentLinksAsync(task.Id, attachmentUpdate.TargetAttachmentIds, cancellationToken);
+                            task.AttachmentLinks = attachmentUpdate.TargetAttachmentIds
+                                .Select(attId => new TaskAttachmentLink
+                                {
+                                    TaskId = task.Id,
+                                    TaskAttachmentId = attId
+                                })
+                                .ToList();
+                        }
+
                         if (resolvedDeps != null)
                         {
                             task.Dependencies = resolvedDeps.Select(depId => new TaskDependency
@@ -2387,7 +2484,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     {
                         var effectiveDeps = resolvedDeps ?? task.Dependencies?.Select(d => d.DependsOnTaskId).ToList() ?? new List<int>();
                         frontmatter.DependsOn = new TaskDependencyReferenceList(effectiveDeps);
-                        var normalizedMarkdown = GenerateMarkdown(task, effectiveDeps, frontmatter.AgentProfile);
+                        frontmatter.AttachmentIds = attachmentUpdate.TargetAttachmentIds.Count > 0
+                            ? attachmentUpdate.TargetAttachmentIds.ToList()
+                            : null;
+                        var normalizedMarkdown = GenerateMarkdownWithFrontmatter(
+                            task,
+                            effectiveDeps,
+                            frontmatter.AgentProfile,
+                            attachmentUpdate.TargetAttachmentIds).Markdown;
                         var normHash = ComputeContentHash(normalizedMarkdown);
                         _suppressedHashes[normHash] = 1;
                         await File.WriteAllTextAsync(filePath, normalizedMarkdown.Replace("\r\n", "\n"), Utf8NoBom, cancellationToken);
@@ -2435,11 +2539,19 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 }
             }
 
+            var newTaskDescription = !string.IsNullOrWhiteSpace(description) ? description : body;
+            var resolvedAttachmentIds = await ValidateAndResolveMarkdownAttachmentsAsync(
+                scope.ServiceProvider,
+                workspaceId,
+                frontmatter.AttachmentIds,
+                newTaskDescription,
+                cancellationToken);
+
             var newTask = new ForgeTask
             {
                 WorkspaceId = workspaceId,
                 Title = frontmatter.Title.Trim(),
-                Description = !string.IsNullOrWhiteSpace(description) ? description : body,
+                Description = newTaskDescription,
                 Priority = frontmatter.Priority > 0 ? frontmatter.Priority : TaskSyncConstants.DefaultPriority,
                 MergeMode = mergeMode,
                 Difficulty = difficulty,
@@ -2464,6 +2576,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 TaskSyncConstants.TaskCreatedFromDisk,
                 cancellationToken);
 
+            if (resolvedAttachmentIds.Count > 0)
+            {
+                var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
+                await attachmentRepo.SetTaskAttachmentLinksAsync(created.Id, resolvedAttachmentIds, cancellationToken);
+            }
+
             frontmatter.Id = created.Id;
             frontmatter.CreatedAt = created.CreatedAt;
             frontmatter.Status = created.Status.ToString();
@@ -2477,8 +2595,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             frontmatter.PullRequestNumber = created.PullRequestNumber;
             frontmatter.PullRequestUrl = created.PullRequestUrl;
             frontmatter.DependsOn = newResolvedDeps != null ? new TaskDependencyReferenceList(newResolvedDeps) : null;
+            frontmatter.AttachmentIds = resolvedAttachmentIds.Count > 0 ? resolvedAttachmentIds.ToList() : null;
 
-            var inPlaceMarkdown = GenerateMarkdown(created, newResolvedDeps, frontmatter.AgentProfile);
+            var inPlaceMarkdown = GenerateMarkdownWithFrontmatter(created, newResolvedDeps, frontmatter.AgentProfile, resolvedAttachmentIds).Markdown;
             var inPlaceHash = ComputeContentHash(inPlaceMarkdown);
             _suppressedHashes[inPlaceHash] = 1;
 
@@ -2789,6 +2908,132 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                Enum.IsDefined(parsed)
             ? parsed
             : defaultValue;
+    }
+
+    private async Task<IReadOnlyList<int>> ResolvePersistedAttachmentIdsForTaskAsync(
+        ForgeTask task,
+        CancellationToken cancellationToken)
+    {
+        if (task.Id <= 0)
+        {
+            return ExtractTaskNavigationAttachmentIds(task);
+        }
+
+        using var scope = _scopeFactory.CreateScope();
+        var attachmentRepo = scope.ServiceProvider.GetService<ITaskAttachmentRepository>();
+        return await ResolvePersistedAttachmentIdsForTaskAsync(task, attachmentRepo, cancellationToken);
+    }
+
+    private static async Task<IReadOnlyList<int>> ResolvePersistedAttachmentIdsForTaskAsync(
+        ForgeTask task,
+        ITaskAttachmentRepository? attachmentRepo,
+        CancellationToken cancellationToken)
+    {
+        if (task.Id > 0 && attachmentRepo != null)
+        {
+            var repoAttachments = await attachmentRepo.GetByTaskIdAsync(task.Id, cancellationToken);
+            if (repoAttachments.Count > 0 || task.AttachmentLinks == null || task.AttachmentLinks.Count == 0)
+            {
+                return repoAttachments
+                    .Select(a => a.Id)
+                    .Where(id => id > 0)
+                    .Distinct()
+                    .OrderBy(id => id)
+                    .ToList();
+            }
+        }
+
+        return ExtractTaskNavigationAttachmentIds(task);
+    }
+
+    private static IReadOnlyList<int> ExtractTaskNavigationAttachmentIds(ForgeTask task) =>
+        task.AttachmentLinks?
+            .Select(l => l.TaskAttachmentId)
+            .Where(id => id > 0)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList() ?? [];
+
+    private static ITaskAttachmentRepository ResolveAttachmentRepository(
+        IServiceProvider serviceProvider,
+        ITaskRepository taskRepository) =>
+        serviceProvider.GetService<ITaskAttachmentRepository>()
+        ?? new InMemoryTaskAttachmentRepository(taskRepository);
+
+    private static async Task<IReadOnlyList<int>> ValidateAndResolveMarkdownAttachmentsAsync(
+        IServiceProvider serviceProvider,
+        int workspaceId,
+        IReadOnlyList<int>? explicitIds,
+        string? description,
+        CancellationToken cancellationToken)
+    {
+        var unionIds = AttachmentCitationParser.UnionAttachmentIds(explicitIds, description);
+        if (unionIds.Count == 0)
+        {
+            return Array.Empty<int>();
+        }
+
+        var taskRepo = serviceProvider.GetRequiredService<ITaskRepository>();
+        var attachmentRepo = ResolveAttachmentRepository(serviceProvider, taskRepo);
+        return await AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+            attachmentRepo,
+            workspaceId,
+            explicitIds,
+            description,
+            cancellationToken);
+    }
+
+    private static async Task<(bool Changed, IReadOnlyList<int> TargetAttachmentIds)> ResolveExistingTaskAttachmentUpdateAsync(
+        IServiceProvider serviceProvider,
+        ITaskRepository taskRepo,
+        int workspaceId,
+        ForgeTask task,
+        IReadOnlyList<int>? frontmatterAttachmentIds,
+        IReadOnlyList<int>? baselineAttachmentIds,
+        string? effectiveDescription,
+        CancellationToken cancellationToken)
+    {
+        var registeredRepo = serviceProvider.GetService<ITaskAttachmentRepository>();
+        var currentIds = registeredRepo != null
+            ? (await registeredRepo.GetByTaskIdAsync(task.Id, cancellationToken))
+                .Select(a => a.Id)
+                .Where(id => id > 0)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToList()
+            : ExtractTaskNavigationAttachmentIds(task).ToList();
+
+        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(effectiveDescription);
+
+        IReadOnlyList<int> baseIds;
+        if (frontmatterAttachmentIds != null)
+        {
+            baseIds = frontmatterAttachmentIds;
+        }
+        else if (baselineAttachmentIds is { Count: > 0 })
+        {
+            // Frontmatter attachment_ids were present in baseline and removed on disk.
+            baseIds = Array.Empty<int>();
+        }
+        else
+        {
+            var oldCitedIds = AttachmentCitationParser.ExtractAttachmentIds(task.Description).ToHashSet();
+            baseIds = currentIds.Where(id => !oldCitedIds.Contains(id)).ToList();
+        }
+
+        if (baseIds.Count == 0 && citedIds.Count == 0)
+        {
+            return (currentIds.Count > 0, Array.Empty<int>());
+        }
+
+        var targetIds = await ValidateAndResolveMarkdownAttachmentsAsync(
+            serviceProvider,
+            workspaceId,
+            baseIds,
+            effectiveDescription,
+            cancellationToken);
+
+        return (!currentIds.SequenceEqual(targetIds), targetIds);
     }
 
     public void Dispose()

@@ -291,7 +291,12 @@ When proposing implementation tasks to the developer, adhere to the following ru
    - Do NOT propose duplicate tasks for issues already present in the backlog.
    - You may reference existing task IDs or link dependencies (via depends_on_ids or dependsOnTitles) to existing backlog tasks when planning follow-ups or prerequisite work.
 
-6. DEPENDENCY IDENTIFICATION:
+6. WORKSPACE ATTACHMENTS & CITATIONS:
+   - When '<workspace_attachments>' is present, workspace context files are mounted read-only at '/workspace/attachments/'.
+   - Inspect relevant attachments directly using 'read' (passing the entry's 'path', e.g., read(""/workspace/attachments/001-spec.md"")) or 'bash' on '/workspace/attachments' instead of guessing their contents.
+   - Cite relied-upon attachments in task descriptions using '@attachment:{id} {Title}' (e.g., ""Design the routing table per @attachment:2 OpenAI API Specification"") and/or pass their IDs in 'attachment_ids' when invoking 'propose_tasks' or 'edit_task'.
+
+7. DEPENDENCY IDENTIFICATION:
 <dependency_identification_rules>
 When planning or proposing tasks:
 1. Cross-reference your ideas against the `<existing_workspace_tasks>` list above (which contains top active backlog tasks ordered by priority).
@@ -304,8 +309,8 @@ When planning or proposing tasks:
 
 <backlog_management_guidelines>
 You cannot edit repository files or 'docs/tasks/*.md' directly. Existing backlog tasks are managed exclusively through these host-level tools, which are audited and keep the markdown specifications in sync:
-- 'get_task' (task_id): fetch the full details (description, status, priority, difficulty, merge mode, base branch, prerequisites, dependents) of a task listed in <existing_workspace_tasks>. Call it before refining a task, instead of guessing its content.
-- 'edit_task' (task_id, title?, description?, priority?, depends_on_ids?, merge_mode?, base_branch?, difficulty?): refine an existing task. Omitted arguments are unchanged; 'description' and 'depends_on_ids' replace the existing value, so start from the 'get_task' output. Resolve functional questions with the maintainer ('ask') BEFORE calling it.
+- 'get_task' (task_id): fetch the full details (description, status, priority, difficulty, merge mode, base branch, prerequisites, dependents, attachmentIds) of a task listed in <existing_workspace_tasks>. Call it before refining a task, instead of guessing its content.
+- 'edit_task' (task_id, title?, description?, priority?, depends_on_ids?, attachment_ids?, merge_mode?, base_branch?, difficulty?): refine an existing task. Omitted arguments are unchanged; 'description' and 'depends_on_ids' replace the existing value, so start from the 'get_task' output. Resolve functional questions with the maintainer ('ask') BEFORE calling it.
 - 'set_task_priority' (task_id, priority) and 'rework_priorities' (updates: [{ task_id, priority }]): change priority tiers (1 Critical to 5 Trivial) of one or several tasks; prefer 'rework_priorities' when reordering several tasks.
 - 'remove_task' (task_id, reason): cancel a task that is obsolete or duplicated. It is refused while active tasks depend on it; re-link or remove those dependents first.
 Only tasks that are Draft, Suggested or Open, never executed, and not currently running can be changed. Tasks that already entered the pipeline (or are Reviewed, Implemented, Ready, Closed, Rejected, Cancelled) are rejected with an error: do not retry, create a follow-up task via 'propose_tasks' instead. Never mutate the backlog without the maintainer's agreement; summarize every change you made afterwards.
@@ -333,13 +338,15 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
 
         var backlogDigest = await _workspaceContext.BuildBacklogDigestAsync(workspace.Id, null, cancellationToken);
         var backlogSection = string.IsNullOrWhiteSpace(backlogDigest) ? string.Empty : backlogDigest + "\n\n";
+        var attachmentsDigest = await _workspaceContext.BuildWorkspaceAttachmentsDigestAsync(workspace.Id, cancellationToken);
+        var attachmentsSection = string.IsNullOrWhiteSpace(attachmentsDigest) ? string.Empty : attachmentsDigest + "\n\n";
         var hotspotsDigest = await _workspaceContext.BuildFrictionHotspotsDigestAsync(repoPath, cancellationToken);
         var hotspotsSection = string.IsNullOrWhiteSpace(hotspotsDigest) ? string.Empty : hotspotsDigest + "\n\n";
         var systemPrompt = $@"{basePersona}
 {environmentSection.ToString().TrimEnd()}
 {promptContext.ProjectContext}{skillsSection}
 
-{backlogSection}{hotspotsSection}{taskGuidance}";
+{backlogSection}{attachmentsSection}{hotspotsSection}{taskGuidance}";
 
         // The system prompt is supplied to HarnessAgent as HarnessInstructions (ChatOptions.Instructions);
         // adding it as a System message too would send it to the model twice.
@@ -877,12 +884,14 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                         }
                     }
 
+                    var attachmentIds = AttachmentCitationParser.UnionAttachmentIds(p.AttachmentIds, p.Description);
                     proposals.Add(new IdeationProposal(
                         p.Title ?? "Untitled Proposal",
                         p.Description ?? string.Empty,
                         p.Priority <= 0 ? TaskPriority.Normal : p.Priority,
                         deps,
-                        Difficulty: p.Difficulty));
+                        Difficulty: p.Difficulty,
+                        AttachmentIds: attachmentIds.Count > 0 ? attachmentIds : null));
                 }
             }
         }
@@ -919,8 +928,10 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         return null;
     }
 
-    private static IdeationProposal ToIdeationProposal(TaskProposal proposal) =>
-        new(
+    private static IdeationProposal ToIdeationProposal(TaskProposal proposal)
+    {
+        var attachmentIds = AttachmentCitationParser.UnionAttachmentIds(proposal.AttachmentIds, proposal.Description);
+        return new(
             proposal.Title,
             proposal.Description,
             proposal.Priority,
@@ -928,7 +939,9 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
             proposal.TaskId,
             proposal.DependsOnIds,
             proposal.MergeMode,
-            proposal.Difficulty);
+            proposal.Difficulty,
+            attachmentIds.Count > 0 ? attachmentIds : null);
+    }
 
     public class IdeationProposalDto
     {
@@ -937,6 +950,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         public int Priority { get; set; } = 1;
         public List<string>? DependsOnTitles { get; set; }
         public string? Difficulty { get; set; }
+        public List<int>? AttachmentIds { get; set; }
     }
 }
 

@@ -47,6 +47,12 @@ public interface IAgentWorkspaceContextService
     /// <summary>Builds the existing backlog digest (empty when the backlog has no active task).</summary>
     Task<string> BuildBacklogDigestAsync(int workspaceId, int? excludeTaskId, CancellationToken cancellationToken);
 
+    /// <summary>Builds the workspace attachments digest (empty when the workspace has no attachments).</summary>
+    Task<string> BuildWorkspaceAttachmentsDigestAsync(int workspaceId, CancellationToken cancellationToken = default);
+
+    /// <summary>Builds the linked task attachments digest (empty when the task has no linked attachments).</summary>
+    Task<string> BuildTaskAttachmentsDigestAsync(ForgeTask task, CancellationToken cancellationToken = default);
+
     /// <summary>Builds a bounded recent transcript friction hotspot digest (empty when no friction exists).</summary>
     Task<string> BuildFrictionHotspotsDigestAsync(string repoPath, CancellationToken cancellationToken = default);
 }
@@ -241,6 +247,34 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
 
     public Task<string> BuildBacklogDigestAsync(int workspaceId, int? excludeTaskId, CancellationToken cancellationToken) =>
         _backlogContext.BuildBacklogDigestAsync(workspaceId, excludeTaskId, cancellationToken);
+
+    public Task<string> BuildWorkspaceAttachmentsDigestAsync(int workspaceId, CancellationToken cancellationToken = default) =>
+        _backlogContext.BuildWorkspaceAttachmentsDigestAsync(workspaceId, cancellationToken);
+
+    public async Task<string> BuildTaskAttachmentsDigestAsync(ForgeTask task, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+
+        if (task.Id > 0)
+        {
+            var fromStore = await _backlogContext.BuildTaskAttachmentsDigestAsync(task.WorkspaceId, task.Id, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(fromStore))
+            {
+                return fromStore;
+            }
+        }
+
+        if (task.AttachmentLinks is { Count: > 0 })
+        {
+            var linkedAttachments = task.AttachmentLinks
+                .Where(l => l.TaskAttachment != null)
+                .Select(l => l.TaskAttachment!)
+                .ToList();
+            return AttachmentDigestFormatter.FormatTaskAttachmentsDigest(linkedAttachments);
+        }
+
+        return string.Empty;
+    }
 
     public async Task<string> BuildFrictionHotspotsDigestAsync(string repoPath, CancellationToken cancellationToken = default)
     {

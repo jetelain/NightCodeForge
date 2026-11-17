@@ -62,6 +62,7 @@ public class BacklogMutationToolServiceTests
             _streamer.Object,
             _pullRequestDeliveryService.Object,
             Options.Create(_securityOptions),
+            new InMemoryTaskAttachmentRepository(_repository),
             NullLogger<BacklogMutationToolService>.Instance);
     }
 

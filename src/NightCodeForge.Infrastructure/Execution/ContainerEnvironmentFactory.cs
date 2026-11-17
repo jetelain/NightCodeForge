@@ -607,18 +607,17 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
 
         var entry = scope.MountTable.Entries.FirstOrDefault(e =>
             string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
-        if (entry != null)
+        if (entry == null)
         {
-            var entryPath = !string.IsNullOrWhiteSpace(entry.WslTargetDirectoryPath)
-                ? entry.WslTargetDirectoryPath
-                : entry.HostDirectoryPath;
-            if (!string.IsNullOrWhiteSpace(entryPath))
-            {
-                return entryPath;
-            }
+            return null;
         }
 
-        return EnsureHostAttachmentsDirectory(scope.WorkspaceId ?? 0, scope.HostWorkspacePath);
+        var entryPath = !string.IsNullOrWhiteSpace(entry.WslTargetDirectoryPath)
+            ? entry.WslTargetDirectoryPath
+            : entry.HostDirectoryPath;
+        return !string.IsNullOrWhiteSpace(entryPath)
+            ? entryPath
+            : EnsureHostAttachmentsDirectory(scope.WorkspaceId ?? 0, scope.HostWorkspacePath);
     }
 
     private string? EnsureHostAttachmentsDirectory(int workspaceId, string? hostWorkspacePath)

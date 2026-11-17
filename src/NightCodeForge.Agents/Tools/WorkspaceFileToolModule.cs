@@ -1,11 +1,15 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 
@@ -112,13 +116,25 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         return
         [
             AIFunctionFactory.Create(
-                ([Description("Workspace-relative path to read")] string path,
+                async ([Description("Workspace-relative path to read")] string path,
                  [Description("1-indexed start line offset")] int? offset = null,
                  [Description("Maximum lines to read")] int? limit = null,
                  CancellationToken ct = default) =>
-                    module != null
-                        ? module.ReadAsync(path, offset, limit, ct)
-                        : throw new InvalidOperationException(MissingModuleInstanceMessage),
+                {
+                    if (module == null)
+                    {
+                        throw new InvalidOperationException(MissingModuleInstanceMessage);
+                    }
+
+                    try
+                    {
+                        return await module.ReadAsync(path, offset, limit, ct);
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        return $"Error: {ex.Message}";
+                    }
+                },
                 CanonicalToolNames.Read,
                 $"Reads a file with line numbers and optional line-based pagination. Output is capped to {capKb} KB to avoid overflowing context; use offset and limit to page through large files."),
 
@@ -136,7 +152,7 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
                     {
                         return await module.WriteAsync(path, content, ct);
                     }
-                    catch (InvalidOperationException ex)
+                    catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
                     {
                         return $"Error: {ex.Message}";
                     }
@@ -174,7 +190,7 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
 
                         return MissingEditParametersMessage;
                     }
-                    catch (InvalidOperationException ex)
+                    catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
                     {
                         return $"Error: {ex.Message}";
                     }
@@ -194,18 +210,23 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         {
             fullPath = SandboxPathResolver.ResolveHostPath(path, forWrite: false);
         }
-        catch (UnauthorizedAccessException ex)
+        catch (UnauthorizedAccessException ex) when (!Core.Interfaces.SandboxPathResolver.IsAttachmentsPathOrReference(
+            path,
+            SandboxPathResolver?.MountTable,
+            SandboxPathResolver?.Scope?.DefaultWorkingDirectory))
         {
             return $"Error: {ex.Message}";
         }
 
-        if (!File.Exists(fullPath))
+        var readPath = await ValidateAndResolveAttachmentReadPathAsync(path, fullPath, cancellationToken);
+
+        if (!File.Exists(readPath))
         {
-            _logger.LogWarning("CanonicalTools.read: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
+            _logger.LogWarning("CanonicalTools.read: File not found '{Path}' (resolved: '{FullPath}')", path, readPath);
             return $"Error: File not found: '{path}'";
         }
 
-        var lines = await File.ReadAllLinesAsync(fullPath, cancellationToken);
+        var lines = await File.ReadAllLinesAsync(readPath, cancellationToken);
         int startLine = Math.Max(1, offset ?? 1);
         int startIndex = startLine - 1;
 
@@ -220,6 +241,447 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         return ReadOutputFormatter.FormatCapped(selectedLines, startLine, lines.Length, _maxReadFileBytes);
     }
 
+    private async Task<string> ValidateAndResolveAttachmentReadPathAsync(
+        string requestedPath,
+        string resolvedFullPath,
+        CancellationToken cancellationToken)
+    {
+        if (!TryResolveAttachmentsRoot(requestedPath, resolvedFullPath, out var attachmentsRoot, out var relativeAttachmentPath))
+        {
+            return resolvedFullPath;
+        }
+
+        var manifestEntry = await TryFindManifestEntryAsync(attachmentsRoot, relativeAttachmentPath, cancellationToken);
+        var dbAttachment = manifestEntry == null
+            ? await TryFindDatabaseAttachmentAsync(relativeAttachmentPath, cancellationToken)
+            : null;
+
+        var primaryRelativePath = manifestEntry?.RelativePath ?? dbAttachment?.RelativePath;
+        var primaryAttachmentPath = !string.IsNullOrWhiteSpace(primaryRelativePath)
+            ? Path.Combine(attachmentsRoot, primaryRelativePath.Replace('/', Path.DirectorySeparatorChar))
+            : resolvedFullPath;
+
+        var fileInfo = new FileInfo(resolvedFullPath);
+        var primaryFileInfo = string.Equals(
+            NormalizePathForComparison(primaryAttachmentPath),
+            NormalizePathForComparison(resolvedFullPath),
+            StringComparison.OrdinalIgnoreCase)
+            ? fileInfo
+            : new FileInfo(primaryAttachmentPath);
+        var linkTarget = !string.IsNullOrWhiteSpace(fileInfo.LinkTarget)
+            ? fileInfo.LinkTarget
+            : primaryFileInfo.LinkTarget;
+
+        var isRegisteredSymlink = manifestEntry?.IsSymlink ?? dbAttachment?.IsSymlink;
+        var registeredSourceRef = manifestEntry?.SourceRef ?? dbAttachment?.SourceRef;
+        var registeredAttachmentId = manifestEntry?.Id ?? dbAttachment?.Id;
+        var isPrimaryRelativeMatch = manifestEntry != null
+            ? string.Equals(NormalizeSlash(manifestEntry.RelativePath), NormalizeSlash(relativeAttachmentPath), StringComparison.OrdinalIgnoreCase)
+            : (dbAttachment != null && string.Equals(NormalizeSlash(dbAttachment.RelativePath), NormalizeSlash(relativeAttachmentPath), StringComparison.OrdinalIgnoreCase));
+
+        bool mustValidateSymlink =
+            !string.IsNullOrWhiteSpace(linkTarget) ||
+            isRegisteredSymlink == true;
+
+        if (!mustValidateSymlink)
+        {
+            return resolvedFullPath;
+        }
+
+        if (!IsPathInsideDirectory(resolvedFullPath, attachmentsRoot) ||
+            !IsPathInsideDirectory(primaryAttachmentPath, attachmentsRoot))
+        {
+            throw new UnauthorizedAccessException(
+                $"Access denied: Symlinked attachment '{requestedPath}' resolves outside '{attachmentsRoot}'.");
+        }
+
+        var linkDirectory = !string.IsNullOrWhiteSpace(fileInfo.LinkTarget)
+            ? Path.GetDirectoryName(resolvedFullPath)
+            : Path.GetDirectoryName(primaryAttachmentPath);
+        var linkReferencePath = !string.IsNullOrWhiteSpace(fileInfo.LinkTarget)
+            ? resolvedFullPath
+            : primaryAttachmentPath;
+
+        var rawTargetRef = !string.IsNullOrWhiteSpace(registeredSourceRef)
+            ? registeredSourceRef
+            : linkTarget!;
+
+        var hostTargetPath = ResolveHostReadableSymlinkTarget(
+            rawTargetRef,
+            linkTarget,
+            linkDirectory,
+            linkReferencePath);
+
+        if (!string.IsNullOrWhiteSpace(linkTarget))
+        {
+            // Validate host target readability first so dangling symlinks always report AttachmentTargetNotFoundException.
+            VerifyHostTargetReadable(hostTargetPath, rawTargetRef, registeredAttachmentId);
+
+            if ((manifestEntry == null && dbAttachment == null) ||
+                isRegisteredSymlink == false ||
+                string.IsNullOrWhiteSpace(registeredSourceRef))
+            {
+                throw new AttachmentTargetNotFoundException(
+                    linkTarget,
+                    $"Attachment '{requestedPath}' is an unregistered or unexpected symbolic link pointing to '{linkTarget}'.");
+            }
+
+            if (!AreEquivalentTargetPaths(linkTarget, registeredSourceRef, linkDirectory))
+            {
+                throw new AttachmentTargetNotFoundException(
+                    registeredSourceRef,
+                    $"Symbolic link target '{linkTarget}' for '{requestedPath}' does not match registered SourceRef '{registeredSourceRef}'.");
+            }
+        }
+        else
+        {
+            VerifyHostTargetReadable(hostTargetPath, rawTargetRef, registeredAttachmentId);
+        }
+
+        if ((isPrimaryRelativeMatch || (manifestEntry == null && dbAttachment == null)) &&
+            !File.Exists(resolvedFullPath) &&
+            !string.IsNullOrWhiteSpace(hostTargetPath) &&
+            File.Exists(hostTargetPath))
+        {
+            return hostTargetPath;
+        }
+
+        return resolvedFullPath;
+    }
+
+    private bool TryResolveAttachmentsRoot(
+        string requestedPath,
+        string resolvedFullPath,
+        out string attachmentsRoot,
+        out string relativeAttachmentPath)
+    {
+        attachmentsRoot = string.Empty;
+        relativeAttachmentPath = string.Empty;
+
+        var normResolved = NormalizePathForComparison(resolvedFullPath);
+        var attachEntry = SandboxPathResolver?.MountTable?.Entries.FirstOrDefault(e =>
+            string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
+
+        if (attachEntry != null && !string.IsNullOrWhiteSpace(attachEntry.HostDirectoryPath))
+        {
+            var normAttachHost = NormalizePathForComparison(attachEntry.HostDirectoryPath);
+            if (!string.IsNullOrEmpty(normAttachHost) &&
+                normResolved.StartsWith(normAttachHost + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                attachmentsRoot = attachEntry.HostDirectoryPath;
+                relativeAttachmentPath = normResolved[(normAttachHost.Length + 1)..];
+                return true;
+            }
+        }
+
+        var reqNorm = NormalizeSlash(requestedPath).Trim();
+        while (reqNorm.StartsWith("./", StringComparison.Ordinal))
+        {
+            reqNorm = reqNorm[2..].TrimStart('/');
+        }
+        if (reqNorm.StartsWith("workspace/attachments/", StringComparison.OrdinalIgnoreCase))
+        {
+            reqNorm = "/" + reqNorm;
+        }
+
+        if (reqNorm.StartsWith(AttachmentConstants.VirtualAttachmentsMountPath + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            var rel = reqNorm[(AttachmentConstants.VirtualAttachmentsMountPath.Length + 1)..];
+            var suffix = "/" + rel;
+            if (normResolved.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && normResolved.Length > suffix.Length)
+            {
+                attachmentsRoot = normResolved[..^suffix.Length];
+                relativeAttachmentPath = rel;
+                return true;
+            }
+        }
+
+        const string wksMarker = ".nightcodeforge/wks/";
+        var wksIdx = normResolved.IndexOf(wksMarker, StringComparison.OrdinalIgnoreCase);
+        if (wksIdx >= 0)
+        {
+            var afterWks = normResolved[(wksIdx + wksMarker.Length)..];
+            var slashIdx = afterWks.IndexOf('/');
+            if (slashIdx > 0)
+            {
+                var afterId = afterWks[(slashIdx + 1)..];
+                var attachPrefix = AttachmentConstants.AttachmentsDirectoryName + "/";
+                if (afterId.StartsWith(attachPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    var rel = afterId[attachPrefix.Length..];
+                    var suffix = "/" + rel;
+                    if (normResolved.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) && normResolved.Length > suffix.Length)
+                    {
+                        attachmentsRoot = normResolved[..^suffix.Length];
+                        relativeAttachmentPath = rel;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<AttachmentManifestEntry?> TryFindManifestEntryAsync(
+        string attachmentsRoot,
+        string relativeAttachmentPath,
+        CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(attachmentsRoot, AttachmentConstants.ManifestFileName);
+        if (!File.Exists(manifestPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(manifestPath, cancellationToken);
+            var manifest = JsonSerializer.Deserialize<AttachmentManifest>(json);
+            if (manifest?.Attachments == null)
+            {
+                return null;
+            }
+
+            var normRel = NormalizeSlash(relativeAttachmentPath);
+            return manifest.Attachments.FirstOrDefault(a =>
+                string.Equals(NormalizeSlash(a.RelativePath), normRel, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(a.MarkdownPath) &&
+                 string.Equals(NormalizeSlash(a.MarkdownPath), normRel, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<TaskAttachment?> TryFindDatabaseAttachmentAsync(
+        string relativeAttachmentPath,
+        CancellationToken cancellationToken)
+    {
+        if (ScopeFactory == null || !_workspaceId.HasValue)
+        {
+            return null;
+        }
+
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var repo = scope.ServiceProvider.GetService<ITaskAttachmentRepository>();
+        if (repo == null)
+        {
+            return null;
+        }
+
+        var attachments = await repo.GetByWorkspaceIdAsync(_workspaceId.Value, cancellationToken);
+        var normRel = NormalizeSlash(relativeAttachmentPath);
+        return attachments.FirstOrDefault(a =>
+            string.Equals(NormalizeSlash(a.RelativePath), normRel, StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(a.MarkdownPath) &&
+             string.Equals(NormalizeSlash(a.MarkdownPath), normRel, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string? ResolveHostReadableSymlinkTarget(
+        string rawTargetRef,
+        string? linkTarget,
+        string? linkDirectory,
+        string resolvedFullPath)
+    {
+        var candidate = !string.IsNullOrWhiteSpace(linkTarget) ? linkTarget : rawTargetRef;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        if (!Path.IsPathRooted(candidate) && !string.IsNullOrWhiteSpace(linkDirectory) && !candidate.StartsWith('/'))
+        {
+            return Path.GetFullPath(Path.Combine(linkDirectory, candidate));
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+            TryConvertMntDriveToWindowsPath(candidate, out var windowsDrivePath))
+        {
+            return windowsDrivePath;
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+            TryConvertMntDriveToWindowsPath(rawTargetRef, out var refWindowsPath))
+        {
+            return refWindowsPath;
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+            resolvedFullPath.StartsWith(@"\\", StringComparison.Ordinal) &&
+            TryMapPosixPathToUncRoot(resolvedFullPath, candidate, out var uncTargetPath))
+        {
+            return uncTargetPath;
+        }
+
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        if (!string.IsNullOrWhiteSpace(rawTargetRef) &&
+            !string.Equals(rawTargetRef, candidate, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!Path.IsPathRooted(rawTargetRef) && !string.IsNullOrWhiteSpace(linkDirectory) && !rawTargetRef.StartsWith('/'))
+            {
+                return Path.GetFullPath(Path.Combine(linkDirectory, rawTargetRef));
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+                resolvedFullPath.StartsWith(@"\\", StringComparison.Ordinal) &&
+                TryMapPosixPathToUncRoot(resolvedFullPath, rawTargetRef, out var rawUncTargetPath))
+            {
+                return rawUncTargetPath;
+            }
+
+            return rawTargetRef;
+        }
+
+        return candidate;
+    }
+
+    private static bool TryMapPosixPathToUncRoot(string uncReferencePath, string posixPath, out string uncTargetPath)
+    {
+        uncTargetPath = string.Empty;
+        if (!posixPath.StartsWith('/') || !uncReferencePath.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Extract \\server\share prefix (e.g., \\wsl.localhost\Ubuntu)
+        var afterLeading = uncReferencePath.AsSpan(2);
+        var serverSep = afterLeading.IndexOfAny('\\', '/');
+        if (serverSep <= 0)
+        {
+            return false;
+        }
+
+        var afterServer = afterLeading[(serverSep + 1)..];
+        var shareSep = afterServer.IndexOfAny('\\', '/');
+        var prefixLen = shareSep >= 0 ? 2 + serverSep + 1 + shareSep : uncReferencePath.Length;
+        var uncRoot = uncReferencePath[..prefixLen];
+        var relativeWin = posixPath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+        uncTargetPath = string.IsNullOrEmpty(relativeWin) ? uncRoot : Path.Combine(uncRoot, relativeWin);
+        return true;
+    }
+
+    private static void VerifyHostTargetReadable(
+        string? hostTargetPath,
+        string rawTargetRef,
+        int? attachmentId)
+    {
+        if (string.IsNullOrWhiteSpace(hostTargetPath) || !File.Exists(hostTargetPath))
+        {
+            throw CreateTargetNotFoundException(attachmentId, rawTargetRef);
+        }
+
+        try
+        {
+            using var stream = new FileStream(
+                hostTargetPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException or IOException)
+        {
+            throw new AttachmentTargetNotFoundException(
+                rawTargetRef,
+                $"Attachment host target '{rawTargetRef}' does not exist or is unreadable.",
+                ex);
+        }
+    }
+
+    private static AttachmentTargetNotFoundException CreateTargetNotFoundException(int? attachmentId, string targetRef) =>
+        attachmentId.HasValue
+            ? new AttachmentTargetNotFoundException(
+                attachmentId.Value,
+                targetRef,
+                $"Attachment #{attachmentId.Value} target '{targetRef}' does not exist or is unreadable.")
+            : new AttachmentTargetNotFoundException(targetRef);
+
+    private static bool AreEquivalentTargetPaths(string linkTarget, string sourceRef, string? linkDirectory)
+    {
+        var effectiveLink = linkTarget;
+        if (!Path.IsPathRooted(effectiveLink) && !effectiveLink.StartsWith('/') && !string.IsNullOrWhiteSpace(linkDirectory))
+        {
+            effectiveLink = Path.GetFullPath(Path.Combine(linkDirectory, effectiveLink));
+        }
+
+        var normLink = NormalizeSlash(effectiveLink).TrimEnd('/');
+        var normSource = NormalizeSlash(sourceRef).TrimEnd('/');
+        if (string.Equals(normLink, normSource, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var wslLink = VirtualMountEntry.ToDefaultWslPath(effectiveLink).TrimEnd('/');
+        var wslSource = VirtualMountEntry.ToDefaultWslPath(sourceRef).TrimEnd('/');
+        return string.Equals(wslLink, wslSource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryConvertMntDriveToWindowsPath(string path, out string windowsPath)
+    {
+        windowsPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var norm = NormalizeSlash(path);
+        if (norm.Length >= 7 &&
+            norm.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) &&
+            char.IsAsciiLetter(norm[5]) &&
+            norm[6] == '/')
+        {
+            var drive = char.ToUpperInvariant(norm[5]);
+            var rest = norm[7..].Replace('/', '\\');
+            windowsPath = $"{drive}:\\{rest}";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsPathInsideDirectory(string filePath, string directoryPath)
+    {
+        var normFile = NormalizePathForComparison(filePath);
+        var normDir = NormalizePathForComparison(directoryPath);
+        return !string.IsNullOrEmpty(normDir) &&
+               (normFile.Equals(normDir, StringComparison.OrdinalIgnoreCase) ||
+                normFile.StartsWith(normDir + "/", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizePathForComparison(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var norm = NormalizeSlash(path).TrimEnd('/');
+        if (!norm.StartsWith("//", StringComparison.Ordinal) &&
+            !norm.StartsWith('/') &&
+            !norm.StartsWith('~') &&
+            Path.IsPathRooted(path))
+        {
+            try
+            {
+                norm = NormalizeSlash(Path.GetFullPath(path)).TrimEnd('/');
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Retain slash-normalized form for non-local path syntax.
+            }
+        }
+
+        return norm;
+    }
+
+    private static string NormalizeSlash(string path) =>
+        (path ?? string.Empty).Replace('\\', '/');
+
     public async Task<string> WriteAsync(string path, string content, CancellationToken cancellationToken = default)
     {
         if (IsEffectiveReadOnly)
@@ -232,7 +694,10 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         {
             fullPath = SandboxPathResolver.ResolveHostPath(path, forWrite: true);
         }
-        catch (UnauthorizedAccessException ex)
+        catch (UnauthorizedAccessException ex) when (!Core.Interfaces.SandboxPathResolver.IsAttachmentsPathOrReference(
+            path,
+            SandboxPathResolver?.MountTable,
+            SandboxPathResolver?.Scope?.DefaultWorkingDirectory))
         {
             return $"Error: {ex.Message}";
         }
@@ -274,7 +739,10 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         {
             fullPath = SandboxPathResolver.ResolveHostPath(path, forWrite: true);
         }
-        catch (UnauthorizedAccessException ex)
+        catch (UnauthorizedAccessException ex) when (!Core.Interfaces.SandboxPathResolver.IsAttachmentsPathOrReference(
+            path,
+            SandboxPathResolver?.MountTable,
+            SandboxPathResolver?.Scope?.DefaultWorkingDirectory))
         {
             return $"Error: {ex.Message}";
         }

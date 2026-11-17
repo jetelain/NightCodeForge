@@ -18,6 +18,7 @@ public class TestOrchestratorBuilder
     private IDependencyResolutionEngine? _dependencyEngine;
 
     public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
+    public ITaskAttachmentRepository? AttachmentRepository { get; set; }
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskDependencyStore DependencyStore
     {
@@ -190,6 +191,7 @@ public class TestOrchestratorBuilder
             Streamer,
             OperationsControlService,
             TelemetryService,
+            AttachmentRepository ?? new InMemoryTaskAttachmentRepository(TaskRepository),
             Logger);
     }
 }
