@@ -1,60 +1,83 @@
-# 📎 Step 12.2B: Agent Attachment Tools, Citation Links & Prompt Digest Injection
+# 📎 Step 12.2B: `/workspace/attachments` Read/Bash Access, Citation Links & Prompt Digest Injection
 
-> **Feature Implementation Step (Part 2 of 3 — Agent Tools & Prompt Context Layer)**  
+> **Feature Implementation Step (Part 2 of 4 — Canonical `read`/`bash` Consumption & Prompt Context Layer)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Step:* [Step 12.2A: Attachments Store, Intake Service & MarkItDown Conversion](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md)  
-> *Companion Step:* [Step 12.2C: Attachments Web UI & Task Picker](STEP_12_2C_ATTACHMENTS_WEB_UI_AND_TASK_PICKER.md)  
-> *Target Components:* `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Crucible`, `src/NightCodeForge.Agents/Tools` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Companion Steps:* [Step 12.2C: Attachments Web UI & Task Picker](STEP_12_2C_ATTACHMENTS_WEB_UI_AND_TASK_PICKER.md) | [Step 12.2D: Multimodal Vision & In-Loop Image Inspection](STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md)  
+> *Related Architecture:* [Step 12.36A: Declarative Sandbox Mount Table](../archive/phase-12/STEP_12_36A_DECLARATIVE_SANDBOX_MOUNT_TABLE_AND_CONTAINER_LIFECYCLE_REDESIGN.md) | [Step 12.36B: CanonicalTools Modular Decomposition](../archive/phase-12/STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)  
+> *Target Components:* `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Core/Interfaces`, `src/NightCodeForge.Infrastructure/Execution`, `src/NightCodeForge.Agents/Context`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Agents/Ideation`, `src/NightCodeForge.Agents/Crucible`, `src/NightCodeForge.Agents/Triage`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Core.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
-
+>
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
 ---
 
 ## 1. Executive Objective
 
-With the workspace Attachments store and `IAttachmentIntakeService` in place ([Step 12.2A](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md)), this step (Part 2 of Step 12.2) exposes attachments to the **Ideation Agent** and the **Workflow Stage Agents** (Stage 1 Task Review, Stage 2 Implementation, Stage 3 Code Review & Fix):
-1. **Progressive Disclosure via Prompt Digests:** Inject a compact `<workspace_attachments>` digest (`{id, title, kind, source, markdownPath}`) into the Ideation prompt and inject the task's linked attachments digest into Stage 1–3 prompts without bloating context windows.
-2. **Read-Only Agent Tools (`list_attachments` & `read_attachment`):** Allow Ideation and Stage 1–3 agents to list workspace attachments and read their markdown companions, protected by path-traversal validation and fail-fast broken-symlink detection (`AttachmentTargetNotFoundException`).
-3. **Citation Linking (`@attachment:{id}`):** Parse `@attachment:{id}` references and explicit attachment IDs from `propose_tasks` / task descriptions to materialize `TaskAttachmentLinks` in the database (failing fast on unknown attachment IDs).
+With the workspace Attachments store, `IAttachmentIntakeService`, and read-only `/workspace/attachments` mount in place ([Step 12.2A](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md)), this step (Part 2 of Step 12.2) exposes attachments to the **Ideation Agent** and **Workflow Stage Agents** (Stage 1 Task Review, Stage 2 Implementation, Stage 3 Code Review & Fix) without introducing new tools:
+1. **Standard `read` & `bash` Inspection of `/workspace/attachments` (Zero Dedicated Attachment Tools):** No dedicated attachment tools are added to [`CanonicalToolNames`](../../src/NightCodeForge.Core/Domain/CanonicalToolNames.cs) or [`DefaultAgentTools`](../../src/NightCodeForge.Core/Domain/DefaultAgentTools.cs). Agents inspect `/workspace/attachments/` using the existing canonical `read` and `bash` tools across `ContainerSandbox`, `WslDirect`, and `BareHost`, while [`WorkspaceFileToolModule`](../../src/NightCodeForge.Agents/Tools/WorkspaceFileToolModule.cs) enforces symlink target integrity (`AttachmentTargetNotFoundException`) and [`TriageService`](../../src/NightCodeForge.Agents/Triage/TriageService.cs) keeps `/workspace/attachments` unmounted for untrusted intake triage.
+2. **Progressive Disclosure via Prompt Digests:** Inject a compact `<workspace_attachments>` digest (`{id, title, contentKind, mediaType, dimensions, isSymlink, path}`) into the Ideation prompt and inject the task's linked `<task_attachments>` digest into Stage 1–3 prompts strictly within Layer 3 ([`PromptPrefixStabilizer`](../../src/NightCodeForge.Agents/Optimizations/PromptPrefixStabilizer.cs)) without bloating context windows or breaking KV-cache prefixes.
+3. **Citation Linking (`@attachment:{id}` & `attachment_ids`):** Parse `@attachment:{id}` references and explicit `attachment_ids` from `propose_tasks`, `edit_task`, and Stage 1 proposal/task persistence to materialize `TaskAttachmentLinks` in the database (failing fast on unknown or cross-workspace attachment IDs).
 
 ---
 
-## 2. Agent Consumption & Tool Specifications
+## 2. Agent Consumption, Sandbox Mount Isolation & Citation Specifications
 
-### 2.1 Ideation Agent
-- The ideation system prompt (built by context assembly in [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs)) gains an **attachments digest** when the workspace has attachments: a compact list of `{id, title, kind, source, markdownPath}` — progressive disclosure, not full content injection.
-- Read-only tools registered for the ideation agent:
-  - `list_attachments` — full registry listing for the current workspace.
-  - `read_attachment(attachmentId)` — returns the markdown companion content (truncated with an explicit continuation handle for very large docs).
-- When proposing tasks, the agent **cites attachments** in the task description using the stable reference `@attachment:{id} {Title}` (e.g. *"Design the routing table per @attachment:2 OpenAI API Specification"*). The `propose_tasks` payload carries the linked attachment IDs; the service materializes `TaskAttachmentLinks` in the same transaction as task creation (no synthetic links — unknown IDs throw `AttachmentNotFoundException`).
+### 2.1 Inspection via Canonical `read` & `bash` Tools (No Dedicated Tools)
+- **Minimalist Tool Approach ([AGENTS.md](../../AGENTS.md)) — No Tool Additions:** Following the minimalist tool policy in [AGENTS.md](../../AGENTS.md), prefer re-using existing tools (`read`/`write`/`bash`) with dedicated mount points over adding dedicated tools so agents can leverage standard Unix tools while keeping prompt context compact. Keep [`CanonicalToolNames`](../../src/NightCodeForge.Core/Domain/CanonicalToolNames.cs), [`DefaultAgentTools`](../../src/NightCodeForge.Core/Domain/DefaultAgentTools.cs), and persisted agent profiles unchanged—no custom attachment tools are registered.
+- **Canonical Agent Inspection Workflows:**
+  - **Discovery:** `read("/workspace/attachments/manifest.json")` or `bash("ls -la /workspace/attachments")` to inspect the workspace attachment registry and filenames.
+  - **Text & Rich Documents:** `read("/workspace/attachments/{seq:000}-{slug}.md")` (with `offset` and `limit` line-based pagination via [`ReadOutputFormatter.FormatCapped`](../../src/NightCodeForge.Agents/Tools/ReadOutputFormatter.cs)) to read plain-text attachments and `Pmad.Markitdown`-converted markdown companions.
+  - **Image Attachments:** `read("/workspace/attachments/{seq:000}-{slug}.{png|jpg|webp|gif}")` delegates to [Step 12.2D](STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md)'s in-loop multimodal `DataContent` injection pipeline inside [`WorkspaceFileToolModule.ReadAsync`](../../src/NightCodeForge.Agents/Tools/WorkspaceFileToolModule.cs).
+- **Uniform Mount Registration Across Execution Modes:**
+  - Ensure `/workspace/attachments` (`isReadOnly: true`, `allowWriteInReadOnlyScope: false`) is registered in [`SandboxMountTable`](../../src/NightCodeForge.Core/Interfaces/SandboxMountTable.cs) across [`ContainerEnvironmentFactory.BuildWorkspaceScope`](../../src/NightCodeForge.Infrastructure/Execution/ContainerEnvironmentFactory.cs), [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs), and [`WorkspacePathResolverSandboxAdapter`](../../src/NightCodeForge.Agents/Tools/WorkspacePathResolverSandboxAdapter.cs) so `read` and `bash` resolve `/workspace/attachments/...` uniformly across `ContainerSandbox`, `WslDirect`, and `BareHost`.
+  - Update [`WorkspacePathResolverSandboxAdapter.ValidateWithinWorkspace`](../../src/NightCodeForge.Agents/Tools/WorkspacePathResolverSandboxAdapter.cs) (and `ResolveRawPath`) to include the sibling `attachments` root (`IWorkspacePathResolver.GetAttachmentsPath(workspaceId)`) for reads while rejecting any write/edit targeting `/workspace/attachments` with `UnauthorizedAccessException`.
+- **Stage 0 Untrusted Intake Triage Isolation ([`TriageService`](../../src/NightCodeForge.Agents/Triage/TriageService.cs)):**
+  - In Stage 0 Untrusted Intake Triage (`StandardStageIds.Triage`), omit `/workspace/attachments` from the `SandboxMountTable` constructed for the triage sandbox scope. Because `SandboxMountTable.ForWorkspace` always registers a catch-all `/workspace` root entry, [`SandboxPathResolver`](../../src/NightCodeForge.Core/Interfaces/SandboxPathResolver.cs) (and [`ReadOnlyCommandValidator`](../../src/NightCodeForge.Agents/Tools/ReadOnlyCommandValidator.cs) / [`SandboxBashToolModule`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs)) must explicitly reject `/workspace/attachments` (and `/workspace/attachments/...`) with `UnauthorizedAccessException` whenever no `/workspace/attachments` mount entry is registered in `MountTable` rather than falling through to `/workspace`, blocking any `read` or `bash` access to attachments during untrusted report processing.
 
-### 2.2 Workflow Stage Agents (Stage 1 Review, Implementation, Code Review & Fix)
-- The stage context (via `PipelineDataBag` / prompt template rendering in [`PromptPrefixStabilizer`](../../src/NightCodeForge.Agents/Optimizations/PromptPrefixStabilizer.cs) Layer 3) injects the **task's linked attachments digest** — the compact `{id, title, markdownPath}` list — so stage agents know the prior POC / external doc exists without bloating every prompt.
-- Stage agents reuse the same `list_attachments` / `read_attachment` tools (scoped to the workspace) when a task description cites `@attachment:{id}` or when the digest reveals a relevant spec.
-- Because the attachments directory lives outside the clone and worktrees, agents read it via the tools (which resolve through `IWorkspacePathResolver`) — **no agent tool receives a free-form path into this directory**.
+### 2.2 Constructor Parameter Ceiling & Prompt Digest Injection
+> **Constructor Ceiling Constraint ([AGENTS.md](../../AGENTS.md)):** [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs) (10 parameters) and [`CrucibleAgentHarness`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) (10 parameters) are already at the 10-constructor-parameter ceiling and **must not** add constructor parameters. Similarly, [`BacklogMutationToolService`](../../src/NightCodeForge.Agents/Tools/BacklogMutationToolService.cs) and [`TaskOrchestrator`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs) (9 parameters each) must remain $\le 10$ constructor parameters with no optional parameters.
 
-### 2.3 Read-Only Enforcement & Symlink Traversal Guard
-- `read_attachment` resolves `attachmentId` → registry → path:
-  - For normal files: validates the resolved path stays inside the attachments directory (path traversal defense in depth) before reading.
-  - For symlinked host files (`IsSymlink == true`): verifies that the symlink itself resides inside `attachments/`, and that its target matches the immutable, registered `SourceRef` recorded in the database / `manifest.json`.
-  - If the target host file has been moved or deleted since registration, `read_attachment` throws `AttachmentTargetNotFoundException` with the missing target path (fail-fast, no silent empty response).
-- No agent tool exposes write, edit, or delete operations on the attachments directory or on symlinked host files.
+- **Extend Shared Context Collaborators:** Extend [`IAgentWorkspaceContextService`](../../src/NightCodeForge.Agents/Context/AgentWorkspaceContextService.cs) (currently 7 parameters) and/or [`IBacklogPlanningContext`](../../src/NightCodeForge.Agents/Tools/BacklogPlanningContext.cs) (currently 5 parameters, already owning `IServiceScopeFactory`) to supply workspace and task attachment digests without adding dependencies to `IdeationService` or `CrucibleAgentHarness`.
+- **Canonical Digest Fields:** Each entry in `<workspace_attachments>` and `<task_attachments>` exposes `{id, title, contentKind, mediaType, dimensions, isSymlink, path}` where `path` is the canonical virtual path `/workspace/attachments/{MarkdownPath ?? RelativePath}` (pointing to the `.md` companion for `RichDocument`, the plain-text file for `PlainText`, or the image file for `Image` so the agent can pass `path` directly to `read` or inspect `/workspace/attachments` with `bash`).
+- **Ideation Agent ([`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs)):**
+  - When the workspace has attachments, inject the compact `<workspace_attachments>` digest into the Ideation system prompt — progressive disclosure, never full content or raw image injection.
+  - Extend `<task_planning_guidelines>` so the Ideation agent inspects relevant attachments via `read` (or `bash` on `/workspace/attachments`) and cites them in task descriptions using `@attachment:{id} {Title}` (e.g. *"Design the routing table per @attachment:2 OpenAI API Specification"*) and/or explicit `attachment_ids` in `propose_tasks` / `edit_task`.
+- **Workflow Stage Agents (Stage 1 Task Review, Stage 2 Implementation, Stage 3 Code Review & Fix):**
+  - Inject the task's linked `<task_attachments>` digest into [`PromptPrefixStabilizer.BuildLayer3TaskScope`](../../src/NightCodeForge.Agents/Optimizations/PromptPrefixStabilizer.cs) — strictly inside **Layer 3 Task Scope** so Layer 1 and Layer 2 remain byte-identical across tasks for KV-cache prefix reuse.
+  - Guide stage agents to read linked attachments directly by passing the virtual `path` (`/workspace/attachments/...`) to `read` (or inspecting `/workspace/attachments/` via `bash`).
+
+### 2.3 Read-Only Enforcement & Broken Symlink Guard in `WorkspaceFileToolModule.ReadAsync`
+- **Strict Read-Only Mount:** [`SandboxPathResolver`](../../src/NightCodeForge.Core/Interfaces/SandboxPathResolver.cs) (and Docker `:ro` bind mounts from [Step 12.2A](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md)) enforces `isReadOnly: true` on `/workspace/attachments`, rejecting any `write`, `edit`, or mutating `bash` command targeting `/workspace/attachments` with `UnauthorizedAccessException`.
+- **Path & Symlink Validation on Read ([`WorkspaceFileToolModule.ReadAsync`](../../src/NightCodeForge.Agents/Tools/WorkspaceFileToolModule.cs)):**
+  - All `/workspace/attachments/...` paths pass through `SandboxPathResolver.ResolveHostPath(path, forWrite: false)` to prevent path-traversal escapes outside `attachments/`.
+  - When `WorkspaceFileToolModule.ReadAsync` reads a path resolving under the workspace's `attachments/` directory that is a symbolic link (`FileInfo.LinkTarget != null` or marked `IsSymlink == true` in `manifest.json`), it verifies that:
+    1. The symlink itself resides inside `attachments/`.
+    2. Its resolved target matches the immutable, registered `SourceRef` recorded in `manifest.json` / database.
+    3. The target host file exists and is readable.
+  - If the host target has been moved, deleted, or is unreadable since registration (broken symlink), `ReadAsync` fails fast with `AttachmentTargetNotFoundException` naming the missing target path (surfaced as a hard error, never returning an empty response or fabricated content).
+- No agent tool exposes write, edit, or delete operations on `/workspace/attachments` or on symlinked host files.
+
+### 2.4 Citation Linking (`@attachment:{id}` & `attachment_ids`)
+- Extend [`TaskProposal`](../../src/NightCodeForge.Core/Domain/ForgeTask.cs), [`TaskEditRequest`](../../src/NightCodeForge.Agents/Tools/BacklogMutationToolService.cs), [`BacklogManagementToolModule`](../../src/NightCodeForge.Agents/Tools/BacklogManagementToolModule.cs), and [`BacklogMutationToolService`](../../src/NightCodeForge.Agents/Tools/BacklogMutationToolService.cs) with optional `attachment_ids` (`IReadOnlyList<int>? AttachmentIds`).
+- Provide a deterministic citation parser (`AttachmentCitationParser` in `NightCodeForge.Core`) extracting `@attachment:{id}` references from task descriptions.
+- Union explicit `attachment_ids` with `@attachment:{id}` citations parsed from `description` when creating or editing tasks (`ProposeTasksAsync`, `EditTaskAsync`, and Stage 1 proposal/markdown sync persistence).
+- **Strict Validation (No Synthetic Links):** Validate all referenced attachment IDs against the workspace before persisting; any unknown or cross-workspace attachment ID throws `AttachmentNotFoundException`.
 
 ---
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **Agent Tools (`CanonicalTools` & `CanonicalAIFunctionFactory`):**
-  - [ ] Implement `list_attachments` and `read_attachment(attachmentId)` read-only tools in `NightCodeForge.Agents`.
-  - [ ] Enforce workspace path-traversal validation, `SourceRef` symlink target verification, and fail-fast `AttachmentTargetNotFoundException` on broken symlinks.
-  - [ ] Register `list_attachments` and `read_attachment` for Ideation and Workflow Stage 1–3 profiles.
+- [ ] **Uniform `/workspace/attachments` Sandbox Registration & Triage Exclusion:**
+  - [ ] Ensure `/workspace/attachments` (`isReadOnly: true`, `allowWriteInReadOnlyScope: false`) is registered in [`SandboxMountTable`](../../src/NightCodeForge.Core/Interfaces/SandboxMountTable.cs) across [`ContainerEnvironmentFactory.BuildWorkspaceScope`](../../src/NightCodeForge.Infrastructure/Execution/ContainerEnvironmentFactory.cs), [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs), and [`WorkspacePathResolverSandboxAdapter`](../../src/NightCodeForge.Agents/Tools/WorkspacePathResolverSandboxAdapter.cs) (with `ValidateWithinWorkspace` including the sibling `attachments` root for reads and rejecting writes targeting `/workspace/attachments`) so canonical `read` and `bash` work across `ContainerSandbox`, `WslDirect`, and `BareHost` without adding new tools to `CanonicalToolNames` or `DefaultAgentTools`.
+  - [ ] Omit `/workspace/attachments` from the `SandboxMountTable` created in [`TriageService`](../../src/NightCodeForge.Agents/Triage/TriageService.cs) and ensure [`SandboxPathResolver`](../../src/NightCodeForge.Core/Interfaces/SandboxPathResolver.cs) (and `ReadOnlyCommandValidator` / `SandboxBashToolModule`) explicitly rejects `/workspace/attachments` with `UnauthorizedAccessException` whenever no `/workspace/attachments` mount entry is registered in `MountTable` (preventing fallback to the catch-all `/workspace` root entry) so untrusted Stage 0 triage cannot `read` or `bash` workspace attachments.
+- [ ] **Broken Symlink & Read-Only Enforcement in `WorkspaceFileToolModule.ReadAsync`:**
+  - [ ] Update [`WorkspaceFileToolModule.ReadAsync`](../../src/NightCodeForge.Agents/Tools/WorkspaceFileToolModule.cs) so reading a symlinked attachment inside `attachments/` validates `SourceRef` target match and host target readability, failing fast with `AttachmentTargetNotFoundException` on broken symlinks while preserving `ReadOutputFormatter.FormatCapped` pagination for text/markdown files.
 - [ ] **Prompt Digests & `@attachment:{id}` Citation Linking:**
-  - [ ] Inject workspace attachments digest into the Ideation system prompt when attachments exist.
-  - [ ] Parse `@attachment:{id}` citations (and `propose_tasks` attachment IDs) into `TaskAttachmentLinks` on task creation, throwing `AttachmentNotFoundException` on unknown IDs.
-  - [ ] Inject linked task attachments digest into Stage 1–3 prompts (Layer 3 Task Scope).
+  - [ ] Extend [`IAgentWorkspaceContextService`](../../src/NightCodeForge.Agents/Context/AgentWorkspaceContextService.cs) / [`IBacklogPlanningContext`](../../src/NightCodeForge.Agents/Tools/BacklogPlanningContext.cs) (preserving $\le 10$ constructor parameters on `IdeationService` and `CrucibleAgentHarness`) to build `<workspace_attachments>` and `<task_attachments>` digests carrying `{id, title, contentKind, mediaType, dimensions, isSymlink, path: "/workspace/attachments/..."}`.
+  - [ ] Inject `<workspace_attachments>` and citation guidelines into [`IdeationService`](../../src/NightCodeForge.Agents/Ideation/IdeationService.cs), and inject `<task_attachments>` strictly inside Layer 3 (`PromptPrefixStabilizer.BuildLayer3TaskScope`) for Stage 1–3 prompts.
+  - [ ] Implement `AttachmentCitationParser` and extend `TaskProposal`, `TaskEditRequest`, `BacklogManagementToolModule`, `BacklogMutationToolService`, and Stage 1 task persistence to materialize `TaskAttachmentLinks` (throwing `AttachmentNotFoundException` on unknown or foreign IDs).
 - [ ] **Tests:**
-  - [ ] Unit tests: `read_attachment` broken symlink detection throwing `AttachmentTargetNotFoundException`, path-traversal rejection, and truncation handle for large docs.
-  - [ ] Unit tests: `@attachment:{id}` parsing, unknown-ID hard error, and digest rendering in Ideation and Stage 1–3 prompts.
-  - [ ] Integration test: intake attachment → ideation cites `@attachment:{id}` → task created with `TaskAttachmentLink` → stage agent reads attachment via `read_attachment`.
-
+  - [ ] Unit tests in `NightCodeForge.Agents.Tests` and `NightCodeForge.Core.Tests`: canonical `read` and `bash` access on `/workspace/attachments/...`, read-only rejection on `write`/`edit`, broken symlink detection in `WorkspaceFileToolModule.ReadAsync` throwing `AttachmentTargetNotFoundException`, path-traversal rejection, `ReadOutputFormatter` pagination on large attachment markdown, and `TriageService` mount exclusion blocking `/workspace/attachments` reads.
+  - [ ] Unit tests: `@attachment:{id}` citation parsing, `attachment_ids` unioning in `ProposeTasksAsync`/`EditTaskAsync`, unknown-ID hard error, and digest rendering in Ideation and `PromptPrefixStabilizer` Layer 3 (verifying Layer 1/2 invariance).
+  - [ ] Integration test: intake attachment $\rightarrow$ ideation cites `@attachment:{id}` $\rightarrow$ task created with `TaskAttachmentLink` $\rightarrow$ stage agent reads `/workspace/attachments/...` via canonical `read`, followed by full test suite execution per [AGENTS.md](../../AGENTS.md).

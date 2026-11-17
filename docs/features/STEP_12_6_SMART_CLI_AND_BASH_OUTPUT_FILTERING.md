@@ -2,7 +2,10 @@
 
 > **Phase 12 Implementation Step (Extend Features - Intelligence & Quality Gates)** *(formerly Step 11.3)*  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Project Target:* `src/NightCodeForge.Agents/Tools/Filtering`, `src/NightCodeForge.Agents/Optimizations`, `src/NightCodeForge.Agents/Tools`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned
+> *Project Target:* `src/NightCodeForge.Agents/Tools/Filtering`, `src/NightCodeForge.Agents/Optimizations`, `src/NightCodeForge.Agents/Tools`, `src/NightCodeForge.Core/Domain`, `src/NightCodeForge.Core/Workflow`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned  
+> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+>
+> This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
 ---
 
@@ -133,52 +136,39 @@ With:
 
 ---
 
-### 4.3 Integration into `CanonicalTools.bash` & Tool Schema
+### 4.3 Integration into Modular Bash Tooling, Optimization Flags, Telemetry & Deterministic Priming
 
-In [CanonicalTools.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalTools.cs):
+1. **Modular Tool Architecture & Dependency Injection (Constructor Ceiling `<= 10`):**
+   - `bash` execution and AI function schema definition live in [`SandboxBashToolModule`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs) (`BashAsync` and `CreateFunctions`), composed by [`CanonicalToolsetFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalToolsetFactory.cs), while [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) exposes forwarding overloads and [`CanonicalAIFunctionFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs) delegates to the tool modules.
+   - Inject `ICliOutputFilterRegistry` as a **required** constructor dependency (no optional parameters or silent fallbacks per [AGENTS.md](../../AGENTS.md)) into:
+     - [`CanonicalToolsetFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalToolsetFactory.cs) (`8 -> 9` constructor parameters)
+     - [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) (`8 -> 9` constructor parameters)
+     - [`SandboxBashToolModule`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs) (`4 -> 5` constructor parameters)
+   - Update [`TestCanonicalToolsBuilder`](../../tests/NightCodeForge.Agents.Tests/Fixtures/TestCanonicalToolsBuilder.cs) with default filter registry wiring so existing test suites and `ConstructorParameterCeilingTests` (`<= 10` parameters) remain green.
+   - Extend `CanonicalToolScope` in [`CanonicalToolsetFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalToolsetFactory.cs) with `OptimizationFlags` (`LocalOptimizationFlags`), and populate it from [`CrucibleAgentHarness`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs), `IdeationService`, and `TriageService`.
 
-```csharp
-public async Task<string> BashAsync(
-    string command,
-    int? timeout = null,
-    string? workingDirectory = null,
-    bool? disableFilter = null,
-    CancellationToken cancellationToken = default)
-{
-    // ... command execution ...
-    var rawOutput = FormatRawOutput(res);
+2. **Schema & `SandboxBashToolModule.BashAsync` Filtering Pipeline:**
+   - Extend [`SandboxBashToolModule.CreateFunctions`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs) (`"bash"`) and [`SandboxBashToolModule.BashAsync`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs) (preserving the 4-parameter forwarding overload on both `SandboxBashToolModule` and [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs)) with an explicit `bool? disable_filter = null` / `bool? disableFilter = null` parameter:
+     ```csharp
+     AIFunctionFactory.Create(
+         ([Description("Shell command line to execute")] string command,
+          [Description("Timeout in seconds")] int? timeout = null,
+          [Description("Working directory relative to repo root")] string? working_directory = null,
+          [Description("Optional. Set to true to bypass smart output filtering and receive raw, uncompressed CLI output")] bool? disable_filter = null,
+          CancellationToken ct = default) => BashAsync(command, timeout, working_directory, disable_filter, ct),
+         "bash",
+         "Executes a bash or shell command within the workspace sandbox.")
+     ```
+   - Inside `SandboxBashToolModule.BashAsync`, when `disableFilter != true` and `scope.OptimizationFlags.SmartCliOutputFiltering` is enabled, match the command via `_cliFilterRegistry.GetFilter(command)` and transform the raw output with workspace path relativization (`CommandFilterOptions`).
 
-    // Record full raw output in SessionTranscript / Activity feed (always uncompressed for audit)
-    _transcriptService?.RecordToolExecution(taskId, "bash", command, rawOutput);
+3. **Coordination with [`StructuredDiagnosticExtractor`](../../src/NightCodeForge.Agents/Optimizations/StructuredDiagnosticExtractor.cs):**
+   - `SandboxBashToolModule.BashAsync` currently invokes `StructuredDiagnosticExtractor` on build/test commands and appends `[Structured Diagnostics Extracted]`.
+   - When smart CLI filtering matches and filters a command output, **skip** appending the legacy `[Structured Diagnostics Extracted]` block so the compact smart-filtered summary is not duplicated or bloated.
+   - When `disable_filter == true`, `SmartCliOutputFiltering` is disabled, or no `ICliOutputFilter` matches the command, preserve the existing `StructuredDiagnosticExtractor` behavior.
 
-    // Apply smart filter unless agent explicitly disabled it
-    if (disableFilter != true && _flags?.SmartCliOutputFiltering == true)
-    {
-        var filter = _cliFilterRegistry.GetFilter(command);
-        if (filter != null)
-        {
-            return filter.FilterOutput(rawOutput, _workspaceRoot, new CommandFilterOptions());
-        }
-    }
-
-    return rawOutput;
-}
-```
-
-> **Design Constraint (per AGENTS.md):** In `CanonicalTools`, `ICliOutputFilterRegistry` must be a required constructor dependency (no optional constructor parameters or fallback nulling). All callers and test suites must explicitly provide the dependency or test mock.
-
-In [CanonicalAIFunctionFactory.cs](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs):
-
-```csharp
-AIFunctionFactory.Create(
-    ([Description("Shell command line to execute")] string command,
-     [Description("Timeout in seconds")] int? timeout = null,
-     [Description("Working directory relative to repo root")] string? working_directory = null,
-     [Description("Optional. Set to true to bypass smart output filtering and receive raw, uncompressed CLI output")] bool? disable_filter = null,
-     CancellationToken ct = default) => tools.BashAsync(command, timeout, working_directory, disableFilter: disable_filter, ct),
-    "bash",
-    "Executes a bash or shell command within the workspace sandbox.")
-```
+4. **Context vs. Audit Telemetry Separation & Deterministic Stage Priming:**
+   - **LLM Context vs. Audit Transcripts:** `SandboxBashToolModule.BashAsync` returns the filtered string to the model so `ChatHistory` and persisted `ConversationTurn.ToolResult` (`ConversationHistorySerializer.Serialize`) remain compact across turns and pause/resume cycles. Do **not** invent a non-existent `_transcriptService?.RecordToolExecution(...)` call; instead, attach raw uncompressed output / compression savings metadata to `ConversationTurn.MetadataJson` and disk session transcripts (`SessionTranscriptService`) for full post-mortem auditing.
+   - **Deterministic Build & Test Stages:** In `DeterministicBuildStage` and `DeterministicTestStage`, continue storing **full raw** execution output in `PipelineDataBagKeys.StageOutput(StageId)` / `StageCommands(StageId)` so the Task Inspector (`ConversationTurn`) and audit logs always show complete unedited logs. Apply `ICliOutputFilter` (when `SmartCliOutputFiltering` is enabled) inside [`TaskOrchestrator.SetSyntheticPrimingFromDeterministicStage`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L2811-L2929) when constructing `PendingSyntheticPriming` (`SyntheticPrimingExecution.Output`) for downstream agent prompts.
 
 ---
 
@@ -192,9 +182,10 @@ AIFunctionFactory.Create(
 
 ---
 
-## 6. Containerized Synthetic Test Fixtures & Real CLI Validation
+## 6. Fast Unit Tests & Containerized Synthetic Test Fixtures
 
-To ensure filtering accuracy against actual, unmocked compiler behaviors, the integration test suite runs synthetic .NET test projects **inside a real Docker container** (using the workspace container sandbox or `mcr.microsoft.com/dotnet/sdk:10.0`):
+- **Fast Deterministic Unit Tests (Default Inner-Loop Suite):** Fast unit tests covering `DotNetCliOutputFilter`, `NodeTscCliFilter`, `CargoCliFilter`, `CliOutputFilterRegistry`, `SandboxBashToolModule` + [`StructuredDiagnosticExtractor`](../../src/NightCodeForge.Agents/Optimizations/StructuredDiagnosticExtractor.cs) coordination, [`LocalOptimizationFlags.Clone()`](../../src/NightCodeForge.Core/Domain/LocalOptimizationFlags.cs), transcript YAML frontmatter / `TranscriptBrowserService` (`CloneAndSetFlag`, `ParseSummaryFromContent`), and [`TaskOrchestrator.SetSyntheticPrimingFromDeterministicStage`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L2811-L2929) must run without Docker under `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- **Containerized Synthetic Integration Tests (`[Trait("Category", "Acceptance")]`):** To ensure filtering accuracy against actual, unmocked compiler behaviors, `ContainerCliOutputFilterTests` must be annotated with `[Trait("Category", "Acceptance")]` and run synthetic .NET test projects **inside a real Docker container** (using the workspace container sandbox or `mcr.microsoft.com/dotnet/sdk:10.0`):
 
 ```mermaid
 flowchart TD
@@ -234,19 +225,23 @@ flowchart TD
 
 ## 7. Implementation Checklist & Deliverables
 
-- [ ] **Core Abstractions:**
-  - Create `ICliOutputFilter` and `CommandFilterOptions` in `NightCodeForge.Agents.Tools.Filtering`.
-  - Add `SmartCliOutputFiltering` toggle to [LocalOptimizationFlags](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Core/Domain/LocalOptimizationFlags.cs).
+- [ ] **Core Abstractions & Feature Flagging:**
+  - Create `ICliOutputFilter`, `ICliOutputFilterRegistry`, and `CommandFilterOptions` in `NightCodeForge.Agents.Tools.Filtering`.
+  - Add `SmartCliOutputFiltering` toggle to [`LocalOptimizationFlags`](../../src/NightCodeForge.Core/Domain/LocalOptimizationFlags.cs) (including `Clone()`), wire `smart_cli_output_filtering:` YAML frontmatter serialization in `SessionTranscriptService`, and update `TranscriptBrowserService` (`CloneAndSetFlag` & `ParseSummaryFromContent`).
+  - Propagate `CanonicalToolScope.OptimizationFlags` in [`CanonicalToolsetFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalToolsetFactory.cs) from [`CrucibleAgentHarness`](../../src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs), `IdeationService`, and `TriageService`.
 - [ ] **DotNet / MSBuild Filter:**
   - Implement `DotNetCliOutputFilter` with path relativization, warning suppression, and SDK line pruning.
   - Implement test runner filter collapsing passing test fixtures and highlighting failed assertions with stack traces.
 - [ ] **Extensibility for Other Toolchains:**
   - Implement stub/extensibility points for `NodeTscCliFilter` (TypeScript / npm) and `CargoCliFilter` (Rust).
 - [ ] **Harness & Tool Integration:**
-  - Wire filter pipeline into `CanonicalTools.BashAsync` and expose `disable_filter` parameter in `CanonicalAIFunctionFactory`.
-  - Wire filter pipeline into `DeterministicBuildStage` and `DeterministicTestStage` diagnostic formatting.
-- [ ] **Containerized Synthetic Test Suite:**
-  - Implement `ContainerCliOutputFilterTests` creating temporary containerized C# projects.
+  - Inject required `ICliOutputFilterRegistry` into [`CanonicalToolsetFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalToolsetFactory.cs) (`8 -> 9` params), [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs) (`8 -> 9` params), and [`SandboxBashToolModule`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs) (`4 -> 5` params), plus default wiring in [`TestCanonicalToolsBuilder`](../../tests/NightCodeForge.Agents.Tests/Fixtures/TestCanonicalToolsBuilder.cs), keeping all constructors within `ConstructorParameterCeilingTests` (`<= 10`).
+  - Wire filter pipeline into [`SandboxBashToolModule.BashAsync`](../../src/NightCodeForge.Agents/Tools/SandboxBashToolModule.cs) (and 4-param overload forwarding in `SandboxBashToolModule` / [`CanonicalTools`](../../src/NightCodeForge.Agents/Tools/CanonicalTools.cs)), expose `disable_filter` in `SandboxBashToolModule.CreateFunctions` (and [`CanonicalAIFunctionFactory`](../../src/NightCodeForge.Agents/Tools/CanonicalAIFunctionFactory.cs)), and coordinate skipping `[Structured Diagnostics Extracted]` in [`StructuredDiagnosticExtractor`](../../src/NightCodeForge.Agents/Optimizations/StructuredDiagnosticExtractor.cs) when smart filtering handles output.
+  - Record full raw output / savings audit metadata on `ConversationTurn.MetadataJson` / disk transcripts (`SessionTranscriptService`) while keeping `ChatHistory` and `ConversationTurn.ToolResult` filtered.
+  - Keep raw output in `PipelineDataBagKeys.StageOutput(StageId)` / `StageCommands(StageId)` inside `DeterministicBuildStage` and `DeterministicTestStage`, and filter `SyntheticPrimingExecution.Output` in [`TaskOrchestrator.SetSyntheticPrimingFromDeterministicStage`](../../src/NightCodeForge.Core/Workflow/TaskOrchestrator.cs#L2811-L2929).
+- [ ] **Unit & Containerized Synthetic Test Suites:**
+  - Add fast deterministic unit tests verifying filters, flags, transcript frontmatter, diagnostic extractor coordination, and priming filtering under `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+  - Implement `ContainerCliOutputFilterTests` marked `[Trait("Category", "Acceptance")]` creating temporary containerized C# projects.
   - Verify all 5 synthetic cases (`Case_CleanBuild`, `Case_FatalErrorsAndWarnings`, `Case_WarningsOnlyExceedingCap`, `Case_FailedTestSuite`, `Case_DisableFilterBypass`) against real container CLI outputs.
   - Benchmark and assert token reduction targets (> 90% reduction on verbose builds).
 

@@ -16,3 +16,4 @@ Do not touch git (no `git commit`, `git checkout`, `git restore`, `git reset`, `
 
 UI and Presentation separation: Keep Razor components (`.razor`) focused on presentation, layout, and user interaction. Parsing, payload extraction, data mapping, and non-trivial logic must not live directly in `@code` blocks of Razor components. Instead, extract them into dedicated services or helper classes (e.g., in `Services` or Core) to allow reuse and straightforward unit testing without requiring UI rendering context.
 
+Minimalist tool approach : prefer re-using existing tools (read/write/bash) with dedicated mount point over creating a new dedicated tool unless the task is complex or requires a lot of logic. This allow reuse the all spectrum of unix tools and keep context size minimal.
