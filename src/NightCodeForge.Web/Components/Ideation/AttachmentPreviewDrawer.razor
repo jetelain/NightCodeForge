@@ -1,0 +1,478 @@
+@namespace NightCodeForge.Web.Components.Ideation
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Web.Services
+@inject IAttachmentUiService AttachmentUiService
+@inject ToastService ToastService
+@inject ILogger<AttachmentPreviewDrawer> Logger
+
+@if (IsOpen)
+{
+    <div class="task-drawer-overlay attachment-preview-drawer-overlay" @onclick="CloseAsync">
+        <aside class="task-drawer attachment-preview-drawer card-glass"
+               @onclick:stopPropagation="true"
+               role="dialog"
+               aria-modal="true"
+               aria-label="Attachment Preview">
+            <div class="task-drawer-header attachment-drawer-header">
+                @if (_preview != null)
+                {
+                    var att = _preview.Attachment;
+                    <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;">
+                        <div style="min-width: 0;">
+                            <div style="display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.35rem;">
+                                <span class="font-mono text-secondary" style="font-weight: 700;">#@att.Id</span>
+                                <span class="forge-badge badge-indigo">
+                                    @AttachmentPresentationHelper.GetContentKindIcon(att.ContentKind) @AttachmentPresentationHelper.FormatContentKindLabel(att.ContentKind)
+                                </span>
+                                <span class="forge-badge badge-gray font-mono">@att.MediaType</span>
+                                @if (att.IsSymlink)
+                                {
+                                    <span class="forge-badge badge-indigo font-mono attachment-symlink-badge" title="@att.SourceRef">
+                                        @AttachmentPresentationHelper.FormatSymlinkBadge(att)
+                                    </span>
+                                    <span id="attachment-reachability-badge"
+                                          class="forge-badge @AttachmentPresentationHelper.GetTargetReachabilityBadgeClass(_preview.IsTargetReachable)">
+                                        @AttachmentPresentationHelper.FormatTargetReachabilityLabel(_preview.IsTargetReachable)
+                                    </span>
+                                }
+                            </div>
+                            <h2 style="font-size: 1.15rem; font-weight: 600; margin: 0; color: var(--text-primary); word-break: break-word;">
+                                @att.Title
+                            </h2>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 0.45rem; flex-shrink: 0;">
+                            @if (OnCiteInChat.HasDelegate)
+                            {
+                                <button type="button"
+                                        id="btn-drawer-cite-attachment"
+                                        class="forge-btn forge-btn-secondary btn-xs"
+                                        @onclick="HandleCiteInChatAsync">
+                                    💬 Cite in Chat
+                                </button>
+                            }
+                            <button type="button"
+                                    id="btn-open-delete-attachment"
+                                    class="forge-btn forge-btn-danger btn-xs"
+                                    @onclick="OpenDeleteConfirmationAsync"
+                                    disabled="@_isDeleting">
+                                🗑️ Delete
+                            </button>
+                            <button type="button"
+                                    id="btn-close-attachment-preview"
+                                    class="btn-icon"
+                                    @onclick="CloseAsync"
+                                    aria-label="Close attachment preview">
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                        <h2 style="font-size: 1.1rem; font-weight: 600; margin: 0; color: var(--text-primary);">
+                            📎 Attachment Preview
+                        </h2>
+                        <button type="button"
+                                id="btn-close-attachment-preview"
+                                class="btn-icon"
+                                @onclick="CloseAsync"
+                                aria-label="Close attachment preview">
+                            ✕
+                        </button>
+                    </div>
+                }
+            </div>
+
+            <div class="task-drawer-body attachment-drawer-body">
+                @if (_isLoading)
+                {
+                    <div class="text-muted" style="padding: 2rem; text-align: center;">
+                        Loading attachment preview...
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_loadError))
+                {
+                    <div class="forge-alert alert-error attachment-load-error">
+                        <span>⚠️ @_loadError</span>
+                    </div>
+                }
+                else if (_preview != null)
+                {
+                    var att = _preview.Attachment;
+                    var linkedTasks = _deleteImpact?.LinkedTasks ?? _preview.LinkedTasks;
+
+                    @if (_showDeleteConfirmation)
+                    {
+                        <div class="attachment-delete-confirm-modal" role="alertdialog" aria-modal="true" aria-label="Confirm Attachment Deletion">
+                            <div class="attachment-delete-confirm-header">
+                                <strong>⚠️ Delete Attachment #@att.Id (@att.Title)?</strong>
+                            </div>
+                            <p class="attachment-delete-confirm-desc">
+                                Removing this attachment deletes its entry inside <code>attachments/</code>, companion Markdown, and database/manifest records.
+                                @if (att.IsSymlink)
+                                {
+                                    <span> The external host file (<code>@att.SourceRef</code>) will <strong>strictly never be deleted or modified</strong>.</span>
+                                }
+                                else
+                                {
+                                    <span> Any original host files remain strictly preserved.</span>
+                                }
+                            </p>
+
+                            <div class="attachment-delete-impact-list">
+                                <div class="attachment-delete-impact-title">
+                                    Linked Tasks Impacted (@linkedTasks.Count):
+                                </div>
+                                @if (linkedTasks.Count == 0)
+                                {
+                                    <div class="text-muted" style="font-size: 0.82rem;">
+                                        No tasks currently link this attachment.
+                                    </div>
+                                }
+                                else
+                                {
+                                    <ul class="attachment-impact-tasks">
+                                        @foreach (var task in linkedTasks)
+                                        {
+                                            <li>
+                                                <span class="font-mono">#@task.Id</span>
+                                                <span>@task.Title</span>
+                                                <span class="forge-badge badge-gray" style="font-size: 0.7rem;">@task.Status</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+
+                            <div class="attachment-delete-confirm-actions">
+                                <button type="button"
+                                        id="btn-cancel-delete-attachment"
+                                        class="forge-btn forge-btn-secondary btn-sm"
+                                        @onclick="CancelDeleteConfirmation"
+                                        disabled="@_isDeleting">
+                                    Cancel
+                                </button>
+                                <button type="button"
+                                        id="btn-confirm-delete-attachment"
+                                        class="forge-btn forge-btn-danger btn-sm"
+                                        @onclick="ConfirmDeleteAsync"
+                                        disabled="@_isDeleting">
+                                    @(_isDeleting ? "Deleting..." : "Confirm Delete")
+                                </button>
+                            </div>
+                        </div>
+                    }
+
+                    <!-- Provenance Metadata Grid -->
+                    <div class="drawer-section">
+                        <h4 class="section-title" style="margin-bottom: 0.5rem;">Provenance &amp; Metadata</h4>
+                        <div class="task-metadata-grid attachment-provenance-grid">
+                            <div class="meta-item">
+                                <span class="meta-label">Attachment ID</span>
+                                <span class="meta-val font-mono">#@att.Id</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Title</span>
+                                <span class="meta-val">@att.Title</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Content Kind</span>
+                                <span class="meta-val">@AttachmentPresentationHelper.FormatContentKindLabel(att.ContentKind)</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Media Type</span>
+                                <span class="meta-val font-mono">@att.MediaType</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Source Kind</span>
+                                <span class="meta-val font-mono">@att.SourceKind</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Storage Mode</span>
+                                <span class="meta-val">@(att.IsSymlink ? "Symlink" : "Stored")</span>
+                            </div>
+                            <div class="meta-item" style="grid-column: span 2;">
+                                <span class="meta-label">Source Ref</span>
+                                <span class="meta-val font-mono" style="word-break: break-all;">@att.SourceRef</span>
+                            </div>
+                            <div class="meta-item" style="grid-column: span 2;">
+                                <span class="meta-label">SHA-256</span>
+                                <span class="meta-val font-mono" style="word-break: break-all;">@att.Sha256</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Size</span>
+                                <span class="meta-val font-mono">@AttachmentPresentationHelper.FormatSizeBytes(att.SizeBytes)</span>
+                            </div>
+                            <div class="meta-item">
+                                <span class="meta-label">Created At</span>
+                                <span class="meta-val">@att.CreatedAt.ToLocalTime().ToString("g")</span>
+                            </div>
+                            <div class="meta-item" style="grid-column: span 2;">
+                                <span class="meta-label">Sandbox Path</span>
+                                <span class="meta-val font-mono">@AttachmentDigestFormatter.ResolveVirtualAttachmentPath(att)</span>
+                            </div>
+                            @if (att.ContentKind == TaskAttachmentContentKind.Image)
+                            {
+                                var dims = AttachmentPresentationHelper.FormatDimensions(att);
+                                <div class="meta-item" style="grid-column: span 2;">
+                                    <span class="meta-label">Dimensions</span>
+                                    <span class="meta-val font-mono">@(string.IsNullOrEmpty(dims) ? "Unknown" : dims)</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <!-- Linked Tasks -->
+                    <div class="drawer-section attachment-linked-tasks-section">
+                        <h4 class="section-title" style="margin-bottom: 0.5rem;">
+                            Linked Tasks (@_preview.LinkedTasks.Count)
+                        </h4>
+                        @if (_preview.LinkedTasks.Count == 0)
+                        {
+                            <div class="text-muted" style="font-size: 0.84rem;">
+                                No tasks currently link this attachment.
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="dependency-list">
+                                @foreach (var task in _preview.LinkedTasks)
+                                {
+                                    <a href="@WorkspaceUrlHelper.BuildPath(task.WorkspaceId, $"tasks/{task.Id}")"
+                                       class="dependency-item neutral attachment-linked-task-item"
+                                       style="text-decoration: none;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+                                            <span class="font-mono text-secondary">#@task.Id</span>
+                                            <span class="dep-title">@task.Title</span>
+                                        </div>
+                                        <span class="forge-badge badge-gray" style="font-size: 0.72rem;">@task.Status</span>
+                                    </a>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <!-- Content Preview -->
+                    <div class="drawer-section attachment-preview-content">
+                        <h4 class="section-title" style="margin-bottom: 0.5rem;">Content Preview</h4>
+
+                        @if (att.IsSymlink && !_preview.IsTargetReachable)
+                        {
+                            <div class="attachment-target-missing-alert">
+                                <strong>⚠️ Target Missing</strong>
+                                <div>
+                                    The symlinked host target <code>@att.SourceRef</code> could not be reached on disk.
+                                </div>
+                            </div>
+                        }
+                        else if (att.ContentKind == TaskAttachmentContentKind.Image)
+                        {
+                            var dims = AttachmentPresentationHelper.FormatDimensions(att);
+                            <div class="attachment-image-preview">
+                                <div class="attachment-image-meta-bar">
+                                    @if (!string.IsNullOrEmpty(dims))
+                                    {
+                                        <span class="forge-badge badge-indigo font-mono attachment-dimensions-badge">@dims</span>
+                                    }
+                                    <span class="forge-badge badge-gray font-mono attachment-mediatype-badge">@att.MediaType</span>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(_preview.ImageDataUri))
+                                {
+                                    <img class="attachment-preview-image"
+                                         src="@_preview.ImageDataUri"
+                                         alt="@att.Title" />
+                                }
+                                else
+                                {
+                                    <div class="text-muted" style="font-size: 0.84rem;">
+                                        Image bytes are not currently available on disk for inline preview.
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(_preview.RenderedHtml))
+                        {
+                            <div class="attachment-markdown-preview forge-markdown">
+                                @((MarkupString)_preview.RenderedHtml)
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="text-muted" style="font-size: 0.84rem;">
+                                No previewable Markdown content available on disk for this attachment.
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public int? AttachmentId { get; set; }
+    [Parameter] public TaskAttachment? Attachment { get; set; }
+    [Parameter] public bool StartInDeleteConfirmation { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback<int> OnDeleted { get; set; }
+    [Parameter] public EventCallback<TaskAttachment> OnCiteInChat { get; set; }
+
+    private AttachmentPreviewModel? _preview;
+    private AttachmentDeleteImpact? _deleteImpact;
+    private bool _isLoading;
+    private bool _isDeleting;
+    private bool _showDeleteConfirmation;
+    private bool _appliedStartInDelete;
+    private string? _loadError;
+    private bool _wasOpen;
+    private int? _loadedAttachmentId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            _loadedAttachmentId = null;
+            _preview = null;
+            _deleteImpact = null;
+            _loadError = null;
+            _showDeleteConfirmation = false;
+            _appliedStartInDelete = false;
+            return;
+        }
+
+        var effectiveId = AttachmentId ?? Attachment?.Id;
+        if (!effectiveId.HasValue || effectiveId.Value <= 0)
+        {
+            _preview = null;
+            _loadError = "No attachment selected.";
+            return;
+        }
+
+        var shouldLoad = !_wasOpen || _loadedAttachmentId != effectiveId.Value;
+        _wasOpen = true;
+
+        if (!StartInDeleteConfirmation)
+        {
+            _appliedStartInDelete = false;
+        }
+
+        if (!shouldLoad)
+        {
+            if (StartInDeleteConfirmation && !_appliedStartInDelete && !_showDeleteConfirmation && _preview != null)
+            {
+                _showDeleteConfirmation = true;
+                _appliedStartInDelete = true;
+                _deleteImpact = new AttachmentDeleteImpact(_preview.Attachment, _preview.LinkedTasks);
+            }
+            return;
+        }
+
+        _loadedAttachmentId = effectiveId.Value;
+        _isLoading = true;
+        _loadError = null;
+        _showDeleteConfirmation = false;
+        _appliedStartInDelete = false;
+        _deleteImpact = null;
+
+        try
+        {
+            _preview = await AttachmentUiService.LoadPreviewAsync(effectiveId.Value);
+            if (StartInDeleteConfirmation)
+            {
+                _showDeleteConfirmation = true;
+                _appliedStartInDelete = true;
+                _deleteImpact = new AttachmentDeleteImpact(_preview.Attachment, _preview.LinkedTasks);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to load preview for attachment #{AttachmentId}", effectiveId.Value);
+            _preview = null;
+            _loadError = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OpenDeleteConfirmationAsync()
+    {
+        if (_preview == null || _isDeleting)
+        {
+            return;
+        }
+
+        try
+        {
+            _deleteImpact = await AttachmentUiService.GetDeleteImpactAsync(_preview.Attachment.Id);
+            _showDeleteConfirmation = true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to resolve delete impact for attachment #{AttachmentId}", _preview.Attachment.Id);
+            ToastService.Show("Delete Unavailable", ex.Message, ToastLevel.Error);
+        }
+    }
+
+    private void CancelDeleteConfirmation()
+    {
+        _showDeleteConfirmation = false;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_preview == null || _isDeleting)
+        {
+            return;
+        }
+
+        var id = _preview.Attachment.Id;
+        var title = _preview.Attachment.Title;
+        _isDeleting = true;
+
+        try
+        {
+            await AttachmentUiService.DeleteAttachmentAsync(id);
+            _showDeleteConfirmation = false;
+            ToastService.Show(
+                "Attachment Deleted",
+                $"Removed attachment #{id} ({title}). External host files remain untouched.",
+                ToastLevel.Info);
+            await OnDeleted.InvokeAsync(id);
+            await CloseAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete attachment #{AttachmentId}", id);
+            ToastService.Show("Delete Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
+    }
+
+    private async Task HandleCiteInChatAsync()
+    {
+        if (_preview != null && OnCiteInChat.HasDelegate)
+        {
+            await OnCiteInChat.InvokeAsync(_preview.Attachment);
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        if (_isDeleting)
+        {
+            return;
+        }
+
+        _showDeleteConfirmation = false;
+        _appliedStartInDelete = false;
+        await OnClose.InvokeAsync();
+    }
+}

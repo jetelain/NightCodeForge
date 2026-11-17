@@ -24,7 +24,8 @@ public sealed record TaskCreationRequest(
     IReadOnlyList<int>? PrerequisiteIds,
     bool LaunchImmediately,
     string AuditReason,
-    TaskDifficulty Difficulty = TaskDifficulty.Standard);
+    TaskDifficulty Difficulty = TaskDifficulty.Standard,
+    IReadOnlyList<int>? AttachmentIds = null);
 
 public sealed record TaskCreationResult(ForgeTask Task, bool WasDispatched);
 
@@ -53,6 +54,7 @@ public class TaskCreationUiService : ITaskCreationUiService
     private readonly IGitHubTaskMirrorService _gitHubTaskMirrorService;
     private readonly IGitHubPullRequestDeliveryService _prDeliveryService;
     private readonly ITaskJobQueue _taskJobQueue;
+    private readonly ITaskAttachmentRepository _attachmentRepository;
     private readonly SecurityOptions _securityOptions;
     private readonly ILogger<TaskCreationUiService> _logger;
 
@@ -64,6 +66,7 @@ public class TaskCreationUiService : ITaskCreationUiService
         IGitHubTaskMirrorService gitHubTaskMirrorService,
         IGitHubPullRequestDeliveryService prDeliveryService,
         ITaskJobQueue taskJobQueue,
+        ITaskAttachmentRepository attachmentRepository,
         IOptions<SecurityOptions> securityOptions,
         ILogger<TaskCreationUiService> logger)
     {
@@ -74,6 +77,7 @@ public class TaskCreationUiService : ITaskCreationUiService
         _gitHubTaskMirrorService = gitHubTaskMirrorService ?? throw new ArgumentNullException(nameof(gitHubTaskMirrorService));
         _prDeliveryService = prDeliveryService ?? throw new ArgumentNullException(nameof(prDeliveryService));
         _taskJobQueue = taskJobQueue ?? throw new ArgumentNullException(nameof(taskJobQueue));
+        _attachmentRepository = attachmentRepository ?? throw new ArgumentNullException(nameof(attachmentRepository));
         _securityOptions = securityOptions?.Value ?? throw new ArgumentNullException(nameof(securityOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -217,6 +221,13 @@ public class TaskCreationUiService : ITaskCreationUiService
             }
         }
 
+        var validatedAttachmentIds = await AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+            _attachmentRepository,
+            request.WorkspaceId,
+            request.AttachmentIds,
+            request.Description,
+            cancellationToken);
+
         var newTask = new ForgeTask
         {
             WorkspaceId = request.WorkspaceId,
@@ -239,6 +250,26 @@ public class TaskCreationUiService : ITaskCreationUiService
             createdBy: AuditActors.User,
             reason: request.AuditReason,
             cancellationToken);
+
+        if (validatedAttachmentIds.Count > 0)
+        {
+            await _attachmentRepository.SetTaskAttachmentLinksAsync(created.Id, validatedAttachmentIds, cancellationToken);
+            var linkedAttachments = await _attachmentRepository.GetByTaskIdAsync(created.Id, cancellationToken)
+                ?? Array.Empty<TaskAttachment>();
+            if (linkedAttachments.Count == 0)
+            {
+                linkedAttachments = await _attachmentRepository.GetByIdsAsync(validatedAttachmentIds, cancellationToken)
+                    ?? Array.Empty<TaskAttachment>();
+            }
+            created.AttachmentLinks = linkedAttachments
+                .Select(a => new TaskAttachmentLink
+                {
+                    TaskId = created.Id,
+                    TaskAttachmentId = a.Id,
+                    TaskAttachment = a
+                })
+                .ToList();
+        }
 
         await GitHubPullRequestUiHelper.MirrorTaskOpenedSafeAsync(
             _gitHubTaskMirrorService,
@@ -287,7 +318,7 @@ public class TaskCreationUiService : ITaskCreationUiService
             created.WorkspaceId > 0 ? created.WorkspaceId : null,
             cancellationToken);
         var workflow = workflows.FirstOrDefault(w => w.Id == created.WorkflowId) ?? workflows.FirstOrDefault();
-        var initialStage = workflow?.Stages.OrderBy(s => s.SequenceOrder).FirstOrDefault();
+        var initialStage = workflow?.Stages.MinBy(s => s.SequenceOrder);
         var tier = initialStage?.QueueTier ?? StageQueueTier.TaskReview;
 
         var jobId = _taskJobQueue.EnqueueStage(created.Id, tier, created.Priority);

@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Web.Components.Ideation;
 using NightCodeForge.Web.Services;
@@ -8,6 +9,12 @@ namespace NightCodeForge.Web.Tests;
 
 public class IdeationProposalCardTests : BunitContext
 {
+    public IdeationProposalCardTests()
+    {
+        Services.AddSingleton(TestServices.CreateToastService());
+        TestServices.AddDefaultWebUiServices(Services);
+    }
+
     [Fact]
     public void RendersTitleDescriptionAndPriority()
     {

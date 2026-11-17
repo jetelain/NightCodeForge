@@ -12,6 +12,7 @@
 @using NightCodeForge.Web.Services
 @inject WorkspaceStateService WorkspaceState
 @inject ITaskCreationUiService TaskCreationUiService
+@inject IAttachmentUiService AttachmentUiService
 @inject ToastService ToastService
 @inject NavigationManager Navigation
 @inject ILogger<CreateTask> Logger
@@ -197,6 +198,135 @@
                                     <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
                                         <span class="forge-badge badge-priority-@opt.Priority" style="font-size: 0.72rem;">P@(opt.Priority)</span>
                                         <span class="forge-badge badge-secondary" style="font-size: 0.72rem;">@opt.Status</span>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+
+                <!-- Attachments Picker Section -->
+                <div id="create-task-attachments-section" class="forge-card card-glass form-section attachments-picker-section" style="margin-top: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+                        <div>
+                            <h4 style="margin: 0; font-size: 0.95rem; font-weight: 600; color: var(--text-primary);">
+                                📎 Context Attachments (@_selectedAttachmentIds.Count selected)
+                            </h4>
+                            <p style="margin: 0.2rem 0 0 0; font-size: 0.8rem; color: var(--text-secondary);">
+                                Select existing workspace attachments, drop files, or map a host file as a WSL2 symlink.
+                            </p>
+                        </div>
+                    </div>
+
+                    @if (_selectedAttachmentIds.Count > 0)
+                    {
+                        <div class="selected-attachments-chips" style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem;">
+                            @foreach (var attId in _selectedAttachmentIds.OrderBy(id => id))
+                            {
+                                var att = _availableAttachments.FirstOrDefault(a => a.Id == attId);
+                                var symlinkBadge = att != null ? AttachmentPresentationHelper.FormatSymlinkBadge(att) : string.Empty;
+                                <span class="forge-chip attachment-chip selected-attachment-chip">
+                                    <button type="button"
+                                            class="attachment-chip-main-btn"
+                                            @onclick="() => _previewAttachmentId = attId"
+                                            title="Preview attachment #@attId">
+                                        <span class="font-mono text-secondary">#@attId</span>
+                                        <span>@(att?.Title ?? AttachmentPresentationHelper.FormatCitationToken(attId))</span>
+                                        @if (!string.IsNullOrEmpty(symlinkBadge))
+                                        {
+                                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge">@symlinkBadge</span>
+                                        }
+                                    </button>
+                                    <button type="button"
+                                            class="btn-chip-remove"
+                                            @onclick="() => ToggleAttachment(attId)"
+                                            aria-label="Remove attachment">✕</button>
+                                </span>
+                            }
+                        </div>
+                    }
+
+                    <div class="create-task-attachment-intake" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.65rem;">
+                        <label class="forge-btn forge-btn-secondary btn-sm create-task-file-drop-zone"
+                               style="cursor: pointer; margin: 0;">
+                            <InputFile id="create-task-attachment-file-input"
+                                       class="create-task-attachment-input-file"
+                                       OnChange="HandleAttachmentFilesSelectedAsync"
+                                       multiple
+                                       disabled="@(_isSubmitting || _isUploadingAttachment)" />
+                            <span>📎 Drop / Upload File</span>
+                        </label>
+                        <div style="display: flex; gap: 0.4rem; flex: 1; min-width: 240px;">
+                            <input id="create-task-host-file-input"
+                                   type="text"
+                                   class="form-control-dark attach-host-file-input"
+                                   placeholder="Host file path (e.g. C:\dev\poc\router-spikes.md)..."
+                                   @bind="_hostFilePathInput"
+                                   @bind:event="oninput"
+                                   disabled="@(_isSubmitting || _isUploadingAttachment)"
+                                   style="font-size: 0.85rem; padding: 0.45rem 0.75rem;" />
+                            <button id="btn-create-task-attach-host-file"
+                                    type="button"
+                                    class="forge-btn forge-btn-secondary btn-sm attach-host-file-btn"
+                                    @onclick="HandleAttachHostFileAsync"
+                                    disabled="@(_isSubmitting || _isUploadingAttachment || string.IsNullOrWhiteSpace(_hostFilePathInput))">
+                                🔗 Attach Host File
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="attachment-search-box" style="margin-bottom: 0.6rem;">
+                        <input id="attachment-search-input"
+                               type="text"
+                               class="form-control-dark attachment-search-input"
+                               placeholder="Search workspace attachments by title, source, or #id..."
+                               @bind="_attachmentSearch"
+                               @bind:event="oninput"
+                               style="font-size: 0.85rem; padding: 0.5rem 0.8rem;" />
+                    </div>
+
+                    <div class="attachment-options-container" style="max-height: 180px; overflow-y: auto; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.4rem;">
+                        @{
+                            var filteredAttachments = GetFilteredAttachments();
+                        }
+                        @if (filteredAttachments.Count == 0)
+                        {
+                            <div class="text-muted" style="padding: 0.75rem; text-align: center; font-size: 0.82rem;">
+                                No matching workspace attachments found.
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var opt in filteredAttachments)
+                            {
+                                var isChecked = _selectedAttachmentIds.Contains(opt.Id);
+                                var symlinkBadge = AttachmentPresentationHelper.FormatSymlinkBadge(opt);
+                                <div class="attachment-option-item @(isChecked ? "selected" : "")"
+                                     @onclick="() => ToggleAttachment(opt.Id)"
+                                     style="display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.6rem; border-radius: var(--radius-sm); cursor: pointer; background: @(isChecked ? "rgba(99, 102, 241, 0.15)" : "transparent"); margin-bottom: 2px;">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+                                        <input type="checkbox"
+                                               checked="@isChecked"
+                                               @onclick:stopPropagation="true"
+                                               @onchange="() => ToggleAttachment(opt.Id)" />
+                                        <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@opt.Id</span>
+                                        <span>@AttachmentPresentationHelper.GetContentKindIcon(opt.ContentKind)</span>
+                                        <span style="font-size: 0.85rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@opt.Title</span>
+                                        @if (!string.IsNullOrEmpty(symlinkBadge))
+                                        {
+                                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge" style="font-size: 0.7rem;" title="@opt.SourceRef">@symlinkBadge</span>
+                                        }
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+                                        <span class="forge-badge badge-gray" style="font-size: 0.7rem;">@AttachmentPresentationHelper.FormatContentKindLabel(opt.ContentKind)</span>
+                                        <span class="font-mono text-muted" style="font-size: 0.72rem;">@AttachmentPresentationHelper.FormatSizeBytes(opt.SizeBytes)</span>
+                                        <button type="button"
+                                                class="forge-btn forge-btn-secondary btn-xs attachment-preview-btn"
+                                                @onclick:stopPropagation="true"
+                                                @onclick="() => _previewAttachmentId = opt.Id"
+                                                title="Preview attachment #@opt.Id">
+                                            👁️
+                                        </button>
                                     </div>
                                 </div>
                             }
@@ -420,6 +550,11 @@
                 </div>
             </div>
         </div>
+
+        <AttachmentPreviewDrawer IsOpen="_previewAttachmentId.HasValue"
+                                 AttachmentId="_previewAttachmentId"
+                                 OnClose="() => _previewAttachmentId = null"
+                                 OnDeleted="HandleAttachmentDeletedAsync" />
     }
 </div>
 
@@ -436,12 +571,18 @@
     private string _featureBranch = string.Empty;
     private HashSet<int> _selectedPrereqIds = new();
     private string _prereqSearch = string.Empty;
+    private HashSet<int> _selectedAttachmentIds = new();
+    private string _attachmentSearch = string.Empty;
+    private string _hostFilePathInput = string.Empty;
+    private bool _isUploadingAttachment;
+    private int? _previewAttachmentId;
     private bool _previewMode = false;
     private bool _isSubmitting = false;
     private string? _validationError;
 
     private List<WorkflowDefinition> _workflows = new();
     private List<ForgeTask> _availableTasks = new();
+    private List<TaskAttachment> _availableAttachments = new();
     private bool _isPrDeliveryAvailable;
     private bool _disposed;
 
@@ -488,12 +629,15 @@
         {
             _workflows.Clear();
             _availableTasks.Clear();
+            _availableAttachments.Clear();
             _selectedPrereqIds.Clear();
+            _selectedAttachmentIds.Clear();
             _isPrDeliveryAvailable = false;
             return;
         }
 
         _selectedPrereqIds.Clear();
+        _selectedAttachmentIds.Clear();
         _baseBranch = string.IsNullOrWhiteSpace(active.DefaultBaseBranch) ? "main" : active.DefaultBaseBranch;
         _isPrDeliveryAvailable = await TaskCreationUiService.IsPullRequestDeliveryAvailableAsync(active);
         if (!_isPrDeliveryAvailable && _selectedMergeMode == MergeMode.ExternalPullRequest)
@@ -509,6 +653,9 @@
 
             var tasks = await TaskCreationUiService.LoadSelectablePrerequisitesAsync(active.Id);
             _availableTasks = tasks.ToList();
+
+            var attachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id);
+            _availableAttachments = attachments.ToList();
         }
         catch (Exception ex)
         {
@@ -530,6 +677,92 @@
 
     private IReadOnlyList<ForgeTask> GetFilteredPrerequisiteTasks() =>
         TaskCreationUiService.FilterPrerequisites(_availableTasks, _prereqSearch);
+
+    private void ToggleAttachment(int attachmentId)
+    {
+        if (!_selectedAttachmentIds.Remove(attachmentId))
+        {
+            _selectedAttachmentIds.Add(attachmentId);
+        }
+    }
+
+    private IReadOnlyList<TaskAttachment> GetFilteredAttachments() =>
+        AttachmentPresentationHelper.FilterAttachments(_availableAttachments, _attachmentSearch);
+
+    private async Task HandleAttachmentFilesSelectedAsync(InputFileChangeEventArgs e)
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null) return;
+
+        _isUploadingAttachment = true;
+        try
+        {
+            foreach (var file in e.GetMultipleFiles(maximumFileCount: AttachmentPresentationHelper.MaxBatchUploadFiles))
+            {
+                await using var stream = file.OpenReadStream(AttachmentConstants.MaxFileDropBytes);
+                var ingested = await AttachmentUiService.UploadFileAsync(active.Id, file.Name, stream);
+                _selectedAttachmentIds.Add(ingested.Id);
+                ToastService.Show("Attachment Added", $"#{ingested.Id} {ingested.Title} linked to new task.", ToastLevel.Success);
+            }
+
+            _availableAttachments = (await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id)).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed uploading attachment during task creation.");
+            ToastService.Show("Attachment Upload Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isUploadingAttachment = false;
+        }
+    }
+
+    private async Task HandleAttachHostFileAsync()
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null || string.IsNullOrWhiteSpace(_hostFilePathInput))
+        {
+            return;
+        }
+
+        _isUploadingAttachment = true;
+        try
+        {
+            var ingested = await AttachmentUiService.AttachHostFileAsync(active.Id, _hostFilePathInput.Trim());
+            _selectedAttachmentIds.Add(ingested.Id);
+            _hostFilePathInput = string.Empty;
+            _availableAttachments = (await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id)).ToList();
+            ToastService.Show("Host File Attached", $"#{ingested.Id} {ingested.Title} mapped as symlink.", ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed attaching host file '{HostPath}' during task creation.", _hostFilePathInput);
+            ToastService.Show("Host File Attach Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isUploadingAttachment = false;
+        }
+    }
+
+    private async Task HandleAttachmentDeletedAsync(int deletedAttachmentId)
+    {
+        var deletedTitle = _availableAttachments.FirstOrDefault(a => a.Id == deletedAttachmentId)?.Title;
+        _selectedAttachmentIds.Remove(deletedAttachmentId);
+        _description = AttachmentPresentationHelper.RemoveAttachmentCitation(_description, deletedAttachmentId, deletedTitle);
+        _previewAttachmentId = null;
+
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active != null)
+        {
+            _availableAttachments = (await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id)).ToList();
+        }
+        else
+        {
+            _availableAttachments.Clear();
+        }
+    }
 
     private async Task SaveAsSuggestedAsync()
     {
@@ -580,7 +813,8 @@
                 PrerequisiteIds: _selectedPrereqIds.ToList(),
                 LaunchImmediately: launchImmediately,
                 AuditReason: "Initial task creation via UI",
-                Difficulty: _selectedDifficulty));
+                Difficulty: _selectedDifficulty,
+                AttachmentIds: _selectedAttachmentIds.ToList()));
 
             if (launchImmediately && result.WasDispatched)
             {

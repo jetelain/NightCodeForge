@@ -69,17 +69,50 @@ public static class IdeationPresentationHelper
     /// <summary>
     /// Promotes an existing Draft task to Suggested or creates a new Suggested task from an ideation proposal.
     /// </summary>
+    public static Task<ForgeTask> PromoteOrCreateProposalTaskAsync(
+        Workspace workspace,
+        IdeationProposalViewModel proposal,
+        ITaskRepository taskRepository,
+        IWorkflowRepository workflowRepository,
+        CancellationToken cancellationToken = default) =>
+        PromoteOrCreateProposalTaskAsync(
+            workspace,
+            proposal,
+            taskRepository,
+            workflowRepository,
+            attachmentRepository: null,
+            cancellationToken);
+
+    /// <summary>
+    /// Promotes an existing Draft task to Suggested or creates a new Suggested task from an ideation proposal,
+    /// persisting linked workspace attachments when <paramref name="attachmentRepository"/> is supplied.
+    /// </summary>
     public static async Task<ForgeTask> PromoteOrCreateProposalTaskAsync(
         Workspace workspace,
         IdeationProposalViewModel proposal,
         ITaskRepository taskRepository,
         IWorkflowRepository workflowRepository,
+        ITaskAttachmentRepository? attachmentRepository,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(proposal);
         ArgumentNullException.ThrowIfNull(taskRepository);
         ArgumentNullException.ThrowIfNull(workflowRepository);
+
+        IReadOnlyList<int> validatedAttachmentIds = Array.Empty<int>();
+        var effectiveAttachmentIds = AttachmentCitationParser.UnionAttachmentIds(
+            proposal.SelectedAttachmentIds,
+            proposal.Description);
+        if (attachmentRepository != null && effectiveAttachmentIds.Count > 0)
+        {
+            validatedAttachmentIds = await AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+                attachmentRepository,
+                workspace.Id,
+                proposal.SelectedAttachmentIds,
+                proposal.Description,
+                cancellationToken);
+        }
 
         int? workflowId = workspace.DefaultWorkflowId;
         if (!workflowId.HasValue || workflowId.Value <= 0)
@@ -97,6 +130,7 @@ public static class IdeationPresentationHelper
             ? WorkflowDefaults.DefaultBaseBranch
             : workspace.DefaultBaseBranch;
 
+        ForgeTask savedTask;
         if (proposal.CreatedTaskId.HasValue)
         {
             var existing = await taskRepository.GetByIdAsync(proposal.CreatedTaskId.Value, cancellationToken);
@@ -126,7 +160,10 @@ public static class IdeationPresentationHelper
                     "Promoted draft proposal to Suggested",
                     cancellationToken);
 
-                return existing;
+                savedTask = existing;
+                proposal.SelectedDependencyIds = selectedDeps;
+                await PersistProposalAttachmentLinksAsync(savedTask, proposal, attachmentRepository, validatedAttachmentIds, cancellationToken);
+                return savedTask;
             }
         }
 
@@ -145,12 +182,51 @@ public static class IdeationPresentationHelper
             UpdatedAt = DateTime.UtcNow
         };
 
-        return await taskRepository.CreateWithBaselineAsync(
+        savedTask = await taskRepository.CreateWithBaselineAsync(
             newTask,
             selectedDeps,
             AuditActors.IdeationAgent,
             "Created task proposal from Ideation",
             cancellationToken);
+
+        proposal.SelectedDependencyIds = selectedDeps;
+        await PersistProposalAttachmentLinksAsync(savedTask, proposal, attachmentRepository, validatedAttachmentIds, cancellationToken);
+        return savedTask;
+    }
+
+    private static async Task PersistProposalAttachmentLinksAsync(
+        ForgeTask task,
+        IdeationProposalViewModel proposal,
+        ITaskAttachmentRepository? attachmentRepository,
+        IReadOnlyList<int> validatedAttachmentIds,
+        CancellationToken cancellationToken)
+    {
+        if (attachmentRepository == null)
+        {
+            return;
+        }
+
+        if (validatedAttachmentIds.Count > 0 || (task.AttachmentLinks?.Count ?? 0) > 0)
+        {
+            await attachmentRepository.SetTaskAttachmentLinksAsync(task.Id, validatedAttachmentIds, cancellationToken);
+            var linked = validatedAttachmentIds.Count > 0
+                ? (await attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken) ?? Array.Empty<TaskAttachment>())
+                : Array.Empty<TaskAttachment>();
+            if (linked.Count == 0 && validatedAttachmentIds.Count > 0)
+            {
+                linked = await attachmentRepository.GetByIdsAsync(validatedAttachmentIds, cancellationToken)
+                    ?? Array.Empty<TaskAttachment>();
+            }
+            task.AttachmentLinks = linked
+                .Select(a => new TaskAttachmentLink
+                {
+                    TaskId = task.Id,
+                    TaskAttachmentId = a.Id,
+                    TaskAttachment = a
+                })
+                .ToList();
+            proposal.SelectedAttachmentIds = validatedAttachmentIds.ToList();
+        }
     }
 
     /// <summary>

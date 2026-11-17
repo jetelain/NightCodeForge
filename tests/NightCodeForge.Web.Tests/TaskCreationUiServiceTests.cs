@@ -52,6 +52,7 @@ public class TaskCreationUiServiceTests
                 mirrorMock.Object,
                 prDeliveryMock.Object,
                 jobQueueMock.Object,
+                new InMemoryTaskAttachmentRepository(taskRepo),
                 Options.Create(new SecurityOptions()),
                 NullLogger<TaskCreationUiService>.Instance);
 
@@ -137,6 +138,7 @@ public class TaskCreationUiServiceTests
                 mirrorMock.Object,
                 prDeliveryMock.Object,
                 jobQueueMock.Object,
+                new InMemoryTaskAttachmentRepository(taskRepo),
                 Options.Create(new SecurityOptions()),
                 NullLogger<TaskCreationUiService>.Instance);
 

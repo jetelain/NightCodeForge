@@ -86,7 +86,8 @@ public record ChatMessage(
     string? ThinkingTrace = null,
     DateTime? Timestamp = null,
     IReadOnlyList<IdeationToolCallViewModel>? ToolCalls = null,
-    IReadOnlyList<ChatContentPart>? Parts = null)
+    IReadOnlyList<ChatContentPart>? Parts = null,
+    IReadOnlyList<ConversationAttachmentChipViewModel>? AttachmentChips = null)
 {
     public string GetEffectiveHistoryContent()
     {
@@ -113,7 +114,7 @@ public record ChatMessage(
                     {
                         sb.AppendLine($"[Agent Question: {questions[0].Prompt}]");
                     }
-                    if (!string.IsNullOrWhiteSpace(qp.Answer))
+                    if (qp.IsAnswered)
                     {
                         sb.AppendLine($"[User Answer: {qp.Answer}]");
                     }
@@ -164,9 +165,22 @@ public class IdeationProposalViewModel
     public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public List<int> SelectedDependencyIds { get; set; } = new();
     public List<string> DependsOnTitles { get; set; } = new();
+    public List<int> SelectedAttachmentIds { get; set; } = new();
     public bool IsAdded { get; set; }
     public int? CreatedTaskId { get; set; }
     public bool IsEditingDescription { get; set; }
+
+    public IReadOnlyList<int> GetEffectiveAttachmentIds() =>
+        AttachmentCitationParser.UnionAttachmentIds(SelectedAttachmentIds, Description)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList();
+
+    public void RemoveAttachment(int attachmentId, string? title = null)
+    {
+        SelectedAttachmentIds.RemoveAll(id => id == attachmentId);
+        Description = AttachmentPresentationHelper.RemoveAttachmentCitation(Description, attachmentId, title);
+    }
 
     public static IdeationProposalViewModel FromProposal(IdeationProposal proposal, IReadOnlyList<ForgeTask>? existingTasks = null)
     {
@@ -211,6 +225,14 @@ public class IdeationProposalViewModel
             }
         }
 
+        foreach (var attId in AttachmentCitationParser.UnionAttachmentIds(proposal.AttachmentIds, vm.Description))
+        {
+            if (attId > 0 && !vm.SelectedAttachmentIds.Contains(attId))
+            {
+                vm.SelectedAttachmentIds.Add(attId);
+            }
+        }
+
         vm.ResolveDependencies(existingTasks);
 
         return vm;
@@ -235,6 +257,22 @@ public class IdeationProposalViewModel
                 .Where(id => id != task.Id)
                 .Distinct()
                 .ToList();
+        }
+
+        var taskAttachmentIds = task.AttachmentLinks?
+            .Select(l => l.TaskAttachmentId)
+            .Where(id => id > 0);
+        var mergedAttachments = AttachmentCitationParser
+            .UnionAttachmentIds(taskAttachmentIds, task.Description)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList();
+        foreach (var attId in mergedAttachments)
+        {
+            if (!SelectedAttachmentIds.Contains(attId))
+            {
+                SelectedAttachmentIds.Add(attId);
+            }
         }
     }
 

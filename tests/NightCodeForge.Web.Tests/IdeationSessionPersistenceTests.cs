@@ -54,6 +54,7 @@ public class IdeationSessionPersistenceTests : BunitContext
         Services.AddSingleton(_sessionState);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
         Services.AddSingleton<ICompanionTriageDraftStore>(new CompanionTriageDraftStore(TimeProvider.System));
+        TestServices.AddDefaultWebUiServices(Services);
     }
 
     [Fact]

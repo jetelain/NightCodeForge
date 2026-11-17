@@ -5,7 +5,7 @@
 > *Prerequisite Steps:* [Step 12.2A: Attachments Store & Intake Service](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md) | [Step 12.2B: `/workspace/attachments` Read/Bash Access & Prompt Digest](STEP_12_2B_AGENT_ATTACHMENT_TOOLS_AND_PROMPT_DIGEST.md)  
 > *Companion Step:* [Step 12.2D: Multimodal Vision & In-Loop Image Inspection](STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md)  
 > *Related Steps:* [Step 11.2: Task Creation Page](../archive/phase-11/STEP_11_2_TASK_CREATION_PAGE_AND_MERGE_MODE.md)  
-> *Target Components:* `src/NightCodeForge.Web/Services`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Pages`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Web/Services`, `src/NightCodeForge.Web/Components/Ideation`, `src/NightCodeForge.Web/Components/Backlog`, `src/NightCodeForge.Web/Components/Pages`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 >
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -64,18 +64,18 @@ Per [AGENTS.md](../../AGENTS.md), Razor components (`.razor`) must remain focuse
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] **Web UI Presentation Helpers & Services (`NightCodeForge.Web/Services`):**
-  - [ ] Implement `AttachmentPresentationHelper` and `IAttachmentUiService` (keeping all constructors $\le 10$ parameters and free of optional parameters or bare `catch { }` blocks) for citation extraction, status/symlink/reachability formatting, filtering, intake coordination, and delete-impact resolution.
-  - [ ] Extend [`IdeationSessionState.cs`](../../src/NightCodeForge.Web/Services/IdeationSessionState.cs) (`IdeationProposalViewModel.SelectedAttachmentIds`), [`IdeationPresentationHelper.cs`](../../src/NightCodeForge.Web/Services/IdeationPresentationHelper.cs) (`PromoteOrCreateProposalTaskAsync`), and [`TaskCreationUiService.cs`](../../src/NightCodeForge.Web/Services/TaskCreationUiService.cs) (`TaskCreationRequest.AttachmentIds`) to carry and persist `TaskAttachmentLinks`.
-- [ ] **Ideation Chat UI ([`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor)):**
-  - [ ] Add file drop zone / `<InputFile>` upload, **"Attach Host File"** path input, automatic cited path/URL intake, and clickable status/symlink attachment chips.
-  - [ ] Build the collapsible **"Workspace Attachments"** panel with **Cite in Chat** (`@attachment:{id}`), **Preview**, and **Delete** actions.
-- [ ] **Preview Drawer & Management:**
-  - [ ] Build `AttachmentPreviewDrawer.razor` displaying rendered markdown companion HTML or inline image preview (`WidthPx x HeightPx`, `MediaType`), provenance metadata, live symlink target reachability (`Reachable` vs `Target Missing`), and linked tasks.
-  - [ ] Add user-only delete action with link-impact confirmation dialog preserving host files.
-- [ ] **Proposal Cards, `/tasks/new` Picker & Task Detail Views:**
-  - [ ] Render clickable attachment chips on [`IdeationProposalCard.razor`](../../src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor), [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor), and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
-  - [ ] Add the Attachments picker (existing selection, file drop, and host path symlink mapping) to [`CreateTask.razor`](../../src/NightCodeForge.Web/Components/Pages/CreateTask.razor) (`/tasks/new`).
-- [ ] **Tests:**
-  - [ ] Unit tests in `NightCodeForge.Web.Tests` for `AttachmentPresentationHelper`, `IAttachmentUiService`, `IdeationPresentationHelper`, and `TaskCreationUiService` (citation extraction, status/size/symlink formatting, filtering, link persistence on task creation/promotion).
-  - [ ] bUnit tests in `NightCodeForge.Web.Tests` covering the Ideation drop zone, "Attach Host File" input, attachment chips, Workspace Attachments panel, `/tasks/new` picker, `IdeationProposalCard`, `TaskDetail`/`TaskDetailDrawer` chips, `AttachmentPreviewDrawer`, and delete confirmation flow, followed by full `dotnet test` execution (including Acceptance & E2E suites) per [AGENTS.md](../../AGENTS.md).
+- [x] **Web UI Presentation Helpers & Services (`NightCodeForge.Web/Services`):**
+  - [x] Implement `AttachmentPresentationHelper` and `IAttachmentUiService` (keeping all constructors $\le 10$ parameters and free of optional parameters or bare `catch { }` blocks) for citation extraction, status/symlink/reachability formatting, filtering, intake coordination, and delete-impact resolution.
+  - [x] Extend [`IdeationSessionState.cs`](../../src/NightCodeForge.Web/Services/IdeationSessionState.cs) (`IdeationProposalViewModel.SelectedAttachmentIds`), [`IdeationPresentationHelper.cs`](../../src/NightCodeForge.Web/Services/IdeationPresentationHelper.cs) (`PromoteOrCreateProposalTaskAsync`), and [`TaskCreationUiService.cs`](../../src/NightCodeForge.Web/Services/TaskCreationUiService.cs) (`TaskCreationRequest.AttachmentIds`) to carry and persist `TaskAttachmentLinks`.
+- [x] **Ideation Chat UI ([`Ideation.razor`](../../src/NightCodeForge.Web/Components/Pages/Ideation.razor)):**
+  - [x] Add file drop zone / `<InputFile>` upload, **"Attach Host File"** path input, automatic cited path/URL intake, and clickable status/symlink attachment chips.
+  - [x] Build the collapsible **"Workspace Attachments"** panel with **Cite in Chat** (`@attachment:{id}`), **Preview**, and **Delete** actions.
+- [x] **Preview Drawer & Management:**
+  - [x] Build `AttachmentPreviewDrawer.razor` displaying rendered markdown companion HTML or inline image preview (`WidthPx x HeightPx`, `MediaType`), provenance metadata, live symlink target reachability (`Reachable` vs `Target Missing`), and linked tasks.
+  - [x] Add user-only delete action with link-impact confirmation dialog preserving host files.
+- [x] **Proposal Cards, `/tasks/new` Picker & Task Detail Views:**
+  - [x] Render clickable attachment chips on [`IdeationProposalCard.razor`](../../src/NightCodeForge.Web/Components/Ideation/IdeationProposalCard.razor), [`TaskDetail.razor`](../../src/NightCodeForge.Web/Components/Pages/TaskDetail.razor), and [`TaskDetailDrawer.razor`](../../src/NightCodeForge.Web/Components/Backlog/TaskDetailDrawer.razor).
+  - [x] Add the Attachments picker (existing selection, file drop, and host path symlink mapping) to [`CreateTask.razor`](../../src/NightCodeForge.Web/Components/Pages/CreateTask.razor) (`/tasks/new`).
+- [x] **Tests:**
+  - [x] Unit tests in `NightCodeForge.Web.Tests` for `AttachmentPresentationHelper`, `IAttachmentUiService`, `IdeationPresentationHelper`, and `TaskCreationUiService` (citation extraction, status/size/symlink formatting, filtering, link persistence on task creation/promotion).
+  - [x] bUnit tests in `NightCodeForge.Web.Tests` covering the Ideation drop zone, "Attach Host File" input, attachment chips, Workspace Attachments panel, `/tasks/new` picker, `IdeationProposalCard`, `TaskDetail`/`TaskDetailDrawer` chips, `AttachmentPreviewDrawer`, and delete confirmation flow, followed by full `dotnet test` execution (including Acceptance & E2E suites) per [AGENTS.md](../../AGENTS.md).

@@ -1,4 +1,5 @@
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Repositories
 @using NightCodeForge.Web.Services
 @inject IServiceProvider ServiceProvider
 
@@ -117,6 +118,36 @@
         }
     </div>
 
+    <!-- Linked Attachments Chips -->
+    @{
+        var linkedAttachmentIds = Proposal.GetEffectiveAttachmentIds();
+    }
+    @if (linkedAttachmentIds.Count > 0)
+    {
+        <div class="proposal-attachments-section">
+            <div class="proposal-attachments-label">📎 Linked Attachments (@linkedAttachmentIds.Count)</div>
+            <div class="proposal-attachments-chips">
+                @foreach (var attId in linkedAttachmentIds)
+                {
+                    _resolvedAttachmentMap.TryGetValue(attId, out var att);
+                    var symlinkBadge = att != null ? AttachmentPresentationHelper.FormatSymlinkBadge(att) : string.Empty;
+                    <button type="button"
+                            class="forge-chip attachment-chip proposal-attachment-chip clickable"
+                            @onclick="() => HandlePreviewAttachmentAsync(attId)"
+                            title="@(att?.SourceRef ?? AttachmentPresentationHelper.FormatCitationToken(attId))">
+                        <span>@(att != null ? AttachmentPresentationHelper.GetContentKindIcon(att.ContentKind) : "📎")</span>
+                        <span class="font-mono">#@attId</span>
+                        <span>@(att?.Title ?? AttachmentPresentationHelper.FormatCitationToken(attId))</span>
+                        @if (!string.IsNullOrEmpty(symlinkBadge))
+                        {
+                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge">@symlinkBadge</span>
+                        }
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
     <!-- Dependency Multi-Select Accordion -->
     <div class="proposal-dependencies-section">
         <button type="button" 
@@ -203,12 +234,26 @@
     </div>
 </div>
 
+@if (_standalonePreviewAttachmentId.HasValue)
+{
+    <AttachmentPreviewDrawer IsOpen="true"
+                             AttachmentId="_standalonePreviewAttachmentId"
+                             OnClose="() => _standalonePreviewAttachmentId = null"
+                             OnDeleted="HandleStandaloneAttachmentDeleted" />
+}
+
 @code {
     [Parameter, EditorRequired]
     public IdeationProposalViewModel Proposal { get; set; } = default!;
 
     [Parameter]
     public IReadOnlyList<ForgeTask> WorkspaceTasks { get; set; } = Array.Empty<ForgeTask>();
+
+    [Parameter]
+    public IReadOnlyList<TaskAttachment> WorkspaceAttachments { get; set; } = Array.Empty<TaskAttachment>();
+
+    [Parameter]
+    public EventCallback<int> OnPreviewAttachment { get; set; }
 
     [Parameter]
     public EventCallback<IdeationProposalViewModel> OnAddToBacklog { get; set; }
@@ -220,6 +265,8 @@
     private bool _isPreviewDescription = true;
     private bool _isExpanded;
     private bool _isPrDeliveryAvailable;
+    private int? _standalonePreviewAttachmentId;
+    private Dictionary<int, TaskAttachment> _resolvedAttachmentMap = new();
 
     protected override async Task OnParametersSetAsync()
     {
@@ -227,6 +274,41 @@
         _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(
             ServiceProvider,
             workspaceState?.ActiveWorkspace);
+
+        await ResolveLinkedAttachmentsAsync();
+    }
+
+    private async Task ResolveLinkedAttachmentsAsync()
+    {
+        var workspaceState = ServiceProvider.GetService(typeof(WorkspaceStateService)) as WorkspaceStateService;
+        var attachmentRepository = ServiceProvider.GetService(typeof(ITaskAttachmentRepository)) as ITaskAttachmentRepository;
+        _resolvedAttachmentMap = await AttachmentPresentationHelper.ResolveProposalAttachmentMapAsync(
+            Proposal,
+            WorkspaceAttachments,
+            attachmentRepository,
+            workspaceState?.ActiveWorkspace?.Id);
+    }
+
+    private async Task HandlePreviewAttachmentAsync(int attachmentId)
+    {
+        if (OnPreviewAttachment.HasDelegate)
+        {
+            await OnPreviewAttachment.InvokeAsync(attachmentId);
+        }
+        else
+        {
+            _standalonePreviewAttachmentId = attachmentId;
+        }
+    }
+
+    private void HandleStandaloneAttachmentDeleted(int deletedAttachmentId)
+    {
+        var title = _resolvedAttachmentMap.TryGetValue(deletedAttachmentId, out var removed)
+            ? removed.Title
+            : null;
+        Proposal.RemoveAttachment(deletedAttachmentId, title);
+        _resolvedAttachmentMap.Remove(deletedAttachmentId);
+        _standalonePreviewAttachmentId = null;
     }
 
     private void OnDependencyToggled(int taskId, object? isChecked)
