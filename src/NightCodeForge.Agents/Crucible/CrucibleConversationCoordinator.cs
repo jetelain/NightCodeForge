@@ -382,7 +382,11 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
         if (string.IsNullOrEmpty(effectiveSerializedStateJson) && !hadPersistedTurnsBeforeResume && context.SyntheticPriming != null)
         {
-            ApplySyntheticPriming(state, context.SyntheticPriming);
+            var effectivePriming = FilterSyntheticPriming(
+                context.SyntheticPriming,
+                context.OptimizationFlags ?? context.Profile?.OptimizationFlags,
+                context.WorkspacePath);
+            ApplySyntheticPriming(state, effectivePriming);
         }
 
         if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
@@ -506,6 +510,25 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
         CrucibleAgentHarness.StripAttribution(chatHistory);
         return chatHistory;
+    }
+
+    private static SyntheticPrimingExecution FilterSyntheticPriming(
+        SyntheticPrimingExecution priming,
+        LocalOptimizationFlags? optimizationFlags,
+        string? workspaceRoot)
+    {
+        var filtered = NightCodeForge.Core.Workflow.Filtering.CliOutputFilterHelpers.FilterPrimingOutput(
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
+            priming.Command,
+            priming.Output,
+            priming.IsSuccess,
+            workspaceRoot ?? string.Empty,
+            smartFilteringEnabled: optimizationFlags?.SmartCliOutputFiltering ?? true,
+            WorkflowDefaults.MaxToolInlineChars);
+
+        return string.Equals(filtered, priming.Output, StringComparison.Ordinal)
+            ? priming
+            : priming with { Output = filtered };
     }
 
     private static void ApplySyntheticPriming(CrucibleConversationState state, SyntheticPrimingExecution priming)

@@ -629,10 +629,10 @@
                                         </div>
                                     </label>
                                     <label class="forge-checkbox-tile">
-                                        <input type="checkbox" @bind="profile.OptimizationFlags.StructuredDiagnosticExtraction" />
+                                        <input type="checkbox" @bind="profile.OptimizationFlags.SmartCliOutputFiltering" />
                                         <div>
-                                            <strong style="display: block; font-size: 0.9rem; color: var(--text-primary);">Structured Diagnostics</strong>
-                                            <span style="font-size: 0.78rem; color: var(--text-muted);">Converts raw compiler errors into structured tokens</span>
+                                            <strong style="display: block; font-size: 0.9rem; color: var(--text-primary);">Smart CLI Output Filtering</strong>
+                                            <span style="font-size: 0.78rem; color: var(--text-muted);">Relativizes paths, prunes SDK noise, and offloads raw logs to /tmp</span>
                                         </div>
                                     </label>
                                     <label class="forge-checkbox-tile">

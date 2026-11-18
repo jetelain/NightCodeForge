@@ -18,10 +18,11 @@ public class LocalOptimizationFlags
     public bool DeterministicSymbolMap { get; set; } = true;
 
     /// <summary>
-    /// Parse compiler errors (CS\d+) and test assertion failures into structured summaries instead of raw dumps.
-    /// Default: true. Opt-out passes raw MSBuild and test runner stdout directly to the agent.
+    /// Apply smart CLI and build/test output filtering (path relativization, SDK boilerplate pruning,
+    /// warning suppression on errors) while offloading raw logs to /tmp.
+    /// Default: true. Opt-out passes raw CLI stdout/stderr directly (within inline caps).
     /// </summary>
-    public bool StructuredDiagnosticExtraction { get; set; } = true;
+    public bool SmartCliOutputFiltering { get; set; } = true;
 
     /// <summary>
     /// Asynchronously pre-load next stage's model weights in OllamaRouter during CPU-bound deterministic stages.
@@ -43,7 +44,7 @@ public class LocalOptimizationFlags
     {
         GuidedGrammarDecoding = GuidedGrammarDecoding,
         DeterministicSymbolMap = DeterministicSymbolMap,
-        StructuredDiagnosticExtraction = StructuredDiagnosticExtraction,
+        SmartCliOutputFiltering = SmartCliOutputFiltering,
         JitModelPreload = JitModelPreload,
         SyntheticConversationPriming = SyntheticConversationPriming
     };

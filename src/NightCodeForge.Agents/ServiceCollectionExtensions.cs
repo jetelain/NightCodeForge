@@ -51,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkspaceSkillsServiceFactory, WorkspaceSkillsServiceFactory>();
         services.TryAddSingleton<AgentsMdService>();
         services.TryAddSingleton<IMcpClientManager, McpClientManager>();
+        services.TryAddSingleton<NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry, NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry>();
 
         // Backlog awareness: prompt digest and task specification (dependency cycle) validation
         services.TryAddSingleton(new WorkspaceBacklogDigestOptions());

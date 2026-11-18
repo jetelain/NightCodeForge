@@ -301,9 +301,9 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
             case "deterministic_symbol_map":
                 copy.DeterministicSymbolMap = value;
                 break;
-            case "structureddiagnosticextraction":
-            case "structured_diagnostic_extraction":
-                copy.StructuredDiagnosticExtraction = value;
+            case "smartclioutputfiltering":
+            case "smart_cli_output_filtering":
+                copy.SmartCliOutputFiltering = value;
                 break;
             case "jitmodelpreload":
             case "jit_model_preload":
@@ -403,10 +403,10 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                         TargetKey: "DeterministicSymbolMap",
                         TargetValue: true),
                     new RemediationSuggestion(
-                        Title: "Enable Structured Diagnostic Extraction",
-                        Description: "Parses compiler diagnostics into structured error spans for precise fixes.",
+                        Title: "Enable Smart CLI Output Filtering",
+                        Description: "Relativizes paths, prunes SDK boilerplate, and suppresses noisy warnings so fatal diagnostics stay high-signal.",
                         ActionType: "ToggleOptimizationFlag",
-                        TargetKey: "StructuredDiagnosticExtraction",
+                        TargetKey: "SmartCliOutputFiltering",
                         TargetValue: true)
                 });
         }
@@ -584,7 +584,9 @@ public partial class TranscriptBrowserService : ITranscriptBrowserService
                         {
                             case "guided_grammar_decoding": optimizations.GuidedGrammarDecoding = boolVal; break;
                             case "deterministic_symbol_map": optimizations.DeterministicSymbolMap = boolVal; break;
-                            case "structured_diagnostic_extraction": optimizations.StructuredDiagnosticExtraction = boolVal; break;
+                            case "smart_cli_output_filtering":
+                                optimizations.SmartCliOutputFiltering = boolVal;
+                                break;
                             case "jit_model_preload": optimizations.JitModelPreload = boolVal; break;
                             case "synthetic_conversation_priming": optimizations.SyntheticConversationPriming = boolVal; break;
                         }

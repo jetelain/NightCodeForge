@@ -49,7 +49,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         Assert.NotNull(flags);
         Assert.True(flags.GuidedGrammarDecoding);
         Assert.True(flags.DeterministicSymbolMap);
-        Assert.True(flags.StructuredDiagnosticExtraction);
+        Assert.True(flags.SmartCliOutputFiltering);
         Assert.True(flags.JitModelPreload);
     }
 
@@ -71,7 +71,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         {
             GuidedGrammarDecoding = false,
             DeterministicSymbolMap = false,
-            StructuredDiagnosticExtraction = true,
+            SmartCliOutputFiltering = true,
             JitModelPreload = true
         };
 
@@ -81,7 +81,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         var cached = service.GetFlags();
         Assert.False(cached.GuidedGrammarDecoding);
         Assert.False(cached.DeterministicSymbolMap);
-        Assert.True(cached.StructuredDiagnosticExtraction);
+        Assert.True(cached.SmartCliOutputFiltering);
         Assert.True(cached.JitModelPreload);
 
         // Verify event fired
@@ -105,7 +105,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
             db.SystemSettings.Add(new SystemSetting
             {
                 Key = GlobalOptimizationSettingsService.SettingKey,
-                Value = "{\"GuidedGrammarDecoding\":false,\"DeterministicSymbolMap\":false,\"StructuredDiagnosticExtraction\":true,\"JitModelPreload\":true}",
+                Value = "{\"GuidedGrammarDecoding\":false,\"DeterministicSymbolMap\":false,\"SmartCliOutputFiltering\":true,\"JitModelPreload\":true}",
                 UpdatedAt = DateTimeOffset.UtcNow
             });
             await db.SaveChangesAsync();
@@ -119,7 +119,7 @@ public class GlobalOptimizationSettingsServiceTests : IDisposable
         Assert.NotNull(loaded);
         Assert.False(loaded.GuidedGrammarDecoding);
         Assert.False(loaded.DeterministicSymbolMap);
-        Assert.True(loaded.StructuredDiagnosticExtraction);
+        Assert.True(loaded.SmartCliOutputFiltering);
         Assert.True(loaded.JitModelPreload);
 
         // Check that GetFlags also reflects it

@@ -249,7 +249,7 @@ public class Service
     }
 
     [Fact]
-    public async Task BashAsync_Tier1Clamping_WhenOutputExceedsMaxStageOutputChars_TailTruncates()
+    public async Task BashAsync_Tier1Clamping_WhenOutputExceedsMaxToolInlineChars_HeadTruncatesWithinLimit()
     {
         var env = new FakeEnv();
         var tools = new TestCanonicalToolsBuilder
@@ -259,15 +259,17 @@ public class Service
             ExecutionEnv = env
         }.Build();
 
-        var massiveStdout = new string('A', 50000) + "\nFINAL_IMPORTANT_LINE";
+        var massiveStdout = "HEAD_IMPORTANT_LINE\n" + new string('A', NightCodeForge.Core.Workflow.WorkflowDefaults.MaxToolInlineChars + 10_000) + "\nFINAL_IMPORTANT_LINE";
         env.NextResult = new NightCodeForge.Core.Interfaces.CommandResult(0, massiveStdout, string.Empty, TimeSpan.Zero);
 
         var result = await tools.BashAsync("run-heavy-script");
 
         Assert.Contains("Exit Code: 0", result);
-        Assert.Contains("... [Output truncated to last 32768 characters] ...", result);
-        Assert.Contains("FINAL_IMPORTANT_LINE", result);
-        Assert.DoesNotContain(new string('A', 40000), result);
+        Assert.Contains("HEAD_IMPORTANT_LINE", result);
+        Assert.Contains("... additional ", result);
+        Assert.Contains(" characters", result);
+        Assert.True(result.Length <= NightCodeForge.Core.Workflow.WorkflowDefaults.MaxToolInlineChars);
+        Assert.DoesNotContain("FINAL_IMPORTANT_LINE", result);
     }
 
     private class FakePathResolver : NightCodeForge.Core.Interfaces.IWorkspacePathResolver

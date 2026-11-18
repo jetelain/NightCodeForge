@@ -77,7 +77,7 @@ tokens:
 optimizations:
   guided_grammar_decoding: false
   deterministic_symbol_map: true
-  structured_diagnostic_extraction: false
+  smart_cli_output_filtering: false
   jit_model_preload: true
   synthetic_conversation_priming: false
 kv_cache_hit_rate: 0.92
@@ -104,7 +104,7 @@ Body text
         Assert.NotNull(summary.Optimizations);
         Assert.False(summary.Optimizations.GuidedGrammarDecoding);
         Assert.True(summary.Optimizations.DeterministicSymbolMap);
-        Assert.False(summary.Optimizations.StructuredDiagnosticExtraction);
+        Assert.False(summary.Optimizations.SmartCliOutputFiltering);
         Assert.True(summary.Optimizations.JitModelPreload);
         Assert.False(summary.Optimizations.SyntheticConversationPriming);
     }
@@ -717,7 +717,7 @@ Done
         {
             Flags.GuidedGrammarDecoding = flags.GuidedGrammarDecoding;
             Flags.DeterministicSymbolMap = flags.DeterministicSymbolMap;
-            Flags.StructuredDiagnosticExtraction = flags.StructuredDiagnosticExtraction;
+            Flags.SmartCliOutputFiltering = flags.SmartCliOutputFiltering;
             Flags.JitModelPreload = flags.JitModelPreload;
             OnFlagsChanged?.Invoke(Flags);
             return Task.CompletedTask;

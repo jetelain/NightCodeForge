@@ -40,12 +40,12 @@ public class DomainEntitiesTests
         {
             GuidedGrammarDecoding = false,
             DeterministicSymbolMap = false,
-            StructuredDiagnosticExtraction = false,
+            SmartCliOutputFiltering = false,
             JitModelPreload = false
         };
         Assert.False(flags.GuidedGrammarDecoding);
         Assert.False(flags.DeterministicSymbolMap);
-        Assert.False(flags.StructuredDiagnosticExtraction);
+        Assert.False(flags.SmartCliOutputFiltering);
         Assert.False(flags.JitModelPreload);
 
         var profile = new AgentProfile

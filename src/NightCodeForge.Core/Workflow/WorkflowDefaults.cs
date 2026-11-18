@@ -14,15 +14,17 @@ public static class WorkflowDefaults
     public const int MinimumBashToolTimeoutSeconds = 300;
     public const int ProcessTimeoutExitCode = 124;
     public const int DefaultOutputSummaryTruncationLength = 300;
-    public const int MaxStageOutputChars = 32768;
+    public const int MaxToolInlineChars = 50 * 1024;
+    public const int MaxStageOutputChars = MaxToolInlineChars;
+    public const int MaxBashOutputInlineChars = MaxToolInlineChars;
     public const string DefaultCoverageTestCommand = "dotnet test --no-build --collect:\"XPlat Code Coverage\" --logger trx";
     public const string ModelPreloadKeepAlive = "15m";
     public const string FastTestCategoryFilter = "Category!=Acceptance&Category!=E2E";
     public const string DefaultBaseBranch = "main";
     public const int MaxInlineReviewDiffChars = 20000;
     public const int MaxWebSearchResultInlineChars = 3000;
-    public const int MaxWebSearchTotalInlineChars = 12000;
-    public const int MaxReadFileBytes = 100 * 1024;
+    public const int MaxWebSearchTotalInlineChars = MaxToolInlineChars;
+    public const int MaxReadFileBytes = MaxToolInlineChars;
 
     /// <summary>
     /// Tail-truncates stage output if it exceeds <see cref="MaxStageOutputChars"/> to prevent DataBag bloat.

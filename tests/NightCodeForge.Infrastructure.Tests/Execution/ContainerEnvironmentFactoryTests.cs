@@ -99,7 +99,7 @@ public class ContainerEnvironmentFactoryTests
     }
 
     [Fact]
-    public async Task CreateContainerEnvironmentAsync_RestrictedReadOnlyWithoutTaskId_UsesRoSuffixContainerNameAndOmitsTmpMount()
+    public async Task CreateContainerEnvironmentAsync_RestrictedReadOnlyWithoutTaskId_UsesRoSuffixContainerNameAndMountsTmpReadOnly()
     {
         var sut = CreateSut();
         var workspace = new Workspace
@@ -118,7 +118,7 @@ public class ContainerEnvironmentFactoryTests
         Assert.Equal(ContainerExecutorOptions.DefaultAgentBaseImage, executor.Options.ContainerImage);
         Assert.Equal("/workspace/clone", executor.Options.DefaultWorkingDirectory);
         Assert.True(executor.Options.IsRestrictedReadOnly);
-        Assert.DoesNotContain(executor.Options.AdditionalVolumeMounts, m => m.ContainerPath == "/tmp");
+        Assert.Contains(executor.Options.AdditionalVolumeMounts, m => m.ContainerPath == "/tmp" && m.IsReadOnly);
     }
 
     [Fact]

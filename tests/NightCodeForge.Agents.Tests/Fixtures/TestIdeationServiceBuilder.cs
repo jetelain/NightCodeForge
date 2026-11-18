@@ -92,7 +92,8 @@ public class TestIdeationServiceBuilder
             WebSearchService,
             SkillsServiceFactory,
             McpManager,
-            BacklogContext);
+            BacklogContext,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
 
         var workspaceContext = new AgentWorkspaceContextService(
             PathResolver,

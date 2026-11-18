@@ -323,7 +323,8 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                 new CanonicalToolScope(
                     repoPath,
                     WorkspaceId: workspace.Id,
-                    IsReadOnly: profile.Mode == AgentMode.ReadOnly || profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly),
+                    IsReadOnly: profile.Mode == AgentMode.ReadOnly || profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly,
+                    OptimizationFlags: _agentFactory.ResolveOptimizationFlags(profile, profile.OptimizationFlags)),
                 permittedTools,
                 Array.Empty<CustomToolConfig>(),
                 new Dictionary<string, string>(),
@@ -723,7 +724,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                     ModelName: profile.ModelName ?? "default",
                     DurationMs: sessionStopwatch.ElapsedMilliseconds,
                     Metrics: transcriptMetrics,
-                    Optimizations: profile.OptimizationFlags ?? new LocalOptimizationFlags(),
+                    Optimizations: _agentFactory.ResolveOptimizationFlags(profile, profile.OptimizationFlags),
                     Status: AgentRunStatus.Completed,
                     KvCacheHitRate: null,
                     SystemPrompt: tracingClient.LastCapturedSystemPrompt ?? systemPrompt,

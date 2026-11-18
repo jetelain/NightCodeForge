@@ -41,7 +41,8 @@ public class CanonicalToolsetFactoryTests : IDisposable
             new Mock<IWebSearchService>().Object,
             new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance),
             mcpManager,
-            backlog);
+            backlog,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
         return (factory, env, backlog);
     }
 
@@ -162,7 +163,8 @@ public class CanonicalToolsetFactoryTests : IDisposable
             TestPathResolver.Create(), env.Object, new EditorConfigService(), new EditorConfigFileApplier(),
             new Mock<IWebSearchService>().Object,
             new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance),
-            new Mock<IMcpClientManager>().Object, TestBacklogContext.CreateDefault());
+            new Mock<IMcpClientManager>().Object, TestBacklogContext.CreateDefault(),
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => factory.CreateAsync(ToolsetRequest(false), CancellationToken.None));
     }
@@ -173,7 +175,12 @@ public class CanonicalToolsetFactoryTests : IDisposable
         Assert.Throws<ArgumentNullException>(() => new CanonicalToolsetFactory(
             null!, new Mock<IExecutionEnvironmentProvider>().Object, new EditorConfigService(), new EditorConfigFileApplier(),
             new Mock<IWebSearchService>().Object, new Mock<IWorkspaceSkillsServiceFactory>().Object,
-            new Mock<IMcpClientManager>().Object, TestBacklogContext.CreateDefault()));
+            new Mock<IMcpClientManager>().Object, TestBacklogContext.CreateDefault(),
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default));
+        Assert.Throws<ArgumentNullException>(() => new CanonicalToolsetFactory(
+            TestPathResolver.Create(), new Mock<IExecutionEnvironmentProvider>().Object, new EditorConfigService(), new EditorConfigFileApplier(),
+            new Mock<IWebSearchService>().Object, new Mock<IWorkspaceSkillsServiceFactory>().Object,
+            new Mock<IMcpClientManager>().Object, TestBacklogContext.CreateDefault(), null!));
     }
 
     [Fact]

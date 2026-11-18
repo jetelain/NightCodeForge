@@ -126,7 +126,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     BuildTimeoutSeconds: buildTimeout,
                     TestTimeoutSeconds: testTimeout,
                     IsReadOnly: context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly || context.SandboxScope?.IsReadOnly == true,
-                    SandboxScope: context.SandboxScope),
+                    SandboxScope: context.SandboxScope,
+                    OptimizationFlags: context.OptimizationFlags),
                 permittedTools,
                 harnessConfig.CustomTools,
                 harnessConfig.ToolDirectives,
@@ -689,12 +690,18 @@ public partial class CrucibleAgentHarness : IAgentHarness
                         var resultToolName = frc.CallId != null && toolNamesByCallId.TryGetValue(frc.CallId, out var calledName) ? calledName : null;
                         var resultIsError = resultStr.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
                             || resultStr.StartsWith("[ERROR]", StringComparison.OrdinalIgnoreCase);
+                        NightCodeForge.Core.Workflow.Filtering.BashExecutionAuditEntry? bashAudit = null;
+                        if (string.Equals(resultToolName, CanonicalToolNames.Bash, StringComparison.OrdinalIgnoreCase))
+                        {
+                            canonicalTools.BashModule.TryTakeAuditEntry(resultStr, out bashAudit);
+                        }
                         var metadataJson = JsonSerializer.Serialize(new
                         {
                             CallId = frc.CallId,
                             ToolName = resultToolName,
                             OptimizationFlags = context.OptimizationFlags,
-                            PendingProposalsCount = canonicalTools.PendingProposals.Count
+                            PendingProposalsCount = canonicalTools.PendingProposals.Count,
+                            BashAudit = bashAudit
                         });
 
                         conversationState.EnqueueTurn(

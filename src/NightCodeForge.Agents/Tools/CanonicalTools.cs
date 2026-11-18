@@ -93,6 +93,7 @@ public partial class CanonicalTools
         IEditorConfigFileApplier editorConfigFileApplier,
         IWebSearchService webSearchService,
         IWorkspaceSkillsService skillsService,
+        NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry cliFilterRegistry,
         ILogger<CanonicalTools> logger)
     {
         ArgumentNullException.ThrowIfNull(scope);
@@ -121,6 +122,7 @@ public partial class CanonicalTools
             scope,
             _sandboxPathResolver,
             executionEnv,
+            cliFilterRegistry,
             logger);
 
         InteractionModule = new WorkflowInteractionToolModule();
@@ -160,6 +162,9 @@ public partial class CanonicalTools
 
     public Task<string> BashAsync(string command, int? timeout = null, string? workingDirectory = null, CancellationToken cancellationToken = default) =>
         BashModule.BashAsync(command, timeout, workingDirectory, cancellationToken);
+
+    public Task<string> BashAsync(string command, int? timeout, string? workingDirectory, bool? disableFilter, CancellationToken cancellationToken = default) =>
+        BashModule.BashAsync(command, timeout, workingDirectory, disableFilter, cancellationToken);
 
     public Task<string> AskAsync(IReadOnlyList<QuestionItem>? questions, CancellationToken cancellationToken = default) =>
         InteractionModule.AskAsync(questions, cancellationToken);

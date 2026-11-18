@@ -25,6 +25,8 @@ public class TestCanonicalToolsBuilder
     public int? TaskId { get; set; }
     public bool IsReadOnly { get; set; }
     public int? MaxReadFileBytes { get; set; }
+    public NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry? CliFilterRegistry { get; set; }
+    public LocalOptimizationFlags? OptimizationFlags { get; set; }
 
     public static CanonicalTools Create(
         string workspaceRoot,
@@ -35,7 +37,9 @@ public class TestCanonicalToolsBuilder
         bool isReadOnly = false,
         int? workspaceId = null,
         int? taskId = null,
-        int? maxReadFileBytes = null) =>
+        int? maxReadFileBytes = null,
+        LocalOptimizationFlags? optimizationFlags = null,
+        NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry? cliFilterRegistry = null) =>
         new TestCanonicalToolsBuilder
         {
             WorkspaceRoot = workspaceRoot,
@@ -46,7 +50,9 @@ public class TestCanonicalToolsBuilder
             IsReadOnly = isReadOnly,
             WorkspaceId = workspaceId,
             TaskId = taskId,
-            MaxReadFileBytes = maxReadFileBytes
+            MaxReadFileBytes = maxReadFileBytes,
+            OptimizationFlags = optimizationFlags,
+            CliFilterRegistry = cliFilterRegistry
         }.Build();
 
     public CanonicalTools Build()
@@ -60,13 +66,14 @@ public class TestCanonicalToolsBuilder
             NullLogger<WorkspaceSkillsService>.Instance);
 
         return new(
-            new CanonicalToolScope(WorkspaceRoot, WorkspaceId, TaskId, BuildTimeoutSeconds, TestTimeoutSeconds, IsReadOnly, MaxReadFileBytes),
+            new CanonicalToolScope(WorkspaceRoot, WorkspaceId, TaskId, BuildTimeoutSeconds, TestTimeoutSeconds, IsReadOnly, MaxReadFileBytes, OptimizationFlags: OptimizationFlags),
             PathResolver,
             ExecutionEnv,
             EditorConfigService,
             EditorConfigFileApplier,
             WebSearchService,
             skills,
+            CliFilterRegistry ?? NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             Logger);
     }
 }

@@ -6,6 +6,7 @@ using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Filtering;
 using Xunit;
 
 namespace NightCodeForge.Agents.Tests;
@@ -37,10 +38,11 @@ public sealed class SandboxBashToolModuleTests : IDisposable
         var scope = new CanonicalToolScope(_workspaceRoot);
         var execEnv = new Mock<IExecutionEnvironment>().Object;
 
-        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(null!, _pathResolver, execEnv, NullLogger.Instance));
-        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, null!, execEnv, NullLogger.Instance));
-        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, _pathResolver, null!, NullLogger.Instance));
-        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, _pathResolver, execEnv, null!));
+        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(null!, _pathResolver, execEnv, CliOutputFilterRegistry.Default, NullLogger.Instance));
+        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, null!, execEnv, CliOutputFilterRegistry.Default, NullLogger.Instance));
+        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, _pathResolver, null!, CliOutputFilterRegistry.Default, NullLogger.Instance));
+        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, _pathResolver, execEnv, null!, NullLogger.Instance));
+        Assert.Throws<ArgumentNullException>(() => new SandboxBashToolModule(scope, _pathResolver, execEnv, CliOutputFilterRegistry.Default, null!));
     }
 
     [Fact]
@@ -68,7 +70,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             .Setup(e => e.ExecuteAsync("echo ok", _workspaceRoot, It.IsAny<int?>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CommandResult(0, "ok\n", string.Empty, TimeSpan.FromMilliseconds(5)));
 
-        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
         var bashFn = Assert.Single(module.CreateFunctions());
 
         var result = await bashFn.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>
@@ -85,7 +87,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
     public async Task BashAsync_WithEmptyCommand_ReturnsEmptyBashCommandMarker(string command)
     {
         var execEnv = new Mock<IExecutionEnvironment>(MockBehavior.Strict);
-        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
 
         var result = await module.BashAsync(command);
 
@@ -101,6 +103,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             new CanonicalToolScope(_workspaceRoot, IsReadOnly: true),
             _pathResolver,
             execEnv.Object,
+            CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         var violation1 = await scopeReadOnlyModule.BashAsync("git commit -m 'bad'");
@@ -114,6 +117,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             new CanonicalToolScope(_workspaceRoot, IsReadOnly: false),
             roResolver,
             execEnv.Object,
+            CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         var violation2 = await sandboxReadOnlyModule.BashAsync("rm -rf src");
@@ -126,7 +130,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
         var execEnv = new Mock<IExecutionEnvironment>(MockBehavior.Strict);
         execEnv.SetupGet(e => e.Tier).Returns(ExecutionTier.BareHost);
 
-        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
 
         var result = await module.BashAsync("ls", workingDirectory: "../../outside");
 
@@ -145,7 +149,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             .ReturnsAsync(new CommandResult(0, "done", string.Empty, TimeSpan.FromMilliseconds(5)));
 
         var scope = new CanonicalToolScope(_workspaceRoot, BuildTimeoutSeconds: 400, TestTimeoutSeconds: 500);
-        var module = new SandboxBashToolModule(scope, _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(scope, _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
 
         await module.BashAsync("echo 1", timeout: 60);
         await module.BashAsync("echo 2", timeout: 1200);
@@ -171,7 +175,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             .Setup(e => e.ExecuteAsync("cmd-buffer", _workspaceRoot, It.IsAny<int?>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CommandResult(1, "Operation timed out while waiting", string.Empty, TimeSpan.FromSeconds(1), Truncated: true));
 
-        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
 
         var res1 = await module.BashAsync("cmd-throw");
         var res2 = await module.BashAsync("cmd-exitcode");
@@ -197,7 +201,7 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             .Setup(e => e.ExecuteAsync("boom", _workspaceRoot, It.IsAny<int?>(), null, CancellationToken.None))
             .ThrowsAsync(new InvalidOperationException("Failed to start process"));
 
-        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => module.BashAsync("cancel-me", cancellationToken: cts.Token));
 
@@ -206,10 +210,10 @@ public sealed class SandboxBashToolModuleTests : IDisposable
     }
 
     [Fact]
-    public async Task BashAsync_CombinesStdoutAndStderr_ExtractsDiagnosticsOnBuildOrTest_AndTruncatesHugeOutput()
+    public async Task BashAsync_CombinesStdoutAndStderr_AppliesSmartCliFilter_SupportsDisableFilter_AndTruncatesHugeOutput()
     {
         var compilerErrorOutput = "src/Foo.cs(12,5): error CS1002: ; expected [c:/repo/Demo.csproj]";
-        var hugeOutput = new string('A', WorkflowDefaults.MaxStageOutputChars + 5000);
+        var hugeOutput = new string('A', WorkflowDefaults.MaxToolInlineChars + 5000);
 
         var execEnv = new Mock<IExecutionEnvironment>(MockBehavior.Strict);
         execEnv.SetupGet(e => e.Tier).Returns(ExecutionTier.BareHost);
@@ -220,15 +224,20 @@ public sealed class SandboxBashToolModuleTests : IDisposable
             .Setup(e => e.ExecuteAsync("echo huge", _workspaceRoot, It.IsAny<int?>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new CommandResult(0, hugeOutput, string.Empty, TimeSpan.FromMilliseconds(10)));
 
-        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, NullLogger.Instance);
+        var module = new SandboxBashToolModule(new CanonicalToolScope(_workspaceRoot), _pathResolver, execEnv.Object, CliOutputFilterRegistry.Default, NullLogger.Instance);
 
-        var buildResult = await module.BashAsync("dotnet build");
-        Assert.Contains("Exit Code: 1", buildResult);
-        Assert.Contains("[STDERR]\nBuild failed warning", buildResult);
-        Assert.Contains("[Structured Diagnostics Extracted]:", buildResult);
-        Assert.Contains("CS1002", buildResult);
+        var filteredResult = await module.BashAsync("dotnet build");
+        Assert.Contains("Exit Code: 1", filteredResult);
+        Assert.Contains(CliOutputFilterConstants.SimplifiedOutputHeader, filteredResult);
+        Assert.Contains("CS1002", filteredResult);
+
+        var rawResult = await module.BashAsync("dotnet build", timeout: null, workingDirectory: null, disableFilter: true);
+        Assert.Contains("Exit Code: 1", rawResult);
+        Assert.Contains("[STDERR]\nBuild failed warning", rawResult);
+        Assert.DoesNotContain(CliOutputFilterConstants.SimplifiedOutputHeader, rawResult);
 
         var hugeResult = await module.BashAsync("echo huge");
-        Assert.True(hugeResult.Length <= WorkflowDefaults.MaxStageOutputChars + 200);
+        Assert.True(hugeResult.Length <= WorkflowDefaults.MaxToolInlineChars);
+        Assert.Contains("... additional ", hugeResult);
     }
 }

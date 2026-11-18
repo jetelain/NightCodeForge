@@ -70,7 +70,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         var hostSkillsDir = EnsureHostSkillsDirectory();
 
         string? rawTmpDir = null;
-        if (!isReadOnly && !string.IsNullOrWhiteSpace(hostWorkspacePath))
+        if (!string.IsNullOrWhiteSpace(hostWorkspacePath))
         {
             rawTmpDir = EnsureHostTmpDirectory(hostWorkspacePath);
         }
@@ -176,8 +176,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
                 isReadOnly: true));
         }
 
-        if (scope.SecurityTier != SandboxSecurityTier.RestrictedReadOnly &&
-            scope.MountTable.SandboxTmpMount != null)
+        if (scope.MountTable.SandboxTmpMount != null)
         {
             var tmpMount = scope.MountTable.SandboxTmpMount;
             var tmpSource = !string.IsNullOrWhiteSpace(tmpMount.WslTargetDirectoryPath)
@@ -188,7 +187,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
                 additionalMounts.Add(new(
                     hostPath: tmpSource,
                     containerPath: "/tmp",
-                    isReadOnly: false));
+                    isReadOnly: scope.SecurityTier == SandboxSecurityTier.RestrictedReadOnly || tmpMount.IsReadOnly));
             }
         }
 

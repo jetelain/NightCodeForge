@@ -150,6 +150,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             new CanonicalToolScope(repoDir, WorkspaceId: 1, SandboxPathResolver: resolver),
             resolver,
             envMock.Object,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         var allowed = await bashModule.BashAsync("cat /workspace/attachments/1-notes.txt");
@@ -183,6 +184,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             new CanonicalToolScope(repoDir, WorkspaceId: 1, IsReadOnly: true, SandboxPathResolver: resolver),
             resolver,
             envMock.Object,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -510,6 +512,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             new CanonicalToolScope(repoDir, WorkspaceId: 3, IsReadOnly: true, SandboxScope: triageScope, SandboxPathResolver: resolver),
             resolver,
             envMock.Object,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -624,7 +627,8 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
                 ideationBuilder.WebSearchService,
                 ideationBuilder.SkillsServiceFactory,
                 ideationBuilder.McpManager,
-                backlogContext),
+                backlogContext,
+                NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default),
             workspaceContext,
             ideationHarnessFactoryMock.Object,
             ideationBuilder.ActivityStreamer,
@@ -714,7 +718,8 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
                 harnessBuilder.WebSearchService,
                 harnessBuilder.SkillsServiceFactory,
                 harnessBuilder.McpManager,
-                backlogContext),
+                backlogContext,
+                NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default),
             workspaceContext,
             stageFactoryMock.Object,
             coordinator,
@@ -1036,7 +1041,8 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
                 ideationBuilder.WebSearchService,
                 ideationBuilder.SkillsServiceFactory,
                 ideationBuilder.McpManager,
-                backlogContext),
+                backlogContext,
+                NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default),
             workspaceContext,
             ideationFactory.Object,
             ideationBuilder.ActivityStreamer,
@@ -1081,7 +1087,8 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
                 harnessBuilder.WebSearchService,
                 harnessBuilder.SkillsServiceFactory,
                 harnessBuilder.McpManager,
-                backlogContext),
+                backlogContext,
+                NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default),
             workspaceContext,
             stageFactory.Object,
             new CrucibleConversationCoordinator(

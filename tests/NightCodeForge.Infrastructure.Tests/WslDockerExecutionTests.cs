@@ -466,6 +466,26 @@ public class WslDockerExecutionTests
     }
 
     [Fact]
+    public void BuildDockerRunArgs_RestrictedReadOnly_WithTmpVolumeMount_OmitsDuplicateTmpfs()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-triage-sandbox",
+            IsRestrictedReadOnly = true,
+            AdditionalVolumeMounts =
+            [
+                new ContainerVolumeMount("/home/dev/.nightcodeforge/wks/1/tmp", "/tmp", isReadOnly: true)
+            ]
+        };
+
+        var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
+
+        Assert.Contains("/home/dev/.nightcodeforge/wks/1/tmp:/tmp:ro", args);
+        Assert.DoesNotContain("/tmp:rw,noexec,nosuid,size=32m", args);
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}:rw,noexec,nosuid,size=16m", args);
+    }
+
+    [Fact]
     public void BuildDockerRunProcessSpec_WslEnabled_WrapsWithWslAndDistro()
     {
         var options = new ContainerExecutorOptions

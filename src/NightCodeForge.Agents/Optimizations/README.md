@@ -16,7 +16,6 @@
 | `PromptPrefixStabilizer` | Class | Enforces strict byte-identical prompt prefixes (system prompts, tool specs) across turns for KV cache hits. |
 | `GuidedGrammarHelper` | Class | Formats JSON schema and grammar constraints for LLM sampling engines. |
 | `RoslynSymbolIndexProvider` | Class | Lightweight C# symbol indexing using Roslyn for fast workspace code navigation. |
-| `StructuredDiagnosticExtractor` | Class | Parses MSBuild and compiler error logs into structured diagnostic objects. |
 
 ## 3. Dependencies & Interaction Graph
 

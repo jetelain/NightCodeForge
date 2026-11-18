@@ -644,7 +644,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains("Complete Profile Optimization Overrides", cut.Markup);
         Assert.Contains("Guided Grammar Decoding", cut.Markup);
         Assert.Contains("Deterministic Symbol Map", cut.Markup);
-        Assert.Contains("Structured Diagnostics", cut.Markup);
+        Assert.Contains("Smart CLI Output Filtering", cut.Markup);
         Assert.Contains("JIT Model Preload", cut.Markup);
         Assert.Contains("Synthetic Conversation Priming", cut.Markup);
     }

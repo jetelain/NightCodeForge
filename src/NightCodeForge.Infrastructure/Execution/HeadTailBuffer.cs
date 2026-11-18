@@ -12,7 +12,7 @@ public class HeadTailBuffer
     private long _totalBytesWritten = 0;
     private readonly object _lock = new();
 
-    public const int DefaultMaxBytes = 32 * 1024; // 32 KB
+    public const int DefaultMaxBytes = 4 * 1024 * 1024; // 4 MB
 
     public HeadTailBuffer() : this(DefaultMaxBytes)
     {

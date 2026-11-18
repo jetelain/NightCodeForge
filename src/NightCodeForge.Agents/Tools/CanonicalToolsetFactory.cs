@@ -21,8 +21,10 @@ public sealed record CanonicalToolScope(
     bool IsReadOnly = false,
     int? MaxReadFileBytes = null,
     SandboxScopeDescriptor? SandboxScope = null,
-    ISandboxPathResolver? SandboxPathResolver = null)
+    ISandboxPathResolver? SandboxPathResolver = null,
+    NightCodeForge.Core.Domain.LocalOptimizationFlags? OptimizationFlags = null)
 {
+    public Action<NightCodeForge.Core.Workflow.Filtering.BashExecutionAuditEntry>? OnBashExecutionAudited { get; init; }
     internal string ResolveNormalizedWorkspaceRoot()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(WorkspaceRoot);
@@ -119,6 +121,7 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
     private readonly IWorkspaceSkillsServiceFactory _skillsServiceFactory;
     private readonly IMcpClientManager _mcpManager;
     private readonly IBacklogPlanningContext _backlogContext;
+    private readonly NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry _cliFilterRegistry;
 
     public CanonicalToolsetFactory(
         IWorkspacePathResolver pathResolver,
@@ -128,7 +131,8 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         IWebSearchService webSearchService,
         IWorkspaceSkillsServiceFactory skillsServiceFactory,
         IMcpClientManager mcpManager,
-        IBacklogPlanningContext backlogContext)
+        IBacklogPlanningContext backlogContext,
+        NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry cliFilterRegistry)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
@@ -138,6 +142,7 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         _skillsServiceFactory = skillsServiceFactory ?? throw new ArgumentNullException(nameof(skillsServiceFactory));
         _mcpManager = mcpManager ?? throw new ArgumentNullException(nameof(mcpManager));
         _backlogContext = backlogContext ?? throw new ArgumentNullException(nameof(backlogContext));
+        _cliFilterRegistry = cliFilterRegistry ?? throw new ArgumentNullException(nameof(cliFilterRegistry));
     }
 
     public async Task<CanonicalToolsetSession> CreateAsync(CanonicalToolsetRequest request, CancellationToken cancellationToken)
@@ -168,6 +173,11 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
 
         var skillsService = _skillsServiceFactory.Create(workspace, effectiveScope.WorkspaceRoot, taskId);
 
+        if (effectiveScope.OptimizationFlags is null && request.Profile?.OptimizationFlags is not null)
+        {
+            effectiveScope = effectiveScope with { OptimizationFlags = request.Profile.OptimizationFlags };
+        }
+
         var tools = new CanonicalTools(
             effectiveScope,
             _pathResolver,
@@ -176,6 +186,7 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
             _editorConfigFileApplier,
             _webSearchService,
             skillsService,
+            _cliFilterRegistry,
             _backlogContext.CanonicalToolsLogger);
 
         tools.FileModule.ConfigureDefaultTaskMarkdownValidator(

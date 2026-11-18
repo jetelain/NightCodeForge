@@ -444,4 +444,93 @@ public class TaskOrchestratorSyntheticPrimingTests
         Assert.NotNull(capturedContext);
         Assert.Null(capturedContext.SyntheticPriming);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DeterministicStageSuccess_RespectsTargetStageSmartCliOutputFilteringFlag_InPendingSyntheticPriming(bool smartFilteringEnabled)
+    {
+        var repo = new InMemoryTaskRepository();
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = repo
+        };
+
+        var noisyTestOutput = "  Determining projects to restore...\n"
+            + string.Join("\n", Enumerable.Range(1, 20).Select(i => $"  Passed Suite.Test_{i} [2 ms]"))
+            + "\nPassed!  - Failed:     0, Passed:    20, Skipped:     0, Total:    20";
+
+        var subExecutions = new List<StageCommandExecution>
+        {
+            new("dotnet test", noisyTestOutput, DeterministicStageConstants.TestSubStage, true, 300)
+        };
+
+        var detStageMock = new Mock<IWorkflowStage>();
+        detStageMock.Setup(s => s.StageId).Returns(StandardStageIds.PreImplementationBaseline);
+        detStageMock.Setup(s => s.Kind).Returns(WorkflowStageKind.Deterministic);
+        detStageMock.Setup(s => s.QueueTier).Returns(StageQueueTier.Implementation);
+        detStageMock.Setup(s => s.ExecuteAsync(It.IsAny<PipelineContext>(), It.IsAny<CancellationToken>()))
+            .Callback<PipelineContext, CancellationToken>((ctx, _) =>
+            {
+                ctx.DataBag.Set(PipelineDataBagKeys.StageCommands(StandardStageIds.PreImplementationBaseline), subExecutions);
+            })
+            .ReturnsAsync(StageExecutionResult.Success());
+
+        var nextStageMock = new Mock<IWorkflowStage>();
+        nextStageMock.Setup(s => s.StageId).Returns(StandardStageIds.Implementation);
+        nextStageMock.Setup(s => s.Kind).Returns(WorkflowStageKind.Agentic);
+        nextStageMock.Setup(s => s.QueueTier).Returns(StageQueueTier.TaskReview);
+
+        builder.PipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline([detStageMock.Object, nextStageMock.Object]));
+        var orchestrator = builder.Build();
+
+        var ws = new Workspace
+        {
+            Id = 10,
+            Name = "Test WS",
+            RepositoryPath = "C:\\test",
+            AgentProfiles =
+            [
+                new AgentProfile
+                {
+                    Id = StandardStageIds.Implementation,
+                    HarnessId = StandardHarnessIds.Crucible,
+                    Mode = AgentMode.Full,
+                    OptimizationFlags = new LocalOptimizationFlags { SmartCliOutputFiltering = smartFilteringEnabled }
+                }
+            ]
+        };
+        await builder.WorkspaceRepository.CreateAsync(ws);
+
+        var task = new ForgeTask
+        {
+            Id = smartFilteringEnabled ? 301 : 302,
+            WorkspaceId = 10,
+            Title = "Smart Priming Filter Test",
+            Status = TaskOverallStatus.Open,
+            CurrentStageId = StandardStageIds.PreImplementationBaseline
+        };
+        await repo.CreateAsync(task);
+        ((InMemoryTaskDependencyStore)builder.DependencyStore).AddTask(task.Id, 10, task.Status);
+
+        await orchestrator.ProcessTaskAsync(task.Id);
+
+        var reloaded = await repo.GetByIdAsync(task.Id);
+        Assert.NotNull(reloaded);
+        var bag = PipelineDataBag.FromJson(reloaded.PipelineDataJson);
+        var priming = bag.Get<SyntheticPrimingExecution>(PipelineDataBagKeys.PendingSyntheticPriming);
+        Assert.NotNull(priming);
+
+        if (smartFilteringEnabled)
+        {
+            Assert.Contains(NightCodeForge.Core.Workflow.Filtering.CliOutputFilterConstants.SimplifiedOutputHeader, priming.Output);
+            Assert.DoesNotContain("Passed Suite.Test_1", priming.Output);
+            Assert.Contains("Passed!  - Failed:     0", priming.Output);
+        }
+        else
+        {
+            Assert.DoesNotContain(NightCodeForge.Core.Workflow.Filtering.CliOutputFilterConstants.SimplifiedOutputHeader, priming.Output);
+            Assert.Contains("Passed Suite.Test_1", priming.Output);
+        }
+    }
 }

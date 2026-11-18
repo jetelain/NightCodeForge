@@ -240,7 +240,7 @@ public class ExecutionEnvironmentTests
     }
 
     [Fact]
-    public async Task ExecutionEnvironmentProvider_RestrictedReadOnly_DoesNotBindMountHostTmp()
+    public async Task ExecutionEnvironmentProvider_RestrictedReadOnly_BindMountsHostTmpReadOnly()
     {
         var pathResolver = new FakePathResolver();
         var provider = new TestExecutionEnvironmentProviderBuilder { PathResolver = pathResolver }.Build();
@@ -254,7 +254,7 @@ public class ExecutionEnvironmentTests
         var env = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.RestrictedReadOnly);
         var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
 
-        Assert.DoesNotContain(containerExecutor.Options.AdditionalVolumeMounts, m => m.ContainerPath == "/tmp");
+        Assert.Contains(containerExecutor.Options.AdditionalVolumeMounts, m => m.ContainerPath == "/tmp" && m.IsReadOnly);
     }
 
     [Fact]

@@ -2860,6 +2860,9 @@ public class TaskOrchestrator : ITaskOrchestrator
                 ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
                 ?? "Verification completed successfully with exit code 0.";
 
+            var targetAgentStageId = StandardStageIds.Implementation;
+            rawOutput = ApplySmartCliFilterForPriming(pipelineContext, targetAgentStageId, command, rawOutput, isSuccess: true);
+
             var formattedOutput = rawOutput.StartsWith("Exit Code:", StringComparison.OrdinalIgnoreCase)
                 ? rawOutput
                 : $"Exit Code: 0\n{rawOutput}".TrimEnd();
@@ -2894,6 +2897,11 @@ public class TaskOrchestrator : ITaskOrchestrator
                 ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
                 ?? result.ErrorMessage
                 ?? "Deterministic step failed.";
+
+            var targetAgentStageId = !string.IsNullOrWhiteSpace(stage.LoopBackStageId)
+                ? stage.LoopBackStageId
+                : StandardStageIds.Implementation;
+            rawOutput = ApplySmartCliFilterForPriming(pipelineContext, targetAgentStageId, command, rawOutput, isSuccess: false);
 
             if (!string.IsNullOrWhiteSpace(result.ErrorMessage) && !rawOutput.Contains(result.ErrorMessage, StringComparison.OrdinalIgnoreCase))
             {
@@ -2949,6 +2957,39 @@ public class TaskOrchestrator : ITaskOrchestrator
                 IsSuccess: false,
                 DurationMs: duration));
         }
+    }
+
+    private static string ApplySmartCliFilterForPriming(
+        PipelineContext pipelineContext,
+        string targetAgentStageId,
+        string command,
+        string rawOutput,
+        bool isSuccess)
+    {
+        if (string.IsNullOrWhiteSpace(rawOutput) || string.IsNullOrWhiteSpace(command))
+        {
+            return rawOutput;
+        }
+
+        var targetProfile = pipelineContext.Workspace?.AgentProfiles?
+            .FirstOrDefault(p => p.MatchesStage(targetAgentStageId, pipelineContext.Workspace.Id));
+
+        var optFlags = pipelineContext.CurrentProfile?.OptimizationFlags
+            ?? targetProfile?.OptimizationFlags
+            ?? pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags);
+
+        var workspaceRoot = pipelineContext.WorkingDirectory
+            ?? pipelineContext.Workspace?.Ext4MirrorPath
+            ?? pipelineContext.Workspace?.RepositoryPath
+            ?? string.Empty;
+
+        return Filtering.CliOutputFilterHelpers.FilterPrimingOutput(
+            Filtering.CliOutputFilterRegistry.Default,
+            command,
+            rawOutput,
+            isSuccess,
+            workspaceRoot,
+            smartFilteringEnabled: optFlags?.SmartCliOutputFiltering ?? true);
     }
 
     private Task<IReadOnlyList<int>> ValidateAndResolveWorkspaceAttachmentIdsAsync(

@@ -26,9 +26,9 @@ public class CanonicalToolsReadCapTests : IDisposable
     }
 
     [Fact]
-    public void WorkflowDefaults_MaxReadFileBytes_Is100KB()
+    public void WorkflowDefaults_MaxReadFileBytes_Is50KB()
     {
-        Assert.Equal(100 * 1024, WorkflowDefaults.MaxReadFileBytes);
+        Assert.Equal(50 * 1024, WorkflowDefaults.MaxReadFileBytes);
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class CanonicalToolsReadCapTests : IDisposable
     }
 
     [Fact]
-    public async Task ReadAsync_LargeFileWithDefaultCap_CappedAt100KB()
+    public async Task ReadAsync_LargeFileWithDefaultCap_CappedAt50KB()
     {
         var filePath = Path.Combine(_tempDir, "very_large.js");
         var lines = Enumerable.Range(1, 20_000).Select(i => $"function doWork_{i}() {{ return {i}; }}").ToArray();
@@ -274,11 +274,11 @@ public class CanonicalToolsReadCapTests : IDisposable
     [Fact]
     public void CanonicalAIFunctionFactory_Description_ReflectsOverriddenMaxReadFileBytes()
     {
-        var tools = TestCanonicalToolsBuilder.Create(_tempDir, pathResolver: TestPathResolver.Create(), maxReadFileBytes: 50 * 1024);
+        var tools = TestCanonicalToolsBuilder.Create(_tempDir, pathResolver: TestPathResolver.Create(), maxReadFileBytes: 25 * 1024);
         var aiTools = CanonicalAIFunctionFactory.CreateTools(tools);
         var readTool = aiTools.Single(t => t.Name == CanonicalToolNames.Read);
 
-        Assert.Contains("Output is capped to 50 KB", readTool.Description);
+        Assert.Contains("Output is capped to 25 KB", readTool.Description);
     }
 
     [Fact]

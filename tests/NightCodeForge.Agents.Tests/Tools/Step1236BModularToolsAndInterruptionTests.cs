@@ -132,6 +132,7 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
             toolScope,
             pathResolver,
             mockEnv.Object,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         var bashOutput = await bashModule.BashAsync("grep -n 'Line' /nightcodeforge/ncf-logs/nightwatch.log", workingDirectory: "/nightcodeforge/ncf-logs");
@@ -308,7 +309,8 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
             new Mock<IWebSearchService>().Object,
             new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance),
             mcp.Object,
-            TestBacklogContext.CreateDefault());
+            TestBacklogContext.CreateDefault(),
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
 
         var customModule = new SimulatedNightwatchToolModule();
         var workspace = new Workspace { Id = 1, Name = "TestWS", RepositoryPath = _tempDir };
@@ -384,6 +386,7 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
             toolScope,
             nwResolver,
             mockEnv.Object,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             NullLogger.Instance);
 
         var bashResult = await bashModule.BashAsync("rm -rf /nightcodeforge/ncf-logs");
@@ -586,7 +589,8 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
             new Mock<IWebSearchService>().Object,
             new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance),
             mcp.Object,
-            TestBacklogContext.CreateDefault());
+            TestBacklogContext.CreateDefault(),
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
 
         var customModule = new SimulatedNightwatchToolModule();
         var workspace = new Workspace { Id = 1, Name = "TestWS", RepositoryPath = _tempDir };
@@ -655,7 +659,8 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
             new Mock<IWebSearchService>().Object,
             new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance),
             mcp.Object,
-            TestBacklogContext.CreateDefault());
+            TestBacklogContext.CreateDefault(),
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
 
         var decoratingToolsetFactory = new Mock<ICanonicalToolsetFactory>();
         decoratingToolsetFactory

@@ -7,7 +7,7 @@ using YamlDotNet.Serialization;
 public static class TranscriptAnalysisDefaults
 {
     public const int DefaultRecentLimit = 50;
-    public const int OversizedToolOutputCharThreshold = 10_000;
+    public const int OversizedToolOutputCharThreshold = NightCodeForge.Core.Workflow.WorkflowDefaults.MaxToolInlineChars;
     public const int SlowToolExecutionThresholdSeconds = 60;
     public const int SlowLlmTurnThresholdSeconds = 30;
     public const int MaxFileFrictionEntriesPerSession = 15;

@@ -445,7 +445,7 @@ class Sample {}
     [Fact]
     public void Analyze_ExtractsBreakdownsBehavioralSignalsAndCategorizedRecommendations()
     {
-        var oversizedOutput = new string('x', 10_500);
+        var oversizedOutput = new string('x', TranscriptAnalysisDefaults.OversizedToolOutputCharThreshold + 500);
         var content = $@"---
 task_id: 114
 stage_id: implementation

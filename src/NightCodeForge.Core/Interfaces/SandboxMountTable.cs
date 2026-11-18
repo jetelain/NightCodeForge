@@ -558,8 +558,10 @@ public sealed record SandboxScopeDescriptor
             taskId: effectiveTaskId,
             hostCloneDirectory: clonePath,
             wslCloneDirectory: VirtualMountEntry.ToDefaultWslPath(clonePath),
-            hostTmpDirectory: isReadOnly ? null : tmpDirectoryPath,
-            wslTmpDirectory: isReadOnly ? null : VirtualMountEntry.ToDefaultWslPath(tmpDirectoryPath),
+            hostTmpDirectory: tmpDirectoryPath,
+            wslTmpDirectory: !string.IsNullOrWhiteSpace(tmpDirectoryPath)
+                ? VirtualMountEntry.ToDefaultWslPath(tmpDirectoryPath)
+                : null,
             additionalEntries: additionalEntries,
             hostAttachmentsDirectory: attachmentsDirectoryPath,
             wslAttachmentsDirectory: !string.IsNullOrWhiteSpace(attachmentsDirectoryPath)
