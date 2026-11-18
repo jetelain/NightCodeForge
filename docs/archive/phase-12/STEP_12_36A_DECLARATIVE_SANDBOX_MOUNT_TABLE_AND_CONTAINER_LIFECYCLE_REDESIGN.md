@@ -1,10 +1,10 @@
 # 🧱 Step 12.36A: Declarative Sandbox Mount Table, Async Environment Provisioning & Container Lifecycle Redesign
 
 > **Architecture & Foundation Refactoring Specification (Part 1 of 2 — Execution Environments, Virtual Mounts & Container Decomposition)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Companion Step:* [Step 12.36B: `CanonicalTools` Modular Decomposition, Composable Tool Modules & Unified Interruption Pipeline](STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)  
-> *Unblocks & De-Risks:* [Step 12.22A: Diagnostic Shell & Environment Doctor](../../features/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md) | [Step 12.31: Interactive Ideation Warm Execution Context](../../features/STEP_12_31_INTERACTIVE_IDEATION_AGENT_COORDINATOR_AND_WARM_EXECUTION_CONTEXT.md) | [Step 12.34A: Nightwatch Ledger, Virtual Root & Triage](../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) | [Step 12.34B: Agent Nightwatch SOS Tool](../../features/STEP_12_34B_AGENT_NIGHTWATCH_SOS_TOOL_AND_ENVIRONMENT_REMEDIATION.md) | [Step 12.35B: Nightwatch Idle Deep Analysis](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) | [Step 12.2A/B: Attachments Mounts & Tools](../../features/STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md)  
-> *Source Policy:* [AGENTS.md](../../../AGENTS.md) | [docs/ARCHITECTURE.md](../../ARCHITECTURE.md)  
+> *Parent Plan:* [Phase 12 Master Plan((../12_EXTEND_FEATURES.md)  
+> *Companion Step:* [Step 12.36B: `CanonicalTools` Modular Decomposition, Composable Tool Modules & Unified Interruption Pipeline((STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)  
+> *Unblocks & De-Risks:* [Step 12.22A: Diagnostic Shell & Environment Doctor((../../features/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md) | [Step 12.31: Interactive Ideation Warm Execution Context((../../features/STEP_12_31_INTERACTIVE_IDEATION_AGENT_COORDINATOR_AND_WARM_EXECUTION_CONTEXT.md) | [Step 12.34A: Nightwatch Ledger, Virtual Root & Triage((../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) | [Step 12.34B: Agent Nightwatch SOS Tool((../../features/STEP_12_34B_AGENT_NIGHTWATCH_SOS_TOOL_AND_ENVIRONMENT_REMEDIATION.md) | [Step 12.35B: Nightwatch Idle Deep Analysis((../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) | [Step 12.2A/B: Attachments Mounts & Tools((../../features/STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md)  
+> *Source Policy:* [AGENTS.md((../../../AGENTS.md) | [docs/ARCHITECTURE.md((../../ARCHITECTURE.md)  
 > *Target Projects:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Agents.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -13,7 +13,7 @@
 
 ## 1. Problem Statement & Motivation
 
-Before introducing Warm Ideation Sessions ([Step 12.31](../../features/STEP_12_31_INTERACTIVE_IDEATION_AGENT_COORDINATOR_AND_WARM_EXECUTION_CONTEXT.md)), the Container Diagnostic Shell ([Step 12.22A](../../features/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)), Attachments (`12.2A/B`), and the multi-workspace Nightwatch Virtual Root (`/nightcodeforge/` in [Step 12.34A](../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) & [Step 12.35B](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)), the current execution environment and container management layer has four structural bottlenecks that make extensions high-risk:
+Before introducing Warm Ideation Sessions ([Step 12.31((../../features/STEP_12_31_INTERACTIVE_IDEATION_AGENT_COORDINATOR_AND_WARM_EXECUTION_CONTEXT.md)), the Container Diagnostic Shell ([Step 12.22A((../../features/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)), Attachments (`12.2A/B`), and the multi-workspace Nightwatch Virtual Root (`/nightcodeforge/` in [Step 12.34A((../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) & [Step 12.35B((../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)), the current execution environment and container management layer has four structural bottlenecks that make extensions high-risk:
 
 1. **Three Disconnected Path & Mount Systems (Host C# vs. WSL2 `bash` vs. Docker Bind Mounts):**
    - `WorkspacePathResolver`, `CanonicalTools.ResolveFullPath`, `ContainerEnvironmentFactory`, and `NightCodeForgeContainerExecutor` each compute paths and mounts independently, hardcoding `/workspace` as the only possible virtual root.
@@ -34,20 +34,20 @@ Before introducing Warm Ideation Sessions ([Step 12.31](../../features/STEP_12_3
 
 ```mermaid
 flowchart TD
-    subgraph DescriptorLayer ["1. Declarative Scope &amp; Mount Layer (NightCodeForge.Core)"]
-        Scope["SandboxScopeDescriptor<br/>- ScopeKind (WorkspaceClone, TaskWorktree, SystemNightwatch)<br/>- VirtualRootPath ('/workspace' or '/nightcodeforge')<br/>- ExecutionMode &amp; SandboxSecurityTier"]
-        MountTable["SandboxMountTable &amp; VirtualMountEntry<br/>- VirtualMountPath (e.g. '/nightcodeforge/wks', '/nightcodeforge/ncf-logs')<br/>- HostDirectoryPath (Windows / Native)<br/>- WslTargetDirectoryPath (/home/... or /mnt/c/...)<br/>- IsReadOnly (bool)"]
-        PathGuard["ISandboxPathResolver<br/>- Resolves Virtual (/workspace/..., /nightcodeforge/...) &lt;-&gt; Host C# &amp; WSL2 paths<br/>- Enforces strict boundary &amp; ReadOnly guards (zero symlinks needed)"]
+    subgraph DescriptorLayer ["1. Declarative Scope &amp; Mount Layer (NightCodeForge.Core)"(
+        Scope["SandboxScopeDescriptor<br/>- ScopeKind (WorkspaceClone, TaskWorktree, SystemNightwatch)<br/>- VirtualRootPath ('/workspace' or '/nightcodeforge')<br/>- ExecutionMode &amp; SandboxSecurityTier"(
+        MountTable["SandboxMountTable &amp; VirtualMountEntry<br/>- VirtualMountPath (e.g. '/nightcodeforge/wks', '/nightcodeforge/ncf-logs')<br/>- HostDirectoryPath (Windows / Native)<br/>- WslTargetDirectoryPath (/home/... or /mnt/c/...)<br/>- IsReadOnly (bool)"(
+        PathGuard["ISandboxPathResolver<br/>- Resolves Virtual (/workspace/..., /nightcodeforge/...) &lt;-&gt; Host C# &amp; WSL2 paths<br/>- Enforces strict boundary &amp; ReadOnly guards (zero symlinks needed)"(
     end
 
-    subgraph EnvProvider ["2. Singleton Environment Provider &amp; Factory (NightCodeForge.Infrastructure)"]
-        Provider["IExecutionEnvironmentProvider (Singleton)<br/>- GetEnvironmentAsync(SandboxScopeDescriptor)<br/>- Async pre-flight (worktree paths &amp; companion tools)<br/>- Lifecycle hooks: RecreateAsync, EvictIdleAsync, CleanupAsync"]
+    subgraph EnvProvider ["2. Singleton Environment Provider &amp; Factory (NightCodeForge.Infrastructure)"(
+        Provider["IExecutionEnvironmentProvider (Singleton)<br/>- GetEnvironmentAsync(SandboxScopeDescriptor)<br/>- Async pre-flight (worktree paths &amp; companion tools)<br/>- Lifecycle hooks: RecreateAsync, EvictIdleAsync, CleanupAsync"(
     end
 
-    subgraph ContainerSubsystem ["3. Decomposed Container Subsystem"]
-        ImageMgr["ContainerMountAndDriftBuilder<br/>- Builds -v bind mounts directly at VirtualMountPath (/workspace/... or /nightcodeforge/...)<br/>- Appends '-ro' suffix for RestrictedReadOnly containers<br/>- Detects container mount/image drift"]
-        ShellSession["PersistentContainerShellSession<br/>- Manages docker exec -i bash process<br/>- Sentinel framing &amp; \x03 SIGINT drain recovery"]
-        Executor["NightCodeForgeContainerExecutor<br/>- Thin orchestrator delegating to Builder &amp; ShellSession"]
+    subgraph ContainerSubsystem ["3. Decomposed Container Subsystem"(
+        ImageMgr["ContainerMountAndDriftBuilder<br/>- Builds -v bind mounts directly at VirtualMountPath (/workspace/... or /nightcodeforge/...)<br/>- Appends '-ro' suffix for RestrictedReadOnly containers<br/>- Detects container mount/image drift"(
+        ShellSession["PersistentContainerShellSession<br/>- Manages docker exec -i bash process<br/>- Sentinel framing &amp; \x03 SIGINT drain recovery"(
+        Executor["NightCodeForgeContainerExecutor<br/>- Thin orchestrator delegating to Builder &amp; ShellSession"(
     end
 
     Scope --> MountTable
@@ -80,14 +80,14 @@ flowchart TD
      - `WslTargetDirectoryPath` (`string` — `/home/...` or `/mnt/c/...` path used when rewriting virtual paths in non-container WSL2 `bash` commands).
      - `IsReadOnly` (`bool`).
 3. **Unified Virtual Path Resolution & Boundary Guard (`ISandboxPathResolver`):**
-   - Used by `CanonicalTools` ([Step 12.36B](STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)) to resolve any agent-supplied path (relative to `VirtualRootPath`, absolute `/workspace/...`, `/nightcodeforge/...`, or `/tmp/...`) without needing any on-disk symlinks:
+   - Used by `CanonicalTools` ([Step 12.36B((STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)) to resolve any agent-supplied path (relative to `VirtualRootPath`, absolute `/workspace/...`, `/nightcodeforge/...`, or `/tmp/...`) without needing any on-disk symlinks:
      - **Longest-Prefix Virtual Mount Matching (Host C# `read`/`write`/`edit`):** Normalizes relative paths against `VirtualRootPath`, matches the longest `VirtualMountPath` in `SandboxMountTable`, and translates the remainder directly to `HostDirectoryPath` on the host.
      - **Virtual-to-WSL Command Path Rewriting & Non-Container Working Directory (`WslDirect` / `BareHost` `bash`):**
        - In `ContainerSandbox` mode, Docker mounts each `VirtualMountPath` natively at `/workspace/...` or `/nightcodeforge/<subpath>:ro` with `-w {VirtualRootPath}`, so zero command path rewriting is needed inside the container.
        - When `ExecutionMode != ContainerSandbox` (where `/workspace` or `/nightcodeforge` is not a Linux mount-namespace root on disk), `ISandboxPathResolver` translates explicit virtual path prefixes (`/workspace/...` or `/nightcodeforge/<subpath>/...`) in `SandboxBashToolModule` commands and `workingDirectory` arguments to their corresponding `WslTargetDirectoryPath` (or `HostDirectoryPath` on `BareHost`). For `SystemNightwatch` scopes that have no single root mount, the default initial `bash` working directory resolves to a dedicated empty/marker host directory (`~/.nightcodeforge/nightwatch-root/`) so `cd` never fails with `No such file or directory`, and system prompts instruct Nightwatch to use explicit `/nightcodeforge/<subpath>/...` paths in `bash`.
      - **Strict Boundary & Write Validation:** Verifies that the resolved path stays strictly within the allowed `HostDirectoryPath` of the matched mount (or sandbox `/tmp`), rejects unmapped paths under `/nightcodeforge/` (when no root catch-all mount is defined), and rejects write/edit operations if `Scope.IsReadOnly` or `matchedMount.IsReadOnly` is `true`.
 4. **`SystemNightwatch` Execution Mode Resolution:**
-   - Because `SystemNightwatch` is not tied to a `Workspace` entity, `SandboxScopeDescriptor` accepts explicit `ExecutionMode`, `WslDistribution`, and optional `ContainerImage` parameters (populated from `NightwatchOptions` in [Step 12.34A](../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md), defaulting to `ContainerSandbox` when Docker is available, or falling back to `WslDirect` on Windows / `BareHost` on Linux/macOS).
+   - Because `SystemNightwatch` is not tied to a `Workspace` entity, `SandboxScopeDescriptor` accepts explicit `ExecutionMode`, `WslDistribution`, and optional `ContainerImage` parameters (populated from `NightwatchOptions` in [Step 12.34A((../../features/STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md), defaulting to `ContainerSandbox` when Docker is available, or falling back to `WslDirect` on Windows / `BareHost` on Linux/macOS).
 
 ---
 
@@ -121,9 +121,9 @@ Refactor `NightCodeForgeContainerExecutor` into three focused, single-responsibi
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [x] Define `SandboxScopeKind`, `SandboxScopeDescriptor` (`VirtualRootPath = "/workspace"` or `"/nightcodeforge"`), `SandboxMountTable`, `VirtualMountEntry`, and `ISandboxPathResolver` (`SandboxPathResolver`) in `NightCodeForge.Core` / `NightCodeForge.Infrastructure`.
-- [x] Implement virtual mount resolution in `SandboxPathResolver` for Host C# file operations and non-container WSL2 `bash` path translation, plus direct `-v "{WslTargetDirectoryPath}:{VirtualMountPath}:ro"` Docker bind mounts in `ContainerMountAndDriftBuilder` (requiring zero on-disk symlinks).
-- [x] Promote `IExecutionEnvironmentProvider` to a **Singleton**, replace synchronous `GetEnvironment` / `CreateContainerEnvironment` with async `GetEnvironmentAsync` / `CreateContainerEnvironmentAsync` across all callers (`CanonicalToolsetFactory`, `AcpHostRpcHandler`, `ConflictResolutionVerifier`, and `Deterministic*Stage`, eliminating `.GetAwaiter().GetResult()` calls and caching companion tool checks per stack/distro), align `AcpHostRpcHandler` with `ISandboxPathResolver`, and support `SandboxScopeKind.SystemNightwatch` without requiring a synthetic `Workspace`.
-- [x] Enforce `-ro` container name isolation (`{baseName}-ro`, `ncf-nightwatch-ro`) for `SandboxSecurityTier.RestrictedReadOnly`.
-- [x] Decompose `NightCodeForgeContainerExecutor` by extracting `ContainerMountAndDriftBuilder` and `PersistentContainerShellSession` (including `\x03` `SIGINT` sentinel recovery on cancellation).
-- [x] Add unit tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Infrastructure.Tests` covering `/nightcodeforge/` and `/workspace/` `SandboxMountTable` longest-prefix host path resolution, WSL2 virtual path translation, read-only mount enforcement, `-ro` container naming, async environment caching, and `PersistentContainerShellSession` `SIGINT` recovery.
+- [x( Define `SandboxScopeKind`, `SandboxScopeDescriptor` (`VirtualRootPath = "/workspace"` or `"/nightcodeforge"`), `SandboxMountTable`, `VirtualMountEntry`, and `ISandboxPathResolver` (`SandboxPathResolver`) in `NightCodeForge.Core` / `NightCodeForge.Infrastructure`.
+- [x( Implement virtual mount resolution in `SandboxPathResolver` for Host C# file operations and non-container WSL2 `bash` path translation, plus direct `-v "{WslTargetDirectoryPath}:{VirtualMountPath}:ro"` Docker bind mounts in `ContainerMountAndDriftBuilder` (requiring zero on-disk symlinks).
+- [x( Promote `IExecutionEnvironmentProvider` to a **Singleton**, replace synchronous `GetEnvironment` / `CreateContainerEnvironment` with async `GetEnvironmentAsync` / `CreateContainerEnvironmentAsync` across all callers (`CanonicalToolsetFactory`, `AcpHostRpcHandler`, `ConflictResolutionVerifier`, and `Deterministic*Stage`, eliminating `.GetAwaiter().GetResult()` calls and caching companion tool checks per stack/distro), align `AcpHostRpcHandler` with `ISandboxPathResolver`, and support `SandboxScopeKind.SystemNightwatch` without requiring a synthetic `Workspace`.
+- [x( Enforce `-ro` container name isolation (`{baseName}-ro`, `ncf-nightwatch-ro`) for `SandboxSecurityTier.RestrictedReadOnly`.
+- [x( Decompose `NightCodeForgeContainerExecutor` by extracting `ContainerMountAndDriftBuilder` and `PersistentContainerShellSession` (including `\x03` `SIGINT` sentinel recovery on cancellation).
+- [x( Add unit tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Infrastructure.Tests` covering `/nightcodeforge/` and `/workspace/` `SandboxMountTable` longest-prefix host path resolution, WSL2 virtual path translation, read-only mount enforcement, `-ro` container naming, async environment caching, and `PersistentContainerShellSession` `SIGINT` recovery.

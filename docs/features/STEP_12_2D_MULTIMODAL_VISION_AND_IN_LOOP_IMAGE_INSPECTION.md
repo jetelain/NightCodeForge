@@ -2,8 +2,8 @@
 
 > **Feature Implementation Step (Part 4 of 4 — Native Multimodal Vision, Zero-KV-Loss In-Loop Injection & Compaction Hygiene)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Steps:* [Step 12.2A: Attachments Store, Intake Service & MarkItDown Conversion](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md) | [Step 12.2B: `/workspace/attachments` Read/Bash Access, Citation Links & Prompt Digest Injection](STEP_12_2B_AGENT_ATTACHMENT_TOOLS_AND_PROMPT_DIGEST.md) | [Step 12.2C: Attachments Web UI & Task Picker](STEP_12_2C_ATTACHMENTS_WEB_UI_AND_TASK_PICKER.md)  
-> *Related Architecture:* [Step 12.5A: Antigravity ACP Harness](STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md) | [Step 12.36B: CanonicalTools Modular Decomposition](../archive/phase-12/STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)  
+> *Prerequisite Steps:* [Step 12.2A: Attachments Store, Intake Service & MarkItDown Conversion](../archive/phase-12/STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md) | [Step 12.2B: `/workspace/attachments` Read/Bash Access, Citation Links & Prompt Digest Injection](../archive/phase-12/STEP_12_2B_AGENT_ATTACHMENT_TOOLS_AND_PROMPT_DIGEST.md) | [Step 12.2C: Attachments Web UI & Task Picker](../archive/phase-12/STEP_12_2C_ATTACHMENTS_WEB_UI_AND_TASK_PICKER.md)  
+> *Related Architecture:* [Step 12.5A: Antigravity ACP Harness](../archive/phase-12/STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md) | [Step 12.36B: CanonicalTools Modular Decomposition](../archive/phase-12/STEP_12_36B_CANONICAL_TOOLS_MODULAR_DECOMPOSITION_AND_INTERRUPTION_PIPELINE.md)  
 > *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 >
@@ -86,7 +86,7 @@ sequenceDiagram
   - When the resolved file has a supported image extension (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`) or matches an image magic-byte signature, branch into the multimodal image loading path (treating `offset`/`limit` as unused for binary images) instead of reading UTF-8 text lines.
 - **Vision Capability, Symlink & Magic-Byte Validation:**
   - Check `SupportsVision` for the session's active model first; if `false`, fail fast with `ModelVisionNotSupportedException` (never attempting to pass binary bytes as text lines).
-  - Verify file existence and, for symlinked host attachments inside `attachments/` ([Step 12.2B](STEP_12_2B_AGENT_ATTACHMENT_TOOLS_AND_PROMPT_DIGEST.md)), verify the symlink resolves to its registered `SourceRef`, throwing `AttachmentTargetNotFoundException` if moved or unreadable.
+  - Verify file existence and, for symlinked host attachments inside `attachments/` ([Step 12.2B](../archive/phase-12/STEP_12_2B_AGENT_ATTACHMENT_TOOLS_AND_PROMPT_DIGEST.md)), verify the symlink resolves to its registered `SourceRef`, throwing `AttachmentTargetNotFoundException` if moved or unreadable.
   - Inspect file magic bytes to validate supported image media types (`image/png`, `image/jpeg`, `image/webp`, `image/gif`). Reject mismatched extensions, zero-byte files, or corrupt headers with `AttachmentConversionException` (never silent fallbacks).
 - **Named Size & Dimension Caps:**
   - Define named constants (e.g., in `VisionConstants` / `WorkflowDefaults`):
@@ -122,7 +122,7 @@ sequenceDiagram
 
 ### 4.2 `AcpAgentHarness` (`agy acp`) Native Multimodal Prompt Blocks
 - Extend `AgentSessionContext` and [`AcpAgentHarness`](../../src/NightCodeForge.Agents/Acp/AcpAgentHarness.cs) (`DispatchPromptAsync` `session/prompt` payload) so when image attachments are linked to the prompt/task (and normalized within size caps), `session/prompt` emits `{ type = "image", data = "<base64>", mimeType = "<mimeType>" }` content blocks alongside `{ type = "text", text = promptText }`.
-- Additionally, because `/workspace/attachments` (`:ro`) and `/workspace/task-{id}` (`:rw`) are bind-mounted into `agy` sessions ([Step 12.2A](STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md) & [Step 12.5A](STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md)), `agy` can inspect workspace screenshots and attachment images directly on disk using its native multimodal file tools.
+- Additionally, because `/workspace/attachments` (`:ro`) and `/workspace/task-{id}` (`:rw`) are bind-mounted into `agy` sessions ([Step 12.2A](../archive/phase-12/STEP_12_2A_ATTACHMENTS_STORE_INTAKE_AND_MARKITDOWN.md) & [Step 12.5A](../archive/phase-12/STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md)), `agy` can inspect workspace screenshots and attachment images directly on disk using its native multimodal file tools.
 
 ---
 

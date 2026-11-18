@@ -1,9 +1,9 @@
 # 🔌 Step 12.5A: ACP Harness Catalog, Antigravity (`agy acp`) Authentication & Container-Ready Rework (with `PiRpc` Removal)
 
 > **Phase 12 Implementation Step (Extend Features - Harnesses & External Agent Integrations)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
 > *Companion Step:* [Step 12.5B: Task Difficulty Classification & Role-Based Harness/Model Escalation Matrix](STEP_12_5B_TASK_DIFFICULTY_AND_ROLE_ESCALATION_MATRIX.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Infrastructure.Tests`  
 > *Status:* Completed ✅ | *Target Framework:* .NET 10 (C# 13)
 
@@ -16,7 +16,7 @@
 ### 1.1 Why Consolidate on `Crucible` + `ACP` (and Drop `PiRpc`)
 1. **`Crucible` Covers All Local / Open-Weight & OpenAI-Compatible Inference:**
    - NightCodeForge's built-in [`CrucibleAgentHarness`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Agents/Crucible/CrucibleAgentHarness.cs) already provides native C# tool dispatch, guided grammar decoding, Roslyn symbol mapping, context compaction, and dynamic thinking effort mapping across Ollama, OllamaRouter, and OpenAI-compatible gateways.
-   - Maintaining `PiRpcAgentHarness` (`StandardHarnessIds.PiRpc`) duplicates local LLM capabilities with an external Node.js daemon. Under the project's clean-break policy ([AGENTS.md](../../AGENTS.md)), `PiRpc` is removed.
+   - Maintaining `PiRpcAgentHarness` (`StandardHarnessIds.PiRpc`) duplicates local LLM capabilities with an external Node.js daemon. Under the project's clean-break policy ([AGENTS.md](../../../AGENTS.md)), `PiRpc` is removed.
 2. **First-Class Google Antigravity CLI (`agy acp`) Integration via ACP:**
    - For `Expert` tasks (or teams leveraging cloud frontier models via their Google AI Pro/Ultra or Gemini Enterprise subscription), **Google Antigravity CLI (`agy acp`)** exposes a built-in **Agent Client Protocol (ACP)** stdio server (`https://antigravity.google/docs/cli/acp/`).
    - Instead of requiring users to manually type executable paths, CLI flags, and JSON blobs across multiple agent profiles, NightCodeForge introduces a centralized **ACP Harness Catalog** (`IAcpHarnessCatalogService`) with built-in support for **Google Antigravity (`agy acp`)**:
@@ -241,7 +241,7 @@ To avoid configuring executable paths, arguments, and container mounts repeatedl
      - Bind-mount `~/.gemini` to `/ncf-home/.gemini` (read-write so OAuth token refreshes and `agy` session state persist back to the host).
    - **Process Reaper Whitelist:** Add `"agy"` alongside `"csnav"` in `ContainerExecutorOptions.DefaultProcessKillWhitelist` so an in-container process sweep does not terminate an active `agy acp` process.
 2. **Environment-Aware Process Launch & Collaborator Extraction (`IAcpProcessLauncher`):**
-   - **Constructor Parameter Limit ([AGENTS.md](../../AGENTS.md)):** `AcpAgentHarness` currently has 8 constructor parameters (and `ContainerEnvironmentFactory` has 8). Keep all service constructors free of optional parameters and strictly $\le 10$ parameters (`ConstructorParameterCeilingTests`) by encapsulating multi-environment ACP process launch resolution (`BareHost`, `WslDirect`, `ContainerSandbox`) into a dedicated collaborator service (e.g., `IAcpProcessLauncher`). Note: if `ContainerEnvironmentFactory` reads `SecurityOptions` (e.g., `IOptions<SecurityOptions>`), it has 9 parameters (still $\le 10$); keep existing test constructor helpers updated accordingly.
+   - **Constructor Parameter Limit ([AGENTS.md](../../../AGENTS.md)):** `AcpAgentHarness` currently has 8 constructor parameters (and `ContainerEnvironmentFactory` has 8). Keep all service constructors free of optional parameters and strictly $\le 10$ parameters (`ConstructorParameterCeilingTests`) by encapsulating multi-environment ACP process launch resolution (`BareHost`, `WslDirect`, `ContainerSandbox`) into a dedicated collaborator service (e.g., `IAcpProcessLauncher`). Note: if `ContainerEnvironmentFactory` reads `SecurityOptions` (e.g., `IOptions<SecurityOptions>`), it has 9 parameters (still $\le 10$); keep existing test constructor helpers updated accordingly.
    - **Default `AcpHarnessOptions`:** Update `AcpHarnessOptions` defaults from `"gemini"` / `"--experimental-acp"` to `"agy"` / `"acp --dangerously-skip-permissions"` (and update the corresponding fallback `[InlineData]` expectations in `AcpAgentHarnessTests.RunStageAsync_ParsesHarnessConfigurationJson_OrFallsBackToDefaults`).
    - When `context.Workspace?.ExecutionMode == ExecutionMode.ContainerSandbox`:
      - Provision and start the task container via `var env = await IExecutionEnvironmentProvider.GetEnvironmentAsync(workspace, profile.SecurityTier, task.Id, cancellationToken)` and invoke `containerExecutor.EnsureContainerRunning()` on `NightCodeForgeContainerExecutor` (note: `EnsureContainerRunning()` is synchronous).
@@ -271,7 +271,7 @@ To avoid configuring executable paths, arguments, and container mounts repeatedl
 
 ### 3.4 Web UI: ACP Catalog Strip & Harness/Model Selector in `AgentProfilesTab.razor`
 
-> **UI & Presentation Separation Rule ([AGENTS.md](../../AGENTS.md)):** Keep `AgentProfilesTab.razor` focused on presentation, layout, and user interaction. Extract ACP status badge formatting, stage harness eligibility (`triage`/`ideation` pinned to `Crucible` vs task pipeline stages supporting `Crucible` or `ACP`), model/thinking-effort mapping, and profile save/clone field synchronization into a dedicated helper/service (e.g., `AgentProfileAcpPresentationHelper` in `NightCodeForge.Web.Services`) with unit tests in `NightCodeForge.Web.Tests`.
+> **UI & Presentation Separation Rule ([AGENTS.md](../../../AGENTS.md)):** Keep `AgentProfilesTab.razor` focused on presentation, layout, and user interaction. Extract ACP status badge formatting, stage harness eligibility (`triage`/`ideation` pinned to `Crucible` vs task pipeline stages supporting `Crucible` or `ACP`), model/thinking-effort mapping, and profile save/clone field synchronization into a dedicated helper/service (e.g., `AgentProfileAcpPresentationHelper` in `NightCodeForge.Web.Services`) with unit tests in `NightCodeForge.Web.Tests`.
 
 1. **Provider Status Strip Enhancement ([`AgentProfilesTab.razor`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Settings/AgentProfilesTab.razor)):**
    - Alongside the Local LLM / OllamaRouter connection status badge, display the **Antigravity ACP Status Badge** (with a **"🔄 Refresh ACP Status & Models"** action and **"🔑 Login Hints / Test Connection"** modal):

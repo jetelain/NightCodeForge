@@ -1,9 +1,9 @@
 # 🧠 Step 12.5B: Task Difficulty Classification & Role-Based Harness/Model Escalation Matrix
 
 > **Phase 12 Implementation Step (Extend Features - Intelligence & Multi-Harness Escalation)** *(formerly Step 11.1 / Step 12.5)*  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Companion / Upstream Specs:* [Step 12.5A: ACP Harness Catalog, Antigravity (`agy acp`) Authentication & Container-Ready Rework](STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md) *(order-independent via optional catalog resolution & built-in ACP model fallback)*, [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.27: Dynamic Ollama & OllamaRouter Thinking Effort Discovery & Mapping](../archive/phase-12/STEP_12_27_DYNAMIC_OLLAMA_THINKING_EFFORT_MAPPING.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
+> *Companion / Upstream Specs:* [Step 12.5A: ACP Harness Catalog, Antigravity (`agy acp`) Authentication & Container-Ready Rework](STEP_12_5A_ACP_HARNESS_CATALOG_ANTIGRAVITY_AND_CONTAINER_REWORK.md) *(order-independent via optional catalog resolution & built-in ACP model fallback)*, [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.27: Dynamic Ollama & OllamaRouter Thinking Effort Discovery & Mapping](STEP_12_27_DYNAMIC_OLLAMA_THINKING_EFFORT_MAPPING.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
 > *Status:* Completed ✅ | *Target Framework:* .NET 10 (C# 13)
 
@@ -183,14 +183,14 @@ To preserve NightCodeForge's profile inheritance model (Global profiles vs. Work
    - Resolve the upcoming `WorkflowStageKind.Agentic` stage's base profile (via `context.Workspace?.AgentProfiles` or the 3-argument `_workspaceRepository.GetEffectiveAgentProfileAsync(context.Workspace.Id, nextStage.StageId, cancellationToken)` for Moq compatibility), then apply `ResolveForDifficulty(context.ForgeTask?.Difficulty ?? TaskDifficulty.Standard, fallbackArchitectProfile)` (resolving `StandardStageIds.TaskReview` only if needed for legacy fallback).
    - **Guard on `HarnessId == StandardHarnessIds.Crucible`:** Only invoke `_preloadService.PreloadModelAsync(...)` when `string.Equals(effectiveProfile.HarnessId, StandardHarnessIds.Crucible, StringComparison.OrdinalIgnoreCase)` and `!string.IsNullOrWhiteSpace(effectiveProfile.ModelName)`.
    - When the resolved effective profile uses `StandardHarnessIds.Acp` (or any non-Crucible harness), skip `_preloadService` so local GPU VRAM is not touched.
-4. **Constructor Ceiling Policy ([`AGENTS.md`](../../AGENTS.md)):**
+4. **Constructor Ceiling Policy ([`AGENTS.md`](../../../AGENTS.md)):**
    - Keep all service constructors free of optional parameters and strictly $\le 10$ parameters (`ConstructorParameterCeilingTests`). `TaskWorkspacePreparer` (10), `TaskOrchestrator` (9), `DeterministicBuildStage` (9), `BacklogMutationToolService` (9), `TaskCreationUiService` (9), and `TaskMutationService` (6) require zero additional constructor parameters.
 
 ---
 
 ### 2.4 Web UI & Presentation Specifications
 
-> **UI & Presentation Separation Rule ([AGENTS.md](../../AGENTS.md)):** Keep `.razor` components focused on layout and interaction. Extract difficulty-matrix mapping, role synchronization, built-in ACP model fallback lists, and badge formatting into dedicated services/helpers (`AgentProfileDifficultyMatrixHelper` and `TaskDifficultyPresentationHelper` in `NightCodeForge.Web.Services`).
+> **UI & Presentation Separation Rule ([AGENTS.md](../../../AGENTS.md)):** Keep `.razor` components focused on layout and interaction. Extract difficulty-matrix mapping, role synchronization, built-in ACP model fallback lists, and badge formatting into dedicated services/helpers (`AgentProfileDifficultyMatrixHelper` and `TaskDifficultyPresentationHelper` in `NightCodeForge.Web.Services`).
 
 1. **Settings $\rightarrow$ Agent Profiles Tab ([`AgentProfilesTab.razor`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Settings/AgentProfilesTab.razor)):**
    - **Section 1: 🎯 Role-Based Task Difficulty Matrix (`#difficulty-escalation-matrix`):**

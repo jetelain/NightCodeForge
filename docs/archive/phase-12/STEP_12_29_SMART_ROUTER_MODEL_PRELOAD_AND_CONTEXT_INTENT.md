@@ -1,11 +1,11 @@
 # 🚀 Step 12.29: Smart OllamaRouter Model Preload & Context-Intent Warmup
 
 > **Phase 12 Feature Specification (Fleet Optimization, Latency Hiding & Placement Telemetry)**  
-> *Parent Plan:* [Phase 12 Master Plan](../12_EXTEND_FEATURES.md)  
-> *Target Projects:* [`src/NightCodeForge.Core`](../../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Web`](../../../src/NightCodeForge.Web), [`tests/NightCodeForge.Core.Tests`](../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Infrastructure.Tests`](../../../tests/NightCodeForge.Infrastructure.Tests), [`tests/NightCodeForge.Web.Tests`](../../../tests/NightCodeForge.Web.Tests)  
+> *Parent Plan:* [Phase 12 Master Plan((../12_EXTEND_FEATURES.md)  
+> *Target Projects:* [`src/NightCodeForge.Core`((../../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`((../../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Web`((../../../src/NightCodeForge.Web), [`tests/NightCodeForge.Core.Tests`((../../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Infrastructure.Tests`((../../../tests/NightCodeForge.Infrastructure.Tests), [`tests/NightCodeForge.Web.Tests`((../../../tests/NightCodeForge.Web.Tests)  
 > *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
-> *Dependencies & OpenAPI References:* [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.18B: OllamaRouter Setup Wizard Integration](../../features/STEP_12_18B_INSTALLER_OLLAMA_MANAGER_AND_128K_MICRO_BENCHMARK.md), [Step 12.5B: Task Difficulty Classification & Role-Based Harness/Model Escalation Matrix](../../features/STEP_12_5B_TASK_DIFFICULTY_AND_ROLE_ESCALATION_MATRIX.md), [OllamaRouter OpenAPI 3.1.1 Spec](http://localhost:11434/api/router/openapi.json)  
-> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
+> *Dependencies & OpenAPI References:* [Step 11.33: Unified LLM Provider & Dynamic Fleet Integration((../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md), [Step 12.18B: OllamaRouter Setup Wizard Integration((../../features/STEP_12_18B_INSTALLER_OLLAMA_MANAGER_AND_128K_MICRO_BENCHMARK.md), [Step 12.5B: Task Difficulty Classification & Role-Based Harness/Model Escalation Matrix((../../features/STEP_12_5B_TASK_DIFFICULTY_AND_ROLE_ESCALATION_MATRIX.md), [OllamaRouter OpenAPI 3.1.1 Spec((http://localhost:11434/api/router/openapi.json)  
+> *Aligns With:* [AGENTS.md((../../../AGENTS.md), [docs/PLAN.md((../../PLAN.md)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -97,7 +97,7 @@ The endpoint is **fail-soft** once a candidate target is selected: daemon load f
       "busy": false,
       "skipReason": "Target context ceiling (16,384) below context intent (65,536)"
     }
-  ],
+  (,
   "reason": "Server-class target selected with existing residency and 0 in-flight requests"
 }
 ```
@@ -213,18 +213,18 @@ In `DeterministicBuildStage` (and deterministic post-review quality gate stages)
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [x] **Phase 1: Domain Models & Gateway Contracts in `NightCodeForge.Core`:**
-  - [x] Add `ModelPreloadOptions`, `ModelPreloadCandidate`, and `ModelPreloadResult` records to `NightCodeForge.Core.Interfaces` (or `NightCodeForge.Core.Domain`).
-  - [x] Update `ILlmModelPreloadService.PreloadModelAsync` signature to accept `ModelPreloadOptions?` and return `Task<ModelPreloadResult>`.
-  - [x] Update `DeterministicBuildStage` (and post-review deterministic quality gate lookahead) to check `OptimizationFlags.JitModelPreload`, resolve the upcoming stage's effective model/target/context intent, and pass `ModelPreloadOptions`.
+- [x( **Phase 1: Domain Models & Gateway Contracts in `NightCodeForge.Core`:**
+  - [x( Add `ModelPreloadOptions`, `ModelPreloadCandidate`, and `ModelPreloadResult` records to `NightCodeForge.Core.Interfaces` (or `NightCodeForge.Core.Domain`).
+  - [x( Update `ILlmModelPreloadService.PreloadModelAsync` signature to accept `ModelPreloadOptions?` and return `Task<ModelPreloadResult>`.
+  - [x( Update `DeterministicBuildStage` (and post-review deterministic quality gate lookahead) to check `OptimizationFlags.JitModelPreload`, resolve the upcoming stage's effective model/target/context intent, and pass `ModelPreloadOptions`.
 
-- [x] **Phase 2: Infrastructure Implementation in `NightCodeForge.Infrastructure`:**
-  - [x] Implement `OllamaRouterModelPreloadService` for `LlmProviderType.OllamaRouter` invoking `POST /api/router/models/{model}/preload`, parsing `RouterModelPreloadResponse` (including `503` response bodies and soft-intent fallback when explicit intent exceeds `ContextCeiling - 8192`), and enforcing `IOperationsControlService.IsPaused`.
-  - [x] Update `OllamaModelPreloadService` for standalone `LlmProviderType.Ollama` (`POST /api/generate` with `{ model, keep_alive }`) and `NoOpModelPreloadService` for `LlmProviderType.OpenAiCompatible` to return `ModelPreloadResult`.
-  - [x] Update `InferenceServiceCollectionExtensions.AddNightCodeForgeInference` to register `OllamaRouterModelPreloadService` when `providerType == LlmProviderType.OllamaRouter`, `OllamaModelPreloadService` when `LlmProviderType.Ollama`, and `NoOpModelPreloadService` when `LlmProviderType.OpenAiCompatible` (preserving polymorphic startup registration with zero runtime `ProviderType` branching).
-  - [x] Wire `IAgentActivityStreamer` and `IOperationsTelemetryService` notifications upon preload completion.
-  - [x] Author unit tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Core.Tests` covering smart preload path, pause guard (`OperationsPausedException`), namespaced model path construction, candidate parsing, `503` qualification fallback/reporting, and standalone Ollama preload.
+- [x( **Phase 2: Infrastructure Implementation in `NightCodeForge.Infrastructure`:**
+  - [x( Implement `OllamaRouterModelPreloadService` for `LlmProviderType.OllamaRouter` invoking `POST /api/router/models/{model}/preload`, parsing `RouterModelPreloadResponse` (including `503` response bodies and soft-intent fallback when explicit intent exceeds `ContextCeiling - 8192`), and enforcing `IOperationsControlService.IsPaused`.
+  - [x( Update `OllamaModelPreloadService` for standalone `LlmProviderType.Ollama` (`POST /api/generate` with `{ model, keep_alive }`) and `NoOpModelPreloadService` for `LlmProviderType.OpenAiCompatible` to return `ModelPreloadResult`.
+  - [x( Update `InferenceServiceCollectionExtensions.AddNightCodeForgeInference` to register `OllamaRouterModelPreloadService` when `providerType == LlmProviderType.OllamaRouter`, `OllamaModelPreloadService` when `LlmProviderType.Ollama`, and `NoOpModelPreloadService` when `LlmProviderType.OpenAiCompatible` (preserving polymorphic startup registration with zero runtime `ProviderType` branching).
+  - [x( Wire `IAgentActivityStreamer` and `IOperationsTelemetryService` notifications upon preload completion.
+  - [x( Author unit tests in `NightCodeForge.Infrastructure.Tests` and `NightCodeForge.Core.Tests` covering smart preload path, pause guard (`OperationsPausedException`), namespaced model path construction, candidate parsing, `503` qualification fallback/reporting, and standalone Ollama preload.
 
-- [x] **Phase 3: Web UI & Monitoring in `NightCodeForge.Web`:**
-  - [x] Extend `OperationsTelemetryUiService` and `/monitoring` components (`ActiveOperationsHero.razor` and `WorkerStatusCard.razor`) to surface live preload state and target residency.
-  - [x] Author unit tests in `NightCodeForge.Web.Tests`.
+- [x( **Phase 3: Web UI & Monitoring in `NightCodeForge.Web`:**
+  - [x( Extend `OperationsTelemetryUiService` and `/monitoring` components (`ActiveOperationsHero.razor` and `WorkerStatusCard.razor`) to surface live preload state and target residency.
+  - [x( Author unit tests in `NightCodeForge.Web.Tests`.
