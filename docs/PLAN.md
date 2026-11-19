@@ -10,16 +10,18 @@ NightCodeForge's planning specifications are organized into three areas:
 | 🚀 **Features & Integrations** | [**docs/features/README.md**](features/README.md) | [`docs/features/`](features/) | Active new features, developer ergonomics, and ecosystem integrations (remaining steps from Phase 12). |
 | 🏛️ **Completed Archive** | [**docs/archive/README.md**](archive/README.md) | [`docs/archive/`](archive/) | Completed MVP phases (Phases 1–10) and all completed Phase 11 & Phase 12 step specifications. |
 
-### 🔥 Next in Line (Immediate Implementation Queue)
+### 🔥 `v0.1.0` Parallel Execution Plan (4 Streams)
 
-The following steps are prioritized next in line for implementation in order:
+To accelerate delivery of **`v0.1.0`**, active work is organized into four streams (see [docs/features/README.md](features/README.md) for full details):
 
-| Order | Step | Specification | Strategic Goal & Attention Points |
-| :---: | :--- | :--- | :--- |
-| **1** | **11.51** | [🔗 Step 11.51: Remove Implicit Sequential Dependencies in `propose_tasks`](fixes/STEP_11_51_REMOVE_IMPLICIT_PROPOSE_TASKS_DEPENDENCIES.md) | **Independent intra-batch proposals** — Remove implicit `i - 1` / `previousTaskId` chaining in `BacklogManagementToolModule.ProposeTasksAsync`, `BacklogMutationToolService.ProposeTasksAsync`/`ResolveProposalDependencies`, and `IdeationService.ParseProposals`, preserving explicit `depends_on_ids` / `dependsOnTitles` and updating Ideation prompt guidance. |
-| **2** | **11.52** | [🔄 Step 11.52: Synchronize Ideation Proposal View When Agent Updates Proposed Tasks](fixes/STEP_11_52_IDEATION_PROPOSAL_VIEW_SYNC_ON_AGENT_UPDATES.md) | **Authoritative persisted task sync** — Reconcile `DependsOnTitles`, `SelectedDependencyIds`, and `SelectedAttachmentIds` from persisted `ForgeTask` in `IdeationProposalViewModel.FromProposal` & `SyncFromTask`, and prevent `Ideation.razor` end-of-turn reconciliation from re-adding cancelled proposals. |
-| **3** | **11.53** | [⚡ Step 11.53: Schedule `Open` Task When Blocking Dependencies Are Removed](fixes/STEP_11_53_SCHEDULE_OPEN_TASK_ON_DEPENDENCY_REMOVAL.md) | **Unblock & schedule `Open` tasks** — Add `ITaskJobQueue.IsJobActive` and `ITaskOrchestrator.TryScheduleOpenTaskIfReadyAsync` (verifying `Open` status, closed prerequisites across repository & store, and no active Hangfire job while keeping `BacklogMutationToolService` `<= 10` constructor parameters), invoked from `TaskMutationService.UpdateDependenciesAsync` and `BacklogMutationToolService.EditTaskAsync`. |
-| **4** | **12.1B** | [🔗 Step 12.1B: Dynamic Task Suspension on Unclosed Prerequisites & UI Blocker Badges](features/STEP_12_1B_ORCHESTRATOR_PREREQUISITE_SUSPENSION_AND_BLOCKER_UI.md) | **Prerequisite safety & DAG clarity** — Post-Stage-1 prerequisite audit in `TaskOrchestrator` via `ITaskMergeAndCascadeCoordinator` (suspending to clean pre-Stage-1 `Open` state, removing worktree/container, and deleting stale `feature/task-{id}` branch via `ITaskWorkspacePreparer` so DAG cascade re-branches cleanly), `TaskDependencyPresentationHelper`, and blocker badges in Kanban & Task Detail. |
+| Stream | Focus | Included Steps | Parallelism |
+| :--- | :--- | :--- | :--- |
+| **1. Common Trunk** | **Stabilize Internals** (`Core`, `Agents`, `Orchestrator`, `config/config.json`) | [12.1B](features/STEP_12_1B_ORCHESTRATOR_PREREQUISITE_SUSPENSION_AND_BLOCKER_UI.md) *(Next in Line)*, [12.31](features/STEP_12_31_INTERACTIVE_IDEATION_AGENT_COORDINATOR_AND_WARM_EXECUTION_CONTEXT.md), [12.2D](features/STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md), [12.39](features/STEP_12_39_TWO_TIER_AGENT_MEMORY_MANAGEMENT_AND_UI_NOTIFICATIONS.md) *(+ opportunistic [11.49B](fixes/STEP_11_49B_RETIRE_OLLAMASHARP_STREAM_CANCELLATION_WORKAROUND.md))* | Trunk (freeze APIs) |
+| **2. Installer** | **Avalonia OOBE Wizard & Atomic Updater** | [12.18A](features/STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md), [12.18B](features/STEP_12_18B_INSTALLER_OLLAMA_MANAGER_AND_128K_MICRO_BENCHMARK.md), [12.18C](features/STEP_12_18C_INSTALLER_AVALONIA_OOBE_WIZARD_AND_MAINTENANCE_HUB.md) | Parallel |
+| **3. Benchmark** | **Standalone CLI** (`Agents` + mock DB for Implementation, Code Review, Task Review) | [12.23A](features/STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md), [12.23B](features/STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md) | Parallel |
+| **4. `v0.1` Features** | **Onboarding & Diagnostic UI** | [12.32A](features/STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md), [12.32B](features/STEP_12_32B_WORKSPACE_TEMPLATES_NATIVE_CLI_SCAFFOLDING_AND_REMOTE_PUBLISH.md), [12.4](features/STEP_12_4_IDEATION_QUICK_NOTES_SUGGESTIONS_AND_DRAFT_PRUNING.md), [12.22A](features/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md), [12.22B](features/STEP_12_22B_DIAGNOSTIC_BASH_CONSOLE_WEB_UI.md) *(+ optional [12.7](features/STEP_12_7_DEVSKIM_SAST_QUALITY_GATE.md), [12.9](features/STEP_12_9_CUSTOM_SCRIPTS_FOR_DETERMINISTIC_STEPS.md))* | Parallel |
+
+*(Deferred to **Post-`v0.1.0` / `v0.2`**: SLM delegating clients `11.43C`, MCP `12.10A/B`, Voice `12.12`, `mdfetch` config `12.20B`, Envoy `12.21A/B`, DiffGuard `12.28A/B`, and Nightwatch `12.34A/B/C` + `12.35B`.)*
 
 ---
 

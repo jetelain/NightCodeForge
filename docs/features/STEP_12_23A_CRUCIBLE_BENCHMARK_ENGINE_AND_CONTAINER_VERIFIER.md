@@ -13,21 +13,28 @@
 
 ## 1. Executive Objective
 
-Provide a dedicated benchmark execution engine that runs **SWE-Sharp-Bench** (and compatible SWE-bench / custom JSONL benchmarks) directly through the **Crucible agent loop** without invoking the 6-stage NightCodeForge workflow or creating synthetic SQLite `Workspace`/`ForgeTask` rows:
-1. **SWE-Sharp-Bench / SWE-bench Dataset Ingestion (`IBenchmarkDatasetLoader`):** Parse `.jsonl` and `.json` files (`instance_id`, `repo`, `base_commit`, `problem_statement`, `hints_text`, `patch` $\rightarrow$ `GoldPatch`, `test_patch`, `fail_to_pass`, `pass_to_pass`).
+Provide a dedicated, **strictly standalone** benchmark execution engine that evaluates **"Implementation"**, **"Code Review"**, and **"Task Review"** problems directly through `NightCodeForge.Agents` (`CrucibleAgentHarness` and related agent classes) using a **mock / in-memory database**—without invoking the 6-stage NightCodeForge orchestrator, Hangfire, `NightCodeForge.Web`, or real SQLite `Workspace`/`ForgeTask` rows:
+1. **Multi-Category Dataset Ingestion (`IBenchmarkDatasetLoader`):** Parse `.jsonl` and `.json` files across three problem categories:
+   - **Implementation** (SWE-Sharp-Bench / SWE-bench format: `instance_id`, `repo`, `base_commit`, `problem_statement`, `hints_text`, `patch` $\rightarrow$ `GoldPatch`, `test_patch`, `fail_to_pass`, `pass_to_pass`).
+   - **Code Review** (problem statement + candidate diff / branch, expected review verdict and findings).
+   - **Task Review** (task specification + repository context, expected specification-enforcement / readiness verdict).
 2. **Leak-Free Ephemeral Workspace Provisioning (`IBenchmarkWorkspaceManager`):** Maintain a local repository cache (`~/.nightcodeforge/benchmarks/repos/{owner}__{repo}`) and initialize each benchmark instance workspace via `git init` + `git fetch <cachedRepoPath> <BaseCommit>` + `git checkout --detach FETCH_HEAD` so zero commits, tags, or branches after `BaseCommit` exist in `.git`.
-3. **Stateless Single-Shot Crucible Runner (`ICrucibleBenchmarkRunner`):** Decouple `CrucibleAgentHarness` turn persistence from `ITaskRepository`, run autonomous sessions with `["read", "edit", "write", "bash"]` (plus `"load_skill"` and `~/.dotnet/tools` mount when `EnableStackSkills == true`, strictly excluding `ask`, `propose_tasks`, `request_changes`, `web_search`, and `mdfetch`), and export standard `predictions.jsonl`.
-4. **Built-In Containerized Verification & Telemetry Scorecard:** Apply `model_patch` + `TestPatch` inside `NightCodeForgeContainerExecutor`, run `FailToPass` and `PassToPass` tests, and compute `BenchmarkInstanceResult` (`ToolCallTelemetryBreakdown` including `CsNavBashCalls`, `CodeCondenserBashCalls`, `EditFailures`, and `DispatcherRepairs`) and `BenchmarkCandidateSummary`.
+3. **Stateless Crucible Runner with Mock DB (`ICrucibleBenchmarkRunner`):** Wire `CrucibleAgentHarness` against mock/in-memory implementations of `ITaskRepository`, `IWorkspaceRepository`, `ICrucibleConversationCoordinator` (capturing turns in memory and markdown transcripts), `ITaskCancellationManager`, and `IOperationsControlService`. Evaluate across both **model configurations** and **tooling versions / flags** (e.g., stack skills `csnav`/`codecondenser` on/off or versioned, `LocalOptimizationFlags`), exporting `predictions.jsonl` for implementation runs.
+4. **Built-In Verification & Telemetry Scorecard:**
+   - For **Implementation**: Apply `model_patch` + `TestPatch` inside `NightCodeForgeContainerExecutor`, run `FailToPass` and `PassToPass` tests.
+   - For **Code Review** and **Task Review**: Evaluate the agent's review verdict and structured findings against the dataset's expected ground-truth outcome.
+   - Compute `BenchmarkInstanceResult` (`ToolCallTelemetryBreakdown` including `CsNavBashCalls`, `CodeCondenserBashCalls`, `EditFailures`, and `DispatcherRepairs`) and `BenchmarkCandidateSummary`.
 
-*(The `ncf benchmark` CLI commands and `/benchmarks` Web UI leaderboard & diff inspector are specified in [Step 12.23B](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md).)*
+*(The standalone Benchmark CLI commands `run` and `report` are specified in [Step 12.23B](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md).)*
 
 ---
 
 ## 2. Architecture & Technical Specification
 
 ### 2.1 Domain Models (`NightCodeForge.Core.Benchmarking`)
-- `BenchmarkInstance`: `InstanceId`, `Repo`, `BaseCommit`, `ProblemStatement`, `HintsText`, `GoldPatch`, `TestPatch`, `FailToPass`, `PassToPass`, `CustomContainerImage`, `CustomTestCommand`.
-- `BenchmarkModelCandidate`: `CandidateId`, `DisplayName`, `ModelName`, `ThinkingEffort`, `ThinkingTokenBudget`, `ContextWindowTokens`, `Temperature`, `MaxTurns`, `InstanceTimeoutSeconds`, `OptimizationFlags`, `EnableStackSkills`.
+- `BenchmarkProblemCategory`: `Implementation`, `CodeReview`, `TaskReview`.
+- `BenchmarkInstance`: `InstanceId`, `Category`, `Repo`, `BaseCommit`, `ProblemStatement`, `HintsText`, `GoldPatch`, `TestPatch`, `FailToPass`, `PassToPass`, `CandidatePatch` (for `CodeReview`), `TaskSpecification` (for `TaskReview`), `ExpectedVerdict`, `ExpectedFindings`, `CustomContainerImage`, `CustomTestCommand`.
+- `BenchmarkModelCandidate`: `CandidateId`, `DisplayName`, `ModelName`, `ThinkingEffort`, `ThinkingTokenBudget`, `ContextWindowTokens`, `Temperature`, `MaxTurns`, `InstanceTimeoutSeconds`, `OptimizationFlags`, `EnableStackSkills`, `ToolingVersionTag`.
 - `BenchmarkRunRequest`: `SuiteName`, `DatasetPath`, `InstanceIdFilter`, `MaxInstances`, `Candidates`, `IncludeHints`, `VerifyWithTests`, `ExecutionMode`.
 - `ToolCallTelemetryBreakdown`, `BenchmarkInstanceOutcome`, `BenchmarkInstanceResult`, and `BenchmarkCandidateSummary`.
 
