@@ -358,10 +358,6 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         {
             var task = discovered[i];
             var deps = task.DependsOnTitles?.ToList() ?? new List<string>();
-            if (deps.Count == 0 && (task.DependsOnIds == null || task.DependsOnIds.Count == 0) && i > 0 && discovered.Count > 1)
-            {
-                deps.Add(discovered[i - 1].Title);
-            }
             var unionAttachments = AttachmentCitationParser.UnionAttachmentIds(task.AttachmentIds, task.Description);
             discovered[i] = task with
             {

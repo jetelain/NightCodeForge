@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Agents`, `NightCodeForge.Agents.Tests`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
 
@@ -41,13 +41,13 @@ Previously, this convenience prevented independent tasks from racing without exp
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Remove the implicit `discovered[i - 1].Title` dependency injection from `BacklogManagementToolModule.ProposeTasksAsync`.
-- [ ] Remove the implicit `previousTaskId` dependency chaining from `BacklogMutationToolService.ProposeTasksAsync` and `BacklogMutationToolService.ResolveProposalDependencies`.
-- [ ] Remove the implicit `parsed[i - 1].Title` dependency injection from `IdeationService.ParseProposals`.
-- [ ] Update the Ideation system prompt in `IdeationService` to reflect that intra-batch tasks are independent unless explicitly linked.
-- [ ] Update existing unit tests in:
+- [x] Remove the implicit `discovered[i - 1].Title` dependency injection from `BacklogManagementToolModule.ProposeTasksAsync`.
+- [x] Remove the implicit `previousTaskId` dependency chaining from `BacklogMutationToolService.ProposeTasksAsync` and `BacklogMutationToolService.ResolveProposalDependencies`.
+- [x] Remove the implicit `parsed[i - 1].Title` dependency injection from `IdeationService.ParseProposals`.
+- [x] Update the Ideation system prompt in `IdeationService` to reflect that intra-batch tasks are independent unless explicitly linked.
+- [x] Update existing unit tests in:
   - `tests/NightCodeForge.Agents.Tests/BacklogMutationToolServiceTests.cs` (`ProposeTasks_MultipleProposals_CreatesSequentialDraftTasks_AndReturnsJsonArray`),
   - `tests/NightCodeForge.Agents.Tests/Tools/BacklogManagementToolModuleTests.cs` (`ProposeTasks_HandlesAllInputShapes_SequentialAutoChaining_AndDerivedTitles`), and
   - `tests/NightCodeForge.Agents.Tests/IdeationServiceTests.cs` (`ConverseStreamingAsync_ProposeTasks_EstablishesSequentialDependencies_WhenMultipleTasksProposed`, `ConverseStreamingAsync_ProposeTasks_HandlesSerializedJsonStringArgument`, `ConverseStreamingAsync_SystemPrompt_InstructsProposeTasksInsteadOfMarkdownJson`),
   and add/verify tests confirming multi-task `propose_tasks` calls produce independent tasks when no dependencies are specified while still honoring explicit `depends_on_ids` / `dependsOnTitles` (including intra-batch references).
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

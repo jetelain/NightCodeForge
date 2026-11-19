@@ -534,7 +534,7 @@ public class BacklogMutationToolServiceTests
     }
 
     [Fact]
-    public async Task ProposeTasks_MultipleProposals_CreatesSequentialDraftTasks_AndReturnsJsonArray()
+    public async Task ProposeTasks_MultipleProposalsWithoutDependencies_CreatesIndependentDraftTasks_AndReturnsJsonArray()
     {
         var proposals = new List<TaskProposal>
         {
@@ -551,9 +551,39 @@ public class BacklogMutationToolServiceTests
         var id2 = doc.RootElement[1].GetProperty("id").GetInt32();
         Assert.Equal("Draft", doc.RootElement[0].GetProperty("status").GetString());
         Assert.Equal("Draft", doc.RootElement[1].GetProperty("status").GetString());
+        Assert.Empty(doc.RootElement[0].GetProperty("prerequisites").EnumerateArray());
+        Assert.Empty(doc.RootElement[1].GetProperty("prerequisites").EnumerateArray());
 
-        var task2Deps = await _repository.GetDependenciesAsync(id2);
-        Assert.Contains(id1, task2Deps);
+        Assert.Empty(await _repository.GetDependenciesAsync(id1));
+        Assert.Empty(await _repository.GetDependenciesAsync(id2));
+    }
+
+    [Fact]
+    public async Task ProposeTasks_MultipleProposalsWithMixedExplicitAndIndependentTasks_PreservesOnlyExplicitDependencies()
+    {
+        var existing = await AddTaskAsync("Existing Core Infrastructure");
+
+        var proposals = new List<TaskProposal>
+        {
+            new("Task A - Independent", "Independent first task", 2),
+            new("Task B - Depends on Existing", "Uses existing infra", priority: 2, dependsOnIds: [existing.Id]),
+            new("Task C - Also Independent", "Independent third task", 3),
+            new("Task D - Depends on Task A", "Explicitly depends on Task A only", 3, dependsOnTitles: ["Task A - Independent"])
+        };
+
+        var json = await _service.ProposeTasksAsync(_scope, proposals, CancellationToken.None);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(4, doc.RootElement.GetArrayLength());
+
+        var idA = doc.RootElement[0].GetProperty("id").GetInt32();
+        var idB = doc.RootElement[1].GetProperty("id").GetInt32();
+        var idC = doc.RootElement[2].GetProperty("id").GetInt32();
+        var idD = doc.RootElement[3].GetProperty("id").GetInt32();
+
+        Assert.Empty(await _repository.GetDependenciesAsync(idA));
+        Assert.Equal([existing.Id], await _repository.GetDependenciesAsync(idB));
+        Assert.Empty(await _repository.GetDependenciesAsync(idC));
+        Assert.Equal([idA], await _repository.GetDependenciesAsync(idD));
     }
 
     [Fact]

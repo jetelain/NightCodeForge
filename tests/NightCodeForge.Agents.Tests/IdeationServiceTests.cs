@@ -110,6 +110,41 @@ Let me know what you think!";
     }
 
     [Fact]
+    public async Task ConverseAsync_ExtractsProposals_FromMarkdownJsonCodeBlock_DoesNotInjectImplicitDependencies()
+    {
+        var jsonResponse = @"```json
+[
+  {
+    ""title"": ""First Task"",
+    ""description"": ""First desc"",
+    ""priority"": 1
+  },
+  {
+    ""title"": ""Unlinked Middle Task"",
+    ""description"": ""Independent desc"",
+    ""priority"": 2
+  },
+  {
+    ""title"": ""Third Task"",
+    ""description"": ""Depends explicitly on First Task"",
+    ""priority"": 3,
+    ""dependsOnTitles"": [""First Task""]
+  }
+]
+```";
+
+        var fakeClient = new FakeChatClient { ResponseToReturn = jsonResponse };
+        var service = CreateService(fakeClient);
+
+        var result = await service.ConverseAsync(CreateWorkspace(1, "Test WS"), "Plan tasks");
+
+        Assert.Equal(3, result.ProposedTasks.Count);
+        Assert.Empty(result.ProposedTasks[0].DependsOnTitles ?? Array.Empty<string>());
+        Assert.Empty(result.ProposedTasks[1].DependsOnTitles ?? Array.Empty<string>());
+        Assert.Equal(["First Task"], result.ProposedTasks[2].DependsOnTitles);
+    }
+
+    [Fact]
     public async Task ConverseAsync_UsesWorkspaceIdeationProfile_WhenPresent()
     {
         ChatOptions? capturedOptions = null;
@@ -697,7 +732,7 @@ Let me know what you think!";
     }
 
     [Fact]
-    public async Task ConverseStreamingAsync_ProposeTasks_EstablishesSequentialDependencies_WhenMultipleTasksProposed()
+    public async Task ConverseStreamingAsync_ProposeTasks_KeepsMultipleTasksIndependent_WhenNoDependenciesSpecified()
     {
         int turn = 0;
         var client = new MultiTurnStreamingChatClient((messages) =>
@@ -715,7 +750,7 @@ Let me know what you think!";
                     }
                 })]);
             }
-            return new ChatResponseUpdate(ChatRole.Assistant, "I have proposed 3 sequential tasks for your review.");
+            return new ChatResponseUpdate(ChatRole.Assistant, "I have proposed 3 independent tasks for your review.");
         });
 
         var service = CreateService(client);
@@ -733,29 +768,70 @@ Let me know what you think!";
 
         Assert.Equal(3, proposals.Count);
 
-        // Task 0: No predecessor
-        Assert.Equal("Setup DB migrations", proposals[0].Title);
-        Assert.Empty(proposals[0].DependsOnTitles ?? Array.Empty<string>());
+        foreach (var proposal in proposals)
+        {
+            Assert.Empty(proposal.DependsOnTitles ?? Array.Empty<string>());
+            Assert.True(proposal.DependsOnIds == null || proposal.DependsOnIds.Count == 0);
+        }
 
-        // Task 1: Implicit dependency on Task 0
-        Assert.Equal("Implement repository layer", proposals[1].Title);
-        Assert.NotNull(proposals[1].DependsOnTitles);
-        Assert.Contains("Setup DB migrations", proposals[1].DependsOnTitles!);
-
-        // Task 2: Implicit dependency on Task 1
-        Assert.Equal("Expose endpoints", proposals[2].Title);
-        Assert.NotNull(proposals[2].DependsOnTitles);
-        Assert.Contains("Implement repository layer", proposals[2].DependsOnTitles!);
-
-        // Verify real-time stream events
+        // Verify real-time stream events also have no implicit dependencies
         var discoveredUpdates = streamUpdates
             .Where(u => u.Kind == IdeationStreamUpdateKind.ProposalDiscovered && u.Proposal != null)
             .Select(u => u.Proposal!)
             .ToList();
 
         Assert.Equal(3, discoveredUpdates.Count);
-        Assert.Contains("Setup DB migrations", discoveredUpdates[1].DependsOnTitles!);
-        Assert.Contains("Implement repository layer", discoveredUpdates[2].DependsOnTitles!);
+        foreach (var discovered in discoveredUpdates)
+        {
+            Assert.Empty(discovered.DependsOnTitles ?? Array.Empty<string>());
+            Assert.True(discovered.DependsOnIds == null || discovered.DependsOnIds.Count == 0);
+        }
+    }
+
+    [Fact]
+    public async Task ConverseStreamingAsync_ProposeTasks_PreservesExplicitDependencies_WithoutImplicitChaining()
+    {
+        int turn = 0;
+        var client = new MultiTurnStreamingChatClient((messages) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?>
+                {
+                    ["tasks"] = new List<object?>
+                    {
+                        new Dictionary<string, object?> { ["title"] = "Setup DB migrations", ["description"] = "Configure schema" },
+                        new Dictionary<string, object?> { ["title"] = "Add metrics endpoint", ["description"] = "Independent observability work" },
+                        new Dictionary<string, object?>
+                        {
+                            ["title"] = "Expose domain API",
+                            ["description"] = "Depends on schema and task #42",
+                            ["dependsOnTitles"] = new List<object?> { "Setup DB migrations" },
+                            ["depends_on_ids"] = new List<object?> { 42 }
+                        }
+                    }
+                })]);
+            }
+            return new ChatResponseUpdate(ChatRole.Assistant, "Proposed tasks with explicit dependencies.");
+        });
+
+        var service = CreateService(client);
+        var workspace = CreateWorkspace(10);
+
+        var result = await service.ConverseAsync(workspace, "Plan feature implementation");
+        var proposals = result.ProposedTasks;
+
+        Assert.Equal(3, proposals.Count);
+
+        Assert.Empty(proposals[0].DependsOnTitles ?? Array.Empty<string>());
+        Assert.Empty(proposals[0].DependsOnIds ?? Array.Empty<int>());
+
+        Assert.Empty(proposals[1].DependsOnTitles ?? Array.Empty<string>());
+        Assert.Empty(proposals[1].DependsOnIds ?? Array.Empty<int>());
+
+        Assert.Equal(["Setup DB migrations"], proposals[2].DependsOnTitles);
+        Assert.Equal([42], proposals[2].DependsOnIds);
     }
 
     [Fact]
@@ -797,7 +873,7 @@ Let me know what you think!";
                 var innerJson = "[{\"title\": \"Step Alpha\", \"description\": \"Alpha details\"}, {\"title\": \"Step Beta\", \"description\": \"Beta details\"}]";
                 return new ChatResponseUpdate(ChatRole.Assistant, [new FunctionCallContent("call-1", "propose_tasks", new Dictionary<string, object?> { ["tasks"] = innerJson })]);
             }
-            return new ChatResponseUpdate(ChatRole.Assistant, "Sequential tasks parsed.");
+            return new ChatResponseUpdate(ChatRole.Assistant, "Independent tasks parsed.");
         });
 
         var service = CreateService(client);
@@ -807,8 +883,9 @@ Let me know what you think!";
 
         Assert.Equal(2, result.ProposedTasks.Count);
         Assert.Equal("Step Alpha", result.ProposedTasks[0].Title);
+        Assert.Empty(result.ProposedTasks[0].DependsOnTitles ?? Array.Empty<string>());
         Assert.Equal("Step Beta", result.ProposedTasks[1].Title);
-        Assert.Contains("Step Alpha", result.ProposedTasks[1].DependsOnTitles!);
+        Assert.Empty(result.ProposedTasks[1].DependsOnTitles ?? Array.Empty<string>());
     }
 
     [Fact]
@@ -831,7 +908,10 @@ Let me know what you think!";
 
         // Must instruct using the propose_tasks tool
         Assert.Contains("propose_tasks", systemMsg.Text);
-        Assert.Contains("sequentially with dependencies established automatically", systemMsg.Text);
+        Assert.DoesNotContain("sequentially with dependencies established automatically", systemMsg.Text);
+        Assert.Contains("independent by default", systemMsg.Text);
+        Assert.Contains("depends_on_ids", systemMsg.Text);
+        Assert.Contains("edit_task", systemMsg.Text);
         Assert.Contains("do NOT output markdown JSON codeblocks", systemMsg.Text);
 
         // Must NOT ask the model for markdown JSON codeblocks

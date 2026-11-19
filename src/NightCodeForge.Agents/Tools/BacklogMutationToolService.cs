@@ -448,7 +448,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         if (proposals.Count == 1)
         {
             var single = proposals[0];
-            var singleDeps = ResolveProposalDependencies(single, workspaceTasks, Array.Empty<ForgeTask>(), previousTaskId: null);
+            var singleDeps = ResolveProposalDependencies(single, workspaceTasks, Array.Empty<ForgeTask>());
             var (_, singleJson) = await ProposeSingleTaskAsync(
                 scope,
                 single.Title,
@@ -464,11 +464,10 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
         var createdTasks = new List<JsonElement>(proposals.Count);
         var createdEntities = new List<ForgeTask>(proposals.Count);
-        int? previousTaskId = null;
 
         foreach (var p in proposals)
         {
-            var deps = ResolveProposalDependencies(p, workspaceTasks, createdEntities, previousTaskId);
+            var deps = ResolveProposalDependencies(p, workspaceTasks, createdEntities);
 
             var (created, singleResultJson) = await ProposeSingleTaskAsync(
                 scope,
@@ -482,7 +481,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 cancellationToken);
 
             createdEntities.Add(created);
-            previousTaskId = created.Id;
             createdTasks.Add(JsonSerializer.Deserialize<JsonElement>(singleResultJson));
         }
 
@@ -492,8 +490,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     private static IReadOnlyList<int>? ResolveProposalDependencies(
         TaskProposal proposal,
         IReadOnlyList<ForgeTask>? workspaceTasks,
-        IReadOnlyList<ForgeTask> createdBatchTasks,
-        int? previousTaskId)
+        IReadOnlyList<ForgeTask> createdBatchTasks)
     {
         var deps = new List<int>();
         if (proposal.DependsOnIds is { Count: > 0 })
@@ -501,8 +498,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             deps.AddRange(proposal.DependsOnIds);
         }
 
-        bool hasTitleDependencies = proposal.DependsOnTitles is { Count: > 0 };
-        if (hasTitleDependencies)
+        if (proposal.DependsOnTitles is { Count: > 0 })
         {
             var activeCandidates = createdBatchTasks
                 .Concat(workspaceTasks?.Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
@@ -538,11 +534,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                     deps.Add(partial.Id);
                 }
             }
-        }
-
-        if (deps.Count == 0 && !hasTitleDependencies && previousTaskId.HasValue)
-        {
-            deps.Add(previousTaskId.Value);
         }
 
         return deps.Count > 0 ? deps.Distinct().OrderBy(id => id).ToList() : null;

@@ -149,7 +149,7 @@ public sealed class BacklogManagementToolModuleTests
     }
 
     [Fact]
-    public async Task ProposeTasks_HandlesAllInputShapes_SequentialAutoChaining_AndDerivedTitles()
+    public async Task ProposeTasks_HandlesAllInputShapes_NoImplicitChaining_AndDerivedTitles()
     {
         var module = new BacklogManagementToolModule(new CanonicalToolScope("/workspace", WorkspaceId: 1));
 
@@ -197,8 +197,14 @@ public sealed class BacklogManagementToolModuleTests
         Assert.Contains("Proposed 3 backlog task(s):", batchResult);
         Assert.Equal(3, module.PendingProposals.Count);
 
-        // Step B had no explicit deps, so it auto-chained to Step A
-        Assert.Equal(["Step A"], module.PendingProposals[1].DependsOnTitles);
+        // Step A and Step B had no explicit deps and remain independent (no implicit chaining)
+        Assert.NotNull(module.PendingProposals[0].DependsOnTitles);
+        Assert.Empty(module.PendingProposals[0].DependsOnTitles!);
+        Assert.Null(module.PendingProposals[0].DependsOnIds);
+
+        Assert.NotNull(module.PendingProposals[1].DependsOnTitles);
+        Assert.Empty(module.PendingProposals[1].DependsOnTitles!);
+        Assert.Null(module.PendingProposals[1].DependsOnIds);
 
         // Step C parsed explicit dependsOnTitles and depends_on_ids
         Assert.Equal([15, 25], module.PendingProposals[2].DependsOnIds);
@@ -248,7 +254,10 @@ public sealed class BacklogManagementToolModuleTests
         mockService
             .Setup(s => s.ProposeTasksAsync(
                 new BacklogToolScope(9, "/workspace"),
-                It.Is<IReadOnlyList<TaskProposal>>(p => p.Count == 2),
+                It.Is<IReadOnlyList<TaskProposal>>(p =>
+                    p.Count == 2 &&
+                    p[0].DependsOnTitles != null && p[0].DependsOnTitles!.Count == 0 &&
+                    p[1].DependsOnTitles != null && p[1].DependsOnTitles!.Count == 0),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("""[{"id": 201, "prerequisites": []}, {"id": 202, "prerequisites": [201]}]""");
 

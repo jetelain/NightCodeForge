@@ -282,7 +282,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
    - When you recommend one or more implementation tasks, do NOT output markdown JSON codeblocks in your response.
    - Instead, invoke the 'propose_tasks' tool with your proposed task(s). Proposing tasks creates draft task(s) and returns their details and numeric IDs so you can reference them in subsequent calls (e.g. dependencies, edit_task, etc.).
    - Structure each task's description with clear Markdown sections (## Summary, ## Functional Scope / Sub-tasks, ## Acceptance Criteria, ## Testing Plan).
-   - If multiple tasks are proposed, they will be scheduled sequentially with dependencies established automatically (or via depends_on_ids / dependsOnTitles).
+   - Multiple tasks proposed in a single call are independent by default (no implicit sequential dependencies are created). Whenever a task genuinely depends on an existing task or on another task proposed in the same batch, specify it explicitly via 'depends_on_ids' / 'dependsOnTitles' (or update it afterwards with 'edit_task').
    - After proposing tasks, explain your proposal and architectural rationale clearly to the developer.
 
 5. EXISTING BACKLOG & ISSUE AWARENESS:
@@ -301,7 +301,7 @@ When proposing implementation tasks to the developer, adhere to the following ru
 When planning or proposing tasks:
 1. Cross-reference your ideas against the `<existing_workspace_tasks>` list above (which contains top active backlog tasks ordered by priority).
 2. DO NOT propose duplicate tasks for capabilities already captured in existing tasks or already merged in the codebase.
-3. If your proposed task builds on, calls, or extends interfaces or data models introduced in an existing open, suggested, or draft task, you MUST set 'depends_on_ids' in your 'propose_tasks' call (or 'dependsOnTitles') with the numeric ID (or title) of the prerequisite task.
+3. If your proposed task builds on, calls, or extends interfaces or data models introduced in an existing open, suggested, or draft task (or an earlier task proposed in the same batch), you MUST set 'depends_on_ids' in your 'propose_tasks' call (or 'dependsOnTitles') with the numeric ID (or title) of the prerequisite task.
 4. Explain to the developer why this dependency exists and the recommended order of execution.
 5. AVOID CIRCULAR DEPENDENCIES: Ensure your dependencies form a strict acyclic graph. Circular dependencies will be rejected with an error.
 </dependency_identification_rules>
@@ -871,18 +871,6 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
                     if (p.DependsOnTitles != null && p.DependsOnTitles.Count > 0)
                     {
                         deps.AddRange(p.DependsOnTitles.Where(d => !string.IsNullOrWhiteSpace(d)));
-                    }
-
-                    // Enforce sequential implicit dependencies if multiple tasks are parsed:
-                    // Task i (for i > 0) depends on Task i - 1.
-                    if (parsed.Count > 1 && i > 0)
-                    {
-                        var prevTitle = parsed[i - 1].Title?.Trim();
-                        if (!string.IsNullOrWhiteSpace(prevTitle) &&
-                            !deps.Any(d => string.Equals(d, prevTitle, StringComparison.OrdinalIgnoreCase)))
-                        {
-                            deps.Add(prevTitle);
-                        }
                     }
 
                     var attachmentIds = AttachmentCitationParser.UnionAttachmentIds(p.AttachmentIds, p.Description);
