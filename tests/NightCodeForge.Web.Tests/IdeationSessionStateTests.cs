@@ -343,5 +343,235 @@ public class IdeationSessionStateTests
         Assert.Empty(second.SelectedDependencyIds);
         Assert.Empty(second.DependsOnTitles);
     }
+
+    [Fact]
+    public void SyncFromTask_ClearingAllDependencies_WithEmptyOrNullDependencies_ClearsSelectedAndTitlesWithoutResurrection()
+    {
+        var prereq = new ForgeTask { Id = 10, Title = "Prereq Task", Status = TaskOverallStatus.Draft };
+        var draftEmptyDeps = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Draft Empty", "Scope", 2, DependsOnTitles: ["Prereq Task", "#10"], TaskId: 20, DependsOnIds: [10]),
+            [prereq]);
+        var draftNullDeps = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Draft Null", "Scope", 2, DependsOnTitles: ["Prereq Task"], TaskId: 21, DependsOnIds: [10]),
+            [prereq]);
+
+        Assert.Equal([10], draftEmptyDeps.SelectedDependencyIds);
+        Assert.NotEmpty(draftEmptyDeps.DependsOnTitles);
+        Assert.Equal([10], draftNullDeps.SelectedDependencyIds);
+        Assert.NotEmpty(draftNullDeps.DependsOnTitles);
+
+        var updatedEmpty = new ForgeTask
+        {
+            Id = 20,
+            Title = "Draft Empty",
+            Description = "Scope",
+            Priority = 2,
+            Status = TaskOverallStatus.Draft,
+            Dependencies = new List<TaskDependency>()
+        };
+        var updatedNull = new ForgeTask
+        {
+            Id = 21,
+            Title = "Draft Null",
+            Description = "Scope",
+            Priority = 2,
+            Status = TaskOverallStatus.Draft,
+            Dependencies = null!
+        };
+
+        var session = new IdeationSessionState();
+        session.Proposals.AddRange([draftEmptyDeps, draftNullDeps]);
+        session.SyncProposalsWithWorkspaceTasks([prereq, updatedEmpty, updatedNull]);
+
+        Assert.Empty(draftEmptyDeps.SelectedDependencyIds);
+        Assert.Empty(draftEmptyDeps.DependsOnTitles);
+        Assert.True(draftEmptyDeps.IsSyncedFromPersistedTask);
+
+        Assert.Empty(draftNullDeps.SelectedDependencyIds);
+        Assert.Empty(draftNullDeps.DependsOnTitles);
+        Assert.True(draftNullDeps.IsSyncedFromPersistedTask);
+
+        // Even if DependsOnTitles were inspected or ResolveDependencies called again, old deps are not resurrected
+        draftEmptyDeps.ResolveDependencies([prereq, updatedEmpty, updatedNull]);
+        draftNullDeps.ResolveDependencies([prereq, updatedEmpty, updatedNull]);
+        Assert.Empty(draftEmptyDeps.SelectedDependencyIds);
+        Assert.Empty(draftNullDeps.SelectedDependencyIds);
+    }
+
+    [Fact]
+    public void SyncProposalsWithWorkspaceTasks_ReversingDependencyBetweenTwoDrafts_DoesNotRestoreOldDependency()
+    {
+        var session = new IdeationSessionState();
+        var taskAVm = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Task A", "First", 2, TaskId: 101));
+        var taskBVm = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Task B", "Second", 3, DependsOnTitles: ["Task A"], TaskId: 102, DependsOnIds: [101]));
+        session.Proposals.AddRange([taskAVm, taskBVm]);
+
+        Assert.Empty(taskAVm.SelectedDependencyIds);
+        Assert.Equal([101], taskBVm.SelectedDependencyIds);
+        Assert.Contains("Task A", taskBVm.DependsOnTitles);
+
+        // Agent reverses dependency direction in DB: Task A now depends on Task B; Task B has no dependencies
+        var persistedTaskA = new ForgeTask
+        {
+            Id = 101,
+            Title = "Task A",
+            Description = "First",
+            Priority = 2,
+            Status = TaskOverallStatus.Draft,
+            Dependencies = [new TaskDependency { TaskId = 101, DependsOnTaskId = 102 }]
+        };
+        var persistedTaskB = new ForgeTask
+        {
+            Id = 102,
+            Title = "Task B",
+            Description = "Second",
+            Priority = 3,
+            Status = TaskOverallStatus.Draft,
+            Dependencies = new List<TaskDependency>()
+        };
+
+        session.SyncProposalsWithWorkspaceTasks([persistedTaskA, persistedTaskB]);
+
+        Assert.Equal([102], taskAVm.SelectedDependencyIds);
+        Assert.Empty(taskAVm.DependsOnTitles);
+        Assert.Empty(taskBVm.SelectedDependencyIds);
+        Assert.Empty(taskBVm.DependsOnTitles);
+
+        // Re-running ResolveDependencies must not re-add Task A to Task B
+        taskBVm.ResolveDependencies([persistedTaskA, persistedTaskB]);
+        Assert.Empty(taskBVm.SelectedDependencyIds);
+    }
+
+    [Fact]
+    public void SyncFromTask_And_FromProposal_RemoveDeletedAttachmentsFromPersistedTask()
+    {
+        var initialProposal = new IdeationProposal(
+            Title: "Attachment Draft",
+            Description: "Read @attachment:10 and @attachment:20",
+            Priority: 2,
+            TaskId: 201,
+            AttachmentIds: [10, 20, 30]);
+
+        var vm = IdeationProposalViewModel.FromProposal(initialProposal);
+        Assert.Equal([10, 20, 30], vm.SelectedAttachmentIds);
+
+        // Agent updates draft task in DB: removes attachment 20 and 30, keeps link 10 and adds citation 40 in description
+        var persistedTask = new ForgeTask
+        {
+            Id = 201,
+            Title = "Attachment Draft",
+            Description = "Read @attachment:40 only",
+            Priority = 2,
+            Status = TaskOverallStatus.Draft,
+            AttachmentLinks =
+            [
+                new TaskAttachmentLink { TaskId = 201, TaskAttachmentId = 10 }
+            ]
+        };
+
+        vm.SyncFromTask(persistedTask);
+
+        Assert.Equal([10, 40], vm.SelectedAttachmentIds);
+
+        // Rehydrating historical turn metadata containing stale AttachmentIds [10, 20, 30] must still reflect persistedTask
+        var rehydrated = IdeationProposalViewModel.FromProposal(initialProposal, [persistedTask]);
+        Assert.Equal([10, 40], rehydrated.SelectedAttachmentIds);
+    }
+
+    [Fact]
+    public void SyncProposalsWithWorkspaceTasks_UpdatesFieldsInPlace_AndFiresOnChangeWithoutRemovals()
+    {
+        var session = new IdeationSessionState();
+        var vm = IdeationProposalViewModel.FromProposal(new IdeationProposal("Original Title", "Original Desc", 3, TaskId: 301));
+        session.Proposals.Add(vm);
+
+        var notifyCount = 0;
+        session.OnChange += () => notifyCount++;
+
+        var updatedTask = new ForgeTask
+        {
+            Id = 301,
+            Title = "Updated Title",
+            Description = "Updated Desc",
+            Priority = 1,
+            Difficulty = TaskDifficulty.Difficult,
+            MergeMode = MergeMode.Automatic,
+            Status = TaskOverallStatus.Draft
+        };
+
+        session.SyncProposalsWithWorkspaceTasks([updatedTask]);
+
+        Assert.Equal(1, notifyCount);
+        Assert.Single(session.Proposals);
+        Assert.Equal("Updated Title", vm.Title);
+        Assert.Equal("Updated Desc", vm.Description);
+        Assert.Equal(1, vm.Priority);
+        Assert.Equal(TaskDifficulty.Difficult, vm.Difficulty);
+        Assert.Equal(MergeMode.Automatic, vm.MergeMode);
+        Assert.False(vm.IsAdded);
+    }
+
+    [Theory]
+    [InlineData(TaskOverallStatus.Cancelled)]
+    [InlineData(TaskOverallStatus.Rejected)]
+    public void ReconcileProposedTasks_DoesNotResurrectCancelledOrRejectedTasks_AndSyncsRemaining(TaskOverallStatus terminalStatus)
+    {
+        var session = new IdeationSessionState();
+        var activeProposal = new IdeationProposal("Active Draft", "Initial", 3, TaskId: 401);
+        var cancelledProposal = new IdeationProposal("Cancelled Draft", "Removed", 2, TaskId: 402);
+
+        session.TryAddProposal(activeProposal, null);
+        session.TryAddProposal(cancelledProposal, null);
+
+        var workspaceTasks = new List<ForgeTask>
+        {
+            new()
+            {
+                Id = 401,
+                Title = "Active Draft Refined",
+                Description = "Updated scope",
+                Priority = 1,
+                Status = TaskOverallStatus.Draft
+            },
+            new()
+            {
+                Id = 402,
+                Title = "Cancelled Draft",
+                Description = "Removed",
+                Priority = 2,
+                Status = terminalStatus
+            }
+        };
+
+        session.ReconcileProposedTasks([activeProposal, cancelledProposal], workspaceTasks);
+
+        var remaining = Assert.Single(session.Proposals);
+        Assert.Equal(401, remaining.CreatedTaskId);
+        Assert.Equal("Active Draft Refined", remaining.Title);
+        Assert.Equal("Updated scope", remaining.Description);
+        Assert.Equal(1, remaining.Priority);
+    }
+
+    [Theory]
+    [InlineData(CanonicalToolNames.EditTask, true)]
+    [InlineData(CanonicalToolNames.SetTaskPriority, true)]
+    [InlineData(CanonicalToolNames.ReworkPriorities, true)]
+    [InlineData(CanonicalToolNames.RemoveTask, true)]
+    [InlineData(CanonicalToolNames.GetTask, true)]
+    [InlineData(CanonicalToolNames.ProposeTasks, true)]
+    [InlineData("backlog.edit_task", true)]
+    [InlineData("mcp:propose_tasks", true)]
+    [InlineData("create_tasks", true)]
+    [InlineData("read", false)]
+    [InlineData("bash", false)]
+    [InlineData("ask", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void RequiresWorkspaceTaskSync_MatchesBacklogAndProposalToolsOnly(string? toolName, bool expected)
+    {
+        Assert.Equal(expected, IdeationPresentationHelper.RequiresWorkspaceTaskSync(toolName));
+    }
 }
 

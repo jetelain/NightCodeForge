@@ -5,6 +5,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Web.Components.Ideation;
 using NightCodeForge.Web.Components.Pages;
 using NightCodeForge.Web.Services;
 
@@ -789,11 +790,318 @@ public class IdeationPageTests : BunitContext
         cut.WaitForAssertion(() => Assert.Equal(ws2.Id, _sessionState.BoundWorkspaceId));
         Assert.Empty(_ideationService.ReleasedSessions);
     }
+
+    [Fact]
+    public async Task AgentEditTaskAndReworkPriorities_UpdatesProposalCardsImmediately_AndClearsStaleDependenciesAndAttachments()
+    {
+        var ws = new Workspace { Id = 60, Name = "LiveSyncRepo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 60;
+
+        var attachmentRepo = Services.GetRequiredService<ITaskAttachmentRepository>();
+        var keptAtt = await attachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = 60,
+            Title = "kept-spec.md",
+            SourceRef = "kept-spec.md",
+            Sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ContentKind = TaskAttachmentContentKind.PlainText
+        });
+        var removedAtt = await attachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = 60,
+            Title = "removed-spec.md",
+            SourceRef = "removed-spec.md",
+            Sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ContentKind = TaskAttachmentContentKind.PlainText
+        });
+
+        var draftA = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 60,
+                Title = "Task A - Core",
+                Description = "Core implementation",
+                Status = TaskOverallStatus.Draft,
+                Priority = 3
+            },
+            null,
+            AuditActors.IdeationAgent,
+            "Draft A");
+
+        var draftB = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 60,
+                Title = "Task B - Adapter",
+                Description = $"Adapter per @attachment:{keptAtt.Id} and @attachment:{removedAtt.Id}",
+                Status = TaskOverallStatus.Draft,
+                Priority = 3
+            },
+            [draftA.Id],
+            AuditActors.IdeationAgent,
+            "Draft B");
+        await attachmentRepo.SetTaskAttachmentLinksAsync(draftB.Id, [keptAtt.Id, removedAtt.Id]);
+
+        var vmA = IdeationProposalViewModel.FromProposal(new IdeationProposal("Task A - Core", "Core implementation", 3, TaskId: draftA.Id));
+        var vmB = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal(
+                "Task B - Adapter",
+                draftB.Description,
+                3,
+                DependsOnTitles: ["Task A - Core"],
+                TaskId: draftB.Id,
+                DependsOnIds: [draftA.Id],
+                AttachmentIds: [keptAtt.Id, removedAtt.Id]));
+        _sessionState.Proposals.AddRange([vmA, vmB]);
+
+        var cut = Render<Ideation>();
+        cut.WaitForAssertion(() => Assert.Equal(2, cut.FindComponents<IdeationProposalCard>().Count));
+
+        // Open dependencies accordion on Task B card before agent update to verify live hint disappearance too
+        var cardBBefore = cut.FindComponents<IdeationProposalCard>()[1];
+        cardBBefore.Find("button.dependency-toggle-btn").Click();
+        Assert.NotEmpty(cardBBefore.FindAll(".dependency-implicit-hint"));
+        Assert.Contains("removed-spec.md", cardBBefore.Markup);
+
+        var editStarted = new IdeationToolCallInfo("call_edit_1", CanonicalToolNames.EditTask, $"{{\"task_id\":{draftB.Id}}}");
+        var editCompleted = editStarted with { Result = $"Task #{draftB.Id} updated.", DurationMs = 20 };
+        var reworkStarted = new IdeationToolCallInfo("call_rework_1", CanonicalToolNames.ReworkPriorities, "{}");
+        var reworkCompleted = reworkStarted with { Result = $"Priorities updated for 2 task(s): #{draftA.Id}: P3 -> P2; #{draftB.Id}: P3 -> P1.", DurationMs = 15 };
+
+        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        {
+            if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_edit_1")
+            {
+                // Agent reverses dependency direction (A now depends on B; B has none) and removes removedAtt
+                draftA.Description = "Core depends on adapter now";
+                await _taskRepository.UpdateWithHistoryAsync(draftA, [draftB.Id], AuditActors.IdeationAgent, "Reverse dep");
+
+                draftB.Title = "Task B - Adapter Refined";
+                draftB.Description = $"Adapter per @attachment:{keptAtt.Id} only";
+                await _taskRepository.UpdateWithHistoryAsync(draftB, Array.Empty<int>(), AuditActors.IdeationAgent, "Clear deps & update desc");
+                await attachmentRepo.SetTaskAttachmentLinksAsync(draftB.Id, [keptAtt.Id]);
+            }
+            else if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_rework_1")
+            {
+                draftA.Priority = 2;
+                draftB.Priority = 1;
+                await _taskRepository.UpdateWithHistoryAsync(draftA, null, AuditActors.IdeationAgent, "Reprioritize A");
+                await _taskRepository.UpdateWithHistoryAsync(draftB, null, AuditActors.IdeationAgent, "Reprioritize B");
+            }
+        };
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: editStarted),
+            new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: editCompleted),
+            new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: reworkStarted),
+            new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: reworkCompleted),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Reversed dependency and reprioritized drafts."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Done", Array.Empty<IdeationProposal>()))
+        };
+
+        await cut.InvokeAsync(() => cut.Find("textarea.chat-textarea").Input("Make Task A depend on Task B and clean attachments"));
+        await cut.InvokeAsync(() => cut.Find("button.send-btn").Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        // Verify in-memory proposal view models synchronized authoritatively
+        Assert.Equal([draftB.Id], vmA.SelectedDependencyIds);
+        Assert.Equal(2, vmA.Priority);
+        Assert.Empty(vmA.DependsOnTitles);
+
+        Assert.Equal("Task B - Adapter Refined", vmB.Title);
+        Assert.Equal(1, vmB.Priority);
+        Assert.Empty(vmB.SelectedDependencyIds);
+        Assert.Empty(vmB.DependsOnTitles);
+        Assert.Equal([keptAtt.Id], vmB.SelectedAttachmentIds);
+
+        // Verify rendered cards reflect updated state without stale Sequential Dependencies or removed attachment chip
+        var cards = cut.FindComponents<IdeationProposalCard>();
+        Assert.Equal(2, cards.Count);
+        Assert.Equal("Task B - Adapter Refined", cards[1].Find("input.proposal-title-input").GetAttribute("value"));
+        Assert.Equal("1", cards[1].Find("select.proposal-priority-select").GetAttribute("value"));
+        Assert.Empty(cards[1].FindAll(".dependency-implicit-hint"));
+        Assert.Contains("Dependencies (0 selected)", cards[1].Find("button.dependency-toggle-btn").TextContent);
+        Assert.Contains("kept-spec.md", cards[1].Markup);
+        Assert.DoesNotContain("removed-spec.md", cards[1].Markup);
+
+        // Clicking Add to Backlog on Task B must not restore the removed dependency on Task A
+        await cut.InvokeAsync(() => cut.FindComponents<IdeationProposalCard>()[1].Find("button.add-backlog-btn").Click());
+        Assert.Empty(await _taskRepository.GetDependenciesAsync(draftB.Id));
+        Assert.Equal([draftB.Id], await _taskRepository.GetDependenciesAsync(draftA.Id));
+    }
+
+    [Fact]
+    public async Task SameTurn_ProposeThenRemoveTask_DoesNotResurrectCancelledProposalOnCompleted()
+    {
+        var ws = new Workspace { Id = 61, Name = "RemoveSameTurnRepo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 61;
+
+        var keptDraft = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 61,
+                Title = "Kept Draft",
+                Description = "Stay active",
+                Status = TaskOverallStatus.Draft,
+                Priority = 2
+            },
+            null,
+            AuditActors.IdeationAgent,
+            "Proposed");
+
+        var cancelledDraft = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 61,
+                Title = "Obsolete Draft",
+                Description = "Will be removed in same turn",
+                Status = TaskOverallStatus.Draft,
+                Priority = 3
+            },
+            null,
+            AuditActors.IdeationAgent,
+            "Proposed");
+
+        var keptProposal = new IdeationProposal("Kept Draft", "Stay active", 2, TaskId: keptDraft.Id);
+        var obsoleteProposal = new IdeationProposal("Obsolete Draft", "Will be removed in same turn", 3, TaskId: cancelledDraft.Id);
+
+        var removeStarted = new IdeationToolCallInfo("call_remove_1", CanonicalToolNames.RemoveTask, $"{{\"task_id\":{cancelledDraft.Id}}}");
+        var removeCompleted = removeStarted with { Result = $"Task #{cancelledDraft.Id} removed (status Cancelled).", DurationMs = 12 };
+
+        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        {
+            if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_remove_1")
+            {
+                cancelledDraft.Status = TaskOverallStatus.Cancelled;
+                await _taskRepository.UpdateWithHistoryAsync(cancelledDraft, Array.Empty<int>(), AuditActors.IdeationAgent, "Cancelled");
+            }
+        };
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: keptProposal),
+            new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: obsoleteProposal),
+            new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: removeStarted),
+            new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: removeCompleted),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Removed the obsolete draft."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Done", new[] { keptProposal, obsoleteProposal }))
+        };
+
+        var cut = Render<Ideation>();
+
+        await cut.InvokeAsync(() => cut.Find("textarea.chat-textarea").Input("Propose and prune"));
+        await cut.InvokeAsync(() => cut.Find("button.send-btn").Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+
+        var remaining = Assert.Single(_sessionState.Proposals);
+        Assert.Equal(keptDraft.Id, remaining.CreatedTaskId);
+        Assert.Equal("Kept Draft", remaining.Title);
+        var card = Assert.Single(cut.FindComponents<IdeationProposalCard>());
+        Assert.Equal("Kept Draft", card.Find("input.proposal-title-input").GetAttribute("value"));
+        Assert.DoesNotContain("Obsolete Draft", cut.Find(".proposals-pane").InnerHtml);
+    }
+
+    [Fact]
+    public async Task LoadConversationIntoSession_ReconcilesStaleTurnMetadataWithPersistedTask()
+    {
+        var ws = new Workspace { Id = 62, Name = "RehydrateSyncRepo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+
+        var attachmentRepo = Services.GetRequiredService<ITaskAttachmentRepository>();
+        var keptAtt = await attachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = 62,
+            Title = "rehydrate-kept.md",
+            SourceRef = "rehydrate-kept.md",
+            Sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ContentKind = TaskAttachmentContentKind.PlainText
+        });
+        var deletedAtt = await attachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = 62,
+            Title = "rehydrate-deleted.md",
+            SourceRef = "rehydrate-deleted.md",
+            Sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            ContentKind = TaskAttachmentContentKind.PlainText
+        });
+
+        var oldDep = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 62, Title = "Old Prereq", Status = TaskOverallStatus.Draft },
+            null,
+            AuditActors.IdeationAgent,
+            "Prereq");
+        var newDep = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 62, Title = "New Prereq", Status = TaskOverallStatus.Draft },
+            null,
+            AuditActors.IdeationAgent,
+            "New Prereq");
+
+        var editedDraft = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 62,
+                Title = "Persisted Refined Title",
+                Description = $"Persisted scope with @attachment:{keptAtt.Id}",
+                Status = TaskOverallStatus.Draft,
+                Priority = 1
+            },
+            [newDep.Id],
+            AuditActors.IdeationAgent,
+            "Updated in DB");
+        await attachmentRepo.SetTaskAttachmentLinksAsync(editedDraft.Id, [keptAtt.Id]);
+
+        var conv = await _taskRepository.StartIdeationConversationAsync(62, "Rehydrate Sync Session");
+        await _taskRepository.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Propose and refine");
+
+        // Turn metadata still holds initial stale AttachmentIds, DependsOnTitles, and DependsOnIds
+        var staleMetadata = System.Text.Json.JsonSerializer.Serialize(new[]
+        {
+            new IdeationProposal(
+                Title: "Initial Stale Title",
+                Description: $"Old scope with @attachment:{keptAtt.Id} and @attachment:{deletedAtt.Id}",
+                Priority: 4,
+                DependsOnTitles: ["Old Prereq"],
+                TaskId: editedDraft.Id,
+                DependsOnIds: [oldDep.Id],
+                AttachmentIds: [keptAtt.Id, deletedAtt.Id])
+        });
+        await _taskRepository.AddConversationTurnAsync(
+            conv.Id,
+            StageTurnRole.Assistant,
+            content: "Refined draft task.",
+            metadataJson: staleMetadata);
+
+        var cut = Render<Ideation>();
+
+        cut.WaitForAssertion(() =>
+        {
+            var vm = Assert.Single(_sessionState.Proposals);
+            Assert.Equal(editedDraft.Id, vm.CreatedTaskId);
+            Assert.Equal("Persisted Refined Title", vm.Title);
+            Assert.Equal(1, vm.Priority);
+            Assert.Equal([newDep.Id], vm.SelectedDependencyIds);
+            Assert.Empty(vm.DependsOnTitles);
+            Assert.Equal([keptAtt.Id], vm.SelectedAttachmentIds);
+        });
+
+        var card = cut.FindComponent<IdeationProposalCard>();
+        card.Find("button.dependency-toggle-btn").Click();
+        Assert.Empty(card.FindAll(".dependency-implicit-hint"));
+        Assert.Contains("Dependencies (1 selected)", card.Find("button.dependency-toggle-btn").TextContent);
+        Assert.Contains("rehydrate-kept.md", card.Markup);
+        Assert.DoesNotContain("rehydrate-deleted.md", card.Markup);
+    }
 }
 
 public class MockIdeationService : IIdeationService
 {
     public List<IdeationStreamUpdate> StreamUpdatesToYield { get; set; } = new();
+    public Func<IdeationStreamUpdate, Task>? OnBeforeYieldUpdateAsync { get; set; }
     public List<(int WorkspaceId, int ConversationId)> ReleasedSessions { get; } = new();
     public int? LastConversationId { get; private set; }
 
@@ -830,6 +1138,11 @@ public class MockIdeationService : IIdeationService
         {
             if (cancellationToken.IsCancellationRequested)
                 yield break;
+
+            if (OnBeforeYieldUpdateAsync != null)
+            {
+                await OnBeforeYieldUpdateAsync(update);
+            }
 
             yield return update;
             await Task.Yield();

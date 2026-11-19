@@ -873,19 +873,21 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public async Task IdeationProposalViewModel_SyncFromTask_PreservesUnionOfProposalAndDraftTaskAttachments()
+    public async Task IdeationProposalViewModel_SyncFromTask_ReplacesAttachmentsFromPersistedDraftTaskAndCitations()
     {
         var harness = await CreateAttachmentHarnessAsync(workspaceId: 73);
         await using var s1 = new MemoryStream(Encoding.UTF8.GetBytes("Doc 1"));
         await using var s2 = new MemoryStream(Encoding.UTF8.GetBytes("Doc 2"));
+        await using var s3 = new MemoryStream(Encoding.UTF8.GetBytes("Doc 3"));
         var att1 = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "doc1.md", s1);
         var att2 = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "doc2.md", s2);
+        var att3 = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "doc3.md", s3);
 
         var draftTask = await harness.TaskRepo.CreateAsync(new ForgeTask
         {
             WorkspaceId = harness.Workspace.Id,
             Title = "Draft Proposal Task",
-            Description = "Draft body",
+            Description = $"Draft body citing @attachment:{att3.Id}",
             Status = TaskOverallStatus.Draft,
             BaseBranch = "main"
         });
@@ -912,7 +914,8 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         sessionState.SyncProposalsWithWorkspaceTasks([draftTask]);
 
         Assert.Contains(att1.Id, proposalVm.SelectedAttachmentIds);
-        Assert.Contains(att2.Id, proposalVm.SelectedAttachmentIds);
+        Assert.Contains(att3.Id, proposalVm.SelectedAttachmentIds);
+        Assert.DoesNotContain(att2.Id, proposalVm.SelectedAttachmentIds);
     }
 
     [Fact]

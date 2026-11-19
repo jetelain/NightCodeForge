@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Web`, `NightCodeForge.Web.Tests`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
 
@@ -48,9 +48,9 @@ As a result, the Ideation UI retains stale, incorrect dependencies, attachments,
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Update `IdeationProposalViewModel.FromProposal` and `IdeationProposalViewModel.SyncFromTask(ForgeTask task)` in `src/NightCodeForge.Web/Services/IdeationSessionState.cs` so `SyncFromTask` runs after initial `proposal.AttachmentIds` mapping, clears `DependsOnTitles`, and replaces (rather than only appending) `SelectedDependencyIds` and `SelectedAttachmentIds`.
-- [ ] Ensure `IdeationSessionState.SyncProposalsWithWorkspaceTasks` and `Ideation.razor` (both on `ToolCallCompleted` for backlog mutation tools and on `IdeationStreamUpdateKind.Completed` when reconciling `FinalResult.ProposedTasks`) keep all proposal cards in sync whenever the Ideation agent mutates or removes tasks, without re-injecting stale dependencies or re-adding cancelled/rejected proposals.
-- [ ] Add unit tests in `tests/NightCodeForge.Web.Tests/IdeationSessionStateTests.cs` (and `tests/NightCodeForge.Web.Tests/IdeationPageTests.cs` if applicable) verifying that:
+- [x] Update `IdeationProposalViewModel.FromProposal` and `IdeationProposalViewModel.SyncFromTask(ForgeTask task)` in `src/NightCodeForge.Web/Services/IdeationSessionState.cs` so `SyncFromTask` runs after initial `proposal.AttachmentIds` mapping, clears `DependsOnTitles`, and replaces (rather than only appending) `SelectedDependencyIds` and `SelectedAttachmentIds`.
+- [x] Ensure `IdeationSessionState.SyncProposalsWithWorkspaceTasks` and `Ideation.razor` (both on `ToolCallCompleted` for backlog mutation tools and on `IdeationStreamUpdateKind.Completed` when reconciling `FinalResult.ProposedTasks`) keep all proposal cards in sync whenever the Ideation agent mutates or removes tasks, without re-injecting stale dependencies or re-adding cancelled/rejected proposals.
+- [x] Add unit tests in `tests/NightCodeForge.Web.Tests/IdeationSessionStateTests.cs` (and `tests/NightCodeForge.Web.Tests/IdeationPageTests.cs` if applicable) verifying that:
   - Updating a persisted `Draft` task's dependencies (including removing all dependencies or reversing a dependency between two tasks) clears `DependsOnTitles` and updates `SelectedDependencyIds` to match the database without resurrecting old dependencies.
   - Updating attachments on a persisted `Draft` task removes deleted attachments from `SelectedAttachmentIds` (both in `SyncFromTask` and when reconstructing via `FromProposal(..., existingTasks)`).
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

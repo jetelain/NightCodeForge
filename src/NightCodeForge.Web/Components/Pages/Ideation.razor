@@ -1163,12 +1163,7 @@
                         {
                             foreach (var p in proposals)
                             {
-                                if (!Session.Proposals.Any(existing =>
-                                    (p.TaskId.HasValue && existing.CreatedTaskId == p.TaskId) ||
-                                    string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
-                                {
-                                    Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
-                                }
+                                Session.TryAddProposal(p, _workspaceTasks);
                             }
                         }
                     }
@@ -1513,7 +1508,7 @@
                             }
                         }
 
-                        if (!comp.IsError && ws != null && BacklogMutationCardParser.IsBacklogMutationTool(comp.ToolName))
+                        if (!comp.IsError && ws != null && IdeationPresentationHelper.RequiresWorkspaceTaskSync(comp.ToolName))
                         {
                             _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
                             Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
@@ -1554,12 +1549,9 @@
                         {
                             _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
                         }
-                        var newVm = IdeationProposalViewModel.FromProposal(update.Proposal, _workspaceTasks);
-                        if (!Session.Proposals.Any(p =>
-                            (newVm.CreatedTaskId.HasValue && p.CreatedTaskId == newVm.CreatedTaskId) ||
-                            string.Equals(p.Title, newVm.Title, StringComparison.OrdinalIgnoreCase)))
+                        var newVm = Session.TryAddProposal(update.Proposal, _workspaceTasks);
+                        if (newVm != null)
                         {
-                            Session.Proposals.Add(newVm);
                             Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
                             ToastService.Show("New Proposal Discovered", newVm.Title, ToastLevel.Info);
                             StateHasChanged();
@@ -1574,25 +1566,27 @@
                             Session.ActiveSessionCost = TaskCostPresentationHelper.AccumulateCost(Session.ActiveSessionCost, update.FinalResult.UsageDelta);
                         }
 
+                        if (ws != null && (update.FinalResult.ProposedTasks is { Count: > 0 } || Session.Proposals.Count > 0))
+                        {
+                            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
+                        }
+
                         if (update.FinalResult.ProposedTasks != null)
                         {
                             foreach (var p in update.FinalResult.ProposedTasks)
                             {
                                 if (!discoveredProposalsThisTurn.Any(d =>
-                                    (p.TaskId.HasValue && d.TaskId == p.TaskId) ||
-                                    string.Equals(d.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
+                                    (p.TaskId.HasValue && d.TaskId.HasValue)
+                                        ? d.TaskId == p.TaskId
+                                        : string.Equals(d.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
                                 {
                                     discoveredProposalsThisTurn.Add(p);
                                 }
-
-                                if (!Session.Proposals.Any(existing =>
-                                    (p.TaskId.HasValue && existing.CreatedTaskId == p.TaskId) ||
-                                    string.Equals(existing.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
-                                {
-                                    Session.Proposals.Add(IdeationProposalViewModel.FromProposal(p, _workspaceTasks));
-                                }
                             }
                         }
+
+                        Session.ReconcileProposedTasks(update.FinalResult.ProposedTasks, _workspaceTasks);
+                        StateHasChanged();
                         break;
                 }
             }

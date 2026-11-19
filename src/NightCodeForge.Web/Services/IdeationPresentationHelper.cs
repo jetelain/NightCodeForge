@@ -12,6 +12,57 @@ namespace NightCodeForge.Web.Services;
 /// </summary>
 public static class IdeationPresentationHelper
 {
+    private static readonly HashSet<string> ProposeTasksToolNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        CanonicalToolNames.ProposeTasks,
+        "proposetasks",
+        "propose_task",
+        "proposetask",
+        "propose_single_task",
+        "create_task",
+        "create_tasks",
+        "add_task",
+        "add_tasks",
+        "new_task",
+        "new_tasks",
+        "submit_tasks",
+        "propose_backlog",
+        "propose_follow_up",
+        "follow_up_tasks"
+    };
+
+    /// <summary>
+    /// Returns true when the completed tool can create, edit, reprioritize, or remove backlog tasks
+    /// and therefore requires synchronizing Ideation proposals with workspace tasks.
+    /// </summary>
+    public static bool RequiresWorkspaceTaskSync(string? toolName)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            return false;
+        }
+
+        if (BacklogMutationCardParser.IsBacklogMutationTool(toolName))
+        {
+            return true;
+        }
+
+        var clean = toolName.Trim();
+        var colonIdx = clean.LastIndexOf(':');
+        if (colonIdx >= 0)
+        {
+            clean = clean[(colonIdx + 1)..];
+        }
+
+        var dotIdx = clean.LastIndexOf('.');
+        if (dotIdx >= 0)
+        {
+            clean = clean[(dotIdx + 1)..];
+        }
+
+        return ProposeTasksToolNames.Contains(clean);
+    }
+
     /// <summary>
     /// Maps a batch of live IdeationQuestion objects into a list of domain QuestionItem records.
     /// </summary>
