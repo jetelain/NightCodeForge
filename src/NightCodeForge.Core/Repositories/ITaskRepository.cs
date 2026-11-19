@@ -29,6 +29,11 @@ public interface ITaskRepository
     /// Atomically updates only the LastHangfireJobId of a task without rewriting or overwriting other entity fields.
     /// </summary>
     Task UpdateLastHangfireJobIdAsync(int taskId, string? jobId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically updates only LastHangfireJobId and IsDeferredByPause without overwriting other entity fields.
+    /// </summary>
+    Task UpdateSchedulingStateAsync(int taskId, string? jobId, bool isDeferredByPause, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<int>> GetDependenciesAsync(int taskId, CancellationToken cancellationToken = default);
     Task<IReadOnlyDictionary<int, IReadOnlyList<int>>> GetWorkspaceDependenciesAsync(int workspaceId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ForgeTaskHistory>> GetHistoryAsync(int taskId, CancellationToken cancellationToken = default);
@@ -359,6 +364,21 @@ public class InMemoryTaskRepository : ITaskRepository
             }
 
             task.LastHangfireJobId = jobId;
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task UpdateSchedulingStateAsync(int taskId, string? jobId, bool isDeferredByPause, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (!_tasks.TryGetValue(taskId, out var task))
+            {
+                throw new TaskNotFoundException(taskId, $"ForgeTask #{taskId} was not found when updating scheduling state.");
+            }
+
+            task.LastHangfireJobId = jobId;
+            task.IsDeferredByPause = isDeferredByPause;
             return Task.CompletedTask;
         }
     }

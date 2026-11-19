@@ -74,12 +74,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
             .Build();
 
-    private (ITaskRepository TaskRepo, IDependencyResolutionEngine DepEngine, IServiceScope Scope) ResolveDependencies()
+    private (ITaskRepository TaskRepo, IDependencyResolutionEngine DepEngine, ITaskDependencyStore DepStore, IServiceScope Scope) ResolveDependencies()
     {
         var scope = _scopeFactory.CreateScope();
         var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
         var depEngine = scope.ServiceProvider.GetRequiredService<IDependencyResolutionEngine>();
-        return (taskRepo, depEngine, scope);
+        var depStore = scope.ServiceProvider.GetRequiredService<ITaskDependencyStore>();
+        return (taskRepo, depEngine, depStore, scope);
     }
 
     public string GenerateMarkdown(ForgeTask task, IReadOnlyList<int>? dependencies = null, string? agentProfileId = null)
@@ -568,7 +569,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         if (string.IsNullOrWhiteSpace(targetDirectory))
             throw new ArgumentException("Target directory cannot be null or empty.", nameof(targetDirectory));
 
-        var (taskRepo, _, scope) = ResolveDependencies();
+        var (taskRepo, _, _, scope) = ResolveDependencies();
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1012,7 +1013,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         var hostTasksIndex = hostTasksIndexTask != null ? await hostTasksIndexTask : null;
         var hostArchiveIndex = hostArchiveIndexTask != null ? await hostArchiveIndexTask : null;
 
-        var (taskRepo, depEngine, scope) = ResolveDependencies();
+        var (taskRepo, depEngine, depStore, scope) = ResolveDependencies();
         try
         {
             var dbTasksList = await taskRepo.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
@@ -1619,6 +1620,10 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     changeReason ?? TaskSyncConstants.TaskCreatedFromDisk,
                     cancellationToken);
 
+                await depStore.UpdateTaskStatusAsync(created.Id, created.Status, cancellationToken);
+                await depStore.SetWaitingForHumanAsync(created.Id, created.IsWaitingForHuman, cancellationToken);
+                await depStore.SetTaskDependenciesAsync(workspace.Id, created.Id, finalDepIds, cancellationToken);
+
                 if (resolvedAttachmentIds.Count > 0)
                 {
                     var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
@@ -1974,6 +1979,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                             TaskId = task.Id,
                             DependsOnTaskId = depId
                         }).ToList();
+                        await depStore.SetTaskDependenciesAsync(workspace.Id, task.Id, finalDepIds, cancellationToken);
                     }
                 }
 
@@ -2367,7 +2373,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             ? frontmatter.Id.Value
             : (expectedTaskId.HasValue && expectedTaskId.Value > 0 ? expectedTaskId.Value : (int?)null);
 
-        var (taskRepo, depEngine, scope) = ResolveDependencies();
+        var (taskRepo, depEngine, depStore, scope) = ResolveDependencies();
         try
         {
             if (targetTaskId.HasValue)
@@ -2535,6 +2541,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                                 TaskId = task.Id,
                                 DependsOnTaskId = depId
                             }).ToList();
+                            await depStore.SetTaskDependenciesAsync(workspaceId, task.Id, resolvedDeps, cancellationToken);
                         }
                     }
 
@@ -2641,6 +2648,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 AuditActors.User,
                 TaskSyncConstants.TaskCreatedFromDisk,
                 cancellationToken);
+
+            await depStore.UpdateTaskStatusAsync(created.Id, created.Status, cancellationToken);
+            await depStore.SetWaitingForHumanAsync(created.Id, created.IsWaitingForHuman, cancellationToken);
+            if (newResolvedDeps != null)
+            {
+                await depStore.SetTaskDependenciesAsync(workspaceId, created.Id, newResolvedDeps, cancellationToken);
+            }
 
             if (resolvedAttachmentIds.Count > 0)
             {

@@ -134,7 +134,9 @@ public class Step125BTaskDifficultyTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton(taskRepo);
-        services.AddSingleton<IDependencyResolutionEngine>(new DependencyResolutionEngine(new InMemoryTaskDependencyStore()));
+        var depStore = new InMemoryTaskDependencyStore();
+        services.AddSingleton<ITaskDependencyStore>(depStore);
+        services.AddSingleton<IDependencyResolutionEngine>(new DependencyResolutionEngine(depStore));
         var sp = services.BuildServiceProvider();
         return new TaskMarkdownSyncService(
             sp.GetRequiredService<IServiceScopeFactory>(),

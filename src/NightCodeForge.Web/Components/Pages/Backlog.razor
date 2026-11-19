@@ -113,11 +113,11 @@
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Open ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Open)">
                 <span class="stat-chip-label">📂 Open</span>
-                <span class="stat-chip-val text-indigo">@RetainedTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, runningTaskIds: EffectiveRunningTaskIds))</span>
+                <span class="stat-chip-val text-indigo">@RetainedTasks.Count(t => BacklogStatusClassifier.IsOpenBacklog(t, runningTaskIds: EffectiveRunningTaskIds, allTasks: _allLookupTasks, prerequisiteIds: GetPrereqsOrNull(t.Id)))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Reviewed ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Reviewed)">
                 <span class="stat-chip-label">⚡ In-Flight</span>
-                <span class="stat-chip-val text-purple">@RetainedTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, runningTaskIds: EffectiveRunningTaskIds))</span>
+                <span class="stat-chip-val text-purple">@RetainedTasks.Count(t => BacklogStatusClassifier.IsInFlight(t, runningTaskIds: EffectiveRunningTaskIds, allTasks: _allLookupTasks, prerequisiteIds: GetPrereqsOrNull(t.Id)))</span>
             </div>
             <div class="stat-chip @(_statusFilter == TaskOverallStatus.Ready ? "active" : "")" @onclick="() => FilterByStatus(TaskOverallStatus.Ready)">
                 <span class="stat-chip-label">🔍 Ready</span>
@@ -227,7 +227,7 @@
             else if (_currentView == BacklogViewMode.Kanban)
             {
                 <KanbanBoard Tasks="filtered"
-                             AllTasks="_allTasks"
+                             AllTasks="_allLookupTasks"
                              TaskDependencies="_dependenciesMap"
                              ActiveTaskId="@(WorkerState.IsRunning ? WorkerState.Current.ActiveTaskId : null)"
                              RunningTaskIds="@EffectiveRunningTaskIds"
@@ -241,7 +241,7 @@
             else
             {
                 <DagVisualizer Tasks="filtered"
-                               AllTasks="_allTasks"
+                               AllTasks="_allLookupTasks"
                                Dependencies="_allDependencies"
                                ActiveTaskId="@(WorkerState.IsRunning ? WorkerState.Current.ActiveTaskId : null)"
                                RunningTaskIds="@EffectiveRunningTaskIds"
@@ -266,7 +266,7 @@
 
         <DependencyLinkingModal IsOpen="_showDepModal"
                                 TargetTask="_selectedTask"
-                                AllTasks="_allTasks"
+                                AllTasks="_allLookupTasks"
                                 AllDependencies="_allDependencies"
                                 OnClosed="CloseDepModal"
                                 OnSaved="ReloadTasksAsync" />
@@ -294,6 +294,7 @@
 
     private BacklogViewMode _currentView = BacklogViewMode.Kanban;
     private List<ForgeTask> _allTasks = new();
+    private List<ForgeTask> _allLookupTasks = new();
     private List<(int TaskId, int DependsOnTaskId)> _allDependencies = new();
     private Dictionary<int, IReadOnlyList<int>> _dependenciesMap = new();
 
@@ -469,6 +470,7 @@
         if (active == null)
         {
             _allTasks.Clear();
+            _allLookupTasks.Clear();
             _allDependencies.Clear();
             _dependenciesMap.Clear();
             return;
@@ -477,16 +479,21 @@
         _isLoading = true;
         try
         {
-            var tasks = (await TaskRepository.GetByWorkspaceIdAsync(active.Id))
-                .Where(t => t.Status != TaskOverallStatus.Draft && t.Status != TaskOverallStatus.Triage)
+            var allNonTriage = (await TaskRepository.GetByWorkspaceIdAsync(active.Id))
+                .Where(t => t.Status != TaskOverallStatus.Triage)
+                .OrderBy(t => t.Priority)
+                .ThenBy(t => t.CreatedAt)
                 .ToList();
-            _allTasks = tasks.OrderBy(t => t.Priority).ThenBy(t => t.CreatedAt).ToList();
+            _allLookupTasks = allNonTriage;
+            _allTasks = allNonTriage
+                .Where(t => t.Status != TaskOverallStatus.Draft)
+                .ToList();
 
             var deps = await DependencyStore.GetDependenciesForWorkspaceAsync(active.Id);
             _allDependencies = deps.ToList();
 
             var map = new Dictionary<int, IReadOnlyList<int>>();
-            foreach (var task in _allTasks)
+            foreach (var task in _allLookupTasks)
             {
                 var prereqIds = _allDependencies
                     .Where(d => d.TaskId == task.Id)
@@ -586,11 +593,11 @@
             if (_statusFilter == TaskOverallStatus.Reviewed || _statusFilter == TaskOverallStatus.Implemented)
             {
                 // Group In-Flight stages
-                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t, runningTaskIds: EffectiveRunningTaskIds));
+                query = query.Where(t => BacklogStatusClassifier.IsInFlight(t, runningTaskIds: EffectiveRunningTaskIds, allTasks: _allLookupTasks, prerequisiteIds: GetPrereqsOrNull(t.Id)));
             }
             else if (_statusFilter == TaskOverallStatus.Open)
             {
-                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, runningTaskIds: EffectiveRunningTaskIds));
+                query = query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, runningTaskIds: EffectiveRunningTaskIds, allTasks: _allLookupTasks, prerequisiteIds: GetPrereqsOrNull(t.Id)));
             }
             else
             {
@@ -632,6 +639,9 @@
 
         return query.ToList();
     }
+
+    private IReadOnlyList<int>? GetPrereqsOrNull(int taskId) =>
+        _dependenciesMap.TryGetValue(taskId, out var deps) ? deps : null;
 
     private IReadOnlyList<int> GetPrerequisitesForSelected()
     {

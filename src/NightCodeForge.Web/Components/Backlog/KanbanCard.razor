@@ -6,7 +6,15 @@
 @inject IServiceProvider ServiceProvider
 @inject NavigationManager Navigation
 
-<div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "") @(CheckIsRunning() ? "card-running" : "")"
+@{
+    var isRunning = CheckIsRunning();
+    var unclosedBlockers = TaskDependencyPresentationHelper.GetUnclosedBlockers(Task, AllTasks, PrerequisiteIds);
+    var isSuspendedByBlockers = TaskDependencyPresentationHelper.IsSuspendedByBlockers(Task, AllTasks, PrerequisiteIds, isRunning);
+    var stalledOrFailedBlockers = TaskDependencyPresentationHelper.GetStalledOrFailedBlockers(unclosedBlockers);
+    var prerequisiteItems = TaskDependencyPresentationHelper.ResolvePrerequisiteItems(Task, AllTasks, WorkspaceId, PrerequisiteIds);
+}
+
+<div class="kanban-card task-card card-glass @(Task.IsWaitingForHuman ? "card-waiting-human" : "") @(isRunning ? "card-running" : "") @(isSuspendedByBlockers ? "card-suspended" : "")"
      id="kanban-card-@Task.Id"
      @onclick="HandleClick"
      role="button"
@@ -94,7 +102,7 @@
                 <span>Waiting for Human</span>
             </span>
         }
-        else if (CheckIsRunning())
+        else if (isRunning)
         {
             <a href="/inspector/@Task.Id"
                class="badge-running"
@@ -148,30 +156,49 @@
                 Ready for Review
             </span>
         }
+        else if (isSuspendedByBlockers)
+        {
+            <span class="badge-blocked badge-suspended" title="@TaskDependencyPresentationHelper.FormatSuspensionBannerText(unclosedBlockers)">
+                @TaskDependencyPresentationHelper.FormatSuspendedBadgeText(unclosedBlockers)
+            </span>
+            @if (stalledOrFailedBlockers.Count > 0)
+            {
+                <span class="badge-upstream-warning" title="@TaskDependencyPresentationHelper.FormatStalledOrFailedWarningText(stalledOrFailedBlockers)">
+                    ⚠️ Upstream Attention
+                </span>
+            }
+        }
         else if (!string.IsNullOrWhiteSpace(Task.CurrentStageId) || Task.Status == TaskOverallStatus.Reviewed || Task.Status == TaskOverallStatus.Implemented)
         {
             <span class="forge-badge badge-purple" style="font-size: 0.75rem;">
                 @(string.IsNullOrWhiteSpace(Task.CurrentStageId) ? Task.Status.ToString() : Task.CurrentStageId)
             </span>
         }
-        else if (Task.Status == TaskOverallStatus.Open)
+        else if (Task.Status == TaskOverallStatus.Open && unclosedBlockers.Count == 0)
         {
-            var blockers = GetBlockers();
-            if (blockers.Count > 0)
-            {
-                var blockerText = string.Join(", ", blockers.Select(b => $"#{b.Id} {b.Title}"));
-                <span class="badge-blocked" title="Blocked by: @blockerText">
-                    🔒 Blocked (@blockers.Count)
-                </span>
-            }
-            else
-            {
-                <span class="badge-ready" title="All dependencies closed; ready for inference execution">
-                    🟢 Ready for Inference
-                </span>
-            }
+            <span class="badge-ready" title="All dependencies closed; ready for inference execution">
+                🟢 Ready for Inference
+            </span>
         }
     </div>
+
+    @if (prerequisiteItems.Count > 0)
+    {
+        <div class="kanban-prereq-chips">
+            @foreach (var prereq in prerequisiteItems)
+            {
+                var chipIcon = prereq.RequiresUpstreamAttention ? "⚠️" : "🔗";
+                <a class="@prereq.ChipCssClass"
+                   href="@prereq.TaskUrl"
+                   title="@($"#{prereq.TaskId} {prereq.Title} ({prereq.StatusLabel})")"
+                   @onclick="() => HandlePrerequisiteClickAsync(prereq)"
+                   @onclick:preventDefault="true"
+                   @onclick:stopPropagation="true">
+                    @chipIcon Prereq: #@prereq.TaskId
+                </a>
+            }
+        </div>
+    }
 
     <!-- Card Bottom Actions -->
     <div class="card-actions-row">
@@ -199,7 +226,7 @@
                 @onclick="HandleLinkDependencies"
                 @onclick:stopPropagation="true"
                 title="Manage Dependencies">
-            🔗 @(PrerequisiteIds.Count > 0 ? $"{PrerequisiteIds.Count} Prereqs" : "Link")
+            🔗 @(prerequisiteItems.Count > 0 ? $"{prerequisiteItems.Count} Prereqs" : "Link")
         </button>
         <button type="button"
                 class="forge-btn forge-btn-secondary btn-xs"
@@ -213,7 +240,7 @@
 @code {
     [Parameter, EditorRequired] public ForgeTask Task { get; set; } = default!;
     [Parameter] public IReadOnlyList<ForgeTask> AllTasks { get; set; } = Array.Empty<ForgeTask>();
-    [Parameter] public IReadOnlyList<int> PrerequisiteIds { get; set; } = Array.Empty<int>();
+    [Parameter] public IReadOnlyList<int>? PrerequisiteIds { get; set; }
     [Parameter] public bool IsRunning { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnClick { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnInspect { get; set; }
@@ -221,6 +248,8 @@
     [Parameter] public EventCallback<ForgeTask> OnReject { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependencies { get; set; }
     [Parameter] public EventCallback<(ForgeTask Task, int NewPriority)> OnPriorityChanged { get; set; }
+    [Parameter] public EventCallback<int> OnPrerequisiteClicked { get; set; }
+    [Parameter] public int? WorkspaceId { get; set; }
 
     private bool _showPriorityMenu;
 
@@ -307,23 +336,15 @@
         await OnPriorityChanged.InvokeAsync((Task, newPriority));
     }
 
-    private List<ForgeTask> GetBlockers()
+    private async Task HandlePrerequisiteClickAsync(TaskDependencyItemViewModel item)
     {
-        var blockers = new List<ForgeTask>();
-        foreach (var prereqId in PrerequisiteIds)
+        if (OnPrerequisiteClicked.HasDelegate)
         {
-            var prereq = AllTasks.FirstOrDefault(t => t.Id == prereqId);
-            if (prereq != null)
-            {
-                if (prereq.Status != TaskOverallStatus.Closed)
-                {
-                    blockers.Add(prereq);
-                }
-            }
-            // If prereq is not found in AllTasks (e.g. if AllTasks was scoped to visible items and prereq is an older closed task),
-            // treat prerequisites outside the visible set that are Closed as satisfied (not a blocker).
+            await OnPrerequisiteClicked.InvokeAsync(item.TaskId);
+            return;
         }
-        return blockers;
+
+        Navigation.NavigateTo(item.TaskUrl);
     }
 
     private async Task HandleClick() => await OnClick.InvokeAsync(Task);

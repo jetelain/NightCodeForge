@@ -37,6 +37,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
+            new NightCodeForge.Core.Dependencies.InMemoryTaskDependencyStore(),
             new MockTaskMarkdownSyncService(),
             mockOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,

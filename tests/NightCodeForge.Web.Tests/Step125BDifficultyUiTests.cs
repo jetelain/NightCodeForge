@@ -84,6 +84,7 @@ public class Step125BDifficultyUiTests : BunitContext
         var mutationService = new TaskMutationService(
             taskRepo,
             workspaceRepo,
+            new InMemoryTaskDependencyStore(),
             syncMock,
             orchestrator,
             telemetryMock.Object,

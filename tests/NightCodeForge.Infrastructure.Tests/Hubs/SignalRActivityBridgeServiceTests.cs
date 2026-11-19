@@ -57,6 +57,51 @@ public class SignalRActivityBridgeServiceTests
     }
 
     [Fact]
+    public async Task DispatchActivityEventAsync_TaskSuspendedNotice_ClearsActiveTaskAndBroadcastsTransitionAndBacklogMutation()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var telemetryService = new OperationsTelemetryService(fakeHubContext, NullLogger<OperationsTelemetryService>.Instance);
+        var bridge = CreateBridge(fakeHubContext, telemetryService: telemetryService);
+
+        telemetryService.RecordActiveTask(new ActiveTaskSummary(
+            21,
+            "Suspended Task",
+            StandardStageIds.TaskReview,
+            TaskPriority.High,
+            DeterministicStageConstants.LlmInferenceQueue,
+            DateTime.UtcNow,
+            "Local GPU"));
+
+        await bridge.DispatchActivityEventAsync(new AgentActivityEvent(
+            "sess-susp-1",
+            21,
+            StandardStageIds.TaskReview,
+            AgentActivityKind.Notice,
+            $"{AgentActivityConstants.SuspendedAuditReasonPrefix} [1]",
+            DateTime.UtcNow,
+            new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.ActionType] = AgentActivityConstants.ActionTypeTaskSuspended,
+                [AgentActivityMetadataKeys.StageKind] = WorkflowStageKind.Agentic.ToString()
+            }));
+
+        Assert.Null(telemetryService.GetActiveTask(21));
+        Assert.Contains(fakeHubContext.AllClient.WorkerStatuses, ws =>
+            ws.Status == WorkerStatusConstants.Idle &&
+            ws.ActiveTaskId == null);
+
+        var transition = Assert.Single(fakeHubContext.AllClient.StageTransitions);
+        Assert.Equal(21, transition.TaskId);
+        Assert.Equal(StandardStageIds.TaskReview, transition.StageId);
+        Assert.Equal(WorkflowStageKind.Agentic.ToString(), transition.StageKind);
+        Assert.Equal(AgentActivityConstants.StageStatusSuspended, transition.Status);
+
+        var mutation = Assert.Single(fakeHubContext.AllClient.BacklogMutations);
+        Assert.Equal(21, mutation.TaskId);
+        Assert.Equal(AgentActivityConstants.ActionTypeTaskSuspended, mutation.ToolName);
+    }
+
+    [Fact]
     public async Task DispatchActivityEventAsync_ThinkingDelta_RoutesToTaskGroupWithThinkingFlag()
     {
         var fakeHubContext = new FakeHubContext();

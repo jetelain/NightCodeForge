@@ -625,41 +625,13 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             return false;
         }
 
-        var prerequisiteIds = new HashSet<int>();
-        var repoDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
-        if (repoDeps != null)
+        var unclosedPrerequisites = await _mergeAndCascadeCoordinator.GetUnclosedPrerequisiteIdsAsync(
+            task.Id,
+            task.Dependencies?.Select(d => d.DependsOnTaskId),
+            cancellationToken);
+        if (unclosedPrerequisites.Count > 0)
         {
-            foreach (var depId in repoDeps)
-            {
-                prerequisiteIds.Add(depId);
-            }
-        }
-
-        if (task.Dependencies != null)
-        {
-            foreach (var dep in task.Dependencies)
-            {
-                prerequisiteIds.Add(dep.DependsOnTaskId);
-            }
-        }
-
-        var storeDeps = await _mergeAndCascadeCoordinator.GetPrerequisiteTaskIdsFromStoreAsync(task.Id, cancellationToken);
-        if (storeDeps != null)
-        {
-            foreach (var depId in storeDeps)
-            {
-                prerequisiteIds.Add(depId);
-            }
-        }
-
-        foreach (var prereqId in prerequisiteIds)
-        {
-            var prereqStatus = await _taskRepository.GetStatusAsync(prereqId, cancellationToken)
-                ?? await _mergeAndCascadeCoordinator.GetTaskStatusFromStoreAsync(prereqId, cancellationToken);
-            if (prereqStatus != TaskOverallStatus.Closed)
-            {
-                return false;
-            }
+            return false;
         }
 
         var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);

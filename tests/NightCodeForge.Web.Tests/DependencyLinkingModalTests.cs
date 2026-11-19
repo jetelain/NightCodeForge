@@ -41,6 +41,7 @@ public class DependencyLinkingModalTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
+            _depStore,
             _markdownSync,
             mockOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,

@@ -850,4 +850,82 @@ public class GitHubTaskMirrorServiceTests
             m => m.RemoveIfExists(GitHubTaskMirrorService.GetWorkspacePrMergeRecurringJobId(15)),
             Times.Once);
     }
+
+    [Fact]
+    public async Task TryClaimIssueForExecutionAsync_WhenUnassignedInProgressAfterLocalSuspension_AllowsRerunWithoutClaimConflict()
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace(s => s.AutoAssignIssueOnStart = false);
+        var task = CreateLinkedTask(10, "42", TaskOverallStatus.Open);
+        task.HasExecutionRun = false;
+
+        _taskRepoMock.Setup(r => r.GetByWorkspaceIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync([task]);
+        _taskRepoMock.Setup(r => r.GetHistoryAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync(
+        [
+            new ForgeTaskHistory
+            {
+                TaskId = 10,
+                Version = 2,
+                ChangedBy = AuditActors.TaskOrchestrator,
+                ChangeReason = $"{AgentActivityConstants.SuspendedAuditReasonPrefix} [1]; workflow reset to Open"
+            }
+        ]);
+
+        _gitHubClientMock
+            .Setup(c => c.GetIssueAsync("acme", "nightcodeforge", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubIssue
+            {
+                Number = 42,
+                State = "open",
+                Assignees = Array.Empty<string>(),
+                Labels = [GitHubSyncConstants.LabelInProgress]
+            });
+
+        var allowed = await sut.TryClaimIssueForExecutionAsync(task, workspace);
+
+        Assert.True(allowed);
+        Assert.False(task.IsWaitingForHuman);
+        Assert.Empty(task.Questions);
+        _depStoreMock.Verify(d => d.SetWaitingForHumanAsync(10, true, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(GitHubSyncConstants.LabelGatesPassed)]
+    [InlineData(GitHubSyncConstants.LabelReadyForReview)]
+    public async Task TryClaimIssueForExecutionAsync_WhenAdvancedExecutionLabelPresentAfterLocalSuspension_StillTriggersClaimConflict(string advancedLabel)
+    {
+        var sut = CreateSut();
+        var workspace = CreateConfiguredWorkspace(s => s.AutoAssignIssueOnStart = false);
+        var task = CreateLinkedTask(10, "42", TaskOverallStatus.Open);
+        task.HasExecutionRun = false;
+
+        _taskRepoMock.Setup(r => r.GetByWorkspaceIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync([task]);
+        _taskRepoMock.Setup(r => r.GetHistoryAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync(
+        [
+            new ForgeTaskHistory
+            {
+                TaskId = 10,
+                Version = 2,
+                ChangedBy = AuditActors.TaskOrchestrator,
+                ChangeReason = $"{AgentActivityConstants.SuspendedAuditReasonPrefix} [1]; workflow reset to Open"
+            }
+        ]);
+
+        _gitHubClientMock
+            .Setup(c => c.GetIssueAsync("acme", "nightcodeforge", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubIssue
+            {
+                Number = 42,
+                State = "open",
+                Assignees = Array.Empty<string>(),
+                Labels = [advancedLabel]
+            });
+
+        var allowed = await sut.TryClaimIssueForExecutionAsync(task, workspace);
+
+        Assert.False(allowed);
+        Assert.True(task.IsWaitingForHuman);
+        Assert.Single(task.Questions);
+        _depStoreMock.Verify(d => d.SetWaitingForHumanAsync(10, true, It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

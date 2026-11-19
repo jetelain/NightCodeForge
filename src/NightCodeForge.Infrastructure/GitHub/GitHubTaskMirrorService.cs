@@ -267,9 +267,14 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
             assignees.Any(a => string.Equals(a, authenticatedLogin, StringComparison.OrdinalIgnoreCase));
         var isAssignedToOtherUser = assignees.Count > 0 && !isAssignedToCurrentUser;
         var hasActiveExecutionLabel = labels.Any(l => ActiveExecutionLabels.Contains(l, StringComparer.OrdinalIgnoreCase));
+        var hasAdvancedExecutionLabel = labels.Any(l =>
+            string.Equals(l, GitHubSyncConstants.LabelGatesPassed, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(l, GitHubSyncConstants.LabelReadyForReview, StringComparison.OrdinalIgnoreCase));
         var hasActiveLocalSibling = siblings.Any(s =>
             s.HasExecutionRun || s.Status is TaskOverallStatus.Ready or TaskOverallStatus.Closed);
-        var isInProgressByOther = hasActiveExecutionLabel && !isAssignedToCurrentUser && !hasActiveLocalSibling;
+        var hasLocalSuspensionHistory = hasActiveExecutionLabel && !hasAdvancedExecutionLabel && !isAssignedToCurrentUser && !hasActiveLocalSibling
+            && await HasLocalPrerequisiteSuspensionHistoryAsync(task, cancellationToken);
+        var isInProgressByOther = hasActiveExecutionLabel && !isAssignedToCurrentUser && !hasActiveLocalSibling && !hasLocalSuspensionHistory;
 
         if (!hasUserOverride && (isAssignedToOtherUser || isInProgressByOther))
         {
@@ -833,6 +838,17 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
         var normalized = task.ExternalReferenceId.Trim().TrimStart('#');
         return int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out issueNumber)
             && issueNumber > 0;
+    }
+
+    private async Task<bool> HasLocalPrerequisiteSuspensionHistoryAsync(ForgeTask task, CancellationToken cancellationToken)
+    {
+        IEnumerable<ForgeTaskHistory>? history = task.History is { Count: > 0 }
+            ? task.History
+            : await _taskRepository.GetHistoryAsync(task.Id, cancellationToken);
+
+        return history != null && history.Any(h =>
+            string.Equals(h.ChangedBy, AuditActors.TaskOrchestrator, StringComparison.OrdinalIgnoreCase) &&
+            h.ChangeReason?.StartsWith(AgentActivityConstants.SuspendedAuditReasonPrefix, StringComparison.OrdinalIgnoreCase) == true);
     }
 
     private static Question? FindLatestAnsweredClaimConflictQuestion(ForgeTask task)

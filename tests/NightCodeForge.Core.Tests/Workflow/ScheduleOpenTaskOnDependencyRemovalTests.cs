@@ -684,6 +684,9 @@ public class ScheduleOpenTaskOnDependencyRemovalTests
 
         public Task SetWaitingForHumanAsync(int taskId, bool isWaiting, CancellationToken cancellationToken = default) =>
             _inner.SetWaitingForHumanAsync(taskId, isWaiting, cancellationToken);
+
+        public Task SetTaskDependenciesAsync(int workspaceId, int taskId, IEnumerable<int> prerequisiteTaskIds, CancellationToken cancellationToken = default) =>
+            _inner.SetTaskDependenciesAsync(workspaceId, taskId, prerequisiteTaskIds, cancellationToken);
     }
 
     private sealed class InterceptingEnqueueTaskJobQueue : ITaskJobQueue

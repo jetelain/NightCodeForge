@@ -99,6 +99,30 @@
                         </div>
                     </div>
                 }
+
+                @{
+                    var drawerUnclosedBlockers = TaskDependencyPresentationHelper.GetUnclosedBlockers(Task, AllTasks, PrerequisiteIds);
+                    var drawerIsSuspended = TaskDependencyPresentationHelper.IsSuspendedByBlockers(Task, AllTasks, PrerequisiteIds, isRunning: IsRunning);
+                    var drawerStalledBlockers = TaskDependencyPresentationHelper.GetStalledOrFailedBlockers(drawerUnclosedBlockers);
+                    var drawerPrerequisiteItems = TaskDependencyPresentationHelper.ResolvePrerequisiteItems(Task, AllTasks, WorkspaceState.ActiveWorkspace?.Id, PrerequisiteIds);
+                }
+                @if (drawerIsSuspended)
+                {
+                    <div id="drawer-suspension-banner" class="suspension-alert" role="status" style="margin-top: 0.75rem;">
+                        <div class="suspension-alert-header">
+                            <strong>@TaskDependencyPresentationHelper.FormatSuspendedBadgeText(drawerUnclosedBlockers)</strong>
+                        </div>
+                        <div class="suspension-alert-body">
+                            @TaskDependencyPresentationHelper.FormatSuspensionBannerText(drawerUnclosedBlockers)
+                        </div>
+                        @if (drawerStalledBlockers.Count > 0)
+                        {
+                            <div id="drawer-suspension-upstream-warning" class="suspension-upstream-warning">
+                                ⚠️ @TaskDependencyPresentationHelper.FormatStalledOrFailedWarningText(drawerStalledBlockers)
+                            </div>
+                        }
+                    </div>
+                }
             </div>
 
             <!-- Drawer Body -->
@@ -346,14 +370,14 @@
                 <div class="drawer-section">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
                         <h4 class="section-title" style="margin: 0;">
-                            Prerequisites (@PrerequisiteIds.Count)
+                            Prerequisites (@drawerPrerequisiteItems.Count)
                         </h4>
                         <button type="button" class="forge-btn forge-btn-secondary btn-sm" @onclick="HandleLinkDependencies">
                             ✏️ Edit
                         </button>
                     </div>
 
-                    @if (PrerequisiteIds.Count == 0)
+                    @if (drawerPrerequisiteItems.Count == 0)
                     {
                         <div class="text-muted" style="font-size: 0.85rem; padding: 0.5rem 0;">
                             No prerequisites configured. Eligible to execute immediately when Open.
@@ -362,29 +386,40 @@
                     else
                     {
                         <div class="dependency-list">
-                            @foreach (var prereqId in PrerequisiteIds)
+                            @foreach (var item in drawerPrerequisiteItems)
                             {
-                                var prereqTask = AllTasks.FirstOrDefault(t => t.Id == prereqId);
-                                var isClosed = prereqTask?.Status == TaskOverallStatus.Closed;
-                                <div class="dependency-item @(isClosed ? "satisfied" : "blocking")">
+                                <a href="@item.TaskUrl" class="dependency-item @item.CssClass" style="text-decoration: none;">
                                     <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
-                                        <span class="font-mono text-secondary">#@prereqId</span>
-                                        <span class="dep-title">@(prereqTask?.Title ?? "Task #" + prereqId)</span>
+                                        <span class="font-mono text-secondary">#@item.TaskId</span>
+                                        <span class="dep-title">@item.Title</span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
-                                        @if (isClosed)
+                                        @if (item.IsClosed)
                                         {
                                             <span class="forge-badge badge-emerald" style="font-size: 0.75rem;">✅ Satisfied</span>
                                         }
-                                        else
+                                        else if (item.RequiresUpstreamAttention)
+                                        {
+                                            <span class="badge-upstream-warning" style="font-size: 0.72rem;" title="Upstream attention required">⚠️ Attention</span>
+                                            <span class="forge-badge @GetStatusBadgeClass(item.Status)" style="font-size: 0.75rem;">
+                                                @item.StatusLabel
+                                            </span>
+                                        }
+                                        else if (item.IsBlocking)
                                         {
                                             <span class="forge-badge badge-amber" style="font-size: 0.75rem;">🔒 Blocking</span>
-                                            <span class="forge-badge @GetStatusBadgeClass(prereqTask?.Status ?? TaskOverallStatus.Open)" style="font-size: 0.75rem;">
-                                                @(prereqTask?.Status.ToString() ?? "Open")
+                                            <span class="forge-badge @GetStatusBadgeClass(item.Status)" style="font-size: 0.75rem;">
+                                                @item.StatusLabel
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="forge-badge @GetStatusBadgeClass(item.Status)" style="font-size: 0.75rem;">
+                                                @item.StatusLabel
                                             </span>
                                         }
                                     </div>
-                                </div>
+                                </a>
                             }
                         </div>
                     }
@@ -396,18 +431,17 @@
                     <div class="drawer-section">
                         <h4 class="section-title">Downstream Dependents (@DependentIds.Count)</h4>
                         <div class="dependency-list">
-                            @foreach (var depId in DependentIds)
+                            @foreach (var item in TaskDependencyPresentationHelper.ResolveDependentItems(DependentIds, AllTasks, WorkspaceState.ActiveWorkspace?.Id, Task.WorkspaceId))
                             {
-                                var depTask = AllTasks.FirstOrDefault(t => t.Id == depId);
-                                <div class="dependency-item neutral">
+                                <a href="@item.TaskUrl" class="dependency-item @item.CssClass" style="text-decoration: none;">
                                     <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
-                                        <span class="font-mono text-secondary">#@depId</span>
-                                        <span class="dep-title">@(depTask?.Title ?? "Task #" + depId)</span>
+                                        <span class="font-mono text-secondary">#@item.TaskId</span>
+                                        <span class="dep-title">@item.Title</span>
                                     </div>
-                                    <span class="forge-badge @GetStatusBadgeClass(depTask?.Status ?? TaskOverallStatus.Open)" style="font-size: 0.75rem;">
-                                        @(depTask?.Status.ToString() ?? "Open")
+                                    <span class="forge-badge @GetStatusBadgeClass(item.Status)" style="font-size: 0.75rem;">
+                                        @item.StatusLabel
                                     </span>
-                                </div>
+                                </a>
                             }
                         </div>
                     </div>
@@ -531,8 +565,9 @@
     [Parameter] public bool IsOpen { get; set; }
     [Parameter] public ForgeTask? Task { get; set; }
     [Parameter] public IReadOnlyList<ForgeTask> AllTasks { get; set; } = Array.Empty<ForgeTask>();
-    [Parameter] public IReadOnlyList<int> PrerequisiteIds { get; set; } = Array.Empty<int>();
+    [Parameter] public IReadOnlyList<int>? PrerequisiteIds { get; set; }
     [Parameter] public IReadOnlyList<int> DependentIds { get; set; } = Array.Empty<int>();
+    [Parameter] public bool IsRunning { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnPromoteClicked { get; set; }
     [Parameter] public EventCallback<ForgeTask> OnLinkDependenciesClicked { get; set; }
@@ -913,7 +948,7 @@
         }
     }
 
-    private static string GetStatusBadgeClass(TaskOverallStatus status) => status switch
+    private static string GetStatusBadgeClass(TaskOverallStatus? status) => status switch
     {
         TaskOverallStatus.Suggested => "badge-amber",
         TaskOverallStatus.Open => "badge-indigo",

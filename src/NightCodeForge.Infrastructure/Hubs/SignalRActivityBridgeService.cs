@@ -201,18 +201,7 @@ public class SignalRActivityBridgeService : BackgroundService
                               string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase)))
                     {
-                        _telemetryService.ClearActiveTask(evt.TaskId);
-                        var remainingActive = GetRemainingActiveTask();
-                        if (remainingActive != null)
-                        {
-                            await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingActive.TaskId, remainingActive.CurrentStageId, remainingActive.HardwareTarget);
-                        }
-                        else
-                        {
-                            await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, LocalGpuHardwareTarget);
-                        }
+                        await ClearActiveTaskAndBroadcastWorkerStatusAsync(evt.TaskId);
                     }
                     break;
 
@@ -260,18 +249,7 @@ public class SignalRActivityBridgeService : BackgroundService
                 case AgentActivityKind.Error:
                     if (AutonomousTaskClassifier.IsAutonomousTask(evt))
                     {
-                        _telemetryService.ClearActiveTask(evt.TaskId);
-                        var remainingAfterError = GetRemainingActiveTask();
-                        if (remainingAfterError != null)
-                        {
-                            await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingAfterError.TaskId, remainingAfterError.CurrentStageId, remainingAfterError.HardwareTarget);
-                        }
-                        else
-                        {
-                            await _hubContext.Clients.All
-                                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, LocalGpuHardwareTarget);
-                        }
+                        await ClearActiveTaskAndBroadcastWorkerStatusAsync(evt.TaskId);
                     }
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, "Error", evt.Content, evt.Timestamp);
@@ -299,7 +277,24 @@ public class SignalRActivityBridgeService : BackgroundService
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, ResilienceConstants.LogLevelWarning, evt.Content, evt.Timestamp);
 
-                    if (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ToolName, out var noticeTool) == true
+                    if (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ActionType, out var actionObj) == true
+                        && string.Equals(actionObj?.ToString(), AgentActivityConstants.ActionTypeTaskSuspended, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (AutonomousTaskClassifier.IsAutonomousTask(evt))
+                        {
+                            await ClearActiveTaskAndBroadcastWorkerStatusAsync(evt.TaskId);
+                        }
+
+                        var stageKind = evt.Metadata.TryGetValue(AgentActivityMetadataKeys.StageKind, out var suspendedKind) == true && suspendedKind != null
+                            ? suspendedKind.ToString()!
+                            : WorkflowStageKind.Agentic.ToString();
+
+                        await _hubContext.Clients.All
+                            .ReceiveStageTransition(evt.TaskId, evt.StageId, stageKind, AgentActivityConstants.StageStatusSuspended);
+                        await _hubContext.Clients.All
+                            .ReceiveBacklogMutation(evt.TaskId, AgentActivityConstants.ActionTypeTaskSuspended, evt.Content);
+                    }
+                    else if (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ToolName, out var noticeTool) == true
                         && noticeTool?.ToString() is { } noticeToolName
                         && (CanonicalToolNames.BacklogMutationTools.Contains(noticeToolName, StringComparer.OrdinalIgnoreCase) ||
                             string.Equals(noticeToolName, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase)))
@@ -312,6 +307,22 @@ public class SignalRActivityBridgeService : BackgroundService
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Failed to dispatch SignalR activity event {Kind} for task #{TaskId}; client may have disconnected.", evt.Kind, evt.TaskId);
+        }
+    }
+
+    private async Task ClearActiveTaskAndBroadcastWorkerStatusAsync(int taskId)
+    {
+        _telemetryService.ClearActiveTask(taskId);
+        var remainingActive = GetRemainingActiveTask();
+        if (remainingActive != null)
+        {
+            await _hubContext.Clients.All
+                .ReceiveWorkerStatus(WorkerStatusConstants.Running, remainingActive.TaskId, remainingActive.CurrentStageId, remainingActive.HardwareTarget);
+        }
+        else
+        {
+            await _hubContext.Clients.All
+                .ReceiveWorkerStatus(WorkerStatusConstants.Idle, null, null, LocalGpuHardwareTarget);
         }
     }
 

@@ -42,6 +42,7 @@ public class TaskDetailPageTests : BunitContext
         _mutationService = new TaskMutationService(
             _taskRepository,
             _workspaceRepository,
+            _depStore,
             _markdownSync,
             _orchestrator,
             new Mock<IOperationsTelemetryService>().Object,

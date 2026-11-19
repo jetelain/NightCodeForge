@@ -57,6 +57,7 @@ public class BacklogPageTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
+            _depStore,
             _markdownSync,
             _orchestrator,
             telemetryMock.Object,

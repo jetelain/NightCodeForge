@@ -263,7 +263,7 @@
                                                 {
                                                     <span class="badge-waiting-human" style="font-size: 0.75rem;">💬 Human Input</span>
                                                 }
-                                                else if (BacklogStatusClassifier.IsInFlight(task, runningTaskIds: EffectiveRunningTaskIds))
+                                                else if (BacklogStatusClassifier.IsInFlight(task, runningTaskIds: EffectiveRunningTaskIds, allTasks: _rawTasks))
                                                 {
                                                     <span class="forge-badge badge-purple" style="font-size: 0.75rem;">⚡ In-Flight</span>
                                                 }

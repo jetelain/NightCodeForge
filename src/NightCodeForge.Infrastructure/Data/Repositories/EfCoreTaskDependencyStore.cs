@@ -98,4 +98,15 @@ public class EfCoreTaskDependencyStore : ITaskDependencyStore
                 .SetProperty(t => t.UpdatedAt, now),
                 cancellationToken);
     }
+
+    /// <summary>
+    /// Documented no-op: <see cref="EfCoreTaskDependencyStore"/> is stateless and queries
+    /// <see cref="AppDbContext.TaskDependencies"/> directly, which <see cref="EfCoreTaskRepository"/>
+    /// already persists atomically.
+    /// </summary>
+    public Task SetTaskDependenciesAsync(
+        int workspaceId,
+        int taskId,
+        IEnumerable<int> prerequisiteTaskIds,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
 }

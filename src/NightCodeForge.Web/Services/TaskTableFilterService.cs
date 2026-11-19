@@ -57,11 +57,15 @@ public static class TaskTableFilterService
         bool sortAscending,
         DateTime? utcNow = null,
         int? activeTaskId = null,
-        IEnumerable<int>? runningTaskIds = null)
+        IEnumerable<int>? runningTaskIds = null,
+        IReadOnlyList<ForgeTask>? allTasksForDependencyLookup = null,
+        IReadOnlyDictionary<int, IReadOnlyList<int>>? taskDependencies = null)
     {
         if (tasks == null) return Array.Empty<ForgeTask>();
 
-        var query = tasks.Where(t => t.Status != TaskOverallStatus.Triage);
+        var materializedTasks = tasks as IReadOnlyList<ForgeTask> ?? tasks.ToList();
+        var lookupTasks = allTasksForDependencyLookup ?? materializedTasks;
+        var query = materializedTasks.Where(t => t.Status != TaskOverallStatus.Triage);
         var now = utcNow ?? DateTime.UtcNow;
 
         // 1. Text search by #ID, title, or description
@@ -87,8 +91,18 @@ public static class TaskTableFilterService
         query = statusFilter switch
         {
             TaskStatusFilter.Suggested => query.Where(t => t.Status is TaskOverallStatus.Suggested or TaskOverallStatus.Draft),
-            TaskStatusFilter.Open => query.Where(t => BacklogStatusClassifier.IsOpenBacklog(t, activeTaskId, runningTaskIds)),
-            TaskStatusFilter.InFlight => query.Where(t => BacklogStatusClassifier.IsInFlight(t, activeTaskId, runningTaskIds)),
+            TaskStatusFilter.Open => query.Where(t => BacklogStatusClassifier.IsOpenBacklog(
+                t,
+                activeTaskId,
+                runningTaskIds,
+                lookupTasks,
+                ResolvePrerequisiteIds(t, taskDependencies))),
+            TaskStatusFilter.InFlight => query.Where(t => BacklogStatusClassifier.IsInFlight(
+                t,
+                activeTaskId,
+                runningTaskIds,
+                lookupTasks,
+                ResolvePrerequisiteIds(t, taskDependencies))),
             TaskStatusFilter.Ready => query.Where(t => t.Status == TaskOverallStatus.Ready),
             TaskStatusFilter.Failed => query.Where(t => t.Status == TaskOverallStatus.Failed),
             TaskStatusFilter.Closed => query.Where(t => t.Status == TaskOverallStatus.Closed),
@@ -140,6 +154,18 @@ public static class TaskTableFilterService
         }
 
         return orderedQuery.ToList();
+    }
+
+    private static IReadOnlyList<int>? ResolvePrerequisiteIds(
+        ForgeTask task,
+        IReadOnlyDictionary<int, IReadOnlyList<int>>? taskDependencies)
+    {
+        if (taskDependencies != null && taskDependencies.TryGetValue(task.Id, out var prereqIds))
+        {
+            return prereqIds;
+        }
+
+        return null;
     }
 }
 

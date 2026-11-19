@@ -307,6 +307,23 @@ public class EfCoreTaskRepository : ITaskRepository
         await context.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task UpdateSchedulingStateAsync(int taskId, string? jobId, bool isDeferredByPause, CancellationToken cancellationToken = default)
+    {
+        await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
+
+        var updatedRows = await context.Tasks
+            .Where(t => t.Id == taskId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(t => t.LastHangfireJobId, jobId)
+                .SetProperty(t => t.IsDeferredByPause, isDeferredByPause),
+                cancellationToken);
+
+        if (updatedRows == 0)
+        {
+            throw new TaskNotFoundException(taskId, $"ForgeTask #{taskId} was not found when updating scheduling state.");
+        }
+    }
+
     public async Task UpdateWithHistoryAsync(ForgeTask task, IEnumerable<int>? dependsOn, string changedBy, string? reason, CancellationToken cancellationToken = default)
     {
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);

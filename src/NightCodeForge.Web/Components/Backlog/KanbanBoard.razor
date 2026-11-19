@@ -9,7 +9,7 @@
         }
         <!-- Column 1: Suggested / Triage -->
         @{
-            var suggestedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.Suggested).ToList();
+            var suggestedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds, allTasks: AllTasks ?? Tasks, prerequisiteIds: GetPrereqsOrNull(t.Id)) == BacklogKanbanColumn.Suggested).ToList();
         }
         <div class="kanban-column column-suggested">
             <div class="column-header">
@@ -28,7 +28,7 @@
                 {
                     @foreach (var task in suggestedTasks)
                     {
-                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        var prereqs = GetPrereqsOrNull(task.Id);
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
@@ -46,7 +46,7 @@
 
         <!-- Column 2: Open / Backlog -->
         @{
-            var openTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.Open).ToList();
+            var openTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds, allTasks: AllTasks ?? Tasks, prerequisiteIds: GetPrereqsOrNull(t.Id)) == BacklogKanbanColumn.Open).ToList();
         }
         <div class="kanban-column column-open">
             <div class="column-header">
@@ -65,7 +65,7 @@
                 {
                     @foreach (var task in openTasks)
                     {
-                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        var prereqs = GetPrereqsOrNull(task.Id);
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
@@ -83,7 +83,7 @@
 
         <!-- Column 3: In-Flight -->
         @{
-            var inFlightTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.InFlight).ToList();
+            var inFlightTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds, allTasks: AllTasks ?? Tasks, prerequisiteIds: GetPrereqsOrNull(t.Id)) == BacklogKanbanColumn.InFlight).ToList();
         }
         <div class="kanban-column column-inflight">
             <div class="column-header">
@@ -102,7 +102,7 @@
                 {
                     @foreach (var task in inFlightTasks)
                     {
-                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        var prereqs = GetPrereqsOrNull(task.Id);
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
@@ -120,7 +120,7 @@
 
         <!-- Column 4: Ready for Review -->
         @{
-            var readyTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.ReadyForReview).ToList();
+            var readyTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds, allTasks: AllTasks ?? Tasks, prerequisiteIds: GetPrereqsOrNull(t.Id)) == BacklogKanbanColumn.ReadyForReview).ToList();
         }
         <div class="kanban-column column-ready">
             <div class="column-header">
@@ -139,7 +139,7 @@
                 {
                     @foreach (var task in readyTasks)
                     {
-                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        var prereqs = GetPrereqsOrNull(task.Id);
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
@@ -157,7 +157,7 @@
 
         <!-- Column 5: Closed & Terminal -->
         @{
-            var closedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds) == BacklogKanbanColumn.Closed).ToList();
+            var closedTasks = Tasks.Where(t => BacklogStatusClassifier.GetColumn(t, runningTaskIds: runningIds, allTasks: AllTasks ?? Tasks, prerequisiteIds: GetPrereqsOrNull(t.Id)) == BacklogKanbanColumn.Closed).ToList();
             var orderedClosedTasks = TaskRecencyAndRetentionHelper.OrderClosedColumnTasks(closedTasks).ToList();
         }
         <div class="kanban-column column-closed">
@@ -177,7 +177,7 @@
                 {
                     @foreach (var task in orderedClosedTasks)
                     {
-                        var prereqs = TaskDependencies.TryGetValue(task.Id, out var deps) ? deps : Array.Empty<int>();
+                        var prereqs = GetPrereqsOrNull(task.Id);
                         <KanbanCard Task="task"
                                     AllTasks="AllTasks ?? Tasks"
                                     PrerequisiteIds="prereqs"
@@ -210,6 +210,9 @@
 
     private HashSet<int> EffectiveRunningTaskIds =>
         TaskInspectorGroupingHelper.ResolveRunningTaskIds(ActiveTaskId, RunningTaskIds);
+
+    private IReadOnlyList<int>? GetPrereqsOrNull(int taskId) =>
+        TaskDependencies != null && TaskDependencies.TryGetValue(taskId, out var deps) ? deps : null;
 
     private bool IsTaskRunning(ForgeTask task) =>
         BacklogStatusClassifier.IsRunning(task, ActiveTaskId, RunningTaskIds);

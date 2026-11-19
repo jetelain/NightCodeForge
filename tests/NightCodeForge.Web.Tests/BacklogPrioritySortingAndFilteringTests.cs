@@ -52,6 +52,7 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             new InMemoryWorkspaceRepository(),
+            _depStore,
             _markdownSync,
             _orchestrator,
             telemetryMock.Object,

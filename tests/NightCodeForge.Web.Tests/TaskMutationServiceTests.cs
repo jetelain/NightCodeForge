@@ -31,6 +31,7 @@ public class TaskMutationServiceTests
         _service = new TaskMutationService(
             _taskRepository,
             _workspaceRepository,
+            new InMemoryTaskDependencyStore(),
             _markdownSync,
             _taskOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,
@@ -425,6 +426,7 @@ public class TaskMutationServiceTests
         var mutationService = new TaskMutationService(
             taskRepo,
             _workspaceRepository,
+            depStore,
             _markdownSync,
             orchestrator,
             telemetry,

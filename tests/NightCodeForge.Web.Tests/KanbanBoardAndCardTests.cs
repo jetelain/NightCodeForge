@@ -62,7 +62,7 @@ public class KanbanBoardAndCardTests : BunitContext
             .Add(c => c.PrerequisiteIds, prereqIds));
 
         var blockedBadge = cut.Find(".badge-blocked");
-        Assert.Contains("Blocked (1)", blockedBadge.TextContent);
+        Assert.Contains("⏸️ Blocked on #1", blockedBadge.TextContent);
     }
 
     [Fact]

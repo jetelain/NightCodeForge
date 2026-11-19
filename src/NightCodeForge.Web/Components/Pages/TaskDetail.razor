@@ -26,6 +26,7 @@
 @inject ToastService ToastService
 @inject NavigationManager Navigation
 @inject WorkspaceStateService WorkspaceState
+@inject WorkerStateService WorkerState
 @inject OrchestratorHubClientConnection HubClient
 @inject ILogger<TaskDetail> Logger
 @implements IDisposable
@@ -225,6 +226,31 @@
                     <a href="@WorkspaceState.GetPath($"inspector/{_task.Id}")" class="forge-btn forge-btn-primary btn-sm" style="text-decoration: none; padding: 0.35rem 0.8rem; font-size: 0.82rem;">
                         Answer Questions &amp; Resume →
                     </a>
+                </div>
+            }
+
+            <!-- Prerequisite Suspension Banner -->
+            @{
+                var isTaskRunning = BacklogStatusClassifier.IsRunning(_task, runningTaskIds: TaskInspectorGroupingHelper.ResolveRunningTaskIds(WorkerState.Current));
+                var unclosedBlockers = TaskDependencyPresentationHelper.GetUnclosedBlockers(_task, _allWorkspaceTasks, _prerequisiteIds);
+                var isSuspendedByBlockers = TaskDependencyPresentationHelper.IsSuspendedByBlockers(_task, _allWorkspaceTasks, _prerequisiteIds, isRunning: isTaskRunning);
+                var stalledBlockers = TaskDependencyPresentationHelper.GetStalledOrFailedBlockers(unclosedBlockers);
+            }
+            @if (isSuspendedByBlockers)
+            {
+                <div id="task-suspension-banner" class="suspension-alert card-glass" role="status" style="margin-top: 1rem;">
+                    <div class="suspension-alert-header">
+                        <strong>@TaskDependencyPresentationHelper.FormatSuspendedBadgeText(unclosedBlockers)</strong>
+                    </div>
+                    <div class="suspension-alert-body">
+                        @TaskDependencyPresentationHelper.FormatSuspensionBannerText(unclosedBlockers)
+                    </div>
+                    @if (stalledBlockers.Count > 0)
+                    {
+                        <div id="task-suspension-upstream-warning" class="suspension-upstream-warning">
+                            ⚠️ @TaskDependencyPresentationHelper.FormatStalledOrFailedWarningText(stalledBlockers)
+                        </div>
+                    }
                 </div>
             }
         </div>
@@ -696,27 +722,35 @@
                     else
                     {
                         <div class="dependency-list" style="display: flex; flex-direction: column; gap: 0.4rem;">
-                            @foreach (var prereqId in _prerequisiteIds)
+                            @foreach (var item in TaskDependencyPresentationHelper.ResolvePrerequisiteItems(_task, _allWorkspaceTasks, WorkspaceState.ActiveWorkspace?.Id, _prerequisiteIds))
                             {
-                                var prereq = _allWorkspaceTasks.FirstOrDefault(t => t.Id == prereqId);
-                                var isClosed = prereq?.Status == TaskOverallStatus.Closed;
-                                <a href="@WorkspaceState.GetPath($"tasks/{prereqId}")"
-                                   class="dependency-item @(isClosed ? "satisfied" : "blocking")"
-                                   style="text-decoration: none; display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0.65rem; border-radius: var(--radius-sm); border: 1px solid @(isClosed ? "rgba(16, 185, 129, 0.3)" : "rgba(245, 158, 11, 0.3)"); background: var(--bg-input);">
+                                <a href="@item.TaskUrl"
+                                   class="dependency-item @item.CssClass"
+                                   style="text-decoration: none; display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0.65rem; border-radius: var(--radius-sm); border: 1px solid @(item.IsClosed ? "rgba(16, 185, 129, 0.3)" : item.RequiresUpstreamAttention ? "rgba(239, 68, 68, 0.4)" : item.IsBlocking ? "rgba(245, 158, 11, 0.3)" : "var(--border-subtle)"); background: var(--bg-input);">
                                     <div style="display: flex; align-items: center; gap: 0.4rem; min-width: 0;">
-                                        <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@prereqId</span>
+                                        <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@item.TaskId</span>
                                         <span style="font-size: 0.82rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;">
-                                            @(prereq?.Title ?? $"Task #{prereqId}")
+                                            @item.Title
                                         </span>
                                     </div>
-                                    @if (isClosed)
-                                    {
-                                        <span class="forge-badge badge-emerald" style="font-size: 0.7rem; padding: 1px 5px;">✅ Closed</span>
-                                    }
-                                    else
-                                    {
-                                        <span class="forge-badge badge-amber" style="font-size: 0.7rem; padding: 1px 5px;">🔒 Blocking</span>
-                                    }
+                                    <div style="display: flex; align-items: center; gap: 0.3rem; flex-shrink: 0;">
+                                        @if (item.IsClosed)
+                                        {
+                                            <span class="forge-badge badge-emerald" style="font-size: 0.7rem; padding: 1px 5px;">✅ Closed</span>
+                                        }
+                                        else if (item.RequiresUpstreamAttention)
+                                        {
+                                            <span class="badge-upstream-warning" style="font-size: 0.7rem; padding: 1px 5px;" title="Upstream attention required">⚠️ @item.StatusLabel</span>
+                                        }
+                                        else if (item.IsBlocking)
+                                        {
+                                            <span class="forge-badge badge-amber" style="font-size: 0.7rem; padding: 1px 5px;">🔒 Blocking (@item.StatusLabel)</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="forge-badge badge-secondary" style="font-size: 0.7rem; padding: 1px 5px;">@item.StatusLabel</span>
+                                        }
+                                    </div>
                                 </a>
                             }
                         </div>
@@ -732,20 +766,19 @@
                             Downstream Dependents (@_dependentIds.Count)
                         </label>
                         <div class="dependency-list" style="display: flex; flex-direction: column; gap: 0.4rem;">
-                            @foreach (var depId in _dependentIds)
+                            @foreach (var item in TaskDependencyPresentationHelper.ResolveDependentItems(_dependentIds, _allWorkspaceTasks, WorkspaceState.ActiveWorkspace?.Id, _task.WorkspaceId))
                             {
-                                var dep = _allWorkspaceTasks.FirstOrDefault(t => t.Id == depId);
-                                <a href="@WorkspaceState.GetPath($"tasks/{depId}")"
-                                   class="dependency-item neutral"
+                                <a href="@item.TaskUrl"
+                                   class="dependency-item @item.CssClass"
                                    style="text-decoration: none; display: flex; align-items: center; justify-content: space-between; padding: 0.45rem 0.65rem; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); background: var(--bg-input);">
                                     <div style="display: flex; align-items: center; gap: 0.4rem; min-width: 0;">
-                                        <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@depId</span>
+                                        <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@item.TaskId</span>
                                         <span style="font-size: 0.82rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;">
-                                            @(dep?.Title ?? $"Task #{depId}")
+                                            @item.Title
                                         </span>
                                     </div>
-                                    <span class="forge-badge @GetStatusBadgeClass(dep?.Status ?? TaskOverallStatus.Open)" style="font-size: 0.7rem; padding: 1px 5px;">
-                                        @(dep?.Status.ToString() ?? "Open")
+                                    <span class="forge-badge @GetStatusBadgeClass(item.Status)" style="font-size: 0.7rem; padding: 1px 5px;">
+                                        @item.StatusLabel
                                     </span>
                                 </a>
                             }
@@ -887,6 +920,7 @@
     protected override async Task OnInitializedAsync()
     {
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged += HandleWorkerStateChanged;
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived += HandleStageTransition;
@@ -1281,7 +1315,16 @@
         });
     }
 
-    private static string GetStatusBadgeClass(TaskOverallStatus status) => status switch
+    private void HandleWorkerStateChanged()
+    {
+        if (_disposed) return;
+        _ = InvokeAsync(() =>
+        {
+            if (!_disposed) StateHasChanged();
+        });
+    }
+
+    private static string GetStatusBadgeClass(TaskOverallStatus? status) => status switch
     {
         TaskOverallStatus.Triage => "badge-indigo",
         TaskOverallStatus.Suggested => "badge-amber",
@@ -1299,6 +1342,7 @@
     {
         _disposed = true;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+        WorkerState.OnWorkerStateChanged -= HandleWorkerStateChanged;
         if (HubClient != null)
         {
             HubClient.OnStageTransitionReceived -= HandleStageTransition;

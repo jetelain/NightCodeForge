@@ -60,6 +60,7 @@ public class Step1238TriageWebAndInspectorTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             _workspaceRepository,
+            depStore,
             new MockTaskMarkdownSyncService(),
             mockOrchestrator,
             Mock.Of<IOperationsTelemetryService>(),

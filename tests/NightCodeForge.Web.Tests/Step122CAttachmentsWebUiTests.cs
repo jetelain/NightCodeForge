@@ -1026,6 +1026,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         var mutationService = new TaskMutationService(
             harness.TaskRepo,
             harness.WorkspaceRepo,
+            depStore,
             markdownSync,
             orchestrator,
             new Mock<IOperationsTelemetryService>().Object,

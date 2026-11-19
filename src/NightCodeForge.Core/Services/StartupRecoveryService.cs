@@ -95,6 +95,34 @@ public class StartupRecoveryService : IStartupRecoveryService
 
         foreach (var task in candidateTasks)
         {
+            if (task.Status == TaskOverallStatus.Open && await HasUnclosedPrerequisitesAsync(task, cancellationToken))
+            {
+                if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId) || task.IsDeferredByPause)
+                {
+                    if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+                    {
+                        _jobQueue.Delete(task.LastHangfireJobId);
+                    }
+
+                    await _taskRepository.UpdateSchedulingStateAsync(task.Id, jobId: null, isDeferredByPause: false, cancellationToken);
+                    task.LastHangfireJobId = null;
+                    task.IsDeferredByPause = false;
+                }
+
+                var convs = await _taskRepository.GetConversationsAsync(task.Id, cancellationToken) ?? Array.Empty<Conversation>();
+                foreach (var runningConv in convs.Where(c => c.Status == StageExecutionStatus.Running))
+                {
+                    await _taskRepository.CompleteConversationAsync(
+                        runningConv.Id,
+                        StageExecutionStatus.Interrupted,
+                        summary: InterruptedAgenticConversationSummary,
+                        cancellationToken: cancellationToken);
+                }
+
+                _logger.LogInformation("Startup recovery skipping blocked Open task #{TaskId} with unclosed prerequisites.", task.Id);
+                continue;
+            }
+
             var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
 
             // Normalize legacy status Implemented / Reviewed
@@ -362,5 +390,42 @@ public class StartupRecoveryService : IStartupRecoveryService
         }
 
         _logger.LogInformation("Startup workspace reconciliation completed. Reconciled {Count} active tasks.", reconciledCount);
+    }
+
+    private async Task<bool> HasUnclosedPrerequisitesAsync(ForgeTask task, CancellationToken cancellationToken)
+    {
+        var prerequisiteIds = new HashSet<int>();
+        var repoDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
+        if (repoDeps != null)
+        {
+            foreach (var depId in repoDeps)
+            {
+                if (depId > 0)
+                {
+                    prerequisiteIds.Add(depId);
+                }
+            }
+        }
+
+        if (task.Dependencies != null)
+        {
+            foreach (var dep in task.Dependencies)
+            {
+                if (dep.DependsOnTaskId > 0)
+                {
+                    prerequisiteIds.Add(dep.DependsOnTaskId);
+                }
+            }
+        }
+
+        foreach (var prereqId in prerequisiteIds)
+        {
+            if (await _taskRepository.GetStatusAsync(prereqId, cancellationToken) != TaskOverallStatus.Closed)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

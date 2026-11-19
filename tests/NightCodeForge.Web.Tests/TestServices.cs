@@ -94,6 +94,7 @@ public static class TestServices
             return mock.Object;
         });
         services.TryAddSingleton<WorkspaceStateService>();
+        services.TryAddSingleton(_ => WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
         services.TryAddSingleton<ITaskReviewService>(sp => new TaskReviewService(
             sp.GetRequiredService<ITaskRepository>(),
             sp.GetRequiredService<IWorkspaceRepository>(),

@@ -1139,6 +1139,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                             createdBy: AuditActors.GetActorForStage(stage.StageId),
                             reason: $"Proposed by stage '{stage.StageId}' during execution of task #{task.Id}",
                             cancellationToken: cancellationToken);
+                        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(suggestedTask.Id, suggestedTask.Status, cancellationToken);
                         if (attachmentIds.Count > 0)
                         {
                             await _attachmentRepository.SetTaskAttachmentLinksAsync(suggestedTask.Id, attachmentIds, cancellationToken);
@@ -1149,10 +1150,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                     pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingProposals);
                 }
 
+                var stageActor = AuditActors.GetActorForStage(stage.StageId);
+                var diskSyncRan = false;
+                var hasAuthoritativeDiskSync = false;
+
                 // Read back all disk modifications to tasks using single authority (TaskMarkdownSyncService)
                 if (!isStageCancelledOrPaused && !string.IsNullOrWhiteSpace(targetSyncPath) && Directory.Exists(targetSyncPath))
                 {
-                    var stageActor = AuditActors.GetActorForStage(stage.StageId);
                     var stageReason = result.NeedsClarification
                         ? $"Stage '{stage.StageId}' pausing for human clarification"
                         : $"Stage '{stage.StageId}' completed disk synchronization";
@@ -1198,6 +1202,7 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 if (authoritativeDbTask != null)
                                 {
                                     TaskWorkspacePreparer.CopyTaskMetadata(task, authoritativeDbTask);
+                                    hasAuthoritativeDiskSync = true;
                                 }
 
                                 await _workspacePreparer.SyncTaskMarkdownAndMirrorAsync(task, workspace, cancellationToken);
@@ -1262,10 +1267,69 @@ public class TaskOrchestrator : ITaskOrchestrator
                     if (refreshedTask != null)
                     {
                         TaskWorkspacePreparer.CopyTaskMetadata(task, refreshedTask);
+                        hasAuthoritativeDiskSync = true;
                     }
 
-                    if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) && result.IsSuccess && !result.IsCancelled && !result.NeedsClarification)
+                    if (hasAuthoritativeDiskSync)
                     {
+                        var syncedDepIds = task.Dependencies?
+                            .Select(d => d.DependsOnTaskId)
+                            .Where(id => id > 0)
+                            .Distinct()
+                            .ToList() ?? new List<int>();
+                        await _mergeAndCascadeCoordinator.SetTaskDependenciesAsync(task.WorkspaceId, task.Id, syncedDepIds, cancellationToken);
+                    }
+
+                    diskSyncRan = true;
+                }
+
+                // Unconditional Stage 1 unclosed prerequisite audit before missing-doc, clarification, or checkpoint handling
+                if (string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) &&
+                    !isStageCancelledOrPaused &&
+                    !_lifecycleMutationCoordinator.IsCancelRequested(task.Id))
+                {
+                    var unclosedPrerequisites = await _mergeAndCascadeCoordinator.GetUnclosedPrerequisiteIdsAsync(
+                        task.Id,
+                        task.Dependencies?.Select(d => d.DependsOnTaskId),
+                        cancellationToken);
+
+                    if (unclosedPrerequisites.Count > 0)
+                    {
+                        var persistedStatus = await _taskRepository.GetStatusAsync(task.Id, CancellationToken.None);
+                        if (persistedStatus == TaskOverallStatus.Cancelled)
+                        {
+                            _logger.LogInformation("ForgeTask #{TaskId} was cancelled out-of-band; skipping prerequisite suspension.", task.Id);
+                            task.Status = TaskOverallStatus.Cancelled;
+                            task.IsWaitingForHuman = false;
+                            await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, TaskOverallStatus.Cancelled, CancellationToken.None);
+                            await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, CancellationToken.None);
+                            await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, CancellationToken.None);
+                            cohortExitReason = CohortExitReason.Cancelled;
+                            return;
+                        }
+
+                        if (persistedStatus is TaskOverallStatus.Rejected or TaskOverallStatus.Closed)
+                        {
+                            _logger.LogInformation("ForgeTask #{TaskId} transitioned out-of-band to terminal status {Status}; skipping prerequisite suspension.", task.Id, persistedStatus);
+                            cohortExitReason = CohortExitReason.Aborted;
+                            return;
+                        }
+
+                        await SuspendTaskForUnclosedPrerequisitesAsync(
+                            task,
+                            workspace,
+                            pipelineContext,
+                            stage,
+                            unclosedPrerequisites,
+                            hasAuthoritativeDiskSync,
+                            cancellationToken);
+                        cohortExitReason = CohortExitReason.Yielded;
+                        return;
+                    }
+                }
+
+                if (diskSyncRan && string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) && result.IsSuccess && !result.IsCancelled && !result.NeedsClarification)
+                {
                         bool modifiedInThisStage = false;
                         if (baselineSnapshot != null && baselineSnapshot.TryGetValue(task.Id, out var baseEntry))
                         {
@@ -1291,7 +1355,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                                 {
                                     var reason = history[i].ChangeReason;
                                     if (reason != null &&
-                                        reason.Contains("Pipeline restarted", StringComparison.OrdinalIgnoreCase))
+                                        (reason.Contains("Pipeline restarted", StringComparison.OrdinalIgnoreCase) ||
+                                         reason.StartsWith(AgentActivityConstants.SuspendedAuditReasonPrefix, StringComparison.OrdinalIgnoreCase)))
                                     {
                                         lastRestartIndex = i;
                                         break;
@@ -1342,7 +1407,6 @@ public class TaskOrchestrator : ITaskOrchestrator
                             cohortExitReason = CohortExitReason.Failed;
                             return;
                         }
-                    }
                 }
 
                 // Implementation artifact gate: a stage that "succeeds" without touching any production/test file is a false completion.
@@ -2459,6 +2523,240 @@ public class TaskOrchestrator : ITaskOrchestrator
             Message = string.Format(ConflictResolutionConstants.AuditBaselineSyncSuccessFormat, task.BaseBranch),
             Timestamp = DateTime.UtcNow
         }, cancellationToken);
+    }
+
+    private static readonly string[] Stage1SuspensionArtifactKeys =
+    [
+        PipelineDataBagKeys.ApprovedPlan,
+        PipelineDataBagKeys.TaskMarkdownPath,
+        PipelineDataBagKeys.DiscoveredSymbols,
+        PipelineDataBagKeys.OptimizationFlags,
+        PipelineDataBagKeys.SerializedMemory,
+        PipelineDataBagKeys.RecoveredSerializedMemory,
+        PipelineDataBagKeys.LastHumanAnswer,
+        PipelineDataBagKeys.LastHumanAnswerJson,
+        PipelineDataBagKeys.PendingProposals,
+        PipelineDataBagKeys.PendingSyntheticPriming,
+        PipelineDataBagKeys.RetryCount,
+        PipelineDataBagKeys.StageRetries,
+        PipelineDataBagKeys.LoopBackId,
+        PipelineDataBagKeys.CompilerErrors,
+        PipelineDataBagKeys.ReviewerFeedback,
+        PipelineDataBagKeys.ReviewDiff,
+        PipelineDataBagKeys.ReviewDiffStat,
+        PipelineDataBagKeys.ReviewFiles,
+        PipelineDataBagKeys.TriageCreatedTaskIds,
+        PipelineDataBagKeys.TriageModifiedTaskIds,
+        PipelineDataBagKeys.TriageRemovedTaskIds
+    ];
+
+    private async Task SuspendTaskForUnclosedPrerequisitesAsync(
+        ForgeTask task,
+        Workspace workspace,
+        PipelineContext pipelineContext,
+        IWorkflowStage stage,
+        IReadOnlyList<int> unclosedPrerequisites,
+        bool hasAuthoritativeDiskSync,
+        CancellationToken cancellationToken)
+    {
+        // Use a non-cancellable token so concurrent pause/shutdown signals cannot abort reset and resource cleanup mid-way.
+        var suspendToken = CancellationToken.None;
+        var suspensionReason = $"{AgentActivityConstants.SuspendedAuditReasonPrefix} [{string.Join(", ", unclosedPrerequisites)}]; workflow reset to Open; container, worktree, and stale branch cleaned up.";
+        _logger.LogInformation("Suspending task #{TaskId} after stage '{StageId}': {Reason}", task.Id, stage.StageId, suspensionReason);
+
+        task.Status = TaskOverallStatus.Open;
+        task.CurrentStageId = string.Empty;
+        task.HasExecutionRun = false;
+        task.MaxExecutedStageOrder = 0;
+        task.LastHangfireJobId = null;
+        task.IsWaitingForHuman = false;
+        task.InterruptedStageId = null;
+        task.InterruptedAgentProfileId = null;
+        task.IsDeferredByPause = false;
+        task.UpdatedAt = DateTime.UtcNow;
+
+        foreach (var artifactKey in Stage1SuspensionArtifactKeys)
+        {
+            pipelineContext.DataBag.Remove(artifactKey);
+        }
+
+        ClearStageExecutionArtifacts(pipelineContext.DataBag, StandardStageIds.TaskReview);
+        if (!string.Equals(stage.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase))
+        {
+            ClearStageExecutionArtifacts(pipelineContext.DataBag, stage.StageId);
+        }
+        pipelineContext.SyncDataBagToTask();
+
+        if (task.Questions != null)
+        {
+            foreach (var pendingQuestion in task.Questions.Where(q => q.Status == QuestionStatus.Pending))
+            {
+                pendingQuestion.Status = QuestionStatus.Skipped;
+            }
+        }
+
+        if (task.Checkpoints != null)
+        {
+            foreach (var checkpoint in task.Checkpoints.Where(c =>
+                string.Equals(c.StageId, StandardStageIds.TaskReview, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrEmpty(c.SerializedMemory)))
+            {
+                checkpoint.SerializedMemory = string.Empty;
+            }
+        }
+
+        await CloseActiveConversationsAsync(task.Id, StageExecutionStatus.Cancelled, suspensionReason, suspendToken);
+
+        var authoritativeDepIds = await ResolveAuthoritativeDependencyIdsAsync(task, hasAuthoritativeDiskSync, suspendToken);
+        task.Dependencies = authoritativeDepIds
+            .Select(depId => new TaskDependency { TaskId = task.Id, DependsOnTaskId = depId })
+            .ToList();
+
+        await _taskRepository.UpdateWithHistoryAsync(
+            task,
+            dependsOn: null,
+            changedBy: AuditActors.TaskOrchestrator,
+            reason: suspensionReason,
+            cancellationToken: suspendToken);
+
+        await _mergeAndCascadeCoordinator.SetTaskDependenciesAsync(task.WorkspaceId, task.Id, authoritativeDepIds, suspendToken);
+        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, suspendToken);
+        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, suspendToken);
+        await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, suspendToken);
+
+        await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, task, suspendToken);
+
+        if (!string.IsNullOrWhiteSpace(task.ExternalReferenceId))
+        {
+            await _workspacePreparer.MirrorTaskOpenedAsync(task, workspace, suspendToken);
+        }
+
+        // Strict container-first teardown order before removing worktree and stale local feature branch
+        await _workspacePreparer.CleanupTaskContainerSafeAsync(workspace, task.Id, "suspended", suspendToken);
+        await _workspacePreparer.RemoveWorktreeSafeAsync(workspace, task.Id, "suspended", suspendToken);
+        await _workspacePreparer.DeleteTaskBranchSafeAsync(workspace, task.Id, "suspended", suspendToken);
+
+        // Anti-lost-wakeup guard under the per-task lock in case the last prerequisite closed or was removed during cleanup
+        var remainingUnclosed = await _mergeAndCascadeCoordinator.GetUnclosedPrerequisiteIdsAsync(
+            task.Id,
+            candidatePrerequisiteIds: null,
+            cancellationToken: suspendToken);
+
+        if (remainingUnclosed.Count == 0)
+        {
+            var latestTask = await _taskRepository.GetByIdAsync(task.Id, suspendToken);
+            if (latestTask != null &&
+                latestTask.Status == TaskOverallStatus.Open &&
+                !latestTask.IsWaitingForHuman &&
+                !_mergeAndCascadeCoordinator.IsJobActive(latestTask.LastHangfireJobId))
+            {
+                if (_operationsControlService.IsPaused)
+                {
+                    await _taskRepository.UpdateSchedulingStateAsync(task.Id, jobId: null, isDeferredByPause: true, suspendToken);
+                    task.LastHangfireJobId = null;
+                    task.IsDeferredByPause = true;
+                }
+                else
+                {
+                    if (!string.IsNullOrWhiteSpace(latestTask.LastHangfireJobId))
+                    {
+                        await _taskRepository.UpdateLastHangfireJobIdAsync(task.Id, null, suspendToken);
+                    }
+
+                    var reEnqueuedJobId = _mergeAndCascadeCoordinator.EnqueueStage(task.Id, stage.QueueTier, latestTask.Priority);
+                    await _taskRepository.UpdateSchedulingStateAsync(task.Id, reEnqueuedJobId, isDeferredByPause: false, suspendToken);
+                    task.LastHangfireJobId = reEnqueuedJobId;
+                    task.IsDeferredByPause = false;
+                    _logger.LogInformation(
+                        "Prerequisites for suspended task #{TaskId} closed concurrently during cleanup; re-enqueued stage '{StageId}' (JobId: {JobId}).",
+                        task.Id, stage.StageId, reEnqueuedJobId);
+                }
+            }
+        }
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            StageId = stage.StageId,
+            Level = LogLevel.Information,
+            Source = AuditActors.TaskOrchestrator,
+            Message = suspensionReason,
+            Timestamp = DateTime.UtcNow
+        }, suspendToken);
+
+        try
+        {
+            await _streamer.BroadcastAsync(new AgentActivityEvent(
+                Guid.NewGuid().ToString("N"),
+                task.Id,
+                stage.StageId,
+                AgentActivityKind.Notice,
+                suspensionReason,
+                DateTime.UtcNow,
+                new Dictionary<string, object?>
+                {
+                    [AgentActivityMetadataKeys.ActionType] = AgentActivityConstants.ActionTypeTaskSuspended,
+                    [AgentActivityMetadataKeys.StageKind] = stage.Kind.ToString(),
+                    [AgentActivityMetadataKeys.Reason] = suspensionReason
+                }), suspendToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed broadcasting task suspension event for task #{TaskId}", task.Id);
+        }
+    }
+
+    private static void ClearStageExecutionArtifacts(PipelineDataBag bag, string stageId)
+    {
+        bag.Remove(PipelineDataBagKeys.StageSummary(stageId));
+        bag.Remove(PipelineDataBagKeys.StageCommand(stageId));
+        bag.Remove(PipelineDataBagKeys.StageOutput(stageId));
+        bag.Remove(PipelineDataBagKeys.StageCommands(stageId));
+    }
+
+    private async Task<List<int>> ResolveAuthoritativeDependencyIdsAsync(
+        ForgeTask task,
+        bool hasAuthoritativeDiskSync,
+        CancellationToken cancellationToken)
+    {
+        if (hasAuthoritativeDiskSync)
+        {
+            return task.Dependencies?
+                .Select(d => d.DependsOnTaskId)
+                .Where(id => id > 0)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToList() ?? new List<int>();
+        }
+
+        var merged = new HashSet<int>();
+        var repoDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
+        if (repoDeps != null)
+        {
+            foreach (var depId in repoDeps)
+            {
+                if (depId > 0) merged.Add(depId);
+            }
+        }
+
+        var storeDeps = await _mergeAndCascadeCoordinator.GetPrerequisiteTaskIdsFromStoreAsync(task.Id, cancellationToken);
+        if (storeDeps != null)
+        {
+            foreach (var depId in storeDeps)
+            {
+                if (depId > 0) merged.Add(depId);
+            }
+        }
+
+        if (task.Dependencies != null)
+        {
+            foreach (var dep in task.Dependencies)
+            {
+                if (dep.DependsOnTaskId > 0) merged.Add(dep.DependsOnTaskId);
+            }
+        }
+
+        return merged.OrderBy(id => id).ToList();
     }
 
     private async Task CloseActiveConversationsAsync(int taskId, StageExecutionStatus status, string summary, CancellationToken cancellationToken)

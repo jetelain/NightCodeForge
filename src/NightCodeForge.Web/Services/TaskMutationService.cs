@@ -1,3 +1,4 @@
+using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
@@ -34,6 +35,7 @@ public class TaskMutationService : ITaskMutationService
 {
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
+    private readonly ITaskDependencyStore _dependencyStore;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly ITaskOrchestrator _taskOrchestrator;
     private readonly IOperationsTelemetryService _telemetryService;
@@ -42,6 +44,7 @@ public class TaskMutationService : ITaskMutationService
     public TaskMutationService(
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
+        ITaskDependencyStore dependencyStore,
         ITaskMarkdownSyncService markdownSyncService,
         ITaskOrchestrator taskOrchestrator,
         IOperationsTelemetryService telemetryService,
@@ -49,6 +52,7 @@ public class TaskMutationService : ITaskMutationService
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
+        _dependencyStore = dependencyStore ?? throw new ArgumentNullException(nameof(dependencyStore));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _taskOrchestrator = taskOrchestrator ?? throw new ArgumentNullException(nameof(taskOrchestrator));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
@@ -348,6 +352,7 @@ public class TaskMutationService : ITaskMutationService
         }
 
         await SyncMarkdownToDiskAsync(task, newDeps, cancellationToken);
+        await _dependencyStore.SetTaskDependenciesAsync(task.WorkspaceId, task.Id, newDeps, cancellationToken);
 
         var scheduled = await _taskOrchestrator.TryScheduleOpenTaskIfReadyAsync(task.Id, cancellationToken);
         if (scheduled)

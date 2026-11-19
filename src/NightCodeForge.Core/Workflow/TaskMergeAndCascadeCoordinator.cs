@@ -55,6 +55,74 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
     public Task<bool> IsReadyForExecutionAsync(int taskId, CancellationToken cancellationToken = default) =>
         _dependencyEngine.IsReadyForExecutionAsync(taskId, cancellationToken);
 
+    public async Task<IReadOnlyList<int>> GetUnclosedPrerequisiteIdsAsync(
+        int taskId,
+        IEnumerable<int>? candidatePrerequisiteIds = null,
+        CancellationToken cancellationToken = default)
+    {
+        var prerequisiteIds = new HashSet<int>();
+
+        if (candidatePrerequisiteIds != null)
+        {
+            foreach (var depId in candidatePrerequisiteIds)
+            {
+                if (depId > 0)
+                {
+                    prerequisiteIds.Add(depId);
+                }
+            }
+        }
+
+        var storeDeps = await _dependencyStore.GetPrerequisiteTaskIdsAsync(taskId, cancellationToken);
+        if (storeDeps != null)
+        {
+            foreach (var depId in storeDeps)
+            {
+                if (depId > 0)
+                {
+                    prerequisiteIds.Add(depId);
+                }
+            }
+        }
+
+        var repoDeps = await _taskRepository.GetDependenciesAsync(taskId, cancellationToken);
+        if (repoDeps != null)
+        {
+            foreach (var depId in repoDeps)
+            {
+                if (depId > 0)
+                {
+                    prerequisiteIds.Add(depId);
+                }
+            }
+        }
+
+        if (prerequisiteIds.Count == 0)
+        {
+            return Array.Empty<int>();
+        }
+
+        var unclosed = new List<int>();
+        foreach (var prereqId in prerequisiteIds.OrderBy(id => id))
+        {
+            var status = await _dependencyStore.GetTaskStatusAsync(prereqId, cancellationToken)
+                ?? await _taskRepository.GetStatusAsync(prereqId, cancellationToken);
+            if (status != TaskOverallStatus.Closed)
+            {
+                unclosed.Add(prereqId);
+            }
+        }
+
+        return unclosed;
+    }
+
+    public Task SetTaskDependenciesAsync(
+        int workspaceId,
+        int taskId,
+        IEnumerable<int> prerequisiteTaskIds,
+        CancellationToken cancellationToken = default) =>
+        _dependencyStore.SetTaskDependenciesAsync(workspaceId, taskId, prerequisiteTaskIds, cancellationToken);
+
     public Task<IReadOnlyList<int>> GetPrerequisiteTaskIdsFromStoreAsync(int taskId, CancellationToken cancellationToken = default) =>
         _dependencyStore.GetPrerequisiteTaskIdsAsync(taskId, cancellationToken);
 
@@ -102,6 +170,9 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
 
     public string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null) =>
         _jobQueue.EnqueueStage(taskId, tier, priority, originalEnqueuedAt);
+
+    public bool IsJobActive(string? jobId) =>
+        _jobQueue.IsJobActive(jobId);
 
     public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default) =>
         _jobQueue.HasUrgentJobsWaitingAsync(cancellationToken);
@@ -630,6 +701,30 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
 
             foreach (var unblockedTask in orderedUnblocked)
             {
+                if (unblockedTask.Status != TaskOverallStatus.Open || unblockedTask.IsWaitingForHuman)
+                {
+                    _logger.LogDebug(
+                        "ForgeTask #{PrereqId} completed; skipping cascade enqueue for dependent task #{UnblockedId} because status is {Status} (WaitingForHuman: {IsWaitingForHuman}).",
+                        task.Id, unblockedTask.Id, unblockedTask.Status, unblockedTask.IsWaitingForHuman);
+                    continue;
+                }
+
+                if (unblockedTask.HasExecutionRun)
+                {
+                    _logger.LogInformation(
+                        "ForgeTask #{PrereqId} completed; skipping cascade enqueue for dependent task #{UnblockedId} because it is already in-flight.",
+                        task.Id, unblockedTask.Id);
+                    continue;
+                }
+
+                if (_jobQueue.IsJobActive(unblockedTask.LastHangfireJobId))
+                {
+                    _logger.LogInformation(
+                        "ForgeTask #{PrereqId} completed; skipping cascade enqueue for dependent task #{UnblockedId} because job '{JobId}' is already active.",
+                        task.Id, unblockedTask.Id, unblockedTask.LastHangfireJobId);
+                    continue;
+                }
+
                 _logger.LogInformation(
                     "ForgeTask #{PrereqId} completed; unblocked dependent task #{UnblockedId} (Priority: {Priority}).",
                     task.Id, unblockedTask.Id, unblockedTask.Priority);
@@ -637,9 +732,15 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
                 var unblockedPipeline = await _pipelineProvider.GetPipelineAsync(unblockedTask, cancellationToken);
                 var initialStage = unblockedPipeline.InitialStage
                     ?? throw new WorkflowValidationException($"Workflow does not contain an initial stage for unblocked task #{unblockedTask.Id}.");
+                if (!string.IsNullOrWhiteSpace(unblockedTask.LastHangfireJobId))
+                {
+                    await _taskRepository.UpdateLastHangfireJobIdAsync(unblockedTask.Id, null, cancellationToken);
+                    unblockedTask.LastHangfireJobId = null;
+                }
+                var jobId = _jobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority);
                 unblockedTask.IsDeferredByPause = false;
-                unblockedTask.LastHangfireJobId = _jobQueue.EnqueueStage(unblockedTask.Id, initialStage.QueueTier, unblockedTask.Priority);
-                await _taskRepository.UpdateAsync(unblockedTask, cancellationToken: cancellationToken);
+                unblockedTask.LastHangfireJobId = jobId;
+                await _taskRepository.UpdateSchedulingStateAsync(unblockedTask.Id, jobId, isDeferredByPause: false, cancellationToken);
             }
         }
     }

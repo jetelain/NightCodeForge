@@ -133,6 +133,7 @@ public class TaskReviewDiskReadBackTests : IDisposable
         var gitManager = new TestGitWorkspaceManager(_tempWorktreeDir);
         var syncServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
         syncServices.AddSingleton<ITaskRepository>(taskRepo);
+        syncServices.AddSingleton<ITaskDependencyStore>(depStore);
         syncServices.AddSingleton<IDependencyResolutionEngine>(depEngine);
         var syncSp = syncServices.BuildServiceProvider();
         var syncService = new TaskMarkdownSyncService(

@@ -272,6 +272,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             taskRepo,
             workspaceRepo,
+            depStore,
             markdownSync,
             orchestrator,
             new Mock<IOperationsTelemetryService>().Object,

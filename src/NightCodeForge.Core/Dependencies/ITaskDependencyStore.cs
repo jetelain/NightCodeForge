@@ -14,6 +14,7 @@ public interface ITaskDependencyStore
     Task UpdateTaskStatusAsync(int taskId, TaskOverallStatus newStatus, CancellationToken cancellationToken = default);
     Task<bool> IsTaskWaitingForHumanAsync(int taskId, CancellationToken cancellationToken = default);
     Task SetWaitingForHumanAsync(int taskId, bool isWaiting, CancellationToken cancellationToken = default);
+    Task SetTaskDependenciesAsync(int workspaceId, int taskId, IEnumerable<int> prerequisiteTaskIds, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -134,6 +135,27 @@ public class InMemoryTaskDependencyStore : ITaskDependencyStore
         lock (_lock)
         {
             return Task.FromResult(_waitingForHuman.TryGetValue(taskId, out var val) && val);
+        }
+    }
+
+    public Task SetTaskDependenciesAsync(
+        int workspaceId,
+        int taskId,
+        IEnumerable<int> prerequisiteTaskIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(prerequisiteTaskIds);
+
+        lock (_lock)
+        {
+            _taskWorkspaces[taskId] = workspaceId;
+            _dependencies.RemoveAll(d => d.TaskId == taskId);
+            foreach (var depId in prerequisiteTaskIds.Where(id => id > 0).Distinct())
+            {
+                _dependencies.Add((workspaceId, taskId, depId));
+            }
+
+            return Task.CompletedTask;
         }
     }
 }

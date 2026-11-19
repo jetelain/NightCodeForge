@@ -72,6 +72,7 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
         Services.AddSingleton<ITaskMutationService>(new TaskMutationService(
             _taskRepository,
             _workspaceRepository,
+            _depStore,
             _markdownSync,
             _orchestrator,
             new Mock<IOperationsTelemetryService>().Object,

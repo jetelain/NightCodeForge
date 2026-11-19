@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
 
@@ -520,5 +521,58 @@ public class TaskHistoryEfCoreRepositoryTests : IDisposable
         Assert.Equal("77", finalTask.ExternalReferenceId);
         Assert.Equal(45, finalTask.PullRequestNumber);
         Assert.Equal("https://github.com/acme/demo/pull/45", finalTask.PullRequestUrl);
+    }
+
+    [Fact]
+    public async Task UpdateSchedulingStateAsync_UpdatesOnlySchedulingFieldsWithoutClobberingResetState_AndThrowsWhenMissing()
+    {
+        var factory = new AppDbContextFactory(_options);
+        await using var context = new AppDbContext(_options);
+        var repo = new EfCoreTaskRepository(factory);
+        var depStore = new EfCoreTaskDependencyStore(factory);
+
+        var workspace = new Workspace { Name = "SchedulingStateWs", RepositoryPath = "/tmp/sched-ws" };
+        context.Workspaces.Add(workspace);
+        await context.SaveChangesAsync();
+
+        var prereq = await repo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = workspace.Id, Title = "Prereq", Status = TaskOverallStatus.Closed },
+            null,
+            AuditActors.User,
+            "Created");
+
+        var target = await repo.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = "Target Task",
+                Description = "Preserved reset state",
+                Status = TaskOverallStatus.Open,
+                CurrentStageId = string.Empty,
+                HasExecutionRun = false,
+                LastHangfireJobId = "old-job",
+                IsDeferredByPause = true
+            },
+            new[] { prereq.Id },
+            AuditActors.User,
+            "Created");
+
+        await repo.UpdateSchedulingStateAsync(target.Id, "new-job-99", isDeferredByPause: false);
+
+        var reloaded = await repo.GetByIdAsync(target.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal("new-job-99", reloaded.LastHangfireJobId);
+        Assert.False(reloaded.IsDeferredByPause);
+        Assert.Equal(string.Empty, reloaded.CurrentStageId);
+        Assert.False(reloaded.HasExecutionRun);
+        Assert.Equal("Preserved reset state", reloaded.Description);
+
+        // EfCoreTaskDependencyStore.SetTaskDependenciesAsync is a documented no-op that preserves DB-authoritative dependencies
+        await depStore.SetTaskDependenciesAsync(workspace.Id, target.Id, Array.Empty<int>());
+        var prereqIds = await depStore.GetPrerequisiteTaskIdsAsync(target.Id);
+        Assert.Equal(new[] { prereq.Id }, prereqIds);
+
+        await Assert.ThrowsAsync<TaskNotFoundException>(() =>
+            repo.UpdateSchedulingStateAsync(999999, "missing-job", isDeferredByPause: false));
     }
 }
