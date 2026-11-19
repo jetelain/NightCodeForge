@@ -300,7 +300,8 @@ public class TaskMutationService : ITaskMutationService
             throw new ArgumentException($"Task #{task.Id} cannot depend on itself.", nameof(prerequisiteIds));
         }
 
-        var currentDeps = task.Dependencies?.Select(d => d.DependsOnTaskId).OrderBy(x => x).ToList() ?? new List<int>();
+        var persistedDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
+        var currentDeps = (persistedDeps ?? Array.Empty<int>()).Distinct().OrderBy(x => x).ToList();
         if (currentDeps.SequenceEqual(newDeps))
         {
             return;
@@ -315,13 +316,11 @@ public class TaskMutationService : ITaskMutationService
             $"Updated dependencies ({newDeps.Count} prerequisite(s))",
             cancellationToken);
 
-        if (task.Dependencies != null)
+        task.Dependencies ??= new List<TaskDependency>();
+        task.Dependencies.Clear();
+        foreach (var depId in newDeps)
         {
-            task.Dependencies.Clear();
-            foreach (var depId in newDeps)
-            {
-                task.Dependencies.Add(new TaskDependency { TaskId = task.Id, DependsOnTaskId = depId });
-            }
+            task.Dependencies.Add(new TaskDependency { TaskId = task.Id, DependsOnTaskId = depId });
         }
 
         await SyncMarkdownToDiskAsync(task, newDeps, cancellationToken);

@@ -585,7 +585,7 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
 
-        if (!IsEligibleForOpenScheduling(task))
+        if (!IsCandidateOpenTask(task))
         {
             return false;
         }
@@ -647,13 +647,19 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             ?? pipeline.InitialStage
             ?? throw new WorkflowValidationException($"Workflow does not contain a valid stage for task #{task.Id}.");
 
+        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
+        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+        {
+            await _taskRepository.UpdateLastHangfireJobIdAsync(task.Id, null, cancellationToken);
+            task.LastHangfireJobId = null;
+        }
+
         var jobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
         task.IsDeferredByPause = false;
         task.LastHangfireJobId = jobId;
 
         await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
-        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
-        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
 
         _logger.LogInformation(
             "Scheduled Open task #{TaskId} to stage '{StageId}' (tier: {QueueTier}, priority: P{Priority}, jobId: {JobId}) after dependencies became ready.",
@@ -672,10 +678,13 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         return true;
     }
 
-    private bool IsEligibleForOpenScheduling(ForgeTask task) =>
+    private static bool IsCandidateOpenTask(ForgeTask task) =>
         task.Status == TaskOverallStatus.Open &&
         !task.IsWaitingForHuman &&
-        !task.HasExecutionRun &&
+        !task.HasExecutionRun;
+
+    private bool IsEligibleForOpenScheduling(ForgeTask task) =>
+        IsCandidateOpenTask(task) &&
         !_jobQueue.IsJobActive(task.LastHangfireJobId);
 
     public async Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default)

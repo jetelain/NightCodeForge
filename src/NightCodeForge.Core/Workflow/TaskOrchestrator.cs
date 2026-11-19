@@ -93,20 +93,9 @@ public class TaskOrchestrator : ITaskOrchestrator
 
         try
         {
-            // 1. DAG Readiness Check
-            if (!await _mergeAndCascadeCoordinator.EnsureReadyForExecutionAsync(task, cancellationToken))
-            {
-                if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
-                {
-                    await _taskRepository.UpdateLastHangfireJobIdAsync(task.Id, null, cancellationToken);
-                    task.LastHangfireJobId = null;
-                }
-                return;
-            }
-
             var initialJobId = task.LastHangfireJobId;
 
-            // 2. ForgeTask Lock Acquisition (Enables concurrent execution of different tasks on the same workspace)
+            // 1. ForgeTask Lock Acquisition (Enables concurrent execution of different tasks on the same workspace)
             using var lockReleaser = await _workspacePreparer.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
             lockAcquired = true;
 
@@ -158,6 +147,19 @@ public class TaskOrchestrator : ITaskOrchestrator
                     task.IsDeferredByPause = true;
                     await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
                 }
+                return;
+            }
+
+            // 2. DAG Readiness Check (under the task lock so clearing a stale LastHangfireJobId
+            //    is linearizable with TryScheduleOpenTaskIfReadyAsync and cannot clobber a superseding job)
+            if (!await _mergeAndCascadeCoordinator.EnsureReadyForExecutionAsync(task, cancellationToken))
+            {
+                if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+                {
+                    await _taskRepository.UpdateLastHangfireJobIdAsync(task.Id, null, cancellationToken);
+                    task.LastHangfireJobId = null;
+                }
+                lockAcquired = false;
                 return;
             }
 

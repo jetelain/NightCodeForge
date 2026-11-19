@@ -630,7 +630,8 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         }
 
         List<string>? deps = null;
-        if (item.TryGetProperty("dependsOnTitles", out var depsProp) && depsProp.ValueKind == JsonValueKind.Array)
+        if ((item.TryGetProperty("dependsOnTitles", out var depsProp) || item.TryGetProperty("depends_on_titles", out depsProp)) &&
+            depsProp.ValueKind == JsonValueKind.Array)
         {
             deps = new List<string>();
             foreach (var dep in depsProp.EnumerateArray())

@@ -555,6 +555,67 @@ public class IdeationSessionStateTests
     }
 
     [Theory]
+    [InlineData(TaskOverallStatus.Cancelled)]
+    [InlineData(TaskOverallStatus.Rejected)]
+    public void SyncProposalsWithWorkspaceTasks_RemovesPromotedIsAddedProposals_WhenCancelledOrRejected(TaskOverallStatus terminalStatus)
+    {
+        var session = new IdeationSessionState();
+        var promotedProposal = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Promoted Task", "Scope", 2, TaskId: 451));
+        promotedProposal.IsAdded = true;
+        var dependentDraft = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Dependent Draft", "Scope", 3, DependsOnTitles: ["Promoted Task"], TaskId: 452, DependsOnIds: [451]));
+        session.Proposals.AddRange([promotedProposal, dependentDraft]);
+
+        var workspaceTasks = new List<ForgeTask>
+        {
+            new() { Id = 451, Title = "Promoted Task", Description = "Scope", Priority = 2, Status = terminalStatus },
+            new() { Id = 452, Title = "Dependent Draft", Description = "Scope", Priority = 3, Status = TaskOverallStatus.Draft }
+        };
+
+        session.SyncProposalsWithWorkspaceTasks(workspaceTasks);
+
+        var remaining = Assert.Single(session.Proposals);
+        Assert.Equal(452, remaining.CreatedTaskId);
+        Assert.DoesNotContain(451, remaining.SelectedDependencyIds);
+    }
+
+    [Fact]
+    public void SyncProposalsWithWorkspaceTasks_WithRemoveMissing_RemovesDeletedPromotedProposal()
+    {
+        var session = new IdeationSessionState();
+        var promotedProposal = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Deleted Promoted", "Scope", 2, TaskId: 461));
+        promotedProposal.IsAdded = true;
+        session.Proposals.Add(promotedProposal);
+
+        session.SyncProposalsWithWorkspaceTasks(Array.Empty<ForgeTask>(), removeMissing: true);
+
+        Assert.Empty(session.Proposals);
+    }
+
+    [Fact]
+    public void ReconcileProposedTasks_WithRemoveMissing_DoesNotResurrectDeletedPersistedProposal_WhileKeepingUnpersisted()
+    {
+        var session = new IdeationSessionState();
+        var deletedPersisted = new IdeationProposal("Dismissed Draft", "Deleted from DB", 2, TaskId: 501);
+        var unpersisted = new IdeationProposal("Markdown Only Proposal", "Not in DB yet", 3, TaskId: null);
+        var keptDraft = new IdeationProposal("Kept Draft", "Still in DB", 1, TaskId: 502);
+
+        var workspaceTasks = new List<ForgeTask>
+        {
+            new() { Id = 502, Title = "Kept Draft", Description = "Still in DB", Priority = 1, Status = TaskOverallStatus.Draft }
+        };
+
+        session.ReconcileProposedTasks([deletedPersisted, unpersisted, keptDraft], workspaceTasks, removeMissing: true);
+
+        Assert.Equal(2, session.Proposals.Count);
+        Assert.DoesNotContain(session.Proposals, p => p.CreatedTaskId == 501);
+        Assert.Contains(session.Proposals, p => p.CreatedTaskId == null && p.Title == "Markdown Only Proposal");
+        Assert.Contains(session.Proposals, p => p.CreatedTaskId == 502);
+    }
+
+    [Theory]
     [InlineData(CanonicalToolNames.EditTask, true)]
     [InlineData(CanonicalToolNames.SetTaskPriority, true)]
     [InlineData(CanonicalToolNames.ReworkPriorities, true)]
@@ -562,8 +623,17 @@ public class IdeationSessionStateTests
     [InlineData(CanonicalToolNames.GetTask, true)]
     [InlineData(CanonicalToolNames.ProposeTasks, true)]
     [InlineData("backlog.edit_task", true)]
+    [InlineData("mcp.backlog.edit_task", true)]
     [InlineData("mcp:propose_tasks", true)]
     [InlineData("create_tasks", true)]
+    [InlineData("modify_task", true)]
+    [InlineData("patch_task", true)]
+    [InlineData("reprioritize", true)]
+    [InlineData("reorder_tasks", true)]
+    [InlineData("drop_task", true)]
+    [InlineData("discard_task", true)]
+    [InlineData("prioritize_task", true)]
+    [InlineData("view_task", true)]
     [InlineData("read", false)]
     [InlineData("bash", false)]
     [InlineData("ask", false)]

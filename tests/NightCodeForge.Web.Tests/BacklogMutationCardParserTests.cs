@@ -200,5 +200,27 @@ public class BacklogMutationCardParserTests
         var chip = Assert.Single(reprioritizeCard.Chips);
         Assert.Equal(2, chip.TaskId);
     }
+
+    [Theory]
+    [InlineData("view_task", BacklogMutationCardKind.Loaded)]
+    [InlineData("inspect_task", BacklogMutationCardKind.Loaded)]
+    [InlineData("modify_task", BacklogMutationCardKind.Updated)]
+    [InlineData("patch_task", BacklogMutationCardKind.Updated)]
+    [InlineData("mcp.backlog.edit_task", BacklogMutationCardKind.Updated)]
+    [InlineData("mcp:tools.update_task", BacklogMutationCardKind.Updated)]
+    [InlineData("prioritize_task", BacklogMutationCardKind.Reprioritized)]
+    [InlineData("reprioritize", BacklogMutationCardKind.Reprioritized)]
+    [InlineData("reorder_tasks", BacklogMutationCardKind.Reprioritized)]
+    [InlineData("drop_task", BacklogMutationCardKind.Removed)]
+    [InlineData("archive_task", BacklogMutationCardKind.Removed)]
+    public void Parse_SupportsAdditionalDispatcherAliasesAndMultiSegmentPrefixes(string alias, BacklogMutationCardKind expectedKind)
+    {
+        Assert.True(BacklogMutationCardParser.IsBacklogMutationTool(alias));
+
+        var card = BacklogMutationCardParser.Parse(alias, "{\"task_id\": 7, \"priority\": 1}", null, false, true);
+
+        Assert.NotNull(card);
+        Assert.Equal(expectedKind, card.Kind);
+    }
 }
 

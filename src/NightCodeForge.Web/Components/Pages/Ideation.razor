@@ -1163,7 +1163,7 @@
                         {
                             foreach (var p in proposals)
                             {
-                                Session.TryAddProposal(p, _workspaceTasks);
+                                Session.TryAddProposal(p, _workspaceTasks, skipMissingPersisted: true);
                             }
                         }
                     }
@@ -1585,7 +1585,7 @@
                             }
                         }
 
-                        Session.ReconcileProposedTasks(update.FinalResult.ProposedTasks, _workspaceTasks);
+                        Session.ReconcileProposedTasks(update.FinalResult.ProposedTasks, _workspaceTasks, removeMissing: ws != null);
                         StateHasChanged();
                         break;
                 }

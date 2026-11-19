@@ -486,4 +486,48 @@ public class TaskMutationServiceTests
 
         Assert.Equal(2, jobQueue.EnqueuedStages.Count);
     }
+
+    [Fact]
+    public async Task UpdateDependenciesAsync_WhenInMemoryDependenciesAreNullOrStale_UsesPersistedDependenciesAndSchedules()
+    {
+        var blocker = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask { Id = 50, WorkspaceId = 1, Status = TaskOverallStatus.Open },
+            null, AuditActors.User, "init");
+        var openTask = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask { Id = 51, WorkspaceId = 1, Status = TaskOverallStatus.Open },
+            new[] { blocker.Id }, AuditActors.User, "init");
+
+        // Caller holds an entity whose navigation property was not loaded (null)
+        var nullDepsSnapshot = new ForgeTask
+        {
+            Id = openTask.Id,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Dependencies = null!
+        };
+
+        await _service.UpdateDependenciesAsync(nullDepsSnapshot, Array.Empty<int>());
+
+        Assert.Empty(await _taskRepository.GetDependenciesAsync(openTask.Id));
+        Assert.NotNull(nullDepsSnapshot.Dependencies);
+        Assert.Empty(nullDepsSnapshot.Dependencies);
+        Assert.Equal([openTask.Id], _taskOrchestrator.TryScheduleOpenTaskCalls);
+
+        // Caller holds an entity with stale empty Dependencies while persisted store has a blocker
+        var openTask2 = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask { Id = 52, WorkspaceId = 1, Status = TaskOverallStatus.Open },
+            new[] { blocker.Id }, AuditActors.User, "init");
+        var staleEmptyDepsSnapshot = new ForgeTask
+        {
+            Id = openTask2.Id,
+            WorkspaceId = 1,
+            Status = TaskOverallStatus.Open,
+            Dependencies = new List<TaskDependency>()
+        };
+
+        await _service.UpdateDependenciesAsync(staleEmptyDepsSnapshot, Array.Empty<int>());
+
+        Assert.Empty(await _taskRepository.GetDependenciesAsync(openTask2.Id));
+        Assert.Equal([openTask.Id, openTask2.Id], _taskOrchestrator.TryScheduleOpenTaskCalls);
+    }
 }

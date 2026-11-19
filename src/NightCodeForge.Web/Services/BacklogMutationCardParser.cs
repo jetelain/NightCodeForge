@@ -96,18 +96,18 @@ public static partial class BacklogMutationCardParser
         }
 
         var clean = toolName.Trim();
-        var colonIdx = clean.IndexOf(':');
+        var colonIdx = clean.LastIndexOf(':');
         if (colonIdx >= 0) clean = clean[(colonIdx + 1)..];
-        var dotIdx = clean.IndexOf('.');
+        var dotIdx = clean.LastIndexOf('.');
         if (dotIdx >= 0) clean = clean[(dotIdx + 1)..];
 
         return clean.ToLowerInvariant() switch
         {
-            CanonicalToolNames.GetTask or "gettask" or "read_task" or "show_task" => CanonicalToolNames.GetTask,
-            CanonicalToolNames.EditTask or "edittask" or "update_task" or "updatetask" => CanonicalToolNames.EditTask,
-            CanonicalToolNames.SetTaskPriority or "settaskpriority" or "set_priority" => CanonicalToolNames.SetTaskPriority,
-            CanonicalToolNames.ReworkPriorities or "reworkpriorities" or "rework_priority" or "set_task_priorities" => CanonicalToolNames.ReworkPriorities,
-            CanonicalToolNames.RemoveTask or "removetask" or "delete_task" or "deletetask" or "cancel_task" => CanonicalToolNames.RemoveTask,
+            CanonicalToolNames.GetTask or "gettask" or "view_task" or "read_task" or "show_task" or "inspect_task" or "fetch_task" or "task_details" => CanonicalToolNames.GetTask,
+            CanonicalToolNames.EditTask or "edittask" or "update_task" or "updatetask" or "modify_task" or "patch_task" or "change_task" => CanonicalToolNames.EditTask,
+            CanonicalToolNames.SetTaskPriority or "settaskpriority" or "set_priority" or "change_task_priority" or "update_task_priority" or "prioritize_task" => CanonicalToolNames.SetTaskPriority,
+            CanonicalToolNames.ReworkPriorities or "reworkpriorities" or "rework_priority" or "set_task_priorities" or "reorder_tasks" or "reprioritize_tasks" or "reprioritize" or "batch_set_priority" or "batch_set_priorities" or "update_priorities" or "set_priorities" => CanonicalToolNames.ReworkPriorities,
+            CanonicalToolNames.RemoveTask or "removetask" or "delete_task" or "deletetask" or "cancel_task" or "drop_task" or "discard_task" or "archive_task" => CanonicalToolNames.RemoveTask,
             _ => null
         };
     }

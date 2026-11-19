@@ -328,4 +328,50 @@ public sealed class BacklogManagementToolModuleTests
         Assert.Contains("Detached Proposal", proposalJson);
         Assert.Single(module.PendingProposals);
     }
+
+    [Fact]
+    public async Task ProposeTasksAsync_ParsesSnakeCaseDependsOnTitles_WithoutImplicitChaining()
+    {
+        var module = new BacklogManagementToolModule(new CanonicalToolScope("/workspace", WorkspaceId: 1));
+
+        var rawJson = """
+        {
+          "tasks": [
+            {
+              "title": "Foundation",
+              "description": "Base work"
+            },
+            {
+              "title": "Independent Task",
+              "description": "Parallel work"
+            },
+            {
+              "title": "Consumer",
+              "description": "Uses Foundation",
+              "depends_on_titles": ["Foundation", 77]
+            }
+          ]
+        }
+        """;
+
+        await module.ProposeTasksAsync(tasks: rawJson);
+        Assert.Equal(3, module.PendingProposals.Count);
+        Assert.Empty(module.PendingProposals[0].DependsOnTitles!);
+        Assert.Empty(module.PendingProposals[1].DependsOnTitles!);
+        Assert.Equal(["Foundation", "77"], module.PendingProposals[2].DependsOnTitles);
+
+        module.PendingProposals.Clear();
+
+        using var elementDoc = JsonDocument.Parse("""
+        [
+          { "title": "Schema", "description": "DB schema" },
+          { "title": "API", "description": "REST layer", "depends_on_titles": ["Schema"] }
+        ]
+        """);
+
+        await module.ProposeTasksAsync(tasks: elementDoc.RootElement);
+        Assert.Equal(2, module.PendingProposals.Count);
+        Assert.Empty(module.PendingProposals[0].DependsOnTitles!);
+        Assert.Equal(["Schema"], module.PendingProposals[1].DependsOnTitles);
+    }
 }

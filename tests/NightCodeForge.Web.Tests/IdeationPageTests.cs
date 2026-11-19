@@ -1096,6 +1096,123 @@ public class IdeationPageTests : BunitContext
         Assert.Contains("rehydrate-kept.md", card.Markup);
         Assert.DoesNotContain("rehydrate-deleted.md", card.Markup);
     }
+
+    [Fact]
+    public async Task AgentRemoveTask_RemovesPromotedProposalCardFromSidebarImmediately()
+    {
+        var ws = new Workspace { Id = 63, Name = "RemovePromotedRepo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 63;
+
+        var suggestedTask = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 63,
+                Title = "Promoted Task To Remove",
+                Description = "Added earlier",
+                Status = TaskOverallStatus.Suggested,
+                Priority = 2
+            },
+            null,
+            AuditActors.User,
+            "Promoted");
+
+        var vm = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Promoted Task To Remove", "Added earlier", 2, TaskId: suggestedTask.Id),
+            [suggestedTask]);
+        Assert.True(vm.IsAdded);
+        _sessionState.Proposals.Add(vm);
+
+        var cut = Render<Ideation>();
+        cut.WaitForAssertion(() => Assert.Single(cut.FindComponents<IdeationProposalCard>()));
+
+        var removeStarted = new IdeationToolCallInfo("call_rm_promoted", CanonicalToolNames.RemoveTask, $"{{\"task_id\":{suggestedTask.Id}}}");
+        var removeCompleted = removeStarted with { Result = $"Task #{suggestedTask.Id} removed (status Cancelled).", DurationMs = 10 };
+
+        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        {
+            if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_rm_promoted")
+            {
+                suggestedTask.Status = TaskOverallStatus.Cancelled;
+                await _taskRepository.UpdateWithHistoryAsync(suggestedTask, Array.Empty<int>(), AuditActors.IdeationAgent, "Cancelled promoted task");
+            }
+        };
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: removeStarted),
+            new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: removeCompleted),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Cancelled the promoted task."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Done", Array.Empty<IdeationProposal>()))
+        };
+
+        await cut.InvokeAsync(() => cut.Find("textarea.chat-textarea").Input("Remove the promoted task"));
+        await cut.InvokeAsync(() => cut.Find("button.send-btn").Click());
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+        Assert.Empty(_sessionState.Proposals);
+        Assert.Empty(cut.FindComponents<IdeationProposalCard>());
+        Assert.DoesNotContain("Promoted Task To Remove", cut.Find(".proposals-pane").InnerHtml);
+    }
+
+    [Fact]
+    public async Task SameTurn_DismissAndDeleteDraft_DoesNotResurrectDeletedProposalOnCompleted()
+    {
+        var ws = new Workspace { Id = 64, Name = "DismissSameTurnRepo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 64;
+
+        var draftTask = await _taskRepository.CreateWithBaselineAsync(
+            new ForgeTask
+            {
+                WorkspaceId = 64,
+                Title = "Draft To Dismiss MidTurn",
+                Description = "Will be dismissed by user during streaming",
+                Status = TaskOverallStatus.Draft,
+                Priority = 3
+            },
+            null,
+            AuditActors.IdeationAgent,
+            "Proposed");
+
+        var proposal = new IdeationProposal("Draft To Dismiss MidTurn", "Will be dismissed by user during streaming", 3, TaskId: draftTask.Id);
+        var readyToComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        {
+            if (update.Kind == IdeationStreamUpdateKind.Completed)
+            {
+                await readyToComplete.Task;
+            }
+        };
+
+        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        {
+            new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: proposal),
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Proposed a draft task."),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Done", new[] { proposal }))
+        };
+
+        var cut = Render<Ideation>();
+
+        await cut.InvokeAsync(() => cut.Find("textarea.chat-textarea").Input("Propose a draft"));
+        var sendTask = cut.InvokeAsync(() => cut.Find("button.send-btn").Click());
+
+        // Wait until the proposal card is rendered, then dismiss it (purges draft from DB and removes card)
+        cut.WaitForAssertion(() => Assert.Single(cut.FindComponents<IdeationProposalCard>()));
+        await cut.InvokeAsync(() => cut.Find("button.dismiss-btn").Click());
+        cut.WaitForAssertion(() => Assert.Empty(_sessionState.Proposals));
+        Assert.Null(await _taskRepository.GetByIdAsync(draftTask.Id));
+
+        // Let the stream emit Completed containing the stale proposal list and verify it stays gone
+        readyToComplete.SetResult();
+        await sendTask;
+
+        cut.WaitForAssertion(() => Assert.Equal(2, _sessionState.Messages.Count));
+        Assert.Empty(_sessionState.Proposals);
+        Assert.Empty(cut.FindComponents<IdeationProposalCard>());
+        Assert.DoesNotContain("Draft To Dismiss MidTurn", cut.Find(".proposals-pane").InnerHtml);
+    }
 }
 
 public class MockIdeationService : IIdeationService

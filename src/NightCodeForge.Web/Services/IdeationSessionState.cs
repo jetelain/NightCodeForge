@@ -443,10 +443,26 @@ public class IdeationSessionState
         return matched != null && matched.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected;
     }
 
-    public IdeationProposalViewModel? TryAddProposal(IdeationProposal proposal, IReadOnlyList<ForgeTask>? workspaceTasks)
+    public static bool IsMissingPersistedInWorkspace(IdeationProposal proposal, IReadOnlyList<ForgeTask>? workspaceTasks)
     {
         ArgumentNullException.ThrowIfNull(proposal);
-        if (IsCancelledOrRejectedInWorkspace(proposal, workspaceTasks) || HasMatchingProposal(proposal))
+        if (!proposal.TaskId.HasValue || workspaceTasks == null)
+        {
+            return false;
+        }
+
+        return !workspaceTasks.Any(t => t.Id == proposal.TaskId.Value);
+    }
+
+    public IdeationProposalViewModel? TryAddProposal(
+        IdeationProposal proposal,
+        IReadOnlyList<ForgeTask>? workspaceTasks,
+        bool skipMissingPersisted = false)
+    {
+        ArgumentNullException.ThrowIfNull(proposal);
+        if (IsCancelledOrRejectedInWorkspace(proposal, workspaceTasks) ||
+            (skipMissingPersisted && IsMissingPersistedInWorkspace(proposal, workspaceTasks)) ||
+            HasMatchingProposal(proposal))
         {
             return null;
         }
@@ -456,17 +472,20 @@ public class IdeationSessionState
         return vm;
     }
 
-    public void ReconcileProposedTasks(IEnumerable<IdeationProposal>? proposedTasks, IReadOnlyList<ForgeTask>? workspaceTasks)
+    public void ReconcileProposedTasks(
+        IEnumerable<IdeationProposal>? proposedTasks,
+        IReadOnlyList<ForgeTask>? workspaceTasks,
+        bool removeMissing = false)
     {
         if (proposedTasks != null)
         {
             foreach (var proposal in proposedTasks)
             {
-                TryAddProposal(proposal, workspaceTasks);
+                TryAddProposal(proposal, workspaceTasks, skipMissingPersisted: removeMissing);
             }
         }
 
-        SyncProposalsWithWorkspaceTasks(workspaceTasks);
+        SyncProposalsWithWorkspaceTasks(workspaceTasks, removeMissing);
     }
 
     public void SyncProposalsWithWorkspaceTasks(IReadOnlyList<ForgeTask>? workspaceTasks, bool removeMissing = false)
@@ -483,7 +502,7 @@ public class IdeationSessionState
                 var matched = workspaceTasks.FirstOrDefault(t => t.Id == proposal.CreatedTaskId.Value);
                 if (matched == null)
                 {
-                    if (removeMissing && !proposal.IsAdded)
+                    if (removeMissing)
                     {
                         RemoveProposalCore(proposal);
                     }
@@ -492,10 +511,7 @@ public class IdeationSessionState
 
                 if (matched.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected)
                 {
-                    if (!proposal.IsAdded)
-                    {
-                        RemoveProposalCore(proposal);
-                    }
+                    RemoveProposalCore(proposal);
                     continue;
                 }
 

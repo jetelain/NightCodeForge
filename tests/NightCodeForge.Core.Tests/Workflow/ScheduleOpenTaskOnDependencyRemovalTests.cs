@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Logging;
 using Moq;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Tests.Fixtures;
 using NightCodeForge.Core.Workflow;
@@ -366,5 +368,348 @@ public class ScheduleOpenTaskOnDependencyRemovalTests
         Assert.NotNull(reloaded);
         Assert.Null(reloaded!.LastHangfireJobId);
         Assert.Null(blockedTask.LastHangfireJobId);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_WhenBlockedTaskSupersededWhileWaitingForLock_DoesNotClobberNewerLastHangfireJobId()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var lockEnteredTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lockProvider = new SignalingTaskLockProvider(
+            new WorkspaceLockProvider(),
+            callIndex =>
+            {
+                if (callIndex == 1)
+                {
+                    lockEnteredTcs.TrySetResult();
+                }
+            });
+
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            DependencyStore = depStore,
+            LockProvider = lockProvider
+        };
+        await builder.WorkspaceRepository.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "Test Workspace",
+            RepositoryPath = "C:/repo",
+            DefaultBaseBranch = "main"
+        });
+        var orchestrator = builder.Build();
+
+        var prereq = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 92,
+            WorkspaceId = 1,
+            Title = "Unclosed Prerequisite",
+            Status = TaskOverallStatus.Open
+        });
+        var blockedTask = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 93,
+            WorkspaceId = 1,
+            Title = "Superseded Blocked Task",
+            Status = TaskOverallStatus.Open,
+            LastHangfireJobId = "job-old"
+        }, dependsOn: [prereq.Id]);
+
+        depStore.AddTask(prereq.Id, 1, TaskOverallStatus.Open);
+        depStore.AddTask(blockedTask.Id, 1, TaskOverallStatus.Open);
+        depStore.AddDependency(1, blockedTask.Id, prereq.Id);
+
+        Task processTask;
+        using (await lockProvider.Inner.AcquireTaskLockAsync(1, blockedTask.Id))
+        {
+            processTask = Task.Run(() => orchestrator.ProcessTaskAsync(blockedTask.Id));
+            await lockEnteredTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            blockedTask.LastHangfireJobId = "job-new";
+            await taskRepo.UpdateAsync(blockedTask);
+        }
+
+        await processTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var reloaded = await taskRepo.GetByIdAsync(blockedTask.Id);
+        Assert.NotNull(reloaded);
+        Assert.Equal("job-new", reloaded!.LastHangfireJobId);
+    }
+
+    [Fact]
+    public async Task ProcessTaskAsync_And_TryScheduleOpenTaskIfReadyAsync_ConcurrentUnblock_DoesNotLoseWakeup()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var innerDepStore = new InMemoryTaskDependencyStore();
+        var enteredReadinessTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowReadinessFinishTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var signalingDepStore = new GateFirstPrereqReadDependencyStore(
+            innerDepStore,
+            targetTaskId: 95,
+            enteredReadinessTcs,
+            allowReadinessFinishTcs);
+
+        var lockProvider = new SignalingTaskLockProvider(
+            new WorkspaceLockProvider(),
+            callIndex =>
+            {
+                if (callIndex == 2)
+                {
+                    allowReadinessFinishTcs.TrySetResult();
+                }
+            });
+
+        var jobQueue = new FakeTaskJobQueue();
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            DependencyStore = signalingDepStore,
+            JobQueue = jobQueue,
+            LockProvider = lockProvider
+        };
+        await builder.WorkspaceRepository.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "Test Workspace",
+            RepositoryPath = "C:/repo",
+            DefaultBaseBranch = "main"
+        });
+        var orchestrator = builder.Build();
+
+        var prereq = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 94,
+            WorkspaceId = 1,
+            Title = "Initial Blocker",
+            Status = TaskOverallStatus.Open
+        });
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 95,
+            WorkspaceId = 1,
+            Title = "Concurrently Unblocked Task",
+            Status = TaskOverallStatus.Open,
+            LastHangfireJobId = "job-active-1"
+        }, dependsOn: [prereq.Id]);
+
+        innerDepStore.AddTask(prereq.Id, 1, TaskOverallStatus.Open);
+        innerDepStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+        innerDepStore.AddDependency(1, task.Id, prereq.Id);
+
+        // Start ProcessTaskAsync for job-active-1; it acquires the lock and pauses inside EnsureReadyForExecutionAsync
+        var processTask = Task.Run(() => orchestrator.ProcessTaskAsync(task.Id));
+        await enteredReadinessTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // While job-active-1 still holds the lock (and jobQueue.IsJobActive("job-active-1") == true),
+        // unblock the task and call TryScheduleOpenTaskIfReadyAsync.
+        await taskRepo.UpdateWithHistoryAsync(task, Array.Empty<int>(), AuditActors.User, "Unblocked concurrently");
+        innerDepStore.RemoveDependency(1, task.Id, prereq.Id);
+
+        var scheduled = await orchestrator.TryScheduleOpenTaskIfReadyAsync(task.Id).WaitAsync(TimeSpan.FromSeconds(5));
+        await processTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(scheduled);
+        var enqueued = Assert.Single(jobQueue.EnqueuedStages);
+        Assert.Equal(task.Id, enqueued.TaskId);
+        var reloaded = await taskRepo.GetByIdAsync(task.Id);
+        Assert.NotNull(reloaded);
+        Assert.False(string.IsNullOrWhiteSpace(reloaded!.LastHangfireJobId));
+        Assert.NotEqual("job-active-1", reloaded.LastHangfireJobId);
+    }
+
+    [Fact]
+    public async Task TryScheduleOpenTaskIfReadyAsync_ReplacingStaleJobId_ClearsStaleJobIdBeforeEnqueue_PreventingSelfSupersedeAbort()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var workerWaitingOnLockTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lockProvider = new SignalingTaskLockProvider(
+            new WorkspaceLockProvider(),
+            callIndex =>
+            {
+                if (callIndex == 2)
+                {
+                    workerWaitingOnLockTcs.TrySetResult();
+                }
+            });
+
+        var stageExecuted = false;
+        var stage = new TestWorkflowStage(StandardStageIds.TaskReview, WorkflowStageKind.Agentic)
+        {
+            QueueTier = StageQueueTier.TaskReview,
+            Handler = (_, _) =>
+            {
+                stageExecuted = true;
+                return Task.FromResult(StageExecutionResult.Success());
+            }
+        };
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline([stage]));
+
+        Task? concurrentWorkerTask = null;
+        string? observedJobIdDuringEnqueue = "not-checked";
+        TaskOrchestrator? orchestrator = null;
+
+        var jobQueue = new InterceptingEnqueueTaskJobQueue(onEnqueueStage: taskId =>
+        {
+            observedJobIdDuringEnqueue = taskRepo.GetByIdAsync(taskId).GetAwaiter().GetResult()!.LastHangfireJobId;
+            concurrentWorkerTask = Task.Run(() => orchestrator!.ProcessTaskAsync(taskId));
+            workerWaitingOnLockTcs.Task.GetAwaiter().GetResult();
+        });
+
+        var builder = new TestOrchestratorBuilder
+        {
+            TaskRepository = taskRepo,
+            DependencyStore = depStore,
+            JobQueue = jobQueue,
+            LockProvider = lockProvider,
+            PipelineProvider = pipelineProvider
+        };
+        await builder.WorkspaceRepository.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "Test Workspace",
+            RepositoryPath = "C:/repo",
+            DefaultBaseBranch = "main"
+        });
+        orchestrator = builder.Build();
+
+        var task = await taskRepo.CreateAsync(new ForgeTask
+        {
+            Id = 96,
+            WorkspaceId = 1,
+            Title = "Task With Stale Job",
+            Status = TaskOverallStatus.Open,
+            LastHangfireJobId = "stale-job-96"
+        });
+        depStore.AddTask(task.Id, 1, TaskOverallStatus.Open);
+        jobQueue.Delete("stale-job-96");
+
+        var scheduled = await orchestrator.TryScheduleOpenTaskIfReadyAsync(task.Id).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(scheduled);
+        Assert.Null(observedJobIdDuringEnqueue);
+        Assert.NotNull(concurrentWorkerTask);
+
+        await concurrentWorkerTask!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(stageExecuted);
+    }
+
+    private sealed class SignalingTaskLockProvider : IWorkspaceLockProvider
+    {
+        private readonly Action<int> _onAcquireTaskLockCalled;
+        private int _taskLockCalls;
+
+        public SignalingTaskLockProvider(WorkspaceLockProvider inner, Action<int> onAcquireTaskLockCalled)
+        {
+            Inner = inner;
+            _onAcquireTaskLockCalled = onAcquireTaskLockCalled;
+        }
+
+        public WorkspaceLockProvider Inner { get; }
+
+        public Task<IDisposable> AcquireLockAsync(int workspaceId, CancellationToken cancellationToken = default) =>
+            Inner.AcquireLockAsync(workspaceId, cancellationToken);
+
+        public bool TryAcquireLock(int workspaceId, out IDisposable? lockReleaser) =>
+            Inner.TryAcquireLock(workspaceId, out lockReleaser);
+
+        public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireLockAsync(int workspaceId, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+            Inner.TryAcquireLockAsync(workspaceId, timeout, cancellationToken);
+
+        public Task<IDisposable> AcquireTaskLockAsync(int workspaceId, int taskId, CancellationToken cancellationToken = default)
+        {
+            var callIndex = Interlocked.Increment(ref _taskLockCalls);
+            _onAcquireTaskLockCalled(callIndex);
+            return Inner.AcquireTaskLockAsync(workspaceId, taskId, cancellationToken);
+        }
+
+        public bool TryAcquireTaskLock(int workspaceId, int taskId, out IDisposable? lockReleaser) =>
+            Inner.TryAcquireTaskLock(workspaceId, taskId, out lockReleaser);
+
+        public Task<(bool Acquired, IDisposable? LockReleaser)> TryAcquireTaskLockAsync(int workspaceId, int taskId, TimeSpan timeout, CancellationToken cancellationToken = default) =>
+            Inner.TryAcquireTaskLockAsync(workspaceId, taskId, timeout, cancellationToken);
+
+        public bool IsTaskLocked(int workspaceId, int taskId) => Inner.IsTaskLocked(workspaceId, taskId);
+        public IReadOnlyList<ActiveLockSnapshot> GetActiveLocks() => Inner.GetActiveLocks();
+        public bool EmergencyRelease(int workspaceId, int? taskId = null) => Inner.EmergencyRelease(workspaceId, taskId);
+        public void EmergencyReleaseAll() => Inner.EmergencyReleaseAll();
+    }
+
+    private sealed class GateFirstPrereqReadDependencyStore : ITaskDependencyStore
+    {
+        private readonly ITaskDependencyStore _inner;
+        private readonly int _targetTaskId;
+        private readonly TaskCompletionSource _enteredTcs;
+        private readonly TaskCompletionSource _allowFinishTcs;
+        private int _gated;
+
+        public GateFirstPrereqReadDependencyStore(
+            ITaskDependencyStore inner,
+            int targetTaskId,
+            TaskCompletionSource enteredTcs,
+            TaskCompletionSource allowFinishTcs)
+        {
+            _inner = inner;
+            _targetTaskId = targetTaskId;
+            _enteredTcs = enteredTcs;
+            _allowFinishTcs = allowFinishTcs;
+        }
+
+        public Task<IReadOnlyList<(int TaskId, int DependsOnTaskId)>> GetDependenciesForWorkspaceAsync(int workspaceId, CancellationToken cancellationToken = default) =>
+            _inner.GetDependenciesForWorkspaceAsync(workspaceId, cancellationToken);
+
+        public async Task<IReadOnlyList<int>> GetPrerequisiteTaskIdsAsync(int taskId, CancellationToken cancellationToken = default)
+        {
+            var result = await _inner.GetPrerequisiteTaskIdsAsync(taskId, cancellationToken);
+            if (taskId == _targetTaskId && Interlocked.Exchange(ref _gated, 1) == 0)
+            {
+                _enteredTcs.TrySetResult();
+                await _allowFinishTcs.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            }
+            return result;
+        }
+
+        public Task<IReadOnlyList<int>> GetDependentTaskIdsAsync(int prerequisiteTaskId, CancellationToken cancellationToken = default) =>
+            _inner.GetDependentTaskIdsAsync(prerequisiteTaskId, cancellationToken);
+
+        public Task<TaskOverallStatus?> GetTaskStatusAsync(int taskId, CancellationToken cancellationToken = default) =>
+            _inner.GetTaskStatusAsync(taskId, cancellationToken);
+
+        public Task UpdateTaskStatusAsync(int taskId, TaskOverallStatus newStatus, CancellationToken cancellationToken = default) =>
+            _inner.UpdateTaskStatusAsync(taskId, newStatus, cancellationToken);
+
+        public Task<bool> IsTaskWaitingForHumanAsync(int taskId, CancellationToken cancellationToken = default) =>
+            _inner.IsTaskWaitingForHumanAsync(taskId, cancellationToken);
+
+        public Task SetWaitingForHumanAsync(int taskId, bool isWaiting, CancellationToken cancellationToken = default) =>
+            _inner.SetWaitingForHumanAsync(taskId, isWaiting, cancellationToken);
+    }
+
+    private sealed class InterceptingEnqueueTaskJobQueue : ITaskJobQueue
+    {
+        private readonly FakeTaskJobQueue _inner = new();
+        private readonly Action<int> _onEnqueueStage;
+
+        public InterceptingEnqueueTaskJobQueue(Action<int> onEnqueueStage)
+        {
+            _onEnqueueStage = onEnqueueStage;
+        }
+
+        public string EnqueueUrgent(int taskId, DateTime? originalEnqueuedAt = null) =>
+            _inner.EnqueueUrgent(taskId, originalEnqueuedAt);
+
+        public string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null)
+        {
+            _onEnqueueStage(taskId);
+            return _inner.EnqueueStage(taskId, tier, priority, originalEnqueuedAt);
+        }
+
+        public bool Delete(string jobId) => _inner.Delete(jobId);
+
+        public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default) =>
+            _inner.HasUrgentJobsWaitingAsync(cancellationToken);
+
+        public bool IsJobActive(string? jobId) => _inner.IsJobActive(jobId);
     }
 }
