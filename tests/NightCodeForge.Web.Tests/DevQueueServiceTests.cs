@@ -1662,6 +1662,9 @@ public class DevQueueServiceTests : IDisposable
         {
             return Task.FromResult(EnqueuedUrgentTaskIds.Count > 0);
         }
+
+        public bool IsJobActive(string? jobId) =>
+            !string.IsNullOrWhiteSpace(jobId) && !DeletedJobs.Contains(jobId);
     }
 
     private class TestDevQueueMarkdownSyncService : ITaskMarkdownSyncService

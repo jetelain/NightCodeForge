@@ -96,6 +96,11 @@ public class TaskOrchestrator : ITaskOrchestrator
             // 1. DAG Readiness Check
             if (!await _mergeAndCascadeCoordinator.EnsureReadyForExecutionAsync(task, cancellationToken))
             {
+                if (!string.IsNullOrWhiteSpace(task.LastHangfireJobId))
+                {
+                    await _taskRepository.UpdateLastHangfireJobIdAsync(task.Id, null, cancellationToken);
+                    task.LastHangfireJobId = null;
+                }
                 return;
             }
 
@@ -2287,6 +2292,9 @@ public class TaskOrchestrator : ITaskOrchestrator
         TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
         CancellationToken cancellationToken = default) =>
         _lifecycleMutationCoordinator.RestartTaskPipelineAsync(taskId, gitMode, cancellationToken);
+
+    public Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _lifecycleMutationCoordinator.TryScheduleOpenTaskIfReadyAsync(taskId, cancellationToken);
 
     [Hangfire.DisableConcurrentExecution("github-pr-merge-sync-workspace-{0}", 60)]
     public Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(

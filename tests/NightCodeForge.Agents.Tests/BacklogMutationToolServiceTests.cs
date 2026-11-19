@@ -1,4 +1,7 @@
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -12,6 +15,9 @@ using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
+using NightCodeForge.Infrastructure;
+using NightCodeForge.Infrastructure.Data;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -28,6 +34,7 @@ public class BacklogMutationToolServiceTests
     private readonly Mock<IGitHubPullRequestDeliveryService> _pullRequestDeliveryService = new();
     private readonly SecurityOptions _securityOptions = new();
     private readonly WorkspaceLockProvider _locks = new();
+    private readonly Mock<ITaskLifecycleMutationCoordinator> _lifecycleCoordinatorMock = new();
     private readonly BacklogMutationToolService _service;
     private readonly BacklogToolScope _scope = new(WorkspaceId, RepoPath);
 
@@ -55,14 +62,16 @@ public class BacklogMutationToolServiceTests
 
         _service = new BacklogMutationToolService(
             _repository,
-            _workspaceRepository.Object,
             new DependencyResolutionEngine(new Mock<ITaskDependencyStore>().Object),
             _markdownSync.Object,
             _locks,
             _streamer.Object,
-            _pullRequestDeliveryService.Object,
-            Options.Create(_securityOptions),
+            new BacklogMergeModeValidator(
+                _workspaceRepository.Object,
+                _pullRequestDeliveryService.Object,
+                Options.Create(_securityOptions)),
             new InMemoryTaskAttachmentRepository(_repository),
+            _lifecycleCoordinatorMock.Object,
             NullLogger<BacklogMutationToolService>.Instance);
     }
 
@@ -709,6 +718,207 @@ public class BacklogMutationToolServiceTests
         var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.ProposeTasksAsync(_scope, [new TaskProposal("Unauth PR Task", "Desc", mergeMode: "external_pull_request")], CancellationToken.None));
         Assert.Contains("GitHub OAuth authentication", proposeEx.Message);
+    }
+
+    [Fact]
+    public async Task EditTaskAsync_InvokesTryScheduleOpenTaskIfReadyOnlyWhenDependenciesChange()
+    {
+        var dep = await AddTaskAsync("Dep", TaskOverallStatus.Open);
+        var task = await AddTaskAsync("Target", TaskOverallStatus.Open, dependsOn: [dep.Id]);
+
+        await _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, Title: "Renamed Only"), CancellationToken.None);
+        _lifecycleCoordinatorMock.Verify(c => c.TryScheduleOpenTaskIfReadyAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        await _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, DependsOnIds: [dep.Id]), CancellationToken.None);
+        _lifecycleCoordinatorMock.Verify(c => c.TryScheduleOpenTaskIfReadyAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        await _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, DependsOnIds: Array.Empty<int>()), CancellationToken.None);
+        _lifecycleCoordinatorMock.Verify(c => c.TryScheduleOpenTaskIfReadyAsync(task.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EditTaskAsync_WithRealLifecycleCoordinator_SchedulesOpenTaskOnLastDependencyRemovalWithoutLockDeadlock()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var wsRepo = new InMemoryWorkspaceRepository();
+        await wsRepo.CreateAsync(new Workspace
+        {
+            Id = WorkspaceId,
+            Name = "Agent WS",
+            RepositoryPath = RepoPath,
+            DefaultBaseBranch = "main"
+        });
+
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var jobQueue = new AgentFakeTaskJobQueue();
+        var locks = new WorkspaceLockProvider();
+
+        var stage = Mock.Of<IWorkflowStage>(s =>
+            s.StageId == StandardStageIds.TaskReview &&
+            s.DisplayName == "Task Review" &&
+            s.QueueTier == StageQueueTier.TaskReview);
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline([stage]));
+
+        var preparer = new TaskWorkspacePreparer(
+            wsRepo,
+            locks,
+            Mock.Of<IGitWorkspaceManager>(),
+            Mock.Of<IGitMirrorSyncService>(),
+            _markdownSync.Object,
+            Mock.Of<IWorkspacePathResolver>(),
+            Mock.Of<IExecutionEnvironmentProvider>(),
+            _pullRequestDeliveryService.Object,
+            Mock.Of<IGitHubTaskMirrorService>(),
+            NullLogger<TaskWorkspacePreparer>.Instance);
+
+        var telemetry = Mock.Of<IOperationsTelemetryService>();
+        var mergeCoordinator = new TaskMergeAndCascadeCoordinator(
+            taskRepo,
+            preparer,
+            depEngine,
+            depStore,
+            jobQueue,
+            pipelineProvider,
+            Mock.Of<IConflictResolutionVerifier>(),
+            _streamer.Object,
+            telemetry,
+            NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
+
+        var cancellationManager = new TaskCancellationManager(NullLogger<TaskCancellationManager>.Instance);
+        var coordinator = new TaskLifecycleMutationCoordinator(
+            taskRepo,
+            preparer,
+            mergeCoordinator,
+            pipelineProvider,
+            jobQueue,
+            cancellationManager,
+            _streamer.Object,
+            telemetry,
+            NullLogger<TaskLifecycleMutationCoordinator>.Instance);
+
+        var service = new BacklogMutationToolService(
+            taskRepo,
+            depEngine,
+            _markdownSync.Object,
+            locks,
+            _streamer.Object,
+            new BacklogMergeModeValidator(wsRepo, _pullRequestDeliveryService.Object, Options.Create(_securityOptions)),
+            new InMemoryTaskAttachmentRepository(taskRepo),
+            coordinator,
+            NullLogger<BacklogMutationToolService>.Instance);
+
+        var blocker1 = await taskRepo.CreateAsync(new ForgeTask { WorkspaceId = WorkspaceId, Title = "B1", Status = TaskOverallStatus.Open });
+        var blocker2 = await taskRepo.CreateAsync(new ForgeTask { WorkspaceId = WorkspaceId, Title = "B2", Status = TaskOverallStatus.Reviewed });
+        var openTask = await taskRepo.CreateAsync(
+            new ForgeTask { WorkspaceId = WorkspaceId, Title = "Open Task", Status = TaskOverallStatus.Open },
+            dependsOn: [blocker1.Id, blocker2.Id]);
+
+        // Removing 1 of 2 blockers must NOT enqueue
+        await service.EditTaskAsync(_scope, new TaskEditRequest(openTask.Id, DependsOnIds: [blocker2.Id]), CancellationToken.None);
+        Assert.Empty(jobQueue.EnqueuedStages);
+
+        // Removing last blocker must enqueue cleanly without deadlocking on WorkspaceLockProvider
+        await service.EditTaskAsync(_scope, new TaskEditRequest(openTask.Id, DependsOnIds: Array.Empty<int>()), CancellationToken.None);
+        Assert.Single(jobQueue.EnqueuedStages);
+        var activeJobId = (await taskRepo.GetByIdAsync(openTask.Id))!.LastHangfireJobId;
+        Assert.False(string.IsNullOrWhiteSpace(activeJobId));
+
+        // Adding then removing a Closed dependency while job is active must NOT duplicate enqueue
+        var closedDep = await taskRepo.CreateAsync(new ForgeTask { WorkspaceId = WorkspaceId, Title = "Closed", Status = TaskOverallStatus.Closed });
+        await service.EditTaskAsync(_scope, new TaskEditRequest(openTask.Id, DependsOnIds: [closedDep.Id]), CancellationToken.None);
+        Assert.Single(jobQueue.EnqueuedStages);
+        Assert.Equal(activeJobId, (await taskRepo.GetByIdAsync(openTask.Id))!.LastHangfireJobId);
+
+        // Deleting/completing the stale job allows clean re-enqueue upon next dependency removal
+        jobQueue.Delete(activeJobId!);
+        await service.EditTaskAsync(_scope, new TaskEditRequest(openTask.Id, DependsOnIds: Array.Empty<int>()), CancellationToken.None);
+        Assert.Equal(2, jobQueue.EnqueuedStages.Count);
+
+        // Non-Open / Waiting tasks must NOT be enqueued
+        var draftTask = await taskRepo.CreateAsync(
+            new ForgeTask { WorkspaceId = WorkspaceId, Title = "Draft", Status = TaskOverallStatus.Draft },
+            dependsOn: [blocker1.Id]);
+        var suggestedTask = await taskRepo.CreateAsync(
+            new ForgeTask { WorkspaceId = WorkspaceId, Title = "Suggested", Status = TaskOverallStatus.Suggested },
+            dependsOn: [blocker1.Id]);
+        var waitingTask = await taskRepo.CreateAsync(
+            new ForgeTask { WorkspaceId = WorkspaceId, Title = "Waiting", Status = TaskOverallStatus.Open, IsWaitingForHuman = true },
+            dependsOn: [blocker1.Id]);
+
+        await service.EditTaskAsync(_scope, new TaskEditRequest(draftTask.Id, DependsOnIds: Array.Empty<int>()), CancellationToken.None);
+        await service.EditTaskAsync(_scope, new TaskEditRequest(suggestedTask.Id, DependsOnIds: Array.Empty<int>()), CancellationToken.None);
+        await service.EditTaskAsync(_scope, new TaskEditRequest(waitingTask.Id, DependsOnIds: Array.Empty<int>()), CancellationToken.None);
+
+        Assert.Equal(2, jobQueue.EnqueuedStages.Count);
+    }
+
+    [Fact]
+    public void ServiceContainer_ResolvesOrchestratorAndBacklogMutationToolService_WithoutCircularDependency()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"ncf-di-{Guid.NewGuid():N}.db");
+        try
+        {
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+            services.AddSingleton(Mock.Of<IHostApplicationLifetime>());
+            services.AddSingleton(Mock.Of<IHostEnvironment>(e => e.ContentRootPath == AppContext.BaseDirectory));
+            services.AddNightCodeForgeCoreAndInfrastructure($"Data Source={dbPath};");
+            services.AddNightCodeForgeInference(LlmProviderType.OllamaRouter);
+            services.AddNightCodeForgeAgents(LlmProviderType.OllamaRouter);
+            services.AddScoped<ITaskJobQueue>(_ => Mock.Of<ITaskJobQueue>());
+
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateScopes = true,
+                ValidateOnBuild = true
+            });
+
+            using (var initScope = provider.CreateScope())
+            {
+                initScope.ServiceProvider.GetRequiredService<AppDbContext>().Database.EnsureCreated();
+            }
+
+            using var scope = provider.CreateScope();
+            var orchestrator = scope.ServiceProvider.GetRequiredService<ITaskOrchestrator>();
+            var backlogService = scope.ServiceProvider.GetRequiredService<IBacklogMutationToolService>();
+
+            Assert.NotNull(orchestrator);
+            Assert.NotNull(backlogService);
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
+    }
+
+    private sealed class AgentFakeTaskJobQueue : ITaskJobQueue
+    {
+        private int _counter;
+        public List<(int TaskId, StageQueueTier Tier, int Priority)> EnqueuedStages { get; } = new();
+        public HashSet<string> DeletedJobs { get; } = new(StringComparer.Ordinal);
+
+        public string EnqueueUrgent(int taskId, DateTime? originalEnqueuedAt = null) =>
+            $"urgent-{taskId}-{Interlocked.Increment(ref _counter)}";
+
+        public string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null)
+        {
+            EnqueuedStages.Add((taskId, tier, priority));
+            return $"stage-{taskId}-{Interlocked.Increment(ref _counter)}";
+        }
+
+        public bool Delete(string jobId) => DeletedJobs.Add(jobId);
+
+        public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
+        public bool IsJobActive(string? jobId) =>
+            !string.IsNullOrWhiteSpace(jobId) && !DeletedJobs.Contains(jobId);
     }
 }
 

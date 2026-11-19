@@ -1,7 +1,9 @@
 using Hangfire;
 using Hangfire.MemoryStorage;
 using Hangfire.States;
+using Hangfire.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.BackgroundJobs;
@@ -297,6 +299,78 @@ public class HangfireQueuePriorityTests
         {
             server.Dispose();
         }
+    }
+
+    [Fact]
+    public void HangfireTaskJobQueue_IsJobActive_HandlesNullWhitespaceUnknownAndAllJobStates()
+    {
+        var storage = new MemoryStorage();
+        var client = new BackgroundJobClient(storage);
+        var queue = new HangfireTaskJobQueue(client, storage, NullLogger<HangfireTaskJobQueue>.Instance);
+
+        Assert.False(queue.IsJobActive(null));
+        Assert.False(queue.IsJobActive(string.Empty));
+        Assert.False(queue.IsJobActive("   "));
+        Assert.False(queue.IsJobActive("999999"));
+
+        // Enqueued -> active
+        var enqueuedId = queue.EnqueueStage(401, StageQueueTier.Implementation, TaskPriority.Normal);
+        Assert.True(queue.IsJobActive(enqueuedId));
+
+        // Scheduled -> active
+        var scheduledId = client.Create(() => TestJobTarget.RecordJob("scheduled"), new ScheduledState(TimeSpan.FromMinutes(10)));
+        Assert.True(queue.IsJobActive(scheduledId));
+
+        // Processing -> active
+        var processingId = queue.EnqueueStage(402, StageQueueTier.TaskReview, TaskPriority.Normal);
+        Assert.True(client.ChangeState(processingId, new StubState(ProcessingState.StateName)));
+        Assert.True(queue.IsJobActive(processingId));
+
+        // Awaiting -> active
+        var awaitingId = client.ContinueJobWith(enqueuedId, () => TestJobTarget.RecordJob("awaiting"));
+        Assert.True(queue.IsJobActive(awaitingId));
+
+        // Deleted -> inactive
+        Assert.True(queue.Delete(enqueuedId));
+        Assert.False(queue.IsJobActive(enqueuedId));
+
+        // Succeeded -> inactive
+        var succeededId = queue.EnqueueStage(403, StageQueueTier.CodeReview, TaskPriority.Normal);
+        Assert.True(client.ChangeState(succeededId, new SucceededState(null, 5, 10)));
+        Assert.False(queue.IsJobActive(succeededId));
+
+        // Failed -> inactive
+        var failedId = queue.EnqueueStage(404, StageQueueTier.Implementation, TaskPriority.Normal);
+        Assert.True(client.ChangeState(failedId, new FailedState(new InvalidOperationException("boom"))));
+        Assert.False(queue.IsJobActive(failedId));
+    }
+
+    [Fact]
+    public void HangfireTaskJobQueue_IsJobActive_WhenStorageThrowsFormatExceptionOnNonNumericJobId_ReturnsFalse()
+    {
+        var connectionMock = new Mock<IStorageConnection>();
+        connectionMock
+            .Setup(c => c.GetJobData("non-numeric-job-id"))
+            .Throws(new FormatException("Input string was not in a correct format."));
+
+        var storageMock = new Mock<JobStorage>();
+        storageMock.Setup(s => s.GetConnection()).Returns(connectionMock.Object);
+
+        var queue = new HangfireTaskJobQueue(
+            new Mock<IBackgroundJobClient>().Object,
+            storageMock.Object,
+            NullLogger<HangfireTaskJobQueue>.Instance);
+
+        Assert.False(queue.IsJobActive("non-numeric-job-id"));
+    }
+
+    private sealed class StubState(string name) : IState
+    {
+        public string Name => name;
+        public string Reason { get; set; } = string.Empty;
+        public bool IsFinal => false;
+        public bool IgnoreJobLoadException => false;
+        public Dictionary<string, string> SerializeData() => new();
     }
 }
 

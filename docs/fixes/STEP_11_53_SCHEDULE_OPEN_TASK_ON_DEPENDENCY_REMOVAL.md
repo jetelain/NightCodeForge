@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Infrastructure`, `NightCodeForge.Web`, `NightCodeForge.Agents`, `NightCodeForge.Core.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Web.Tests`, `NightCodeForge.Agents.Tests`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
 
@@ -49,11 +49,11 @@ However, if a maintainer edits an `Open` task (via `TaskDetail.razor`, `Backlog.
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Add `bool IsJobActive(string? jobId)` to `ITaskJobQueue`, implement it in `HangfireTaskJobQueue` (checking `Enqueued`, `Scheduled`, `Processing`, `Awaiting` job states) and test queue fakes, and clear `LastHangfireJobId` in `TaskOrchestrator.ProcessTaskAsync` when `EnsureReadyForExecutionAsync` exits early.
-- [ ] Add `Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default)` to `ITaskOrchestrator` (implemented in `TaskOrchestrator` via `ITaskLifecycleMutationCoordinator` / `ITaskMergeAndCascadeCoordinator`, and stubbed in `MockTaskOrchestrator`), checking `Open` status, `!IsWaitingForHuman`, `!HasExecutionRun`, closed prerequisites across both `_taskRepository` and `_dependencyStore`, and `!IsJobActive(task.LastHangfireJobId)`.
-- [ ] Invoke `TryScheduleOpenTaskIfReadyAsync` from `TaskMutationService.UpdateDependenciesAsync` (`src/NightCodeForge.Web/Services/TaskMutationService.cs`) after persisting dependency changes.
-- [ ] Inject `ITaskOrchestrator` into `BacklogMutationToolService` (`src/NightCodeForge.Agents/Tools/BacklogMutationToolService.cs`) while keeping constructor parameters `<= 10` (no optional parameters) and preserving `ConstructorParameterCeilingTests`, and invoke `TryScheduleOpenTaskIfReadyAsync` from `BacklogMutationToolService.EditTaskAsync` after dependency changes.
-- [ ] Add unit tests in `NightCodeForge.Core.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Web.Tests`, and `NightCodeForge.Agents.Tests` verifying that:
+- [x] Add `bool IsJobActive(string? jobId)` to `ITaskJobQueue`, implement it in `HangfireTaskJobQueue` (checking `Enqueued`, `Scheduled`, `Processing`, `Awaiting` job states) and test queue fakes, and clear `LastHangfireJobId` in `TaskOrchestrator.ProcessTaskAsync` when `EnsureReadyForExecutionAsync` exits early.
+- [x] Add `Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default)` to `ITaskOrchestrator` (implemented in `TaskOrchestrator` via `ITaskLifecycleMutationCoordinator` / `ITaskMergeAndCascadeCoordinator`, and stubbed in `MockTaskOrchestrator`), checking `Open` status, `!IsWaitingForHuman`, `!HasExecutionRun`, closed prerequisites across both `_taskRepository` and `_dependencyStore`, and `!IsJobActive(task.LastHangfireJobId)`.
+- [x] Invoke `TryScheduleOpenTaskIfReadyAsync` from `TaskMutationService.UpdateDependenciesAsync` (`src/NightCodeForge.Web/Services/TaskMutationService.cs`) after persisting dependency changes.
+- [x] Inject `ITaskOrchestrator` into `BacklogMutationToolService` (`src/NightCodeForge.Agents/Tools/BacklogMutationToolService.cs`) while keeping constructor parameters `<= 10` (no optional parameters) and preserving `ConstructorParameterCeilingTests`, and invoke `TryScheduleOpenTaskIfReadyAsync` from `BacklogMutationToolService.EditTaskAsync` after dependency changes.
+- [x] Add unit tests in `NightCodeForge.Core.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Web.Tests`, and `NightCodeForge.Agents.Tests` verifying that:
   - Removing the last blocking dependency from an `Open` task enqueues it to the workflow stage queue and updates `LastHangfireJobId`.
   - Removing one dependency while another unclosed dependency still blocks the task does NOT enqueue it.
   - Removing dependencies on a `Draft`, `Suggested`, or `HasExecutionRun == true` / `IsWaitingForHuman == true` task does NOT enqueue it.

@@ -30,4 +30,11 @@ public interface ITaskJobQueue
     /// Checks whether any P1 urgent execution jobs are waiting in the queue.
     /// </summary>
     Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks whether the specified Hangfire job identifier corresponds to an active job
+    /// (Enqueued, Scheduled, Processing, or Awaiting). Returns false for null/whitespace IDs,
+    /// unknown/missing jobs, or terminal states (Succeeded, Deleted, Failed).
+    /// </summary>
+    bool IsJobActive(string? jobId);
 }

@@ -75,4 +75,10 @@ public interface ITaskOrchestrator
     Task<IReadOnlyList<int>> SyncMergedPullRequestsAsync(
         int workspaceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evaluates whether an <c>Open</c> task has no remaining unclosed prerequisites, is not waiting for human input,
+    /// has not already started execution, and has no active Hangfire job, enqueuing it to its current/initial workflow stage queue if ready.
+    /// </summary>
+    Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default);
 }

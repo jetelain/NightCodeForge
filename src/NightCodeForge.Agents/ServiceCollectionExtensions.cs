@@ -57,6 +57,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(new WorkspaceBacklogDigestOptions());
         services.TryAddScoped<IWorkspaceBacklogSummaryService, WorkspaceBacklogSummaryService>();
         services.TryAddScoped<ITaskMarkdownValidator, TaskMarkdownValidator>();
+        services.TryAddScoped<IBacklogMergeModeValidator, BacklogMergeModeValidator>();
         services.TryAddScoped<IBacklogMutationToolService, BacklogMutationToolService>();
         services.TryAddScoped<IBacklogPlanningContext, BacklogPlanningContext>();
 

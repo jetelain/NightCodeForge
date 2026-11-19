@@ -55,6 +55,15 @@ public class TaskMergeAndCascadeCoordinator : ITaskMergeAndCascadeCoordinator
     public Task<bool> IsReadyForExecutionAsync(int taskId, CancellationToken cancellationToken = default) =>
         _dependencyEngine.IsReadyForExecutionAsync(taskId, cancellationToken);
 
+    public Task<IReadOnlyList<int>> GetPrerequisiteTaskIdsFromStoreAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _dependencyStore.GetPrerequisiteTaskIdsAsync(taskId, cancellationToken);
+
+    public Task<TaskOverallStatus?> GetTaskStatusFromStoreAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _dependencyStore.GetTaskStatusAsync(taskId, cancellationToken);
+
+    public Task<bool> IsTaskWaitingForHumanInStoreAsync(int taskId, CancellationToken cancellationToken = default) =>
+        _dependencyStore.IsTaskWaitingForHumanAsync(taskId, cancellationToken);
+
     public async Task<bool> EnsureReadyForExecutionAsync(ForgeTask task, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);

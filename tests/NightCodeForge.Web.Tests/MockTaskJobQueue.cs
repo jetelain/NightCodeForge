@@ -29,6 +29,7 @@ public class MockTaskJobQueue : ITaskJobQueue
     }
 
     public List<string> DeletedJobs { get; } = new();
+    public HashSet<string> CompletedJobs { get; } = new(StringComparer.Ordinal);
 
     public bool Delete(string jobId)
     {
@@ -41,4 +42,9 @@ public class MockTaskJobQueue : ITaskJobQueue
     {
         return Task.FromResult(HasUrgentJobs || UrgentEnqueued.Count > 0);
     }
+
+    public bool IsJobActive(string? jobId) =>
+        !string.IsNullOrWhiteSpace(jobId) &&
+        !DeletedJobs.Contains(jobId) &&
+        !CompletedJobs.Contains(jobId);
 }

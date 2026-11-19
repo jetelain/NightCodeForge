@@ -29,6 +29,9 @@ public interface ITaskMergeAndCascadeCoordinator
     Task<IWorkflowPipeline> GetPipelineAsync(ForgeTask task, CancellationToken cancellationToken = default);
     Task<bool> EnsureReadyForExecutionAsync(ForgeTask task, CancellationToken cancellationToken = default);
     Task<bool> IsReadyForExecutionAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<int>> GetPrerequisiteTaskIdsFromStoreAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<TaskOverallStatus?> GetTaskStatusFromStoreAsync(int taskId, CancellationToken cancellationToken = default);
+    Task<bool> IsTaskWaitingForHumanInStoreAsync(int taskId, CancellationToken cancellationToken = default);
     Task UpdateTaskStatusInStoreAsync(int taskId, TaskOverallStatus status, CancellationToken cancellationToken = default);
     Task SetWaitingForHumanInStoreAsync(int taskId, bool isWaiting, CancellationToken cancellationToken = default);
     string EnqueueStage(int taskId, StageQueueTier tier, int priority, DateTime? originalEnqueuedAt = null);

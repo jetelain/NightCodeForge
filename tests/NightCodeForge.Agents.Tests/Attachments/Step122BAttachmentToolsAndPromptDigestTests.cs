@@ -1243,17 +1243,22 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
         services.AddSingleton<IAgentActivityStreamer>(Mock.Of<IAgentActivityStreamer>());
         services.AddSingleton<IGitHubPullRequestDeliveryService>(Mock.Of<IGitHubPullRequestDeliveryService>());
         services.AddSingleton(Options.Create(new SecurityOptions()));
+        services.AddSingleton<IBacklogMergeModeValidator>(sp =>
+            new BacklogMergeModeValidator(
+                sp.GetRequiredService<IWorkspaceRepository>(),
+                sp.GetRequiredService<IGitHubPullRequestDeliveryService>(),
+                sp.GetRequiredService<IOptions<SecurityOptions>>()));
+        services.AddSingleton<ITaskLifecycleMutationCoordinator>(Mock.Of<ITaskLifecycleMutationCoordinator>());
         services.AddSingleton<IBacklogMutationToolService>(sp =>
             new BacklogMutationToolService(
                 sp.GetRequiredService<ITaskRepository>(),
-                sp.GetRequiredService<IWorkspaceRepository>(),
                 sp.GetRequiredService<IDependencyResolutionEngine>(),
                 sp.GetRequiredService<ITaskMarkdownSyncService>(),
                 sp.GetRequiredService<IWorkspaceLockProvider>(),
                 sp.GetRequiredService<IAgentActivityStreamer>(),
-                sp.GetRequiredService<IGitHubPullRequestDeliveryService>(),
-                sp.GetRequiredService<IOptions<SecurityOptions>>(),
+                sp.GetRequiredService<IBacklogMergeModeValidator>(),
                 sp.GetRequiredService<ITaskAttachmentRepository>(),
+                sp.GetRequiredService<ITaskLifecycleMutationCoordinator>(),
                 NullLogger<BacklogMutationToolService>.Instance));
 
         var provider = services.BuildServiceProvider();

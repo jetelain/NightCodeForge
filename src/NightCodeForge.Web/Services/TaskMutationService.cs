@@ -325,6 +325,17 @@ public class TaskMutationService : ITaskMutationService
         }
 
         await SyncMarkdownToDiskAsync(task, newDeps, cancellationToken);
+
+        var scheduled = await _taskOrchestrator.TryScheduleOpenTaskIfReadyAsync(task.Id, cancellationToken);
+        if (scheduled)
+        {
+            var refreshed = await _taskRepository.GetByIdAsync(task.Id, cancellationToken);
+            if (refreshed != null)
+            {
+                task.LastHangfireJobId = refreshed.LastHangfireJobId;
+                task.IsDeferredByPause = refreshed.IsDeferredByPause;
+            }
+        }
     }
 
     private async Task SyncMarkdownToDiskAsync(

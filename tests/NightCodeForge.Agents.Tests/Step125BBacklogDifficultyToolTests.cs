@@ -49,14 +49,16 @@ public class Step125BBacklogDifficultyToolTests : IDisposable
 
         _service = new BacklogMutationToolService(
             _repository,
-            _workspaceRepository,
             new DependencyResolutionEngine(new Mock<ITaskDependencyStore>().Object),
             _markdownSync.Object,
             _locks,
             _streamer.Object,
-            _prDelivery.Object,
-            Options.Create(new SecurityOptions()),
+            new BacklogMergeModeValidator(
+                _workspaceRepository,
+                _prDelivery.Object,
+                Options.Create(new SecurityOptions())),
             new InMemoryTaskAttachmentRepository(_repository),
+            Mock.Of<ITaskLifecycleMutationCoordinator>(),
             NullLogger<BacklogMutationToolService>.Instance);
     }
 

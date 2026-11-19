@@ -79,10 +79,19 @@ public class WorkflowSpecIntegrationTests
             }
         }
 
-        public bool Delete(string jobId) => true;
+        public List<string> DeletedJobs { get; } = new();
+
+        public bool Delete(string jobId)
+        {
+            DeletedJobs.Add(jobId);
+            return true;
+        }
 
         public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(UrgentQueue.Count > 0);
+
+        public bool IsJobActive(string? jobId) =>
+            !string.IsNullOrWhiteSpace(jobId) && !DeletedJobs.Contains(jobId);
     }
 
     private class WorkflowMockChatClient : IChatClient

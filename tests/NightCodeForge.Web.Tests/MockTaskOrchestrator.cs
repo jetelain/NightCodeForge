@@ -112,4 +112,20 @@ public class MockTaskOrchestrator : ITaskOrchestrator
         LastSyncMergedPrWorkspaceId = workspaceId;
         return Task.FromResult(SyncMergedPrResult);
     }
+
+    public int? LastTryScheduleOpenTaskId { get; private set; }
+    public List<int> TryScheduleOpenTaskCalls { get; } = new();
+    public bool TryScheduleOpenTaskResult { get; set; }
+    public Func<int, bool>? OnTryScheduleOpenTask { get; set; }
+
+    public Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        LastTryScheduleOpenTaskId = taskId;
+        TryScheduleOpenTaskCalls.Add(taskId);
+        if (OnTryScheduleOpenTask != null)
+        {
+            return Task.FromResult(OnTryScheduleOpenTask(taskId));
+        }
+        return Task.FromResult(TryScheduleOpenTaskResult);
+    }
 }

@@ -580,6 +580,104 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         }, cancellationToken);
     }
 
+    public async Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default)
+    {
+        var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+
+        if (!IsEligibleForOpenScheduling(task))
+        {
+            return false;
+        }
+
+        using var lockReleaser = await _workspacePreparer.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
+
+        task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
+            ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+
+        if (!IsEligibleForOpenScheduling(task))
+        {
+            return false;
+        }
+
+        if (await _mergeAndCascadeCoordinator.IsTaskWaitingForHumanInStoreAsync(task.Id, cancellationToken))
+        {
+            return false;
+        }
+
+        var prerequisiteIds = new HashSet<int>();
+        var repoDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
+        if (repoDeps != null)
+        {
+            foreach (var depId in repoDeps)
+            {
+                prerequisiteIds.Add(depId);
+            }
+        }
+
+        if (task.Dependencies != null)
+        {
+            foreach (var dep in task.Dependencies)
+            {
+                prerequisiteIds.Add(dep.DependsOnTaskId);
+            }
+        }
+
+        var storeDeps = await _mergeAndCascadeCoordinator.GetPrerequisiteTaskIdsFromStoreAsync(task.Id, cancellationToken);
+        if (storeDeps != null)
+        {
+            foreach (var depId in storeDeps)
+            {
+                prerequisiteIds.Add(depId);
+            }
+        }
+
+        foreach (var prereqId in prerequisiteIds)
+        {
+            var prereqStatus = await _taskRepository.GetStatusAsync(prereqId, cancellationToken)
+                ?? await _mergeAndCascadeCoordinator.GetTaskStatusFromStoreAsync(prereqId, cancellationToken);
+            if (prereqStatus != TaskOverallStatus.Closed)
+            {
+                return false;
+            }
+        }
+
+        var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
+        var targetStage = (!string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null)
+            ?? pipeline.InitialStage
+            ?? throw new WorkflowValidationException($"Workflow does not contain a valid stage for task #{task.Id}.");
+
+        var jobId = _jobQueue.EnqueueStage(task.Id, targetStage.QueueTier, task.Priority);
+        task.IsDeferredByPause = false;
+        task.LastHangfireJobId = jobId;
+
+        await _taskRepository.UpdateAsync(task, cancellationToken: cancellationToken);
+        await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(task.Id, task.Status, cancellationToken);
+        await _mergeAndCascadeCoordinator.SetWaitingForHumanInStoreAsync(task.Id, false, cancellationToken);
+
+        _logger.LogInformation(
+            "Scheduled Open task #{TaskId} to stage '{StageId}' (tier: {QueueTier}, priority: P{Priority}, jobId: {JobId}) after dependencies became ready.",
+            task.Id, targetStage.StageId, targetStage.QueueTier, task.Priority, jobId);
+
+        await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+        {
+            TaskId = task.Id,
+            StageId = targetStage.StageId,
+            Level = LogLevel.Information,
+            Source = AuditActors.TaskOrchestrator,
+            Message = $"Task #{task.Id} unblocked and scheduled to stage '{targetStage.StageId}' ({targetStage.QueueTier}, JobId: {jobId}).",
+            Timestamp = DateTime.UtcNow
+        }, cancellationToken);
+
+        return true;
+    }
+
+    private bool IsEligibleForOpenScheduling(ForgeTask task) =>
+        task.Status == TaskOverallStatus.Open &&
+        !task.IsWaitingForHuman &&
+        !task.HasExecutionRun &&
+        !_jobQueue.IsJobActive(task.LastHangfireJobId);
+
     public async Task RejectTaskAsync(int taskId, string? reason = null, CancellationToken cancellationToken = default)
     {
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken);

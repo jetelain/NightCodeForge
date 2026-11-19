@@ -111,4 +111,27 @@ public class InMemoryTaskJobQueueTests
         queue.Delete(critId);
         Assert.False(await queue.HasUrgentJobsWaitingAsync());
     }
+
+    [Fact]
+    public void IsJobActive_ReturnsTrueForActiveJobsAndFalseForNullUnknownDeletedOrCompleted()
+    {
+        var queue = new InMemoryTaskJobQueue();
+
+        Assert.False(queue.IsJobActive(null));
+        Assert.False(queue.IsJobActive(string.Empty));
+        Assert.False(queue.IsJobActive("   "));
+        Assert.False(queue.IsJobActive("non-existent-job"));
+
+        var urgentId = queue.EnqueueUrgent(101);
+        var stageId = queue.EnqueueStage(102, StageQueueTier.Implementation, TaskPriority.Normal);
+
+        Assert.True(queue.IsJobActive(urgentId));
+        Assert.True(queue.IsJobActive(stageId));
+
+        Assert.True(queue.Delete(urgentId));
+        Assert.False(queue.IsJobActive(urgentId));
+
+        queue.MarkCompleted(stageId);
+        Assert.False(queue.IsJobActive(stageId));
+    }
 }

@@ -2,13 +2,11 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
-using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
@@ -72,37 +70,34 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     };
 
     private readonly ITaskRepository _taskRepository;
-    private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IDependencyResolutionEngine _dependencyEngine;
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IWorkspaceLockProvider _lockProvider;
     private readonly IAgentActivityStreamer _activityStreamer;
-    private readonly IGitHubPullRequestDeliveryService _pullRequestDeliveryService;
-    private readonly IOptions<SecurityOptions> _securityOptions;
+    private readonly IBacklogMergeModeValidator _mergeModeValidator;
     private readonly ITaskAttachmentRepository _attachmentRepository;
+    private readonly ITaskLifecycleMutationCoordinator _lifecycleMutationCoordinator;
     private readonly ILogger<BacklogMutationToolService> _logger;
 
     public BacklogMutationToolService(
         ITaskRepository taskRepository,
-        IWorkspaceRepository workspaceRepository,
         IDependencyResolutionEngine dependencyEngine,
         ITaskMarkdownSyncService markdownSyncService,
         IWorkspaceLockProvider lockProvider,
         IAgentActivityStreamer activityStreamer,
-        IGitHubPullRequestDeliveryService pullRequestDeliveryService,
-        IOptions<SecurityOptions> securityOptions,
+        IBacklogMergeModeValidator mergeModeValidator,
         ITaskAttachmentRepository attachmentRepository,
+        ITaskLifecycleMutationCoordinator lifecycleMutationCoordinator,
         ILogger<BacklogMutationToolService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
-        _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _dependencyEngine = dependencyEngine ?? throw new ArgumentNullException(nameof(dependencyEngine));
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
-        _pullRequestDeliveryService = pullRequestDeliveryService ?? throw new ArgumentNullException(nameof(pullRequestDeliveryService));
-        _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
+        _mergeModeValidator = mergeModeValidator ?? throw new ArgumentNullException(nameof(mergeModeValidator));
         _attachmentRepository = attachmentRepository ?? throw new ArgumentNullException(nameof(attachmentRepository));
+        _lifecycleMutationCoordinator = lifecycleMutationCoordinator ?? throw new ArgumentNullException(nameof(lifecycleMutationCoordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -147,146 +142,158 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         ArgumentNullException.ThrowIfNull(scope);
         ArgumentNullException.ThrowIfNull(request);
 
-        using var taskLock = AcquireTaskLockOrThrow(scope.WorkspaceId, request.TaskId);
-        var task = await LoadEditableTaskAsync(scope, request.TaskId, cancellationToken);
-
-        // Validate every requested value before touching the (possibly tracked) entity.
-        var title = request.Title?.Trim();
-        if (title is { Length: 0 })
+        ForgeTask task;
+        List<string> changes;
+        bool dependenciesUpdated;
+        using (AcquireTaskLockOrThrow(scope.WorkspaceId, request.TaskId))
         {
-            throw new ArgumentException("Task title cannot be empty.", nameof(request));
-        }
+            task = await LoadEditableTaskAsync(scope, request.TaskId, cancellationToken);
 
-        var description = request.Description?.Trim();
-
-        if (request.Priority.HasValue)
-        {
-            ValidatePriority(request.Priority.Value);
-        }
-
-        MergeMode? mergeMode = null;
-        if (request.MergeMode != null)
-        {
-            mergeMode = await ParseAndValidateMergeModeAsync(scope, request.MergeMode, nameof(request), cancellationToken);
-        }
-
-        TaskDifficulty? difficulty = null;
-        if (request.Difficulty != null)
-        {
-            difficulty = ParseDifficulty(request.Difficulty, nameof(request));
-        }
-
-        var baseBranch = request.BaseBranch?.Trim();
-        if (baseBranch is { Length: 0 })
-        {
-            throw new ArgumentException("Base branch cannot be empty.", nameof(request));
-        }
-
-        var changes = new List<string>();
-        IReadOnlyList<int>? newDependencies = null;
-        if (request.DependsOnIds != null)
-        {
-            var distinct = request.DependsOnIds.Distinct().OrderBy(id => id).ToList();
-            var current = (await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken)).OrderBy(id => id).ToList();
-            if (!current.SequenceEqual(distinct))
+            // Validate every requested value before touching the (possibly tracked) entity.
+            var title = request.Title?.Trim();
+            if (title is { Length: 0 })
             {
-                await ValidateDependenciesAsync(scope, task.Id, distinct, cancellationToken);
-                newDependencies = distinct;
-                changes.Add($"dependencies [{string.Join(", ", current)}] -> [{string.Join(", ", distinct)}]");
+                throw new ArgumentException("Task title cannot be empty.", nameof(request));
             }
-        }
 
-        IReadOnlyList<int>? newAttachmentIds = null;
-        if (request.AttachmentIds != null || description != null)
-        {
-            var effectiveDescription = description ?? task.Description;
-            IReadOnlyList<int> requestedAttachmentIds;
-            if (request.AttachmentIds != null)
+            var description = request.Description?.Trim();
+
+            if (request.Priority.HasValue)
             {
-                requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
-                    scope.WorkspaceId,
-                    request.AttachmentIds,
-                    effectiveDescription,
-                    cancellationToken);
+                ValidatePriority(request.Priority.Value);
             }
-            else
+
+            MergeMode? mergeMode = null;
+            if (request.MergeMode != null)
             {
-                var currentAttachments = (await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken))
+                mergeMode = await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, request.MergeMode, nameof(request), cancellationToken);
+            }
+
+            TaskDifficulty? difficulty = null;
+            if (request.Difficulty != null)
+            {
+                difficulty = ParseDifficulty(request.Difficulty, nameof(request));
+            }
+
+            var baseBranch = request.BaseBranch?.Trim();
+            if (baseBranch is { Length: 0 })
+            {
+                throw new ArgumentException("Base branch cannot be empty.", nameof(request));
+            }
+
+            changes = new List<string>();
+            IReadOnlyList<int>? newDependencies = null;
+            if (request.DependsOnIds != null)
+            {
+                var distinct = request.DependsOnIds.Distinct().OrderBy(id => id).ToList();
+                var current = (await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken)).OrderBy(id => id).ToList();
+                if (!current.SequenceEqual(distinct))
+                {
+                    await ValidateDependenciesAsync(scope, task.Id, distinct, cancellationToken);
+                    newDependencies = distinct;
+                    changes.Add($"dependencies [{string.Join(", ", current)}] -> [{string.Join(", ", distinct)}]");
+                }
+            }
+
+            IReadOnlyList<int>? newAttachmentIds = null;
+            if (request.AttachmentIds != null || description != null)
+            {
+                var effectiveDescription = description ?? task.Description;
+                IReadOnlyList<int> requestedAttachmentIds;
+                if (request.AttachmentIds != null)
+                {
+                    requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                        scope.WorkspaceId,
+                        request.AttachmentIds,
+                        effectiveDescription,
+                        cancellationToken);
+                }
+                else
+                {
+                    var currentAttachments = (await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken))
+                        .Select(a => a.Id)
+                        .ToList();
+                    var oldCitedIds = AttachmentCitationParser.ExtractAttachmentIds(task.Description).ToHashSet();
+                    var retainedExplicitIds = currentAttachments
+                        .Where(id => !oldCitedIds.Contains(id))
+                        .ToList();
+                    requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                        scope.WorkspaceId,
+                        retainedExplicitIds,
+                        effectiveDescription,
+                        cancellationToken);
+                }
+
+                var existingIds = (await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken))
                     .Select(a => a.Id)
+                    .OrderBy(id => id)
                     .ToList();
-                var oldCitedIds = AttachmentCitationParser.ExtractAttachmentIds(task.Description).ToHashSet();
-                var retainedExplicitIds = currentAttachments
-                    .Where(id => !oldCitedIds.Contains(id))
-                    .ToList();
-                requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
-                    scope.WorkspaceId,
-                    retainedExplicitIds,
-                    effectiveDescription,
-                    cancellationToken);
+
+                if (!existingIds.SequenceEqual(requestedAttachmentIds))
+                {
+                    newAttachmentIds = requestedAttachmentIds;
+                    changes.Add($"attachments [{string.Join(", ", existingIds)}] -> [{string.Join(", ", requestedAttachmentIds)}]");
+                }
             }
 
-            var existingIds = (await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken))
-                .Select(a => a.Id)
-                .OrderBy(id => id)
-                .ToList();
-
-            if (!existingIds.SequenceEqual(requestedAttachmentIds))
+            if (title != null && !string.Equals(task.Title, title, StringComparison.Ordinal))
             {
-                newAttachmentIds = requestedAttachmentIds;
-                changes.Add($"attachments [{string.Join(", ", existingIds)}] -> [{string.Join(", ", requestedAttachmentIds)}]");
+                changes.Add($"title \"{task.Title}\" -> \"{title}\"");
+                task.Title = title;
             }
+
+            if (description != null && !string.Equals(task.Description, description, StringComparison.Ordinal))
+            {
+                changes.Add("description");
+                task.Description = description;
+            }
+
+            if (request.Priority.HasValue && task.Priority != request.Priority.Value)
+            {
+                changes.Add($"priority P{task.Priority} -> P{request.Priority.Value}");
+                task.Priority = request.Priority.Value;
+            }
+
+            if (mergeMode.HasValue && task.MergeMode != mergeMode.Value)
+            {
+                changes.Add($"mergeMode {task.MergeMode} -> {mergeMode.Value}");
+                task.MergeMode = mergeMode.Value;
+            }
+
+            if (difficulty.HasValue && task.Difficulty != difficulty.Value)
+            {
+                changes.Add($"difficulty {task.Difficulty} -> {difficulty.Value}");
+                task.Difficulty = difficulty.Value;
+            }
+
+            if (baseBranch != null && !string.Equals(task.BaseBranch, baseBranch, StringComparison.Ordinal))
+            {
+                changes.Add($"baseBranch \"{task.BaseBranch}\" -> \"{baseBranch}\"");
+                task.BaseBranch = baseBranch;
+            }
+
+            if (changes.Count == 0)
+            {
+                return $"Task #{task.Id} unchanged: the requested values already match.";
+            }
+
+            task.UpdatedAt = DateTime.UtcNow;
+            var reason = $"Ideation agent edited task: {string.Join("; ", changes)}";
+            await _taskRepository.UpdateWithHistoryAsync(task, newDependencies, AuditActors.IdeationAgent, reason, cancellationToken);
+            if (newAttachmentIds != null)
+            {
+                await _attachmentRepository.SetTaskAttachmentLinksAsync(task.Id, newAttachmentIds, cancellationToken);
+            }
+
+            await SyncMarkdownAsync(scope, task, cancellationToken);
+            dependenciesUpdated = newDependencies != null;
         }
 
-        if (title != null && !string.Equals(task.Title, title, StringComparison.Ordinal))
+        if (dependenciesUpdated)
         {
-            changes.Add($"title \"{task.Title}\" -> \"{title}\"");
-            task.Title = title;
+            await _lifecycleMutationCoordinator.TryScheduleOpenTaskIfReadyAsync(task.Id, cancellationToken);
         }
 
-        if (description != null && !string.Equals(task.Description, description, StringComparison.Ordinal))
-        {
-            changes.Add("description");
-            task.Description = description;
-        }
-
-        if (request.Priority.HasValue && task.Priority != request.Priority.Value)
-        {
-            changes.Add($"priority P{task.Priority} -> P{request.Priority.Value}");
-            task.Priority = request.Priority.Value;
-        }
-
-        if (mergeMode.HasValue && task.MergeMode != mergeMode.Value)
-        {
-            changes.Add($"mergeMode {task.MergeMode} -> {mergeMode.Value}");
-            task.MergeMode = mergeMode.Value;
-        }
-
-        if (difficulty.HasValue && task.Difficulty != difficulty.Value)
-        {
-            changes.Add($"difficulty {task.Difficulty} -> {difficulty.Value}");
-            task.Difficulty = difficulty.Value;
-        }
-
-        if (baseBranch != null && !string.Equals(task.BaseBranch, baseBranch, StringComparison.Ordinal))
-        {
-            changes.Add($"baseBranch \"{task.BaseBranch}\" -> \"{baseBranch}\"");
-            task.BaseBranch = baseBranch;
-        }
-
-        if (changes.Count == 0)
-        {
-            return $"Task #{task.Id} unchanged: the requested values already match.";
-        }
-
-        task.UpdatedAt = DateTime.UtcNow;
-        var reason = $"Ideation agent edited task: {string.Join("; ", changes)}";
-        await _taskRepository.UpdateWithHistoryAsync(task, newDependencies, AuditActors.IdeationAgent, reason, cancellationToken);
-        if (newAttachmentIds != null)
-        {
-            await _attachmentRepository.SetTaskAttachmentLinksAsync(task.Id, newAttachmentIds, cancellationToken);
-        }
-
-        await SyncMarkdownAsync(scope, task, cancellationToken);
         await BroadcastAsync(task, $"Ideation agent edited task #{task.Id}: {string.Join("; ", changes)}", CanonicalToolNames.EditTask, cancellationToken);
 
         return $"Task #{task.Id} updated ({string.Join("; ", changes)}).";
@@ -420,7 +427,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
             if (!string.IsNullOrWhiteSpace(proposal.MergeMode))
             {
-                await ParseAndValidateMergeModeAsync(scope, proposal.MergeMode, nameof(proposals), cancellationToken);
+                await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, proposal.MergeMode, nameof(proposals), cancellationToken);
             }
 
             if (!string.IsNullOrWhiteSpace(proposal.Difficulty))
@@ -562,7 +569,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         ValidatePriority(effPriority);
 
         var effMergeMode = !string.IsNullOrWhiteSpace(mergeMode)
-            ? await ParseAndValidateMergeModeAsync(scope, mergeMode, nameof(mergeMode), cancellationToken)
+            ? await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, mergeMode, nameof(mergeMode), cancellationToken)
             : MergeMode.ManualReviewRequired;
 
         var effDifficulty = !string.IsNullOrWhiteSpace(difficulty)
@@ -628,46 +635,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             explicitIds,
             description,
             cancellationToken);
-
-    private async Task<MergeMode> ParseAndValidateMergeModeAsync(
-        BacklogToolScope scope,
-        string rawMergeMode,
-        string paramName,
-        CancellationToken cancellationToken)
-    {
-        var normalizedMergeMode = rawMergeMode.Trim().Replace("_", string.Empty, StringComparison.Ordinal);
-        if (int.TryParse(normalizedMergeMode, NumberStyles.Integer, CultureInfo.InvariantCulture, out _) ||
-            !Enum.TryParse<MergeMode>(normalizedMergeMode, ignoreCase: true, out var parsedMergeMode) ||
-            !Enum.IsDefined(parsedMergeMode))
-        {
-            throw new ArgumentException(
-                $"Invalid mergeMode '{rawMergeMode}'. Expected one of: {string.Join(", ", Enum.GetNames<MergeMode>())}.",
-                paramName);
-        }
-
-        if (parsedMergeMode == MergeMode.ExternalPullRequest)
-        {
-            if (_securityOptions.Value.AirGappedMode)
-            {
-                throw new InvalidOperationException("MergeMode 'ExternalPullRequest' is not permitted when Air-Gapped Mode (AirGappedMode) is enabled.");
-            }
-
-            var workspace = await _workspaceRepository.GetByIdAsync(scope.WorkspaceId, cancellationToken);
-            if (workspace?.GitHubSettings is not { Enabled: true, PullRequestDeliveryEnabled: true })
-            {
-                throw new InvalidOperationException(
-                    $"MergeMode 'ExternalPullRequest' requires GitHub integration and Pull Request Delivery to be enabled on workspace #{scope.WorkspaceId} (Pull Request Delivery is disabled).");
-            }
-
-            if (!await _pullRequestDeliveryService.IsPullRequestDeliveryAvailableAsync(workspace, cancellationToken))
-            {
-                throw new InvalidOperationException(
-                    $"MergeMode 'ExternalPullRequest' requires a configured GitHub repository (RepositoryOwner/RepositoryName) and valid GitHub OAuth authentication on workspace #{scope.WorkspaceId}.");
-            }
-        }
-
-        return parsedMergeMode;
-    }
 
     private static TaskDifficulty ParseDifficulty(string rawDifficulty, string paramName)
     {

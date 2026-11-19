@@ -11,6 +11,14 @@ namespace NightCodeForge.Infrastructure.BackgroundJobs;
 /// </summary>
 public class HangfireTaskJobQueue : ITaskJobQueue
 {
+    private static readonly HashSet<string> ActiveJobStates = new(StringComparer.OrdinalIgnoreCase)
+    {
+        EnqueuedState.StateName,
+        ScheduledState.StateName,
+        ProcessingState.StateName,
+        AwaitingState.StateName
+    };
+
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly JobStorage _jobStorage;
     private readonly ILogger<HangfireTaskJobQueue> _logger;
@@ -84,6 +92,28 @@ public class HangfireTaskJobQueue : ITaskJobQueue
         {
             _logger.LogWarning(ex, "Failed querying Hangfire monitoring API for urgent queue status");
             return Task.FromResult(false);
+        }
+    }
+
+    public bool IsJobActive(string? jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var connection = _jobStorage.GetConnection();
+            var jobData = connection.GetJobData(jobId);
+            return jobData != null &&
+                   !string.IsNullOrWhiteSpace(jobData.State) &&
+                   ActiveJobStates.Contains(jobData.State);
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException)
+        {
+            _logger.LogWarning(ex, "Hangfire job ID '{JobId}' is invalid for storage lookup; treating as inactive.", jobId);
+            return false;
         }
     }
 

@@ -1,9 +1,12 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Core.Concurrency;
+using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Streaming;
 using NightCodeForge.Web.Services;
 using Xunit;
 
@@ -337,5 +340,150 @@ public class TaskMutationServiceTests
     public async Task UpdateBaseBranchAsync_WithTaskId_ThrowsKeyNotFoundException_WhenTaskDoesNotExist()
     {
         await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.UpdateBaseBranchAsync(99999, "master"));
+    }
+
+    [Fact]
+    public async Task UpdateDependenciesAsync_CallsTryScheduleOpenTaskIfReadyOnlyWhenDependenciesChange()
+    {
+        var task = new ForgeTask { Id = 25, WorkspaceId = 1, Status = TaskOverallStatus.Open };
+        await _taskRepository.CreateWithBaselineAsync(task, new[] { 101 }, AuditActors.User, "baseline");
+
+        // Same dependencies -> no-op, orchestrator not invoked
+        await _service.UpdateDependenciesAsync(task, new[] { 101 });
+        Assert.Empty(_taskOrchestrator.TryScheduleOpenTaskCalls);
+
+        // Changed dependencies -> invokes TryScheduleOpenTaskIfReadyAsync
+        await _service.UpdateDependenciesAsync(task, Array.Empty<int>());
+        Assert.Equal([25], _taskOrchestrator.TryScheduleOpenTaskCalls);
+    }
+
+    [Fact]
+    public async Task UpdateDependenciesAsync_WithRealOrchestrator_SchedulesOnlyUnblockedEligibleOpenTasks()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var jobQueue = new MockTaskJobQueue();
+
+        var stage = Mock.Of<IWorkflowStage>(s =>
+            s.StageId == StandardStageIds.TaskReview &&
+            s.DisplayName == "Task Review" &&
+            s.QueueTier == StageQueueTier.TaskReview);
+        var pipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline([stage]));
+
+        var lockProvider = new WorkspaceLockProvider();
+        var preparer = new TaskWorkspacePreparer(
+            _workspaceRepository,
+            lockProvider,
+            Mock.Of<IGitWorkspaceManager>(),
+            Mock.Of<IGitMirrorSyncService>(),
+            _markdownSync,
+            Mock.Of<IWorkspacePathResolver>(),
+            Mock.Of<IExecutionEnvironmentProvider>(),
+            Mock.Of<IGitHubPullRequestDeliveryService>(),
+            Mock.Of<IGitHubTaskMirrorService>(),
+            NullLogger<TaskWorkspacePreparer>.Instance);
+
+        var streamer = new InMemoryAgentActivityStreamer();
+        var telemetry = Mock.Of<IOperationsTelemetryService>();
+        var mergeCoordinator = new TaskMergeAndCascadeCoordinator(
+            taskRepo,
+            preparer,
+            depEngine,
+            depStore,
+            jobQueue,
+            pipelineProvider,
+            Mock.Of<IConflictResolutionVerifier>(),
+            streamer,
+            telemetry,
+            NullLogger<TaskMergeAndCascadeCoordinator>.Instance);
+
+        var cancellationManager = new TaskCancellationManager(NullLogger<TaskCancellationManager>.Instance);
+        var lifecycleCoordinator = new TaskLifecycleMutationCoordinator(
+            taskRepo,
+            preparer,
+            mergeCoordinator,
+            pipelineProvider,
+            jobQueue,
+            cancellationManager,
+            streamer,
+            telemetry,
+            NullLogger<TaskLifecycleMutationCoordinator>.Instance);
+
+        var orchestrator = new TaskOrchestrator(
+            taskRepo,
+            preparer,
+            mergeCoordinator,
+            lifecycleCoordinator,
+            new HarnessRegistry(),
+            streamer,
+            Mock.Of<IOperationsControlService>(),
+            telemetry,
+            new InMemoryTaskAttachmentRepository(taskRepo),
+            NullLogger<TaskOrchestrator>.Instance);
+
+        var mutationService = new TaskMutationService(
+            taskRepo,
+            _workspaceRepository,
+            _markdownSync,
+            orchestrator,
+            telemetry,
+            NullLogger<TaskMutationService>.Instance);
+
+        var unclosedBlocker1 = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Blocker 1", Status = TaskOverallStatus.Open },
+            null, AuditActors.User, "init");
+        var unclosedBlocker2 = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Blocker 2", Status = TaskOverallStatus.Reviewed },
+            null, AuditActors.User, "init");
+
+        // 1. Removing 1 of 2 blockers does NOT enqueue; removing the last blocker DOES enqueue
+        var openTask = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Open Task", Status = TaskOverallStatus.Open, Priority = TaskPriority.High },
+            new[] { unclosedBlocker1.Id, unclosedBlocker2.Id }, AuditActors.User, "init");
+
+        await mutationService.UpdateDependenciesAsync(openTask, new[] { unclosedBlocker2.Id });
+        Assert.Empty(jobQueue.EnqueuedStages);
+
+        await mutationService.UpdateDependenciesAsync(openTask, Array.Empty<int>());
+        Assert.Single(jobQueue.EnqueuedStages);
+        Assert.Equal(openTask.Id, jobQueue.EnqueuedStages[0].TaskId);
+        Assert.False(string.IsNullOrWhiteSpace(openTask.LastHangfireJobId));
+
+        // 2. Active job prevents duplicate enqueue when dependencies change again (add closed prereq then remove it)
+        var closedBlocker = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Closed Blocker", Status = TaskOverallStatus.Closed },
+            null, AuditActors.User, "init");
+        var originalJobId = openTask.LastHangfireJobId!;
+
+        await mutationService.UpdateDependenciesAsync(openTask, new[] { closedBlocker.Id });
+        Assert.Single(jobQueue.EnqueuedStages);
+        Assert.Equal(originalJobId, openTask.LastHangfireJobId);
+
+        // Stale deleted job IS replaced cleanly when unblocked dependency change occurs
+        jobQueue.Delete(originalJobId);
+        await mutationService.UpdateDependenciesAsync(openTask, Array.Empty<int>());
+        Assert.Equal(2, jobQueue.EnqueuedStages.Count);
+
+        // 3. Draft, Suggested, HasExecutionRun, and IsWaitingForHuman tasks are NOT enqueued
+        var draftTask = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Draft Task", Status = TaskOverallStatus.Draft },
+            new[] { unclosedBlocker1.Id }, AuditActors.User, "init");
+        var suggestedTask = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Suggested Task", Status = TaskOverallStatus.Suggested },
+            new[] { unclosedBlocker1.Id }, AuditActors.User, "init");
+        var executedTask = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Executed Task", Status = TaskOverallStatus.Open, HasExecutionRun = true },
+            new[] { unclosedBlocker1.Id }, AuditActors.User, "init");
+        var waitingTask = await taskRepo.CreateWithBaselineAsync(
+            new ForgeTask { WorkspaceId = 1, Title = "Waiting Task", Status = TaskOverallStatus.Open, IsWaitingForHuman = true },
+            new[] { unclosedBlocker1.Id }, AuditActors.User, "init");
+
+        await mutationService.UpdateDependenciesAsync(draftTask, Array.Empty<int>());
+        await mutationService.UpdateDependenciesAsync(suggestedTask, Array.Empty<int>());
+        await mutationService.UpdateDependenciesAsync(executedTask, Array.Empty<int>());
+        await mutationService.UpdateDependenciesAsync(waitingTask, Array.Empty<int>());
+
+        Assert.Equal(2, jobQueue.EnqueuedStages.Count);
     }
 }

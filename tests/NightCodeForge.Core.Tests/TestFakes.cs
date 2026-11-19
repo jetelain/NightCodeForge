@@ -46,6 +46,8 @@ public class FakeTaskJobQueue : ITaskJobQueue
     }
 
     public List<string> DeletedJobs { get; } = new();
+    public HashSet<string> CompletedJobs { get; } = new(StringComparer.Ordinal);
+    public Func<string, bool>? IsJobActiveOverride { get; set; }
 
     public bool Delete(string jobId)
     {
@@ -57,6 +59,21 @@ public class FakeTaskJobQueue : ITaskJobQueue
     public Task<bool> HasUrgentJobsWaitingAsync(CancellationToken cancellationToken = default)
     {
         return Task.FromResult(HasUrgentJobs || UrgentQueue.Count > 0);
+    }
+
+    public bool IsJobActive(string? jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            return false;
+        }
+
+        if (IsJobActiveOverride != null)
+        {
+            return IsJobActiveOverride(jobId);
+        }
+
+        return !DeletedJobs.Contains(jobId) && !CompletedJobs.Contains(jobId);
     }
 }
 

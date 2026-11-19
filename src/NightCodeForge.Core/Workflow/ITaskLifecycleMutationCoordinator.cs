@@ -40,5 +40,6 @@ public interface ITaskLifecycleMutationCoordinator
         int taskId,
         TaskRestartGitMode gitMode = TaskRestartGitMode.PreserveWork,
         CancellationToken cancellationToken = default);
+    Task<bool> TryScheduleOpenTaskIfReadyAsync(int taskId, CancellationToken cancellationToken = default);
 }
 

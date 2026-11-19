@@ -18,6 +18,7 @@ public class InMemoryTaskJobQueue : ITaskJobQueue
     private readonly ConcurrentQueue<EnqueuedJob> _taskReviewJobs = new();
     private readonly ConcurrentQueue<EnqueuedJob> _inferenceJobs = new();
     private readonly List<EnqueuedJob> _allJobs = new();
+    private readonly HashSet<string> _completedJobs = new(StringComparer.Ordinal);
     private int _jobCounter;
 
     public IReadOnlyList<EnqueuedJob> AllJobs
@@ -124,6 +125,33 @@ public class InMemoryTaskJobQueue : ITaskJobQueue
         }
     }
 
+    public void MarkCompleted(string jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            return;
+        }
+
+        lock (_allJobs)
+        {
+            _completedJobs.Add(jobId);
+        }
+    }
+
+    public bool IsJobActive(string? jobId)
+    {
+        if (string.IsNullOrWhiteSpace(jobId))
+        {
+            return false;
+        }
+
+        lock (_allJobs)
+        {
+            return _allJobs.Any(j => string.Equals(j.JobId, jobId, StringComparison.Ordinal)) &&
+                   !_completedJobs.Contains(jobId);
+        }
+    }
+
     public void Clear()
     {
         while (_urgentJobs.TryDequeue(out _)) { }
@@ -131,6 +159,10 @@ public class InMemoryTaskJobQueue : ITaskJobQueue
         while (_implementationJobs.TryDequeue(out _)) { }
         while (_taskReviewJobs.TryDequeue(out _)) { }
         while (_inferenceJobs.TryDequeue(out _)) { }
-        lock (_allJobs) { _allJobs.Clear(); }
+        lock (_allJobs)
+        {
+            _allJobs.Clear();
+            _completedJobs.Clear();
+        }
     }
 }
