@@ -144,7 +144,8 @@ public class TaskCreationUiService : ITaskCreationUiService
 
         var tasks = await _taskRepository.GetByWorkspaceIdAsync(workspaceId, cancellationToken);
         return tasks
-            .Where(t => t.Status != TaskOverallStatus.Rejected &&
+            .Where(t => t.Status != TaskOverallStatus.Triage &&
+                        t.Status != TaskOverallStatus.Rejected &&
                         t.Status != TaskOverallStatus.Cancelled &&
                         t.Status != TaskOverallStatus.Failed)
             .OrderBy(t => t.Id)
@@ -180,6 +181,11 @@ public class TaskCreationUiService : ITaskCreationUiService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        if (request.InitialStatus == TaskOverallStatus.Triage)
+        {
+            throw new ArgumentException("Cannot manually create a task with Triage status.", nameof(request));
+        }
 
         var trimmedTitle = request.Title?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(trimmedTitle))
@@ -218,6 +224,17 @@ public class TaskCreationUiService : ITaskCreationUiService
             {
                 throw new InvalidOperationException(
                     $"Prerequisite task(s) {string.Join(", ", missingOrForeign.Select(id => $"#{id}"))} do not exist in workspace #{request.WorkspaceId}.");
+            }
+
+            var triagePrereqs = prereqTasks
+                .Where(t => t.Status == TaskOverallStatus.Triage)
+                .Select(t => t.Id)
+                .OrderBy(id => id)
+                .ToList();
+            if (triagePrereqs.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Prerequisite task(s) {string.Join(", ", triagePrereqs.Select(id => $"#{id}"))} are triage session records and cannot be used as dependencies.");
             }
         }
 

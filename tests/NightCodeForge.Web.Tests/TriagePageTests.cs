@@ -625,6 +625,7 @@ public class TriagePageTests : BunitContext
 public class MockTriageService : ITriageService
 {
     public Func<Workspace, TriageReportRequest, CancellationToken, Task<IReadOnlyList<ForgeTask>>>? Handler { get; set; }
+    public Func<Workspace, TriageReportRequest, Action<int>?, CancellationToken, Task<TriageSessionResult>>? SessionHandler { get; set; }
     public TriageReportRequest? LastRequest { get; private set; }
     public Workspace? LastWorkspace { get; private set; }
 
@@ -640,5 +641,30 @@ public class MockTriageService : ITriageService
             return await Handler(workspace, request, cancellationToken);
         }
         return Array.Empty<ForgeTask>();
+    }
+
+    public async Task<TriageSessionResult> RunTriageSessionAsync(
+        Workspace workspace,
+        TriageReportRequest request,
+        Action<int>? onTriageTaskCreated = null,
+        CancellationToken cancellationToken = default)
+    {
+        LastWorkspace = workspace;
+        LastRequest = request;
+        if (SessionHandler != null)
+        {
+            return await SessionHandler(workspace, request, onTriageTaskCreated, cancellationToken);
+        }
+
+        var tasks = Handler != null
+            ? await Handler(workspace, request, cancellationToken)
+            : Array.Empty<ForgeTask>();
+        var createdIds = tasks.Where(t => t.Id > 0).Select(t => t.Id).ToHashSet();
+        return new TriageSessionResult(
+            TriageTaskId: 0,
+            Tasks: tasks,
+            CreatedTaskIds: createdIds,
+            UpdatedTaskIds: new HashSet<int>(),
+            RemovedTaskIds: new HashSet<int>());
     }
 }

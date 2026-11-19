@@ -1,4 +1,5 @@
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -60,6 +61,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         await _taskOrchestrator.RejectTaskAsync(task.Id, reason, cancellationToken);
         task.Status = TaskOverallStatus.Rejected;
         task.IsWaitingForHuman = false;
@@ -74,6 +76,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         var trimmed = newTitle?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(trimmed))
         {
@@ -106,6 +109,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         var trimmed = newDescription?.Trim() ?? string.Empty;
         if (string.Equals(task.Description, trimmed, StringComparison.Ordinal))
         {
@@ -132,6 +136,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         if (newPriority < TaskPriority.Critical || newPriority > TaskPriority.Trivial)
         {
             throw new ArgumentOutOfRangeException(nameof(newPriority), $"Priority must be between {TaskPriority.Critical} and {TaskPriority.Trivial}.");
@@ -163,6 +168,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         if (!Enum.IsDefined(newDifficulty))
         {
             throw new ArgumentOutOfRangeException(nameof(newDifficulty), $"Invalid task difficulty: {newDifficulty}");
@@ -204,6 +210,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         if (!Enum.IsDefined(newMergeMode))
         {
             throw new ArgumentOutOfRangeException(nameof(newMergeMode), $"Invalid merge mode: {newMergeMode}");
@@ -248,6 +255,7 @@ public class TaskMutationService : ITaskMutationService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(task);
+        EnsureMutableNonTriageTask(task);
         var trimmed = newBaseBranch?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(trimmed))
         {
@@ -293,11 +301,27 @@ public class TaskMutationService : ITaskMutationService
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(prerequisiteIds);
+        EnsureMutableNonTriageTask(task);
 
         var newDeps = prerequisiteIds.Distinct().OrderBy(x => x).ToList();
         if (newDeps.Contains(task.Id))
         {
             throw new ArgumentException($"Task #{task.Id} cannot depend on itself.", nameof(prerequisiteIds));
+        }
+
+        if (newDeps.Count > 0)
+        {
+            var resolvedPrereqs = await _taskRepository.GetByIdsAsync(newDeps, cancellationToken) ?? Array.Empty<ForgeTask>();
+            var triageDeps = resolvedPrereqs
+                .Where(t => t.Status == TaskOverallStatus.Triage)
+                .Select(t => t.Id)
+                .OrderBy(id => id)
+                .ToList();
+            if (triageDeps.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Task #{task.Id} cannot depend on triage session record(s): {string.Join(", ", triageDeps.Select(id => $"#{id}"))}.");
+            }
         }
 
         var persistedDeps = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
@@ -334,6 +358,16 @@ public class TaskMutationService : ITaskMutationService
                 task.LastHangfireJobId = refreshed.LastHangfireJobId;
                 task.IsDeferredByPause = refreshed.IsDeferredByPause;
             }
+        }
+    }
+
+    private static void EnsureMutableNonTriageTask(ForgeTask task)
+    {
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(
+                task.Id,
+                "triage execution session records are read-only audit records and cannot be modified.");
         }
     }
 

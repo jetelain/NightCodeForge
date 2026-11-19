@@ -15,8 +15,21 @@ public static class DefaultAgentTools
         CanonicalToolNames.LoadSkill
     ];
 
-    // Read-only workspace plus scoped host-level backlog tools (never granted to untrusted-intake triage).
+    // Read-only workspace plus scoped host-level backlog tools (ideation additionally grants priority-reordering tools).
     private static readonly string[] _ideation = [.. _readOnly, .. CanonicalToolNames.BacklogMutationTools];
+
+    // Untrusted intake triage: read-only workspace inspection, skills, and scoped triage backlog tools
+    // (excludes filesystem edit/write, web_search, ask, request_changes, and team priority reordering).
+    private static readonly string[] _triage =
+    [
+        CanonicalToolNames.Read,
+        CanonicalToolNames.Bash,
+        CanonicalToolNames.LoadSkill,
+        CanonicalToolNames.ProposeTasks,
+        CanonicalToolNames.GetTask,
+        CanonicalToolNames.EditTask,
+        CanonicalToolNames.RemoveTask
+    ];
 
     private static readonly string[] _full =
     [
@@ -45,6 +58,7 @@ public static class DefaultAgentTools
 
     public static IReadOnlyList<string> ReadOnly => _readOnly;
     public static IReadOnlyList<string> Ideation => _ideation;
+    public static IReadOnlyList<string> Triage => _triage;
     public static IReadOnlyList<string> Full => _full;
     public static IReadOnlyList<string> Review => _review;
 

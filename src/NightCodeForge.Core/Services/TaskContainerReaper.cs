@@ -21,7 +21,8 @@ public static class TaskContainerReaper
     /// </summary>
     public static bool ShouldReapTaskContainer(ForgeTask? task) =>
         task == null
-        || task.Status is TaskOverallStatus.Draft
+        || task.Status is TaskOverallStatus.Triage
+            or TaskOverallStatus.Draft
             or TaskOverallStatus.Suggested
             or TaskOverallStatus.Closed
             or TaskOverallStatus.Rejected

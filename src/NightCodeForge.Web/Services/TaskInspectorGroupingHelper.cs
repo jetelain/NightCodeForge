@@ -21,6 +21,7 @@ public static class TaskInspectorGroupingHelper
     public const string GroupFailed = "❌ Failed";
     public const string GroupWaitingForSlot = "⏳ In Flight (Waiting for Slot)";
     public const string GroupOpen = "📋 Backlog / Open";
+    public const string GroupTriage = "🛡️ Triage";
     public const string GroupClosed = "✅ Closed";
 
     /// <summary>
@@ -127,11 +128,25 @@ public static class TaskInspectorGroupingHelper
         var failed = new List<ForgeTask>();
         var waitingForSlot = new List<ForgeTask>();
         var open = new List<ForgeTask>();
+        var triage = new List<ForgeTask>();
         var closed = new List<ForgeTask>();
 
         foreach (var task in taskList)
         {
-            if (task.Status is TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled)
+            var isRunning = (activeTaskId.HasValue && task.Id == activeTaskId.Value) || runningIds.Contains(task.Id);
+
+            if (task.Status == TaskOverallStatus.Triage)
+            {
+                if (isRunning)
+                {
+                    running.Add(task);
+                }
+                else
+                {
+                    triage.Add(task);
+                }
+            }
+            else if (task.Status is TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled)
             {
                 closed.Add(task);
             }
@@ -143,7 +158,7 @@ public static class TaskInspectorGroupingHelper
             {
                 waitingForHuman.Add(task);
             }
-            else if ((activeTaskId.HasValue && task.Id == activeTaskId.Value) || runningIds.Contains(task.Id))
+            else if (isRunning)
             {
                 running.Add(task);
             }
@@ -167,6 +182,7 @@ public static class TaskInspectorGroupingHelper
         AddGroupIfNotEmpty(groups, GroupFailed, failed);
         AddGroupIfNotEmpty(groups, GroupWaitingForSlot, waitingForSlot);
         AddGroupIfNotEmpty(groups, GroupOpen, open);
+        AddGroupIfNotEmpty(groups, GroupTriage, triage);
         AddGroupIfNotEmpty(groups, GroupClosed, closed);
 
         return groups;

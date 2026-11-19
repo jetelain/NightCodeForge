@@ -11,6 +11,7 @@ public class AgentSessionContext
     public required ForgeTask ForgeTask { get; init; }
     public Workspace? Workspace { get; init; }
     public SandboxScopeDescriptor? SandboxScope { get; init; }
+    public BacklogMutationSessionPolicy? BacklogMutationPolicy { get; init; }
     public required AgentProfile Profile { get; init; }
     public PipelineContext? PipelineContext { get; init; }
     public LocalOptimizationFlags? OptimizationFlags { get; set; }

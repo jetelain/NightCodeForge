@@ -180,6 +180,18 @@
                                 <span>Base: @(_model.BaseBranch)</span>
                             </span>
                         </div>
+                        @if (_activeTriageTaskId.HasValue)
+                        {
+                            <div class="mt-3">
+                                <a id="triage-watch-live-inspector-link"
+                                   href="@WorkspaceState.GetPath($"inspector/{_activeTriageTaskId.Value}")"
+                                   target="_blank"
+                                   rel="noopener noreferrer"
+                                   class="forge-btn forge-btn-secondary btn-sm">
+                                    🔎 Watch Live in Task Inspector (#@_activeTriageTaskId.Value) ➔
+                                </a>
+                            </div>
+                        }
                     </div>
                 }
                 else if (_triagedTasks.Count > 0)
@@ -192,15 +204,25 @@
                                     The triage agent verified the report and formulated structured backlog items in status <code class="font-mono">Suggested</code>:
                                 </p>
                             </div>
-                            <a href="@WorkspaceState.GetPath("backlog")" class="forge-btn forge-btn-secondary btn-sm" id="go-to-backlog-link">
-                                Go to Backlog ➔
-                            </a>
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                @if (_lastTriageTaskId.HasValue)
+                                {
+                                    <a id="triage-inspect-session-link"
+                                       href="@WorkspaceState.GetPath($"inspector/{_lastTriageTaskId.Value}")"
+                                       class="forge-btn forge-btn-secondary btn-sm">
+                                        🔎 Inspect Triage Session (#@_lastTriageTaskId.Value)
+                                    </a>
+                                }
+                                <a href="@WorkspaceState.GetPath("backlog")" class="forge-btn forge-btn-secondary btn-sm" id="go-to-backlog-link">
+                                    Go to Backlog ➔
+                                </a>
+                            </div>
                         </div>
 
                         <div class="triaged-tasks-list" id="triaged-tasks-list">
                             @foreach (var task in _triagedTasks)
                             {
-                                <TriageTaskProposalCard @key="task.Id" Task="task" />
+                                <TriageTaskProposalCard @key="task.Id" Task="task" IsUpdated="_updatedTaskIds.Contains(task.Id)" />
                             }
                         </div>
                     </div>
@@ -213,6 +235,16 @@
                         <p class="text-secondary max-w-md mx-auto mb-0">
                             Submit an external bug report, stack trace, or task description to start automated, sandboxed triage on the base branch.
                         </p>
+                        @if (_lastTriageTaskId.HasValue)
+                        {
+                            <div class="mt-3">
+                                <a id="triage-inspect-session-link"
+                                   href="@WorkspaceState.GetPath($"inspector/{_lastTriageTaskId.Value}")"
+                                   class="forge-btn forge-btn-secondary btn-sm">
+                                    🔎 Inspect Triage Session (#@_lastTriageTaskId.Value)
+                                </a>
+                            </div>
+                        }
                     </div>
                 }
             </div>
@@ -226,9 +258,14 @@
 
     private TriageSubmissionModel _model = new();
     private bool _isTriaging;
+    private int? _activeTriageTaskId;
+    private int? _lastTriageTaskId;
     private List<ForgeTask> _triagedTasks = new();
+    private IReadOnlySet<int> _updatedTaskIds = new HashSet<int>();
     private string? _errorMessage;
     private string? _lastAppliedDraftId;
+    private TriageRunHandle? _subscribedRunHandle;
+    private bool _disposed;
 
     protected override async Task OnInitializedAsync()
     {
@@ -298,9 +335,9 @@
 
         _errorMessage = null;
 
-        if (appliedDraft.ExecutionTask is not null)
+        if (appliedDraft.SessionExecutionTask is not null || appliedDraft.ExecutionTask is not null)
         {
-            await AwaitCompanionTriageExecutionAsync(appliedDraft.ExecutionTask);
+            await AwaitCompanionTriageExecutionAsync(appliedDraft);
         }
         else
         {
@@ -310,46 +347,160 @@
         return true;
     }
 
-    private async Task AwaitCompanionTriageExecutionAsync(Task<IReadOnlyList<ForgeTask>> executionTask)
+    private async Task AwaitCompanionTriageExecutionAsync(CompanionTriageDraft appliedDraft)
     {
         _isTriaging = true;
         _errorMessage = null;
+        _activeTriageTaskId = null;
+        _lastTriageTaskId = null;
+        _updatedTaskIds = new HashSet<int>();
         _triagedTasks.Clear();
+        AttachRunHandle(appliedDraft.RunHandle);
         StateHasChanged();
 
         try
         {
-            var tasks = await executionTask;
-            _triagedTasks = tasks.ToList();
-            ToastService.Show("Triage Complete", $"Triage agent formulated {_triagedTasks.Count} suggested task(s).", ToastLevel.Success);
+            if (appliedDraft.SessionExecutionTask is not null)
+            {
+                var sessionResult = await appliedDraft.SessionExecutionTask;
+                if (_disposed) return;
+                if (sessionResult.TriageTaskId > 0)
+                {
+                    _lastTriageTaskId = sessionResult.TriageTaskId;
+                }
+
+                _updatedTaskIds = sessionResult.UpdatedTaskIds;
+                _triagedTasks = sessionResult.Tasks.ToList();
+                ToastService.Show("Triage Complete", TriagePresentationHelper.FormatSessionCompleteMessage(sessionResult), ToastLevel.Success);
+            }
+            else if (appliedDraft.ExecutionTask is not null)
+            {
+                var tasks = await appliedDraft.ExecutionTask;
+                if (_disposed) return;
+                if (appliedDraft.TriageTaskId is > 0)
+                {
+                    _lastTriageTaskId = appliedDraft.TriageTaskId;
+                }
+
+                _triagedTasks = tasks.ToList();
+                ToastService.Show("Triage Complete", $"Triage agent formulated {_triagedTasks.Count} suggested task(s).", ToastLevel.Success);
+            }
         }
         catch (Exception ex)
         {
-            _errorMessage = $"Triage failed: {ex.Message}";
-            ToastService.Show("Triage Failed", ex.Message, ToastLevel.Error);
+            if (!_disposed)
+            {
+                _errorMessage = $"Triage failed: {ex.Message}";
+                ToastService.Show("Triage Failed", ex.Message, ToastLevel.Error);
+            }
         }
         finally
         {
             _isTriaging = false;
+            _activeTriageTaskId = null;
+            DetachRunHandle();
+        }
+    }
+
+    private void AttachRunHandle(TriageRunHandle? runHandle)
+    {
+        DetachRunHandle();
+        if (runHandle == null)
+        {
+            return;
+        }
+
+        _subscribedRunHandle = runHandle;
+        _subscribedRunHandle.OnTriageTaskCreated += NotifyTriageTaskCreated;
+
+        if (runHandle.TriageTaskId is > 0)
+        {
+            _activeTriageTaskId = runHandle.TriageTaskId;
+            _lastTriageTaskId = runHandle.TriageTaskId;
+        }
+    }
+
+    private void DetachRunHandle()
+    {
+        if (_subscribedRunHandle != null)
+        {
+            _subscribedRunHandle.OnTriageTaskCreated -= NotifyTriageTaskCreated;
+            _subscribedRunHandle = null;
+        }
+    }
+
+    private void NotifyTriageTaskCreated(int taskId)
+    {
+        if (_disposed || taskId <= 0)
+        {
+            return;
+        }
+
+        _ = DispatchToUiAsync(() =>
+        {
+            if (_isTriaging)
+            {
+                _activeTriageTaskId = taskId;
+            }
+
+            _lastTriageTaskId = taskId;
+            StateHasChanged();
+            return Task.CompletedTask;
+        });
+    }
+
+    private async Task DispatchToUiAsync(Func<Task> uiAction)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            await InvokeAsync(async () =>
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                await uiAction();
+            });
+        }
+        catch (ObjectDisposedException ex)
+        {
+            Logger.LogDebug(ex, "Skipped UI refresh because Triage component was already disposed.");
         }
     }
 
     private void HandleWorkspaceChanged()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         SyncBaseBranchFromActiveWorkspace();
-        _ = InvokeAsync(async () =>
+        _ = DispatchToUiAsync(async () =>
         {
             if (string.IsNullOrWhiteSpace(DraftId))
             {
                 _lastAppliedDraftId = null;
             }
 
+            _activeTriageTaskId = null;
+            _lastTriageTaskId = null;
+            _updatedTaskIds = new HashSet<int>();
             _triagedTasks.Clear();
             if (!await ApplyCompanionDraftIfPresentAsync())
             {
                 await LoadExistingSuggestedTasksAsync();
             }
-            StateHasChanged();
+            if (!_disposed)
+            {
+                StateHasChanged();
+            }
         });
     }
 
@@ -403,6 +554,9 @@
 
         _isTriaging = true;
         _errorMessage = null;
+        _activeTriageTaskId = null;
+        _lastTriageTaskId = null;
+        _updatedTaskIds = new HashSet<int>();
         _triagedTasks.Clear();
         StateHasChanged();
 
@@ -418,19 +572,38 @@
                 Description: fullDescription,
                 BaseBranch: targetBranch);
 
-            var tasks = await TriageService.TriageExternalReportAsync(workspace, request);
-            _triagedTasks = tasks.ToList();
+            var sessionResult = await TriageService.RunTriageSessionAsync(
+                workspace,
+                request,
+                onTriageTaskCreated: NotifyTriageTaskCreated);
 
-            ToastService.Show("Triage Complete", $"Triage agent formulated {_triagedTasks.Count} suggested task(s).", ToastLevel.Success);
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (sessionResult.TriageTaskId > 0)
+            {
+                _lastTriageTaskId = sessionResult.TriageTaskId;
+            }
+
+            _updatedTaskIds = sessionResult.UpdatedTaskIds;
+            _triagedTasks = sessionResult.Tasks.ToList();
+
+            ToastService.Show("Triage Complete", TriagePresentationHelper.FormatSessionCompleteMessage(sessionResult), ToastLevel.Success);
         }
         catch (Exception ex)
         {
-            _errorMessage = $"Triage failed: {ex.Message}";
-            ToastService.Show("Triage Failed", ex.Message, ToastLevel.Error);
+            if (!_disposed)
+            {
+                _errorMessage = $"Triage failed: {ex.Message}";
+                ToastService.Show("Triage Failed", ex.Message, ToastLevel.Error);
+            }
         }
         finally
         {
             _isTriaging = false;
+            _activeTriageTaskId = null;
         }
     }
 
@@ -455,6 +628,8 @@
 
     public void Dispose()
     {
+        _disposed = true;
+        DetachRunHandle();
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
     }
 }

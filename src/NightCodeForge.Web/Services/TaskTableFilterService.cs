@@ -61,7 +61,7 @@ public static class TaskTableFilterService
     {
         if (tasks == null) return Array.Empty<ForgeTask>();
 
-        var query = tasks.AsEnumerable();
+        var query = tasks.Where(t => t.Status != TaskOverallStatus.Triage);
         var now = utcNow ?? DateTime.UtcNow;
 
         // 1. Text search by #ID, title, or description

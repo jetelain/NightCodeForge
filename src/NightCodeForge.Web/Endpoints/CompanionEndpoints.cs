@@ -197,13 +197,16 @@ public static class CompanionEndpoints
             BaseBranch: input.BaseBranch,
             Origin: TaskOrigin.UntrustedIntake);
 
+        var runHandle = new TriageRunHandle();
         var logger = loggerFactory.CreateLogger(typeof(CompanionEndpoints));
-        var executionTask = StartBackgroundTriageAsync(
+        var sessionExecutionTask = StartBackgroundTriageAsync(
             scopeFactory,
             input.Workspace,
             triageRequest,
+            runHandle,
             logger,
             appLifetime.ApplicationStopping);
+        var executionTask = ExtractSurvivingTasksAsync(sessionExecutionTask);
 
         var draft = draftStore.CreateDraft(
             input.Workspace.Id,
@@ -211,7 +214,9 @@ public static class CompanionEndpoints
             input.ReportMarkdown,
             input.BaseBranch,
             input.SessionDirectoryPath,
-            executionTask);
+            executionTask,
+            runHandle,
+            sessionExecutionTask);
 
         var triageUrl = TriageSubmissionModel.BuildCompanionDraftUrl(input.Workspace.Id, draft.DraftId);
         var response = new CreateCompanionTriageResponse(
@@ -317,27 +322,56 @@ public static class CompanionEndpoints
             sessionDirectoryPath), null);
     }
 
-    private static Task<IReadOnlyList<ForgeTask>> StartBackgroundTriageAsync(
+    private static Task<TriageSessionResult> StartBackgroundTriageAsync(
         IServiceScopeFactory scopeFactory,
         Workspace workspace,
         TriageReportRequest request,
+        TriageRunHandle runHandle,
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var executionTask = Task.Run(async () =>
+        var sessionTask = Task.Run(async () =>
         {
-            await using var scope = scopeFactory.CreateAsyncScope();
-            var triageService = scope.ServiceProvider.GetRequiredService<ITriageService>();
-            return await triageService.TriageExternalReportAsync(workspace, request, cancellationToken);
+            try
+            {
+                await using var scope = scopeFactory.CreateAsyncScope();
+                var triageService = scope.ServiceProvider.GetRequiredService<ITriageService>();
+                return await triageService.RunTriageSessionAsync(
+                    workspace,
+                    request,
+                    runHandle.NotifyTriageTaskCreated,
+                    cancellationToken);
+            }
+            finally
+            {
+                runHandle.NotifyFailedWithoutTask();
+            }
         }, cancellationToken);
 
-        _ = executionTask.ContinueWith(
+        _ = sessionTask.ContinueWith(
             t => logger.LogError(t.Exception, "Background companion triage execution failed for workspace #{WorkspaceId}.", workspace.Id),
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
 
-        return executionTask;
+        return sessionTask;
+    }
+
+    private static Task<IReadOnlyList<ForgeTask>> ExtractSurvivingTasksAsync(Task<TriageSessionResult> sessionTask)
+    {
+        var derivedTask = ExtractCoreAsync(sessionTask);
+        _ = derivedTask.ContinueWith(
+            static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return derivedTask;
+
+        static async Task<IReadOnlyList<ForgeTask>> ExtractCoreAsync(Task<TriageSessionResult> innerTask)
+        {
+            var result = await innerTask;
+            return result.Tasks;
+        }
     }
 
     private static string? NormalizeOptionalText(string? value) =>

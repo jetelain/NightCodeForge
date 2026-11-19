@@ -11,7 +11,8 @@ public enum BacklogKanbanColumn
     Open,
     InFlight,
     ReadyForReview,
-    Closed
+    Closed,
+    NonBacklog
 }
 
 /// <summary>
@@ -20,9 +21,18 @@ public enum BacklogKanbanColumn
 /// </summary>
 public static class BacklogStatusClassifier
 {
+    public static bool IsNonBacklog(ForgeTask task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        return task.Status == TaskOverallStatus.Triage;
+    }
+
     public static BacklogKanbanColumn GetColumn(ForgeTask task, int? activeTaskId = null, IEnumerable<int>? runningTaskIds = null)
     {
         ArgumentNullException.ThrowIfNull(task);
+
+        if (IsNonBacklog(task))
+            return BacklogKanbanColumn.NonBacklog;
 
         if (task.Status is TaskOverallStatus.Draft or TaskOverallStatus.Suggested)
             return BacklogKanbanColumn.Suggested;
@@ -67,6 +77,7 @@ public static class BacklogStatusClassifier
             return false;
 
         return task.Status is not (
+            TaskOverallStatus.Triage or
             TaskOverallStatus.Draft or
             TaskOverallStatus.Suggested or
             TaskOverallStatus.Ready or

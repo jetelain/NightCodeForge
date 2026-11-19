@@ -13,8 +13,35 @@ using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Tools;
 
-/// <summary>Workspace a backlog mutation applies to, with the repository path used for markdown synchronization.</summary>
-public sealed record BacklogToolScope(int WorkspaceId, string RepositoryPath);
+/// <summary>Workspace a backlog mutation applies to, with repository and optional session-policy context.</summary>
+public sealed record BacklogToolScope(
+    int WorkspaceId,
+    string RepositoryPath,
+    BacklogMutationMode Mode = BacklogMutationMode.Ideation,
+    string? Actor = null,
+    TaskOrigin? SessionOrigin = null,
+    string? DefaultBaseBranch = null,
+    string? ExternalSource = null,
+    string? ExternalReferenceId = null,
+    string? CloneDirectory = null,
+    int? SessionTaskId = null)
+{
+    public bool IsTriage => Mode == BacklogMutationMode.Triage;
+
+    public string EffectiveActor => !string.IsNullOrWhiteSpace(Actor)
+        ? Actor
+        : (IsTriage ? AuditActors.TriageAgent : AuditActors.IdeationAgent);
+
+    public string EffectiveActorDisplayName => IsTriage ? "Triage agent" : "Ideation agent";
+
+    public string EffectiveActivityStageId => IsTriage ? StandardStageIds.Triage : BacklogMutationToolService.ActivityStageId;
+
+    public string EffectiveActivitySessionId => IsTriage
+        ? (SessionTaskId is > 0
+            ? $"{BacklogMutationToolService.TriageActivitySessionPrefix}-{WorkspaceId}-{SessionTaskId.Value}"
+            : $"{BacklogMutationToolService.TriageActivitySessionPrefix}-{WorkspaceId}")
+        : $"{BacklogMutationToolService.ActivitySessionPrefix}-{WorkspaceId}";
+}
 
 /// <summary>Partial update of an unstarted task; null members are left untouched.</summary>
 public sealed record TaskEditRequest(
@@ -56,11 +83,21 @@ public interface IBacklogMutationToolService
 /// <inheritdoc />
 public sealed class BacklogMutationToolService : IBacklogMutationToolService
 {
-    /// <summary>Stage identifier used for the activity events broadcast by backlog mutations.</summary>
+    /// <summary>Stage identifier used for the activity events broadcast by ideation backlog mutations.</summary>
     public const string ActivityStageId = StandardStageIds.Ideation;
 
-    /// <summary>Session identifier used for the activity events broadcast by backlog mutations.</summary>
+    /// <summary>Session identifier prefix used for the activity events broadcast by ideation backlog mutations.</summary>
     public const string ActivitySessionPrefix = "ideation-backlog";
+
+    /// <summary>Session identifier prefix used for the activity events broadcast by triage backlog mutations.</summary>
+    public const string TriageActivitySessionPrefix = "triage-backlog";
+
+    /// <summary>Prefix used in <see cref="EditTaskAsync"/> responses when all requested values already match.</summary>
+    public const string UnchangedResultPrefix = "unchanged:";
+
+    public static bool IsUnchangedEditResult(int taskId, string? result) =>
+        !string.IsNullOrWhiteSpace(result) &&
+        result.StartsWith($"Task #{taskId} {UnchangedResultPrefix}", StringComparison.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -106,10 +143,12 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         var task = await LoadTaskAsync(scope, taskId, cancellationToken);
         var prerequisites = await _taskRepository.GetDependenciesAsync(taskId, cancellationToken);
         var graph = await _taskRepository.GetWorkspaceDependenciesAsync(scope.WorkspaceId, cancellationToken);
-        var attachmentIds = (await _attachmentRepository.GetByTaskIdAsync(taskId, cancellationToken))
-            .Select(a => a.Id)
-            .OrderBy(id => id)
-            .ToList();
+        var attachmentIds = scope.IsTriage
+            ? new List<int>()
+            : (await _attachmentRepository.GetByTaskIdAsync(taskId, cancellationToken))
+                .Select(a => a.Id)
+                .OrderBy(id => id)
+                .ToList();
         var dependents = graph
             .Where(kv => kv.Value.Contains(taskId))
             .Select(kv => kv.Key)
@@ -122,6 +161,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             title = task.Title,
             description = task.Description,
             status = task.Status,
+            origin = task.Origin,
             hasExecutionRun = task.HasExecutionRun,
             priority = task.Priority,
             difficulty = task.Difficulty,
@@ -166,7 +206,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             MergeMode? mergeMode = null;
             if (request.MergeMode != null)
             {
-                mergeMode = await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, request.MergeMode, nameof(request), cancellationToken);
+                mergeMode = await ParseAndValidateMergeModeAsync(scope, request.MergeMode, nameof(request), cancellationToken);
             }
 
             TaskDifficulty? difficulty = null;
@@ -196,7 +236,14 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             }
 
             IReadOnlyList<int>? newAttachmentIds = null;
-            if (request.AttachmentIds != null || description != null)
+            if (scope.IsTriage)
+            {
+                if (request.AttachmentIds != null)
+                {
+                    throw new InvalidOperationException("Modifying task attachments is not permitted during untrusted intake triage.");
+                }
+            }
+            else if (request.AttachmentIds != null || description != null)
             {
                 var effectiveDescription = description ?? task.Description;
                 IReadOnlyList<int> requestedAttachmentIds;
@@ -274,12 +321,12 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
             if (changes.Count == 0)
             {
-                return $"Task #{task.Id} unchanged: the requested values already match.";
+                return $"Task #{task.Id} {UnchangedResultPrefix} the requested values already match.";
             }
 
             task.UpdatedAt = DateTime.UtcNow;
-            var reason = $"Ideation agent edited task: {string.Join("; ", changes)}";
-            await _taskRepository.UpdateWithHistoryAsync(task, newDependencies, AuditActors.IdeationAgent, reason, cancellationToken);
+            var reason = $"{scope.EffectiveActorDisplayName} edited task: {string.Join("; ", changes)}";
+            await _taskRepository.UpdateWithHistoryAsync(task, newDependencies, scope.EffectiveActor, reason, cancellationToken);
             if (newAttachmentIds != null)
             {
                 await _attachmentRepository.SetTaskAttachmentLinksAsync(task.Id, newAttachmentIds, cancellationToken);
@@ -294,7 +341,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             await _lifecycleMutationCoordinator.TryScheduleOpenTaskIfReadyAsync(task.Id, cancellationToken);
         }
 
-        await BroadcastAsync(task, $"Ideation agent edited task #{task.Id}: {string.Join("; ", changes)}", CanonicalToolNames.EditTask, cancellationToken);
+        await BroadcastAsync(scope, task, $"{scope.EffectiveActorDisplayName} edited task #{task.Id}: {string.Join("; ", changes)}", CanonicalToolNames.EditTask, cancellationToken);
 
         return $"Task #{task.Id} updated ({string.Join("; ", changes)}).";
     }
@@ -306,6 +353,11 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     public async Task<string> ReworkPrioritiesAsync(BacklogToolScope scope, IReadOnlyList<TaskPriorityUpdate> updates, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(scope);
+        if (scope.IsTriage)
+        {
+            throw new InvalidOperationException("Priority rework tools are disabled during triage sessions.");
+        }
+
         if (updates == null || updates.Count == 0)
         {
             throw new ArgumentException("At least one priority update must be provided.", nameof(updates));
@@ -344,11 +396,11 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 await _taskRepository.UpdateWithHistoryAsync(
                     task,
                     null,
-                    AuditActors.IdeationAgent,
-                    $"Ideation agent updated priority from P{oldPriority} to P{priority}",
+                    scope.EffectiveActor,
+                    $"{scope.EffectiveActorDisplayName} updated priority from P{oldPriority} to P{priority}",
                     cancellationToken);
                 await SyncMarkdownAsync(scope, task, cancellationToken);
-                await BroadcastAsync(task, $"Ideation agent set task #{task.Id} priority P{oldPriority} -> P{priority}", CanonicalToolNames.SetTaskPriority, cancellationToken);
+                await BroadcastAsync(scope, task, $"{scope.EffectiveActorDisplayName} set task #{task.Id} priority P{oldPriority} -> P{priority}", CanonicalToolNames.SetTaskPriority, cancellationToken);
                 summary.Add($"#{task.Id}: P{oldPriority} -> P{priority}");
             }
 
@@ -375,7 +427,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         {
             var dependents = await _taskRepository.GetByIdsAsync(dependentIds, cancellationToken);
             var active = dependents
-                .Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+                .Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected or TaskOverallStatus.Triage))
                 .Select(t => t.Id)
                 .OrderBy(id => id)
                 .ToList();
@@ -393,13 +445,13 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         task.UpdatedAt = DateTime.UtcNow;
 
         var changeReason = trimmedReason == null
-            ? "Ideation agent removed (cancelled) task"
-            : $"Ideation agent removed (cancelled) task: {trimmedReason}";
-        await _taskRepository.UpdateWithHistoryAsync(task, Array.Empty<int>(), AuditActors.IdeationAgent, changeReason, cancellationToken);
+            ? $"{scope.EffectiveActorDisplayName} removed (cancelled) task"
+            : $"{scope.EffectiveActorDisplayName} removed (cancelled) task: {trimmedReason}";
+        await _taskRepository.UpdateWithHistoryAsync(task, Array.Empty<int>(), scope.EffectiveActor, changeReason, cancellationToken);
 
         await SyncMarkdownAsync(scope, task, cancellationToken);
-        await _markdownSyncService.ArchiveOrCleanupTaskFileAsync(task, scope.RepositoryPath, archive: true, cancellationToken);
-        await BroadcastAsync(task, $"Ideation agent removed task #{task.Id}" + (trimmedReason == null ? string.Empty : $": {trimmedReason}"), CanonicalToolNames.RemoveTask, cancellationToken);
+        await ArchiveMarkdownAsync(scope, task, cancellationToken);
+        await BroadcastAsync(scope, task, $"{scope.EffectiveActorDisplayName} removed task #{task.Id}" + (trimmedReason == null ? string.Empty : $": {trimmedReason}"), CanonicalToolNames.RemoveTask, cancellationToken);
 
         return $"Task #{task.Id} removed (status Cancelled).";
     }
@@ -427,7 +479,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
             if (!string.IsNullOrWhiteSpace(proposal.MergeMode))
             {
-                await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, proposal.MergeMode, nameof(proposals), cancellationToken);
+                await ParseAndValidateMergeModeAsync(scope, proposal.MergeMode, nameof(proposals), cancellationToken);
             }
 
             if (!string.IsNullOrWhiteSpace(proposal.Difficulty))
@@ -441,11 +493,21 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 await ValidateDependenciesAsync(scope, taskId: 0, distinctIds, cancellationToken);
             }
 
-            await ValidateAndResolveWorkspaceAttachmentIdsAsync(
-                scope.WorkspaceId,
-                proposal.AttachmentIds,
-                proposal.Description,
-                cancellationToken);
+            if (scope.IsTriage)
+            {
+                if (proposal.AttachmentIds is { Count: > 0 })
+                {
+                    throw new InvalidOperationException("Linking workspace attachments is not permitted during untrusted intake triage.");
+                }
+            }
+            else
+            {
+                await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                    scope.WorkspaceId,
+                    proposal.AttachmentIds,
+                    proposal.Description,
+                    cancellationToken);
+            }
         }
 
         IReadOnlyList<ForgeTask>? workspaceTasks = proposals.Any(p => p.DependsOnTitles is { Count: > 0 })
@@ -508,7 +570,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         if (proposal.DependsOnTitles is { Count: > 0 })
         {
             var activeCandidates = createdBatchTasks
-                .Concat(workspaceTasks?.Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+                .Concat(workspaceTasks?.Where(t => t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected or TaskOverallStatus.Triage))
                     ?? Enumerable.Empty<ForgeTask>())
                 .ToList();
 
@@ -569,7 +631,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         ValidatePriority(effPriority);
 
         var effMergeMode = !string.IsNullOrWhiteSpace(mergeMode)
-            ? await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, mergeMode, nameof(mergeMode), cancellationToken)
+            ? await ParseAndValidateMergeModeAsync(scope, mergeMode, nameof(mergeMode), cancellationToken)
             : MergeMode.ManualReviewRequired;
 
         var effDifficulty = !string.IsNullOrWhiteSpace(difficulty)
@@ -585,31 +647,56 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         }
 
         var trimmedDescription = description?.Trim() ?? string.Empty;
-        var resolvedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
-            scope.WorkspaceId,
-            attachmentIds,
-            trimmedDescription,
-            cancellationToken);
+        IReadOnlyList<int> resolvedAttachmentIds;
+        if (scope.IsTriage)
+        {
+            if (attachmentIds is { Count: > 0 })
+            {
+                throw new InvalidOperationException("Linking workspace attachments is not permitted during untrusted intake triage.");
+            }
+            resolvedAttachmentIds = Array.Empty<int>();
+        }
+        else
+        {
+            resolvedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                scope.WorkspaceId,
+                attachmentIds,
+                trimmedDescription,
+                cancellationToken);
+        }
 
         var task = new ForgeTask
         {
             WorkspaceId = scope.WorkspaceId,
             Title = trimmedTitle,
             Description = trimmedDescription,
-            Status = TaskOverallStatus.Draft,
+            Status = scope.IsTriage ? TaskOverallStatus.Suggested : TaskOverallStatus.Draft,
             Priority = effPriority,
             Difficulty = effDifficulty,
             MergeMode = effMergeMode,
-            BaseBranch = WorkflowDefaults.DefaultBaseBranch,
+            BaseBranch = !string.IsNullOrWhiteSpace(scope.DefaultBaseBranch)
+                ? scope.DefaultBaseBranch
+                : WorkflowDefaults.DefaultBaseBranch,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow
         };
 
+        if (scope.IsTriage)
+        {
+            task.Origin = scope.SessionOrigin ?? TaskOrigin.UntrustedIntake;
+            task.ExternalSource = scope.ExternalSource;
+            task.ExternalReferenceId = scope.ExternalReferenceId;
+        }
+
+        var createdReason = scope.IsTriage
+            ? "Proposed suggested task from untrusted intake triage"
+            : "Proposed draft task from ideation";
+
         var created = await _taskRepository.CreateWithBaselineAsync(
             task,
             validDependencies,
-            AuditActors.IdeationAgent,
-            "Proposed draft task from ideation",
+            scope.EffectiveActor,
+            createdReason,
             cancellationToken);
 
         if (resolvedAttachmentIds.Count > 0)
@@ -618,10 +705,29 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         }
 
         await SyncMarkdownAsync(scope, created, cancellationToken);
-        await BroadcastAsync(created, $"Ideation agent proposed draft task #{created.Id}: {created.Title}", CanonicalToolNames.ProposeTasks, cancellationToken);
+        var broadcastMessage = scope.IsTriage
+            ? $"{scope.EffectiveActorDisplayName} proposed suggested task #{created.Id}: {created.Title}"
+            : $"Ideation agent proposed draft task #{created.Id}: {created.Title}";
+        await BroadcastAsync(scope, created, broadcastMessage, CanonicalToolNames.ProposeTasks, cancellationToken);
 
         var json = await GetTaskAsync(scope, created.Id, cancellationToken);
         return (created, json);
+    }
+
+    private async Task<MergeMode> ParseAndValidateMergeModeAsync(
+        BacklogToolScope scope,
+        string rawMergeMode,
+        string paramName,
+        CancellationToken cancellationToken)
+    {
+        var parsed = await _mergeModeValidator.ParseAndValidateAsync(scope.WorkspaceId, rawMergeMode, paramName, cancellationToken);
+        if (scope.IsTriage && parsed == MergeMode.Automatic)
+        {
+            throw new InvalidOperationException(
+                "MergeMode 'Automatic' is not permitted during untrusted intake triage; use ManualReviewRequired or ExternalPullRequest.");
+        }
+
+        return parsed;
     }
 
     private Task<IReadOnlyList<int>> ValidateAndResolveWorkspaceAttachmentIdsAsync(
@@ -678,6 +784,36 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     {
         var task = await LoadTaskAsync(scope, taskId, cancellationToken);
 
+        if (scope.IsTriage)
+        {
+            if (task.Status == TaskOverallStatus.Triage ||
+                (scope.SessionTaskId.HasValue && task.Id == scope.SessionTaskId.Value))
+            {
+                throw new TaskCannotBeModifiedException(taskId, "it is a triage execution session task and cannot be modified or removed.");
+            }
+
+            if (task.Status is not (TaskOverallStatus.Suggested or TaskOverallStatus.Open))
+            {
+                throw new TaskCannotBeModifiedException(
+                    taskId,
+                    $"its status is {task.Status}; only Suggested or Open tasks can be modified or removed during triage.");
+            }
+
+            if (task.Origin is not (TaskOrigin.UntrustedIntake or TaskOrigin.GitHubIssue))
+            {
+                throw new TaskCannotBeModifiedException(
+                    taskId,
+                    $"its origin is {task.Origin}; triage can only modify or remove tasks originated from UntrustedIntake or GitHubIssue.");
+            }
+
+            if (task.HasExecutionRun)
+            {
+                throw new TaskCannotBeModifiedException(taskId, "it has already entered pipeline execution.");
+            }
+
+            return task;
+        }
+
         if (task.Status is not (TaskOverallStatus.Draft or TaskOverallStatus.Suggested or TaskOverallStatus.Open))
         {
             throw new TaskCannotBeModifiedException(taskId, $"its status is {task.Status}; only Draft, Suggested or Open tasks can be changed from ideation.");
@@ -701,7 +837,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         foreach (var prerequisiteId in dependsOnIds)
         {
             var prerequisite = await LoadTaskAsync(scope, prerequisiteId, cancellationToken);
-            if (prerequisite.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected)
+            if (prerequisite.Status is TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected or TaskOverallStatus.Triage)
             {
                 throw new InvalidOperationException(
                     $"Task #{taskId} cannot depend on task #{prerequisiteId} because its status is {prerequisite.Status}.");
@@ -736,17 +872,48 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
     private async Task SyncMarkdownAsync(BacklogToolScope scope, ForgeTask task, CancellationToken cancellationToken)
     {
         var dependencies = await _taskRepository.GetDependenciesAsync(task.Id, cancellationToken);
-        await _markdownSyncService.SyncTaskToDiskAsync(task, scope.RepositoryPath, dependencies, cancellationToken: cancellationToken);
+        if (!string.IsNullOrWhiteSpace(scope.CloneDirectory))
+        {
+            await _markdownSyncService.SyncTaskToDiskAsync(
+                task,
+                scope.RepositoryPath,
+                dependencies,
+                agentProfileId: null,
+                cloneDirectory: scope.CloneDirectory,
+                cancellationToken: cancellationToken);
+        }
+        else
+        {
+            await _markdownSyncService.SyncTaskToDiskAsync(
+                task,
+                scope.RepositoryPath,
+                dependencies,
+                cancellationToken: cancellationToken);
+        }
     }
 
-    private async Task BroadcastAsync(ForgeTask task, string message, string toolName, CancellationToken cancellationToken)
+    private Task ArchiveMarkdownAsync(BacklogToolScope scope, ForgeTask task, CancellationToken cancellationToken) =>
+        !string.IsNullOrWhiteSpace(scope.CloneDirectory)
+            ? _markdownSyncService.ArchiveOrCleanupTaskFileAsync(
+                task,
+                scope.RepositoryPath,
+                archive: true,
+                cloneDirectory: scope.CloneDirectory,
+                cancellationToken: cancellationToken)
+            : _markdownSyncService.ArchiveOrCleanupTaskFileAsync(
+                task,
+                scope.RepositoryPath,
+                archive: true,
+                cancellationToken: cancellationToken);
+
+    private async Task BroadcastAsync(BacklogToolScope scope, ForgeTask task, string message, string toolName, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Backlog mutation by ideation agent on task #{TaskId}: {Message}", task.Id, message);
+        _logger.LogInformation("Backlog mutation by {Actor} on task #{TaskId}: {Message}", scope.EffectiveActor, task.Id, message);
         await _activityStreamer.BroadcastAsync(
             new AgentActivityEvent(
-                $"{ActivitySessionPrefix}-{task.WorkspaceId}",
+                scope.EffectiveActivitySessionId,
                 task.Id,
-                ActivityStageId,
+                scope.EffectiveActivityStageId,
                 AgentActivityKind.Notice,
                 message,
                 DateTime.UtcNow,

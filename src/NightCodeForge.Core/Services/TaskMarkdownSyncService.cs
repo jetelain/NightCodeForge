@@ -34,6 +34,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     public static bool IsArchivedStatus(TaskOverallStatus status) =>
         status is TaskOverallStatus.Closed or TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected;
 
+    public static bool IsNonSyncedStatus(TaskOverallStatus status) =>
+        status == TaskOverallStatus.Triage;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly ILogger<TaskMarkdownSyncService> _logger;
@@ -462,6 +465,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         string? cloneDirectory,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(task);
+        if (IsNonSyncedStatus(task.Status))
+        {
+            return string.Empty;
+        }
+
         var tasksDir = Path.Combine(workspacePath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
         var archiveDir = Path.Combine(tasksDir, TaskSyncConstants.ArchiveSegment);
         var isArchived = IsArchivedStatus(task.Status);
@@ -658,6 +667,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
             foreach (var task in allTasks)
             {
+                if (IsNonSyncedStatus(task.Status))
+                {
+                    continue;
+                }
+
                 IReadOnlyList<int> depIds;
                 if (task.Dependencies != null && task.Dependencies.Count > 0)
                 {
@@ -1015,6 +1029,25 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     e.Body,
                     e.Description
                 ))
+                .Where(p =>
+                {
+                    if (p.Frontmatter.Id is > 0 &&
+                        dbTasks.TryGetValue(p.Frontmatter.Id.Value, out var existingDbTask) &&
+                        IsNonSyncedStatus(existingDbTask.Status))
+                    {
+                        return false;
+                    }
+
+                    if ((p.Frontmatter.Id is null or <= 0 || !dbTasks.ContainsKey(p.Frontmatter.Id.Value)) &&
+                        !string.IsNullOrWhiteSpace(p.Frontmatter.Status) &&
+                        Enum.TryParse<TaskOverallStatus>(p.Frontmatter.Status.Trim(), ignoreCase: true, out var fmStatus) &&
+                        IsNonSyncedStatus(fmStatus))
+                    {
+                        return false;
+                    }
+
+                    return true;
+                })
                 .ToList();
 
             // 1. Validate Existing and New Tasks (auto-cleaning stale untouched snapshots first)
@@ -2143,6 +2176,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         var lookup = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var (dbId, dbTask) in dbTasks)
         {
+            if (IsNonSyncedStatus(dbTask.Status))
+            {
+                continue;
+            }
+
             lookup[dbId.ToString()] = dbId;
             if (!string.IsNullOrWhiteSpace(dbTask.Title))
             {
@@ -2175,7 +2213,9 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     foreach (var entry in idx.AllEntries)
                     {
                         if (string.Equals(entry.FilePath, normalizedCurrentFilePath, StringComparison.OrdinalIgnoreCase)) continue;
-                        if (entry.TaskId.HasValue && entry.TaskId.Value > 0 && dbTasks.ContainsKey(entry.TaskId.Value))
+                        if (entry.TaskId.HasValue && entry.TaskId.Value > 0 &&
+                            dbTasks.TryGetValue(entry.TaskId.Value, out var entryTask) &&
+                            !IsNonSyncedStatus(entryTask.Status))
                         {
                             var id = entry.TaskId.Value;
                             var fileName = entry.FileName;
@@ -2203,8 +2243,15 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 {
                     throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
                 }
-                if (dbTasks.ContainsKey(intId))
+                if (dbTasks.TryGetValue(intId, out var targetTask))
                 {
+                    if (IsNonSyncedStatus(targetTask.Status))
+                    {
+                        throw new TaskMarkdownSyncException(
+                            $"Task '{taskTitle}' in '{filePath}' cannot depend on #{intId} because its status is {targetTask.Status}.",
+                            filePath,
+                            intId);
+                    }
                     resolvedIds.Add(intId);
                     continue;
                 }
@@ -2253,8 +2300,15 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 {
                     throw new TaskMarkdownSyncException($"Task #{currentTaskId.Value} cannot depend on itself.", filePath, currentTaskId.Value);
                 }
-                if (dbTasks.ContainsKey(parsedId))
+                if (dbTasks.TryGetValue(parsedId, out var parsedTarget))
                 {
+                    if (IsNonSyncedStatus(parsedTarget.Status))
+                    {
+                        throw new TaskMarkdownSyncException(
+                            $"Task '{taskTitle}' in '{filePath}' cannot depend on #{parsedId} because its status is {parsedTarget.Status}.",
+                            filePath,
+                            parsedId);
+                    }
                     resolvedIds.Add(parsedId);
                     continue;
                 }
@@ -2321,6 +2375,11 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var task = await taskRepo.GetByIdAsync(targetTaskId.Value, cancellationToken);
                 if (task != null)
                 {
+                    if (IsNonSyncedStatus(task.Status))
+                    {
+                        return;
+                    }
+
                     if (task.WorkspaceId != workspaceId)
                     {
                         throw new TaskMarkdownSyncException(
@@ -2502,6 +2561,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             }
 
             // New task
+            if (!string.IsNullOrWhiteSpace(frontmatter.Status) &&
+                Enum.TryParse<TaskOverallStatus>(frontmatter.Status.Trim(), ignoreCase: true, out var parsedNewStatus) &&
+                IsNonSyncedStatus(parsedNewStatus))
+            {
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(frontmatter.Title))
             {
                 throw new TaskMarkdownSyncException(
@@ -2617,6 +2683,12 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
     public async Task ArchiveOrCleanupTaskFileAsync(ForgeTask task, string workspacePath, bool archive, string? cloneDirectory, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(task);
+        if (IsNonSyncedStatus(task.Status))
+        {
+            return;
+        }
+
         var tasksDir = Path.Combine(workspacePath, TaskSyncConstants.DocsSegment, TaskSyncConstants.TasksSegment);
         await ArchiveOrCleanupInDirectoryAsync(tasksDir, task.Id, archive, cancellationToken);
 

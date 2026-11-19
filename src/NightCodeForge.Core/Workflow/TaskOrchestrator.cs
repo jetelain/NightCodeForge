@@ -64,9 +64,9 @@ public class TaskOrchestrator : ITaskOrchestrator
             return;
         }
 
-        if (task.Status == TaskOverallStatus.Cancelled || task.Status == TaskOverallStatus.Closed || task.Status == TaskOverallStatus.Rejected || task.Status == TaskOverallStatus.Failed)
+        if (task.Status is TaskOverallStatus.Triage or TaskOverallStatus.Draft or TaskOverallStatus.Cancelled or TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Failed)
         {
-            _logger.LogInformation("ForgeTask #{TaskId} is already in {Status} status; aborting execution.", taskId, task.Status);
+            _logger.LogInformation("ForgeTask #{TaskId} is in non-runnable {Status} status; aborting execution.", taskId, task.Status);
             return;
         }
 
@@ -109,11 +109,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                 return;
             }
 
-            // The task may have been cancelled, closed, rejected, or failed while waiting for the lock.
-            if (reloadedTask.Status == TaskOverallStatus.Cancelled ||
-                reloadedTask.Status == TaskOverallStatus.Closed ||
-                reloadedTask.Status == TaskOverallStatus.Rejected ||
-                reloadedTask.Status == TaskOverallStatus.Failed)
+            // The task may be non-runnable or have been cancelled, closed, rejected, or failed while waiting for the lock.
+            if (reloadedTask.Status is TaskOverallStatus.Triage or TaskOverallStatus.Draft or TaskOverallStatus.Cancelled or TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Failed)
             {
                 _logger.LogInformation("ForgeTask #{TaskId} is now in {Status} status; aborting execution.", taskId, reloadedTask.Status);
                 if (reloadedTask.Status == TaskOverallStatus.Cancelled)

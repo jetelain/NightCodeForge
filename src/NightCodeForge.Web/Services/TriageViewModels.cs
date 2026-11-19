@@ -1,5 +1,6 @@
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Services;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Web.Services;
 
@@ -103,3 +104,37 @@ public record TriageExecutionState(
     IReadOnlyList<string> SecurityBadges,
     IReadOnlyList<ForgeTask> GeneratedTasks,
     string? ErrorMessage);
+
+/// <summary>
+/// Pure presentation helper for formatting untrusted intake triage status summaries.
+/// </summary>
+public static class TriagePresentationHelper
+{
+    public static string FormatSessionCompleteMessage(TriageSessionResult sessionResult)
+    {
+        ArgumentNullException.ThrowIfNull(sessionResult);
+
+        if (sessionResult.UpdatedTaskIds.Count == 0 && sessionResult.RemovedTaskIds.Count == 0)
+        {
+            return $"Triage agent formulated {sessionResult.Tasks.Count} suggested task(s).";
+        }
+
+        var parts = new List<string>();
+        if (sessionResult.CreatedTaskIds.Count > 0)
+        {
+            parts.Add($"{sessionResult.CreatedTaskIds.Count} created");
+        }
+        if (sessionResult.UpdatedTaskIds.Count > 0)
+        {
+            parts.Add($"{sessionResult.UpdatedTaskIds.Count} updated");
+        }
+        if (sessionResult.RemovedTaskIds.Count > 0)
+        {
+            parts.Add($"{sessionResult.RemovedTaskIds.Count} removed");
+        }
+
+        return parts.Count > 0
+            ? $"Triage complete ({string.Join(", ", parts)})."
+            : $"Triage agent formulated {sessionResult.Tasks.Count} suggested task(s).";
+    }
+}

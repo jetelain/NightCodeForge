@@ -99,28 +99,8 @@
         return dict;
     }
 
-    private string FormatStageName(string stageId)
-    {
-        if (WorkflowStages != null)
-        {
-            var match = WorkflowStages.FirstOrDefault(s => string.Equals(s.StageId, stageId, StringComparison.OrdinalIgnoreCase));
-            if (match != null)
-            {
-                return match.SequenceOrder > 0 ? $"{match.SequenceOrder}. {match.DisplayName}" : match.DisplayName;
-            }
-        }
-
-        return stageId switch
-        {
-            StandardStageIds.TaskReview => "ForgeTask Review",
-            StandardStageIds.PreImplementationBaseline => "Pre-Implementation Baseline",
-            StandardStageIds.Implementation => "Implementation",
-            StandardStageIds.PostImplementationGates => "Post-Implementation Gates",
-            StandardStageIds.CodeReviewAndFix => "Code Review & Fix",
-            StandardStageIds.PostReviewVerification => "Post-Review Verification",
-            _ => stageId
-        };
-    }
+    private string FormatStageName(string stageId) =>
+        StageConversationParser.FormatStageName(stageId, WorkflowStages);
 
     private (string Icon, string CssClass) GetStatusBadge(Conversation conv)
     {

@@ -109,7 +109,10 @@ public class TriageServiceTests : IDisposable
         Assert.Equal(AgentMode.ReadOnly, capturedContext.RequiredMode);
         Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.Profile.SecurityTier);
         Assert.Equal("main", capturedContext.ForgeTask.BaseBranch);
-        Assert.Equal(TaskPriority.Critical, capturedContext.ForgeTask.Priority);
+        Assert.Equal(TaskPriority.Normal, capturedContext.ForgeTask.Priority);
+        Assert.Equal(TaskOverallStatus.Triage, capturedContext.ForgeTask.Status);
+        Assert.True(capturedContext.ForgeTask.HasExecutionRun);
+        Assert.Contains("Parser throws NullReferenceException on empty files.", capturedContext.ForgeTask.Description);
 
         Assert.Single(result);
         var created = result[0];
@@ -206,7 +209,10 @@ public class TriageServiceTests : IDisposable
         // Assert
         Assert.Empty(result);
         var allTasks = await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id);
-        Assert.Empty(allTasks);
+        var sessionTask = Assert.Single(allTasks);
+        Assert.Equal(TaskOverallStatus.Triage, sessionTask.Status);
+        Assert.True(sessionTask.HasExecutionRun);
+        Assert.Equal(TaskPriority.Normal, sessionTask.Priority);
     }
 
     [Fact]
@@ -481,7 +487,10 @@ public class TriageServiceTests : IDisposable
             triageService.TriageExternalReportAsync(_workspace, request));
 
         Assert.Contains("LLM endpoint connection refused", ex.Message);
-        Assert.Empty(await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id));
+        var tasks = await _taskRepo.GetByWorkspaceIdAsync(_workspace.Id);
+        var sessionTask = Assert.Single(tasks);
+        Assert.Equal(TaskOverallStatus.Triage, sessionTask.Status);
+        Assert.DoesNotContain(tasks, t => t.Status != TaskOverallStatus.Triage);
     }
 
     [Fact]
@@ -551,7 +560,13 @@ public class TriageServiceTests : IDisposable
             AgentMode.ReadOnly,
             SandboxSecurityTier.RestrictedReadOnly,
             DefaultAgentTools.Ideation,
-            CanonicalToolNames.BacklogMutationTools.ToArray()
+            new[]
+            {
+                CanonicalToolNames.SetTaskPriority,
+                CanonicalToolNames.ReworkPriorities,
+                CanonicalToolNames.WebSearch,
+                CanonicalToolNames.Ask
+            }
         };
         yield return new object[]
         {
@@ -624,10 +639,13 @@ public class TriageServiceTests : IDisposable
         Assert.Equal(AgentMode.ReadOnly, capturedContext.Profile.Mode);
         Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, capturedContext.Profile.SecurityTier);
         Assert.NotNull(capturedContext.Profile.PermittedTools);
-        Assert.Contains(CanonicalToolNames.ProposeTasks, capturedContext.Profile.PermittedTools);
+        foreach (var requiredBacklogTool in CanonicalToolNames.TriageBacklogTools)
+        {
+            Assert.Contains(requiredBacklogTool, capturedContext.Profile.PermittedTools);
+        }
         foreach (var tool in capturedContext.Profile.PermittedTools)
         {
-            Assert.Contains(tool, DefaultAgentTools.ReadOnly);
+            Assert.Contains(tool, DefaultAgentTools.Triage);
         }
         foreach (var forbidden in forbiddenTools)
         {

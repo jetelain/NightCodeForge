@@ -129,7 +129,7 @@ public class EfCoreTaskRepository : ITaskRepository
         context.Tasks.Add(task);
         await context.SaveChangesAsync(cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(task.FeatureBranch))
+        if (task.Status != TaskOverallStatus.Triage && string.IsNullOrWhiteSpace(task.FeatureBranch))
         {
             task.FeatureBranch = $"feature/task-{task.Id}";
         }

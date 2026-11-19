@@ -405,6 +405,10 @@ public class DevQueueService : IDevQueueService
         var taskRepo = scope.ServiceProvider.GetRequiredService<ITaskRepository>();
         var initialTask = await taskRepo.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+        if (initialTask.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage execution sessions are not pipeline tasks and cannot be retried.");
+        }
 
         if (_cancellationManager.IsRegistered(taskId))
         {
@@ -415,6 +419,10 @@ public class DevQueueService : IDevQueueService
 
         var task = await taskRepo.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage execution sessions are not pipeline tasks and cannot be retried.");
+        }
 
         var workspaceRepo = scope.ServiceProvider.GetRequiredService<IWorkspaceRepository>();
         var workspace = task.Workspace ?? await workspaceRepo.GetByIdAsync(task.WorkspaceId, cancellationToken)

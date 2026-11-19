@@ -22,7 +22,8 @@ public sealed record CanonicalToolScope(
     int? MaxReadFileBytes = null,
     SandboxScopeDescriptor? SandboxScope = null,
     ISandboxPathResolver? SandboxPathResolver = null,
-    NightCodeForge.Core.Domain.LocalOptimizationFlags? OptimizationFlags = null)
+    NightCodeForge.Core.Domain.LocalOptimizationFlags? OptimizationFlags = null,
+    NightCodeForge.Core.Domain.BacklogMutationSessionPolicy? BacklogMutationPolicy = null)
 {
     public Action<NightCodeForge.Core.Workflow.Filtering.BashExecutionAuditEntry>? OnBashExecutionAudited { get; init; }
     internal string ResolveNormalizedWorkspaceRoot()

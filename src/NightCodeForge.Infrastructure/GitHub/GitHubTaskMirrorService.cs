@@ -236,7 +236,10 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
         var workspaceTasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken)
             ?? Array.Empty<ForgeTask>();
         var siblings = workspaceTasks
-            .Where(t => t.Id != task.Id && TryGetIssueNumber(t, out var siblingIssueNumber) && siblingIssueNumber == issueNumber)
+            .Where(t => t.Id != task.Id &&
+                        !IsNonBacklogTask(t) &&
+                        TryGetIssueNumber(t, out var siblingIssueNumber) &&
+                        siblingIssueNumber == issueNumber)
             .ToList();
 
         if (string.Equals(liveIssue.State, ClosedIssueState, StringComparison.OrdinalIgnoreCase))
@@ -418,6 +421,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
                 ?? Array.Empty<ForgeTask>();
             var hasActiveSibling = workspaceTasks.Any(t =>
                 t.Id != task.Id &&
+                !IsNonBacklogTask(t) &&
                 TryGetIssueNumber(t, out var siblingIssueNumber) &&
                 siblingIssueNumber == issueNumber &&
                 (t.Status == TaskOverallStatus.Ready ||
@@ -586,6 +590,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
             ?? Array.Empty<ForgeTask>();
         var matchingSiblings = workspaceTasks
             .Where(t => t.Id != task.Id &&
+                        !IsNonBacklogTask(t) &&
                         TryGetIssueNumber(t, out var siblingIssueNumber) &&
                         siblingIssueNumber == issueNumber)
             .OrderBy(t => t.Id)
@@ -1331,4 +1336,7 @@ public sealed class GitHubTaskMirrorService : IGitHubTaskMirrorService
             Task **#{task.Id}** (`{task.Title}`) has been closed ({detailLine}).{siblingNote}
             """;
     }
+
+    private static bool IsNonBacklogTask(ForgeTask task) =>
+        task.Status is TaskOverallStatus.Triage or TaskOverallStatus.Draft;
 }

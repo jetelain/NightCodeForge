@@ -1,8 +1,56 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Core.Services;
+
+/// <summary>
+/// Thread-safe handle exposing the persisted triage session task ID as soon as it is created
+/// during background/companion triage execution.
+/// </summary>
+public sealed class TriageRunHandle
+{
+    private int _triageTaskId;
+    private readonly TaskCompletionSource<int> _triageTaskIdTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Persisted triage session task ID once created, or <see langword="null"/> before creation.</summary>
+    public int? TriageTaskId
+    {
+        get
+        {
+            var id = Volatile.Read(ref _triageTaskId);
+            return id > 0 ? id : null;
+        }
+    }
+
+    /// <summary>Completes when the triage task ID is created (or with 0 if triage failed prior to task creation).</summary>
+    public Task<int> TriageTaskIdTask => _triageTaskIdTcs.Task;
+
+    /// <summary>Raised when the triage session task ID is recorded.</summary>
+    public event Action<int>? OnTriageTaskCreated;
+
+    /// <summary>Records the persisted triage task ID once and notifies listeners.</summary>
+    public void NotifyTriageTaskCreated(int taskId)
+    {
+        if (taskId <= 0)
+        {
+            return;
+        }
+
+        if (Interlocked.CompareExchange(ref _triageTaskId, taskId, 0) == 0)
+        {
+            _triageTaskIdTcs.TrySetResult(taskId);
+            OnTriageTaskCreated?.Invoke(taskId);
+        }
+    }
+
+    /// <summary>Completes <see cref="TriageTaskIdTask"/> with 0 if triage exited before creating a session task.</summary>
+    public void NotifyFailedWithoutTask()
+    {
+        _triageTaskIdTcs.TrySetResult(0);
+    }
+}
 
 /// <summary>
 /// Represents a staged companion exploratory report awaiting triage completion or interactive ideation.
@@ -15,7 +63,13 @@ public sealed record CompanionTriageDraft(
     string BaseBranch,
     string? SessionDirectoryPath,
     DateTimeOffset CreatedAt,
-    Task<IReadOnlyList<ForgeTask>>? ExecutionTask = null);
+    Task<IReadOnlyList<ForgeTask>>? ExecutionTask = null,
+    TriageRunHandle? RunHandle = null,
+    Task<TriageSessionResult>? SessionExecutionTask = null)
+{
+    /// <summary>Persisted triage session task ID if created during companion execution.</summary>
+    public int? TriageTaskId => RunHandle?.TriageTaskId;
+}
 
 /// <summary>
 /// Thread-safe store for staged companion triage and ideation drafts handed off from external companion tools.
@@ -31,7 +85,9 @@ public interface ICompanionTriageDraftStore
         string reportMarkdown,
         string baseBranch,
         string? sessionDirectoryPath = null,
-        Task<IReadOnlyList<ForgeTask>>? executionTask = null);
+        Task<IReadOnlyList<ForgeTask>>? executionTask = null,
+        TriageRunHandle? runHandle = null,
+        Task<TriageSessionResult>? sessionExecutionTask = null);
 
     /// <summary>
     /// Retrieves an active, non-expired companion draft by identifier, or <see langword="null"/> if not found.
@@ -66,7 +122,9 @@ public sealed class CompanionTriageDraftStore : ICompanionTriageDraftStore
         string reportMarkdown,
         string baseBranch,
         string? sessionDirectoryPath = null,
-        Task<IReadOnlyList<ForgeTask>>? executionTask = null)
+        Task<IReadOnlyList<ForgeTask>>? executionTask = null,
+        TriageRunHandle? runHandle = null,
+        Task<TriageSessionResult>? sessionExecutionTask = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(reportMarkdown);
@@ -84,7 +142,9 @@ public sealed class CompanionTriageDraftStore : ICompanionTriageDraftStore
             BaseBranch: baseBranch,
             SessionDirectoryPath: sessionDirectoryPath,
             CreatedAt: now,
-            ExecutionTask: executionTask);
+            ExecutionTask: executionTask,
+            RunHandle: runHandle,
+            SessionExecutionTask: sessionExecutionTask);
 
         _drafts[draftId] = draft;
         return draft;

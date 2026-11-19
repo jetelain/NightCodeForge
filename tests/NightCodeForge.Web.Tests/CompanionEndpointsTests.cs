@@ -361,7 +361,12 @@ public sealed class CompanionEndpointsTests : IDisposable
         Assert.NotNull(storedDraft);
         Assert.Equal("main", storedDraft.BaseBranch);
         Assert.Equal(@"C:\sessions\2026-11-15_14-35", storedDraft.SessionDirectoryPath);
+        Assert.NotNull(storedDraft.RunHandle);
+        Assert.NotNull(storedDraft.SessionExecutionTask);
         Assert.NotNull(storedDraft.ExecutionTask);
+        var sessionResult = await storedDraft.SessionExecutionTask;
+        Assert.Equal(RecordingTriageService.SimulatedTriageTaskId, sessionResult.TriageTaskId);
+        Assert.Equal(RecordingTriageService.SimulatedTriageTaskId, storedDraft.TriageTaskId);
         await storedDraft.ExecutionTask;
 
         // 4. Omitted title & baseBranch -> generated fallback title and workspace.DefaultBaseBranch
@@ -476,6 +481,70 @@ public sealed class CompanionEndpointsTests : IDisposable
         Assert.Empty(triageService.Calls);
     }
 
+    [Fact]
+    public async Task PostTriage_WhenBackgroundTriageFaults_CompletesRunHandleWithZero_AndFaultsBothTasksCleanly()
+    {
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var workspace = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Name = "Faulting Repo",
+            RepositoryPath = @"C:\repos\fault",
+            DefaultBaseBranch = "main"
+        });
+
+        var failingTriageService = new FaultingTriageService("Simulated companion triage failure");
+        await using var host = await CreateHostAsync(
+            workspaceRepo: workspaceRepo,
+            triageService: failingTriageService);
+        using var client = CreateClient(host);
+        var validKey = host.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", validKey);
+
+        bool unobservedObserved = false;
+        EventHandler<UnobservedTaskExceptionEventArgs> unobservedHandler = (_, args) =>
+        {
+            unobservedObserved = true;
+            args.SetObserved();
+        };
+        TaskScheduler.UnobservedTaskException += unobservedHandler;
+
+        try
+        {
+            var resp = await client.PostAsJsonAsync(
+                $"/api/companion/workspaces/{workspace.Id}/triage",
+                new { title = "Fault case", reportMarkdown = "# Crash\nDetails" });
+            Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var draftId = doc.RootElement.GetProperty("draftId").GetString();
+            var draftStore = host.Services.GetRequiredService<ICompanionTriageDraftStore>();
+            var storedDraft = draftStore.GetDraft(draftId);
+
+            Assert.NotNull(storedDraft);
+            Assert.NotNull(storedDraft.RunHandle);
+            Assert.NotNull(storedDraft.SessionExecutionTask);
+            Assert.NotNull(storedDraft.ExecutionTask);
+
+            var resolvedTaskId = await storedDraft.RunHandle.TriageTaskIdTask;
+            Assert.Equal(0, resolvedTaskId);
+
+            var sessionEx = await Assert.ThrowsAsync<InvalidOperationException>(() => storedDraft.SessionExecutionTask);
+            Assert.Equal("Simulated companion triage failure", sessionEx.Message);
+
+            var execEx = await Assert.ThrowsAsync<InvalidOperationException>(() => storedDraft.ExecutionTask);
+            Assert.Equal("Simulated companion triage failure", execEx.Message);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Assert.False(unobservedObserved);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= unobservedHandler;
+        }
+    }
+
     private async Task<WebApplication> CreateHostAsync(
         InMemoryWorkspaceRepository? workspaceRepo = null,
         InMemoryTaskRepository? taskRepo = null,
@@ -549,15 +618,53 @@ public sealed class CompanionEndpointsTests : IDisposable
 
     private sealed class RecordingTriageService : ITriageService
     {
+        public const int SimulatedTriageTaskId = 42;
+
         public ConcurrentQueue<(Workspace Workspace, TriageReportRequest Request)> Calls { get; } = new();
 
-        public Task<IReadOnlyList<ForgeTask>> TriageExternalReportAsync(
+        public async Task<IReadOnlyList<ForgeTask>> TriageExternalReportAsync(
             Workspace workspace,
             TriageReportRequest request,
             CancellationToken cancellationToken = default)
         {
-            Calls.Enqueue((workspace, request));
-            return Task.FromResult<IReadOnlyList<ForgeTask>>(Array.Empty<ForgeTask>());
+            var result = await RunTriageSessionAsync(workspace, request, onTriageTaskCreated: null, cancellationToken);
+            return result.Tasks;
         }
+
+        public Task<TriageSessionResult> RunTriageSessionAsync(
+            Workspace workspace,
+            TriageReportRequest request,
+            Action<int>? onTriageTaskCreated = null,
+            CancellationToken cancellationToken = default)
+        {
+            Calls.Enqueue((workspace, request));
+            onTriageTaskCreated?.Invoke(SimulatedTriageTaskId);
+            return Task.FromResult(new TriageSessionResult(
+                TriageTaskId: SimulatedTriageTaskId,
+                Tasks: Array.Empty<ForgeTask>(),
+                CreatedTaskIds: new HashSet<int>(),
+                UpdatedTaskIds: new HashSet<int>(),
+                RemovedTaskIds: new HashSet<int>()));
+        }
+    }
+
+    private sealed class FaultingTriageService : ITriageService
+    {
+        private readonly string _message;
+
+        public FaultingTriageService(string message) => _message = message;
+
+        public Task<IReadOnlyList<ForgeTask>> TriageExternalReportAsync(
+            Workspace workspace,
+            TriageReportRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<IReadOnlyList<ForgeTask>>(new InvalidOperationException(_message));
+
+        public Task<TriageSessionResult> RunTriageSessionAsync(
+            Workspace workspace,
+            TriageReportRequest request,
+            Action<int>? onTriageTaskCreated = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException<TriageSessionResult>(new InvalidOperationException(_message));
     }
 }

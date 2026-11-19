@@ -105,11 +105,21 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
         }
 
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot receive clarification answers or resume pipeline stages.");
+        }
+
         using var lockReleaser = await _workspacePreparer.AcquireTaskLockAsync(task.WorkspaceId, task.Id, cancellationToken);
 
         // Reload fresh task under lock
         task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot receive clarification answers or resume pipeline stages.");
+        }
 
         var questionMap = task.Questions.ToDictionary(q => q.Id);
         var updatedBatchIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -452,6 +462,11 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
         }
 
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot enter change-request pipeline loops.");
+        }
+
         var pipeline = await _pipelineProvider.GetPipelineAsync(task, cancellationToken);
         var currentStage = !string.IsNullOrWhiteSpace(task.CurrentStageId) ? pipeline.GetStage(task.CurrentStageId) : null;
 
@@ -518,6 +533,11 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         if (task == null)
         {
             throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
+        }
+
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot be promoted or dispatched into the coding pipeline.");
         }
 
         if (targetStatus == TaskOverallStatus.Open)
@@ -695,6 +715,11 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
             throw new KeyNotFoundException($"ForgeTask #{taskId} not found.");
         }
 
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot be rejected or archived as backlog tasks.");
+        }
+
         if (task.Status == TaskOverallStatus.Closed || task.Status == TaskOverallStatus.Rejected)
         {
             throw new InvalidOperationException($"Task #{taskId} is already in a terminal state ({task.Status}).");
@@ -799,6 +824,11 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         var initialSnapshot = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
 
+        if (initialSnapshot.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot be restarted as coding pipeline tasks.");
+        }
+
         if (initialSnapshot.SquashCommitSha != null || initialSnapshot.Status == TaskOverallStatus.Closed)
         {
             throw new InvalidOperationException("Cannot restart a task that has already been merged.");
@@ -816,6 +846,11 @@ public class TaskLifecycleMutationCoordinator : ITaskLifecycleMutationCoordinato
         // 4. Reload task entity after acquiring lock to guarantee fresh state
         var task = await _taskRepository.GetByIdAsync(taskId, cancellationToken)
             ?? throw new KeyNotFoundException($"Task #{taskId} not found.");
+
+        if (task.Status == TaskOverallStatus.Triage)
+        {
+            throw new TaskCannotBeModifiedException(taskId, "triage session records cannot be restarted as coding pipeline tasks.");
+        }
 
         if (task.SquashCommitSha != null || task.Status == TaskOverallStatus.Closed)
         {

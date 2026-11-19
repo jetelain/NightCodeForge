@@ -55,7 +55,7 @@ public class BacklogContextDigestAndCycleRejectionTests
         Assert.DoesNotContain("Closed work", digest);
         Assert.DoesNotContain("Rejected work", digest);
         Assert.DoesNotContain("Cancelled work", digest);
-        Assert.Contains("- #6 [P1/Critical - Ready]: Critical", digest);
+        Assert.Contains("- #6 [P1/Critical - Ready - Origin:Manual]: Critical", digest);
         Assert.True(digest.IndexOf("#6", StringComparison.Ordinal) < digest.IndexOf("#5", StringComparison.Ordinal));
         Assert.True(digest.IndexOf("#5", StringComparison.Ordinal) < digest.IndexOf("#4", StringComparison.Ordinal));
     }

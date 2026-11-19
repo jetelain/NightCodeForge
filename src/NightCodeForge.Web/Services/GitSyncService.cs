@@ -298,7 +298,8 @@ public class GitSyncService : IGitSyncService
                     var wt = snapshots[i];
                     if (taskDict.TryGetValue(wt.TaskId, out var task))
                     {
-                        var isActive = task.Status != TaskOverallStatus.Closed &&
+                        var isActive = task.Status != TaskOverallStatus.Triage &&
+                                       task.Status != TaskOverallStatus.Closed &&
                                        task.Status != TaskOverallStatus.Failed &&
                                        task.Status != TaskOverallStatus.Cancelled &&
                                        task.Status != TaskOverallStatus.Rejected;
@@ -381,7 +382,8 @@ public class GitSyncService : IGitSyncService
                 {
                     if (taskDict.TryGetValue(wt.TaskId, out var task))
                     {
-                        if (task.Status == TaskOverallStatus.Closed ||
+                        if (task.Status == TaskOverallStatus.Triage ||
+                            task.Status == TaskOverallStatus.Closed ||
                             task.Status == TaskOverallStatus.Failed ||
                             task.Status == TaskOverallStatus.Cancelled ||
                             task.Status == TaskOverallStatus.Rejected)

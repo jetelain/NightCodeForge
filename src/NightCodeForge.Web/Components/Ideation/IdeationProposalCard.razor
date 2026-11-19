@@ -177,7 +177,7 @@
 
                 @{
                     var candidateTasks = WorkspaceTasks?
-                        .Where(t => t.Id != Proposal.CreatedTaskId && t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected))
+                        .Where(t => t.Id != Proposal.CreatedTaskId && t.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected or TaskOverallStatus.Triage))
                         .ToList();
                 }
                 @if (candidateTasks == null || candidateTasks.Count == 0)

@@ -5,7 +5,18 @@
 <div class="task-card-preview" id="triage-task-proposal-@Task.Id">
     <div class="task-proposal-header">
         <div class="task-proposal-meta">
-            <span class="badge-suggested">Suggested</span>
+            @if (Task.Status == TaskOverallStatus.Suggested)
+            {
+                <span class="badge-suggested">Suggested</span>
+            }
+            else
+            {
+                <span class="forge-badge badge-indigo">@Task.Status</span>
+            }
+            @if (IsUpdated)
+            {
+                <span class="forge-badge badge-teal" id="triage-task-updated-badge-@Task.Id">Updated</span>
+            }
             <span class="task-id-badge font-mono">#@Task.Id</span>
             @if (string.Equals(Task.ExternalSource, GitHubSyncConstants.ExternalSourceGitHub, StringComparison.OrdinalIgnoreCase) &&
                  !string.IsNullOrWhiteSpace(Task.ExternalReferenceId))
@@ -63,6 +74,9 @@
 @code {
     [Parameter, EditorRequired]
     public ForgeTask Task { get; set; } = null!;
+
+    [Parameter]
+    public bool IsUpdated { get; set; }
 
     private string GetDisplayDescription()
     {

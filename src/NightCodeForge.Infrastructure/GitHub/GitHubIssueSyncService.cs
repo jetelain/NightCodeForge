@@ -329,7 +329,8 @@ public sealed class GitHubIssueSyncService : IGitHubIssueSyncService
 
         var existingTasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
         var existingExternalRefs = existingTasks
-            .Where(t => string.Equals(t.ExternalSource, GitHubSyncConstants.ExternalSourceGitHub, StringComparison.OrdinalIgnoreCase)
+            .Where(t => t.Status != TaskOverallStatus.Triage
+                        && string.Equals(t.ExternalSource, GitHubSyncConstants.ExternalSourceGitHub, StringComparison.OrdinalIgnoreCase)
                         && !string.IsNullOrWhiteSpace(t.ExternalReferenceId))
             .Select(t => t.ExternalReferenceId!.Trim())
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

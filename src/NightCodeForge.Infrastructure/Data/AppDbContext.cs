@@ -933,6 +933,7 @@ VALUES ('" + AddTaskAttachmentsAndLinksMigrationId + @"', '10.0.12');";
         }
 
         await ReconcileIdeationProfilesAsync(cancellationToken);
+        await ReconcileTriageProfilesAsync(cancellationToken);
         await NormalizeLegacyPiRpcProfilesAsync(cancellationToken);
 
         if (ChangeTracker.HasChanges())
@@ -999,6 +1000,72 @@ VALUES ('" + AddTaskAttachmentsAndLinksMigrationId + @"', '10.0.12');";
                 NormalizeLineEndings(profile.SystemPrompt).Trim() == NormalizeLineEndings(AgentProfile.LegacyIdeationSystemPrompt).Trim())
             {
                 profile.SystemPrompt = AgentProfile.DefaultIdeationSystemPrompt;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reconciles stored untrusted-intake triage profiles (global and workspace-scoped) to grant
+    /// <see cref="DefaultAgentTools.Triage"/> (<c>propose_tasks</c>, <c>get_task</c>, <c>edit_task</c>, <c>remove_task</c>)
+    /// while stripping disallowed tools such as <c>web_search</c>, <c>ask</c>, filesystem writes, and priority reordering.
+    /// </summary>
+    private async Task ReconcileTriageProfilesAsync(CancellationToken cancellationToken)
+    {
+        var scopedSuffix = ":" + StandardStageIds.Triage;
+        var triageProfiles = await AgentProfiles
+            .Where(p => p.Id == StandardStageIds.Triage || p.Id.EndsWith(scopedSuffix))
+            .ToListAsync(cancellationToken);
+
+        var allowedSet = new HashSet<string>(DefaultAgentTools.Triage, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var profile in triageProfiles)
+        {
+            List<string> targetTools;
+            if (profile.PermittedTools == null || profile.PermittedTools.Count == 0)
+            {
+                targetTools = DefaultAgentTools.Triage.ToList();
+            }
+            else
+            {
+                var filtered = new List<string>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var tool in profile.PermittedTools)
+                {
+                    if (string.IsNullOrWhiteSpace(tool))
+                    {
+                        continue;
+                    }
+
+                    var trimmed = tool.Trim();
+                    if (allowedSet.Contains(trimmed) && seen.Add(trimmed))
+                    {
+                        filtered.Add(trimmed);
+                    }
+                }
+
+                if (filtered.Count == 0)
+                {
+                    targetTools = DefaultAgentTools.Triage.ToList();
+                }
+                else
+                {
+                    foreach (var requiredBacklogTool in CanonicalToolNames.TriageBacklogTools)
+                    {
+                        if (seen.Add(requiredBacklogTool))
+                        {
+                            filtered.Add(requiredBacklogTool);
+                        }
+                    }
+
+                    targetTools = filtered;
+                }
+            }
+
+            if (profile.PermittedTools == null ||
+                !profile.PermittedTools.SequenceEqual(targetTools, StringComparer.OrdinalIgnoreCase))
+            {
+                profile.PermittedTools = targetTools;
             }
         }
     }

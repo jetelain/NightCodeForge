@@ -782,7 +782,7 @@ public partial class GitHubPullRequestDeliveryService : IGitHubPullRequestDelive
                     string.Equals(s.ExternalSource, GitHubExternalSource, StringComparison.OrdinalIgnoreCase) &&
                     !string.IsNullOrWhiteSpace(s.ExternalReferenceId) &&
                     string.Equals(s.ExternalReferenceId.Trim().TrimStart('#'), normalizedIssueNum, StringComparison.OrdinalIgnoreCase) &&
-                    s.Status is not (TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled));
+                    s.Status is not (TaskOverallStatus.Triage or TaskOverallStatus.Draft or TaskOverallStatus.Closed or TaskOverallStatus.Rejected or TaskOverallStatus.Cancelled));
 
                 var keywordLine = hasActiveSibling
                     ? $"Refs #{normalizedIssueNum}"

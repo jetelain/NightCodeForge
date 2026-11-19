@@ -84,6 +84,9 @@ public partial class CanonicalTools
     public IWorkspaceSkillsService SkillsService => ResearchAndSkillsModule.SkillsService;
     public int MaxReadFileBytes => FileModule.MaxReadFileBytes;
     public List<TaskProposal> PendingProposals => BacklogModule.PendingProposals;
+    public List<int> CreatedTaskIds => BacklogModule.CreatedTaskIds;
+    public List<int> ModifiedTaskIds => BacklogModule.ModifiedTaskIds;
+    public List<int> RemovedTaskIds => BacklogModule.RemovedTaskIds;
 
     public CanonicalTools(
         CanonicalToolScope scope,

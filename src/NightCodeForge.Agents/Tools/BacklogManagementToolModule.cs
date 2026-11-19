@@ -23,12 +23,16 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
 
     private readonly string _workspaceRoot;
     private readonly int? _workspaceId;
+    private readonly BacklogMutationSessionPolicy? _backlogMutationPolicy;
     private IBacklogMutationToolService? _defaultBacklogMutationService;
     private IBacklogMutationToolService? _explicitBacklogMutationService;
     private bool _hasExplicitBacklogMutationService;
     private bool _attachBacklogMutationService;
 
     public List<TaskProposal> PendingProposals { get; } = new();
+    public List<int> CreatedTaskIds { get; } = new();
+    public List<int> ModifiedTaskIds { get; } = new();
+    public List<int> RemovedTaskIds { get; } = new();
 
     public IServiceScopeFactory? ScopeFactory { get; set; }
 
@@ -54,6 +58,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         ArgumentNullException.ThrowIfNull(scope);
         _workspaceRoot = scope.ResolveNormalizedWorkspaceRoot();
         _workspaceId = scope.WorkspaceId;
+        _backlogMutationPolicy = scope.BacklogMutationPolicy;
     }
 
     public BacklogManagementToolModule(CanonicalToolScope scope, IServiceScopeFactory scopeFactory, bool attachBacklogMutationService)
@@ -94,7 +99,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, difficulty, attachment_ids, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.ProposeTasks,
-            "Proposes structured backlog tasks for triage and discovery. Returns the draft task(s) created with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Resolve functional and business questions with the maintainer first, then include scope, acceptance criteria, and testing plan in the description. Subsequent tasks can reference earlier created IDs in depends_on_ids."),
+            "Proposes structured backlog tasks for ideation (Draft) or triage (Suggested). Returns the created task(s) with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Subsequent calls to edit_task, remove_task, or propose_tasks (depends_on_ids) can reference the returned numeric IDs."),
 
         AIFunctionFactory.Create(
             ([Description("Numeric ID of the backlog task")] int task_id,
@@ -103,7 +108,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     ? module.GetTaskAsync(task_id, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.GetTask,
-            "Fetches the complete details of one backlog task (description, status, priority, difficulty, prerequisites, dependents) on demand."),
+            "Fetches the complete details of one backlog task (title, description, status, origin, hasExecutionRun, priority, difficulty, prerequisites, dependents) on demand."),
 
         AIFunctionFactory.Create(
             ([Description("Numeric ID of the unstarted task to edit")] int task_id,
@@ -164,7 +169,26 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             throw new InvalidOperationException($"Tool '{toolName}' requires a workspace-scoped session.");
         }
 
-        return new BacklogToolScope(_workspaceId.Value, _workspaceRoot);
+        if (_backlogMutationPolicy == null)
+        {
+            return new BacklogToolScope(_workspaceId.Value, _workspaceRoot);
+        }
+
+        var repositoryPath = !string.IsNullOrWhiteSpace(_backlogMutationPolicy.HostRepositoryPath)
+            ? _backlogMutationPolicy.HostRepositoryPath
+            : _workspaceRoot;
+
+        return new BacklogToolScope(
+            _workspaceId.Value,
+            repositoryPath,
+            Mode: _backlogMutationPolicy.Mode,
+            Actor: _backlogMutationPolicy.Actor,
+            SessionOrigin: _backlogMutationPolicy.SessionOrigin,
+            DefaultBaseBranch: _backlogMutationPolicy.DefaultBaseBranch,
+            ExternalSource: _backlogMutationPolicy.ExternalSource,
+            ExternalReferenceId: _backlogMutationPolicy.ExternalReferenceId,
+            CloneDirectory: _backlogMutationPolicy.CloneDirectory,
+            SessionTaskId: _backlogMutationPolicy.SessionTaskId);
     }
 
     private async Task<string> ExecuteWithBacklogServiceAsync(
@@ -259,7 +283,17 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         return ExecuteWithBacklogServiceAsync(
             CanonicalToolNames.EditTask,
             scope,
-            (service, s) => service.EditTaskAsync(s, request, cancellationToken));
+            async (service, s) =>
+            {
+                var result = await service.EditTaskAsync(s, request, cancellationToken);
+                if (!BacklogMutationToolService.IsUnchangedEditResult(taskId, result) &&
+                    !ModifiedTaskIds.Contains(taskId))
+                {
+                    ModifiedTaskIds.Add(taskId);
+                }
+
+                return result;
+            });
     }
 
     public Task<string> SetTaskPriorityAsync(int taskId, int priority, CancellationToken cancellationToken = default)
@@ -286,7 +320,19 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         return ExecuteWithBacklogServiceAsync(
             CanonicalToolNames.RemoveTask,
             scope,
-            (service, s) => service.RemoveTaskAsync(s, taskId, reason, cancellationToken));
+            async (service, s) =>
+            {
+                var result = await service.RemoveTaskAsync(s, taskId, reason, cancellationToken);
+                if (!RemovedTaskIds.Contains(taskId))
+                {
+                    RemovedTaskIds.Add(taskId);
+                }
+
+                CreatedTaskIds.Remove(taskId);
+                ModifiedTaskIds.Remove(taskId);
+                PendingProposals.RemoveAll(p => p.TaskId == taskId);
+                return result;
+            });
     }
 
     public string ProposeTasks(IReadOnlyList<TaskProposal> tasks) =>
@@ -348,7 +394,17 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default)
     {
-        var discovered = ExtractTaskProposals(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, attachmentIds);
+        var isTriageMode = _backlogMutationPolicy?.Mode == BacklogMutationMode.Triage;
+        var discovered = ExtractTaskProposals(
+            tasks,
+            title,
+            description,
+            priority,
+            dependsOnIds,
+            mergeMode,
+            difficulty,
+            attachmentIds,
+            extractDescriptionCitations: !isTriageMode);
         if (discovered.Count == 0)
         {
             return "No tasks proposed.";
@@ -358,11 +414,12 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         {
             var task = discovered[i];
             var deps = task.DependsOnTitles?.ToList() ?? new List<string>();
-            var unionAttachments = AttachmentCitationParser.UnionAttachmentIds(task.AttachmentIds, task.Description);
+            var resolvedAttachmentIds = ResolveProposalAttachmentIds(task.AttachmentIds, task.Description, !isTriageMode);
+
             discovered[i] = task with
             {
                 DependsOnTitles = deps,
-                AttachmentIds = unionAttachments.Count > 0 ? unionAttachments : null
+                AttachmentIds = resolvedAttachmentIds
             };
         }
 
@@ -389,6 +446,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                             var id = TryReadIntProperty(doc.RootElement, "id");
                             var prereqs = TryReadIntArrayProperty(doc.RootElement, "prerequisites") ?? discovered[0].DependsOnIds;
                             PendingProposals.Add(discovered[0] with { TaskId = id, DependsOnIds = prereqs });
+                            if (id is > 0)
+                            {
+                                TrackCreatedTaskId(id.Value);
+                            }
                         }
                         else if (doc.RootElement.ValueKind == JsonValueKind.Array)
                         {
@@ -403,6 +464,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                                     prereqs = TryReadIntArrayProperty(arr[i], "prerequisites") ?? prereqs;
                                 }
                                 PendingProposals.Add(discovered[i] with { TaskId = id, DependsOnIds = prereqs });
+                                if (id is > 0)
+                                {
+                                    TrackCreatedTaskId(id.Value);
+                                }
                             }
                         }
                         else
@@ -420,7 +485,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 });
         }
 
-        if (ScopeFactory != null && _workspaceId.HasValue)
+        if (!isTriageMode && ScopeFactory != null && _workspaceId.HasValue)
         {
             await using var serviceScope = ScopeFactory.CreateAsyncScope();
             var attachmentRepository = serviceScope.ServiceProvider.GetService<ITaskAttachmentRepository>();
@@ -453,14 +518,15 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
     }
 
     private static List<TaskProposal> ExtractTaskProposals(
-        object? tasks = null,
-        string? title = null,
-        string? description = null,
-        int? priority = null,
-        IReadOnlyList<int>? dependsOnIds = null,
-        string? mergeMode = null,
-        string? difficulty = null,
-        IReadOnlyList<int>? attachmentIds = null)
+        object? tasks,
+        string? title,
+        string? description,
+        int? priority,
+        IReadOnlyList<int>? dependsOnIds,
+        string? mergeMode,
+        string? difficulty,
+        IReadOnlyList<int>? attachmentIds,
+        bool extractDescriptionCitations)
     {
         var discovered = new List<TaskProposal>();
 
@@ -469,7 +535,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             var effectiveTitle = !IsGenericOrEmptyTitle(title)
                 ? title!.Trim()
                 : DeriveTitleFromDescription(description);
-            var unionAttachments = AttachmentCitationParser.UnionAttachmentIds(attachmentIds, description);
+            var resolvedAttachments = ResolveProposalAttachmentIds(attachmentIds, description, extractDescriptionCitations);
             discovered.Add(new TaskProposal(
                 effectiveTitle,
                 description ?? string.Empty,
@@ -477,7 +543,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 dependsOnIds: dependsOnIds,
                 mergeMode: mergeMode,
                 difficulty: difficulty,
-                attachmentIds: unionAttachments.Count > 0 ? unionAttachments : null));
+                attachmentIds: resolvedAttachments));
         }
 
         if (tasks != null)
@@ -489,7 +555,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             }
             else if (tasks is JsonElement je)
             {
-                batchProposals.AddRange(ParseJsonElementTasks(je));
+                batchProposals.AddRange(ParseJsonElementTasks(je, extractDescriptionCitations));
             }
             else if (tasks is string str)
             {
@@ -498,7 +564,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     try
                     {
                         using var doc = JsonDocument.Parse(str);
-                        batchProposals.AddRange(ParseJsonElementTasks(doc.RootElement));
+                        batchProposals.AddRange(ParseJsonElementTasks(doc.RootElement, extractDescriptionCitations));
                     }
                     catch (JsonException)
                     {
@@ -512,7 +578,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 {
                     var jsonStr = JsonSerializer.Serialize(tasks);
                     using var doc = JsonDocument.Parse(jsonStr);
-                    batchProposals.AddRange(ParseJsonElementTasks(doc.RootElement));
+                    batchProposals.AddRange(ParseJsonElementTasks(doc.RootElement, extractDescriptionCitations));
                 }
                 catch (JsonException)
                 {
@@ -532,10 +598,10 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                     IReadOnlyList<int>? effectiveAttachmentIds = proposal.AttachmentIds;
                     if (attachmentIds is { Count: > 0 })
                     {
-                        var combined = AttachmentCitationParser.UnionAttachmentIds(
-                            proposal.AttachmentIds != null ? proposal.AttachmentIds.Concat(attachmentIds) : attachmentIds,
-                            proposal.Description);
-                        effectiveAttachmentIds = combined.Count > 0 ? combined : null;
+                        IReadOnlyList<int> combinedExplicit = proposal.AttachmentIds != null
+                            ? proposal.AttachmentIds.Concat(attachmentIds).ToList()
+                            : attachmentIds;
+                        effectiveAttachmentIds = ResolveProposalAttachmentIds(combinedExplicit, proposal.Description, extractDescriptionCitations);
                     }
 
                     if (!string.Equals(effectiveMergeMode, proposal.MergeMode, StringComparison.Ordinal) ||
@@ -558,14 +624,14 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         return discovered;
     }
 
-    private static List<TaskProposal> ParseJsonElementTasks(JsonElement element)
+    private static List<TaskProposal> ParseJsonElementTasks(JsonElement element, bool extractDescriptionCitations)
     {
         var list = new List<TaskProposal>();
         if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
             {
-                var p = ParseSingleTaskElement(item);
+                var p = ParseSingleTaskElement(item, extractDescriptionCitations);
                 if (p != null) list.Add(p);
             }
         }
@@ -573,11 +639,11 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         {
             if (element.TryGetProperty("tasks", out var tasksProp))
             {
-                list.AddRange(ParseJsonElementTasks(tasksProp));
+                list.AddRange(ParseJsonElementTasks(tasksProp, extractDescriptionCitations));
             }
             else
             {
-                var p = ParseSingleTaskElement(element);
+                var p = ParseSingleTaskElement(element, extractDescriptionCitations);
                 if (p != null) list.Add(p);
             }
         }
@@ -589,7 +655,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 try
                 {
                     using var innerDoc = JsonDocument.Parse(str);
-                    list.AddRange(ParseJsonElementTasks(innerDoc.RootElement));
+                    list.AddRange(ParseJsonElementTasks(innerDoc.RootElement, extractDescriptionCitations));
                 }
                 catch (JsonException)
                 {
@@ -600,7 +666,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         return list;
     }
 
-    private static TaskProposal? ParseSingleTaskElement(JsonElement item)
+    private static TaskProposal? ParseSingleTaskElement(JsonElement item, bool extractDescriptionCitations)
     {
         if (item.ValueKind != JsonValueKind.Object) return null;
 
@@ -735,7 +801,7 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             }
         }
 
-        var unionAttachmentIds = AttachmentCitationParser.UnionAttachmentIds(explicitAttachmentIds, desc);
+        var resolvedAttachmentIds = ResolveProposalAttachmentIds(explicitAttachmentIds, desc, extractDescriptionCitations);
         return new TaskProposal(
             title,
             desc,
@@ -748,7 +814,34 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             null,
             mergeMode,
             difficulty,
-            unionAttachmentIds.Count > 0 ? unionAttachmentIds : null);
+            resolvedAttachmentIds);
+    }
+
+    private static IReadOnlyList<int>? ResolveProposalAttachmentIds(
+        IReadOnlyList<int>? explicitAttachmentIds,
+        string? description,
+        bool extractDescriptionCitations)
+    {
+        if (extractDescriptionCitations)
+        {
+            var unionAttachmentIds = AttachmentCitationParser.UnionAttachmentIds(explicitAttachmentIds, description);
+            return unionAttachmentIds.Count > 0 ? unionAttachmentIds : null;
+        }
+
+        if (explicitAttachmentIds is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        return explicitAttachmentIds.Distinct().ToList();
+    }
+
+    private void TrackCreatedTaskId(int taskId)
+    {
+        if (taskId > 0 && !CreatedTaskIds.Contains(taskId))
+        {
+            CreatedTaskIds.Add(taskId);
+        }
     }
 
     private static int? TryReadIntProperty(JsonElement obj, string propertyName) =>

@@ -255,6 +255,9 @@
                                             case TaskOverallStatus.Suggested:
                                                 <span class="forge-badge badge-amber" style="font-size: 0.75rem;">💡 Suggested</span>
                                                 break;
+                                            case TaskOverallStatus.Triage:
+                                                <span class="forge-badge badge-indigo" style="font-size: 0.75rem;">🛡️ Triage</span>
+                                                break;
                                             default:
                                                 if (task.IsWaitingForHuman)
                                                 {
@@ -454,7 +457,7 @@
             if (!_showAllWorkspaces && activeWs != null)
             {
                 var tasks = await TaskRepository.GetByWorkspaceIdAsync(activeWs.Id);
-                _rawTasks = tasks.ToList();
+                _rawTasks = tasks.Where(t => t.Status != TaskOverallStatus.Triage).ToList();
             }
             else
             {
@@ -462,7 +465,7 @@
                 foreach (var ws in workspaces)
                 {
                     var tasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id);
-                    allTasks.AddRange(tasks);
+                    allTasks.AddRange(tasks.Where(t => t.Status != TaskOverallStatus.Triage));
                 }
                 _rawTasks = allTasks;
             }

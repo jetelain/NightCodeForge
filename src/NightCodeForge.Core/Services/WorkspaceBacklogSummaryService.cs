@@ -93,7 +93,7 @@ public class WorkspaceBacklogSummaryService : IWorkspaceBacklogSummaryService
         foreach (var task in shown)
         {
             sb.AppendLine(string.Create(CultureInfo.InvariantCulture,
-                $"- #{task.Id} [P{task.Priority}/{ShortPriorityLabel(task.Priority)} - {task.Status}]: {task.Title}"));
+                $"- #{task.Id} [P{task.Priority}/{ShortPriorityLabel(task.Priority)} - {task.Status} - Origin:{task.Origin}]: {task.Title}"));
         }
 
         sb.Append($"</{RootElement}>");

@@ -250,7 +250,15 @@ public class AppDbContextTests : IDisposable
 
         // Untrusted-intake triage never receives backlog mutation tools.
         var triage = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Triage);
-        Assert.DoesNotContain(CanonicalToolNames.EditTask, triage.PermittedTools!);
+        Assert.Contains(CanonicalToolNames.EditTask, triage.PermittedTools!);
+        Assert.Contains(CanonicalToolNames.GetTask, triage.PermittedTools!);
+        Assert.Contains(CanonicalToolNames.RemoveTask, triage.PermittedTools!);
+        Assert.DoesNotContain(CanonicalToolNames.SetTaskPriority, triage.PermittedTools!);
+        Assert.DoesNotContain(CanonicalToolNames.ReworkPriorities, triage.PermittedTools!);
+        Assert.DoesNotContain(CanonicalToolNames.WebSearch, triage.PermittedTools!);
+        Assert.DoesNotContain(CanonicalToolNames.Ask, triage.PermittedTools!);
+        Assert.DoesNotContain(CanonicalToolNames.Write, triage.PermittedTools!);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, triage.PermittedTools!);
     }
 
     [Fact]

@@ -10,6 +10,9 @@ public static class PipelineDataBagKeys
     public const string ApprovedPlan = "Stage1.ApprovedPlan";
     public const string CompilerErrors = "diagnostics.compiler_errors";
     public const string PendingProposals = "PendingProposals";
+    public const string TriageCreatedTaskIds = "triage.created_task_ids";
+    public const string TriageModifiedTaskIds = "triage.modified_task_ids";
+    public const string TriageRemovedTaskIds = "triage.removed_task_ids";
     public const string TaskMarkdownPath = "TaskMarkdownPath";
     public const string SerializedMemory = "SerializedMemory";
     public const string ReviewerFeedback = "ReviewerFeedback";

@@ -384,7 +384,7 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
                 Mode = AgentMode.ReadOnly,
                 SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
                 RoutingTarget = triageTarget,
-                PermittedTools = DefaultAgentTools.ReadOnly,
+                PermittedTools = DefaultAgentTools.Triage,
                 OptimizationFlags = null,
                 ThinkingEffort = archEffort,
                 MaxTurns = 250

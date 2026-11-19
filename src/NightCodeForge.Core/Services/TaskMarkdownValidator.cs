@@ -110,6 +110,17 @@ public class TaskMarkdownValidator : ITaskMarkdownValidator
         }
 
         var workspaceTasks = await _taskRepository.GetByWorkspaceIdAsync(workspaceId, cancellationToken);
+        var nonSyncedTask = FindNonSyncedDependencyTarget(frontmatter.DependsOn, workspaceTasks);
+        if (nonSyncedTask != null)
+        {
+            _logger.LogWarning(
+                "Rejected edit of '{Path}': task cannot depend on #{DependencyId} ({Status}).",
+                path, nonSyncedTask.Id, nonSyncedTask.Status);
+            return TaskMarkdownValidationResult.Invalid(
+                string.Create(CultureInfo.InvariantCulture,
+                    $"[ERROR] Task cannot depend on #{nonSyncedTask.Id} because it is a {nonSyncedTask.Status} session record.{Environment.NewLine}The dependency update was rejected and the file was not modified."));
+        }
+
         var taskId = ResolveTargetTaskId(frontmatter, currentTaskId, path, workspaceTasks);
         if (taskId is not > 0)
         {
@@ -193,6 +204,11 @@ public class TaskMarkdownValidator : ITaskMarkdownValidator
         var byKey = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var task in workspaceTasks)
         {
+            if (TaskMarkdownSyncService.IsNonSyncedStatus(task.Status))
+            {
+                continue;
+            }
+
             byKey[task.Id.ToString(CultureInfo.InvariantCulture)] = task.Id;
             if (!string.IsNullOrWhiteSpace(task.Title))
             {
@@ -340,5 +356,73 @@ public class TaskMarkdownValidator : ITaskMarkdownValidator
         }
 
         return false;
+    }
+
+    private static ForgeTask? FindNonSyncedDependencyTarget(
+        IEnumerable<object> references,
+        IReadOnlyList<ForgeTask> workspaceTasks)
+    {
+        var syncedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var nonSyncedByKey = new Dictionary<string, ForgeTask>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var task in workspaceTasks)
+        {
+            var targetSet = TaskMarkdownSyncService.IsNonSyncedStatus(task.Status) ? null : syncedKeys;
+            if (targetSet != null)
+            {
+                targetSet.Add(task.Id.ToString(CultureInfo.InvariantCulture));
+                if (!string.IsNullOrWhiteSpace(task.Title))
+                {
+                    targetSet.Add(task.Title.Trim());
+                    var slug = TaskMarkdownSyncService.NormalizeDependencyKey(task.Title);
+                    if (!string.IsNullOrEmpty(slug))
+                    {
+                        targetSet.Add(slug);
+                    }
+                }
+            }
+            else
+            {
+                nonSyncedByKey[task.Id.ToString(CultureInfo.InvariantCulture)] = task;
+                if (!string.IsNullOrWhiteSpace(task.Title))
+                {
+                    nonSyncedByKey.TryAdd(task.Title.Trim(), task);
+                    var slug = TaskMarkdownSyncService.NormalizeDependencyKey(task.Title);
+                    if (!string.IsNullOrEmpty(slug))
+                    {
+                        nonSyncedByKey.TryAdd(slug, task);
+                    }
+                }
+            }
+        }
+
+        if (nonSyncedByKey.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var reference in references)
+        {
+            var text = reference?.ToString()?.Trim().TrimStart(TaskIdPrefix) ?? string.Empty;
+            if (text.Length == 0 || syncedKeys.Contains(text))
+            {
+                continue;
+            }
+
+            if (nonSyncedByKey.TryGetValue(text, out var matched))
+            {
+                return matched;
+            }
+
+            var normalized = TaskMarkdownSyncService.NormalizeDependencyKey(text);
+            if (!string.IsNullOrEmpty(normalized) &&
+                !syncedKeys.Contains(normalized) &&
+                nonSyncedByKey.TryGetValue(normalized, out matched))
+            {
+                return matched;
+            }
+        }
+
+        return null;
     }
 }

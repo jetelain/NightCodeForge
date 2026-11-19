@@ -238,7 +238,8 @@ else if (!_isLoadingTasks)
                 var ready = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Ready);
                 var closed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Closed);
                 var failed = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Failed);
-                allTasks = open.Concat(reviewed).Concat(implemented).Concat(ready).Concat(closed).Concat(failed)
+                var triage = await TaskRepository.GetByStatusAsync(TaskOverallStatus.Triage);
+                allTasks = open.Concat(reviewed).Concat(implemented).Concat(ready).Concat(closed).Concat(failed).Concat(triage)
                     .Where(t => t.HasExecutionRun)
                     .ToList();
             }

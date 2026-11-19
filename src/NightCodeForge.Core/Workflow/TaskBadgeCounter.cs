@@ -28,7 +28,8 @@ public static class TaskBadgeCounter
         var task = parentTask ?? question.ForgeTask;
         if (task != null)
         {
-            return task.Status != TaskOverallStatus.Closed &&
+            return task.Status != TaskOverallStatus.Triage &&
+                   task.Status != TaskOverallStatus.Closed &&
                    task.Status != TaskOverallStatus.Rejected &&
                    task.Status != TaskOverallStatus.Cancelled;
         }

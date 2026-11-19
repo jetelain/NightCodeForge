@@ -36,6 +36,18 @@ public static class CanonicalToolNames
     };
 
     /// <summary>
+    /// Scoped host-level backlog tools exposed to the untrusted intake triage agent
+    /// (propose new Suggested tasks, inspect tasks, and edit/remove triage-owned unstarted tasks; no priority reordering).
+    /// </summary>
+    public static readonly IReadOnlyList<string> TriageBacklogTools = new[]
+    {
+        ProposeTasks,
+        GetTask,
+        EditTask,
+        RemoveTask
+    };
+
+    /// <summary>
     /// Complete collection of all canonical tools supported by the platform.
     /// Useful for UI configuration lists, validation, and test harness setup.
     /// </summary>

@@ -56,6 +56,7 @@
     }
     else
     {
+        var isTriageSession = TaskInspectorPresentationHelper.IsTriageSession(_task);
         <!-- Breadcrumb & Quick Actions Header -->
         <div class="task-detail-header">
             <div class="header-breadcrumb" style="margin-bottom: 0.5rem;">
@@ -71,16 +72,31 @@
                     <!-- Badge Row -->
                     <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
                         <span class="font-mono text-secondary" style="font-weight: 700; font-size: 1.1rem;">#@_task.Id</span>
-                        <span class="forge-badge @GetStatusBadgeClass(_task.Status)">@_task.Status</span>
-                        <span class="forge-badge badge-priority-@_task.Priority">P@(_task.Priority) - @TaskPriority.GetLabel(_task.Priority)</span>
-                        <span class="forge-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(_task.Difficulty)"
-                              style="@TaskDifficultyPresentationHelper.GetBadgeStyle(_task.Difficulty)"
-                              title="@TaskDifficultyPresentationHelper.GetDescription(_task.Difficulty)">
-                            @TaskDifficultyPresentationHelper.GetDisplayLabel(_task.Difficulty)
-                        </span>
-                        <span class="forge-badge @MergeModeHelper.GetBadgeClass(_task.MergeMode)">
-                            @MergeModeHelper.GetBadgeLabel(_task.MergeMode)
-                        </span>
+                        <span class="forge-badge @GetStatusBadgeClass(_task.Status)">@TaskInspectorPresentationHelper.FormatStatusBadgeLabel(_task)</span>
+                        @if (isTriageSession)
+                        {
+                            <span class="forge-badge badge-teal">Origin: @TaskInspectorPresentationHelper.FormatTaskOrigin(_task.Origin)</span>
+                            @if (!string.IsNullOrWhiteSpace(_task.ExternalSource))
+                            {
+                                <span class="forge-badge badge-neutral">Source: @_task.ExternalSource</span>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_task.ExternalReferenceId))
+                            {
+                                <span class="forge-badge badge-neutral font-mono">Ref: @_task.ExternalReferenceId</span>
+                            }
+                        }
+                        else
+                        {
+                            <span class="forge-badge badge-priority-@_task.Priority">P@(_task.Priority) - @TaskPriority.GetLabel(_task.Priority)</span>
+                            <span class="forge-badge @TaskDifficultyPresentationHelper.GetBadgeCssClass(_task.Difficulty)"
+                                  style="@TaskDifficultyPresentationHelper.GetBadgeStyle(_task.Difficulty)"
+                                  title="@TaskDifficultyPresentationHelper.GetDescription(_task.Difficulty)">
+                                @TaskDifficultyPresentationHelper.GetDisplayLabel(_task.Difficulty)
+                            </span>
+                            <span class="forge-badge @MergeModeHelper.GetBadgeClass(_task.MergeMode)">
+                                @MergeModeHelper.GetBadgeLabel(_task.MergeMode)
+                            </span>
+                        }
                         @if (!string.IsNullOrWhiteSpace(_task.CurrentStageId))
                         {
                             <span class="forge-badge badge-purple">Stage: @_task.CurrentStageId</span>
@@ -94,7 +110,7 @@
                     </div>
 
                     <!-- Title Row -->
-                    @if (_isEditingTitle)
+                    @if (_isEditingTitle && !isTriageSession)
                     {
                         <div class="edit-title-box" style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.35rem; max-width: 800px;">
                             <input class="form-control-dark font-mono"
@@ -112,13 +128,16 @@
                             <h1 style="margin: 0; font-size: 1.6rem; font-weight: 700; color: var(--text-primary); line-height: 1.3;">
                                 @_task.Title
                             </h1>
-                            <button type="button"
-                                    class="forge-btn forge-btn-secondary btn-xs"
-                                    style="padding: 0.2rem 0.5rem; font-size: 0.78rem;"
-                                    @onclick="StartEditingTitle"
-                                    title="Edit title">
-                                ✏️ Edit
-                            </button>
+                            @if (!isTriageSession)
+                            {
+                                <button type="button"
+                                        class="forge-btn forge-btn-secondary btn-xs"
+                                        style="padding: 0.2rem 0.5rem; font-size: 0.78rem;"
+                                        @onclick="StartEditingTitle"
+                                        title="Edit title">
+                                    ✏️ Edit
+                                </button>
+                            }
                         </div>
                     }
                 </div>
@@ -163,7 +182,7 @@
                             🚀 Triage / Promote
                         </button>
                     }
-                    @if (_task.Status != TaskOverallStatus.Closed && _task.Status != TaskOverallStatus.Rejected)
+                    @if (_task.Status != TaskOverallStatus.Closed && _task.Status != TaskOverallStatus.Rejected && _task.Status != TaskOverallStatus.Triage)
                     {
                         <button type="button" class="forge-btn forge-btn-danger" id="btn-reject-task" @onclick="() => _showRejectModal = true">
                             🗑️ Reject Task
@@ -178,9 +197,12 @@
                     <a href="@WorkspaceState.GetPath($"inspector/{_task.Id}")" class="forge-btn forge-btn-secondary" style="text-decoration: none;" id="btn-inspect-task">
                         🔍 Live Inspector
                     </a>
-                    <button type="button" class="forge-btn forge-btn-secondary" @onclick="() => _showDepModal = true" id="btn-link-dependencies">
-                        🔗 Dependencies (@_prerequisiteIds.Count)
-                    </button>
+                    @if (_task.Status != TaskOverallStatus.Triage)
+                    {
+                        <button type="button" class="forge-btn forge-btn-secondary" @onclick="() => _showDepModal = true" id="btn-link-dependencies">
+                            🔗 Dependencies (@_prerequisiteIds.Count)
+                        </button>
+                    }
                     <button type="button" class="forge-btn forge-btn-secondary" @onclick="ReloadTaskAsync" title="Refresh task state">
                         🔄 Refresh
                     </button>
@@ -234,13 +256,16 @@
                             @onclick='() => _activeTab = "execution"'>
                         ⚡ Execution Logs (@(_task.ExecutionRecords?.Count ?? 0) runs)
                     </button>
-                    <button type="button"
-                            class="forge-btn @(_activeTab == "changes" ? "forge-btn-primary" : "forge-btn-secondary") btn-sm"
-                            id="tab-btn-changes"
-                            style="padding: 0.45rem 1rem; font-size: 0.88rem;"
-                            @onclick='SelectChangesTabAsync'>
-                        🔀 Changes @(_diffFiles.Count > 0 ? $"({_diffFiles.Count})" : "")
-                    </button>
+                    @if (TaskInspectorPresentationHelper.ShouldShowGitDiffTab(_task))
+                    {
+                        <button type="button"
+                                class="forge-btn @(_activeTab == "changes" ? "forge-btn-primary" : "forge-btn-secondary") btn-sm"
+                                id="tab-btn-changes"
+                                style="padding: 0.45rem 1rem; font-size: 0.88rem;"
+                                @onclick='SelectChangesTabAsync'>
+                            🔀 Changes @(_diffFiles.Count > 0 ? $"({_diffFiles.Count})" : "")
+                        </button>
+                    }
                 </div>
 
                 <!-- Tab 1: Task Specification -->
@@ -250,12 +275,12 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border-subtle);">
                             <div style="display: flex; align-items: center; gap: 0.5rem;">
                                 <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-primary);">
-                                    Specification &amp; Acceptance Criteria
+                                    @(isTriageSession ? TaskInspectorPresentationHelper.GetDescriptionHeading(_task) : "Specification & Acceptance Criteria")
                                 </h3>
                                 <span class="forge-badge badge-indigo" style="font-size: 0.75rem;">Markdown</span>
                             </div>
 
-                            @if (!_isEditingDescription)
+                            @if (!_isEditingDescription && !isTriageSession)
                             {
                                 <div style="display: flex; gap: 0.5rem;">
                                     <button type="button"
@@ -268,7 +293,7 @@
                             }
                         </div>
 
-                        @if (_isEditingDescription)
+                        @if (_isEditingDescription && !isTriageSession)
                         {
                             <div class="spec-editor-container">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
@@ -329,9 +354,12 @@
                                 {
                                     <div style="padding: 2.5rem 1rem; text-align: center; color: var(--text-muted);">
                                         <p style="margin-bottom: 1rem; font-size: 0.95rem;">No technical specification or requirements provided yet.</p>
-                                        <button type="button" class="forge-btn forge-btn-primary btn-sm" @onclick="StartEditingDescription">
-                                            ✏️ Add Specification
-                                        </button>
+                                        @if (!isTriageSession)
+                                        {
+                                            <button type="button" class="forge-btn forge-btn-primary btn-sm" @onclick="StartEditingDescription">
+                                                ✏️ Add Specification
+                                            </button>
+                                        }
                                     </div>
                                 }
                                 else
@@ -548,6 +576,8 @@
             @if (_activeTab != "changes")
             {
                 <div class="grid-column-sidebar">
+                @if (!isTriageSession)
+                {
                 <!-- Priority Scheduling Card -->
                 <div class="forge-card card-glass form-section" style="padding: 1.25rem; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); background: var(--bg-card); margin-bottom: 1.25rem;">
                     <label class="form-label" style="display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 0.35rem; color: var(--text-primary);">
@@ -692,6 +722,7 @@
                         </div>
                     }
                 </div>
+                }
 
                 <!-- Downstream Dependents Card (DAG) -->
                 @if (_dependentIds.Count > 0)
@@ -736,10 +767,34 @@
                             <span class="meta-label">Base Branch</span>
                             <span class="meta-val font-mono">@_task.BaseBranch</span>
                         </div>
-                        <div class="meta-item">
-                            <span class="meta-label">Feature Branch</span>
-                            <span class="meta-val font-mono">@(string.IsNullOrWhiteSpace(_task.FeatureBranch) ? "forge/task-" + _task.Id : _task.FeatureBranch)</span>
-                        </div>
+                        @if (TaskInspectorPresentationHelper.ShouldShowBranchAndMergeMetadata(_task))
+                        {
+                            <div class="meta-item">
+                                <span class="meta-label">Feature Branch</span>
+                                <span class="meta-val font-mono">@(string.IsNullOrWhiteSpace(_task.FeatureBranch) ? "forge/task-" + _task.Id : _task.FeatureBranch)</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="meta-item">
+                                <span class="meta-label">Intake Origin</span>
+                                <span class="meta-val">@TaskInspectorPresentationHelper.FormatTaskOrigin(_task.Origin)</span>
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(_task.ExternalSource))
+                            {
+                                <div class="meta-item">
+                                    <span class="meta-label">External Source</span>
+                                    <span class="meta-val font-mono">@_task.ExternalSource</span>
+                                </div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(_task.ExternalReferenceId))
+                            {
+                                <div class="meta-item">
+                                    <span class="meta-label">External Reference</span>
+                                    <span class="meta-val font-mono">@_task.ExternalReferenceId</span>
+                                </div>
+                            }
+                        }
                         <div class="meta-item">
                             <span class="meta-label">Created At</span>
                             <span class="meta-val">@_task.CreatedAt.ToLocalTime().ToString("g")</span>
@@ -870,7 +925,7 @@
         _diffFiles = Array.Empty<FileDiffSummary>();
         _selectedDiffFile = null;
         await LoadTaskDataAsync();
-        if (_activeTab == "changes")
+        if (_activeTab == "changes" && TaskInspectorPresentationHelper.ShouldShowGitDiffTab(_task))
         {
             await LoadDiffFilesAsync();
         }
@@ -884,6 +939,16 @@
             _task = await TaskRepository.GetByIdAsync(TaskId);
             if (_task != null)
             {
+                if (TaskInspectorPresentationHelper.IsTriageSession(_task))
+                {
+                    _isEditingTitle = false;
+                    _isEditingDescription = false;
+                    if (_activeTab == "changes")
+                    {
+                        _activeTab = "spec";
+                    }
+                }
+
                 _workspace = await WorkspaceRepository.GetByIdAsync(_task.WorkspaceId);
                 if (_workspace != null)
                 {
@@ -1218,6 +1283,7 @@
 
     private static string GetStatusBadgeClass(TaskOverallStatus status) => status switch
     {
+        TaskOverallStatus.Triage => "badge-indigo",
         TaskOverallStatus.Suggested => "badge-amber",
         TaskOverallStatus.Open => "badge-indigo",
         TaskOverallStatus.Reviewed => "badge-purple",

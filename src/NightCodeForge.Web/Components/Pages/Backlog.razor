@@ -478,7 +478,7 @@
         try
         {
             var tasks = (await TaskRepository.GetByWorkspaceIdAsync(active.Id))
-                .Where(t => t.Status != TaskOverallStatus.Draft)
+                .Where(t => t.Status != TaskOverallStatus.Draft && t.Status != TaskOverallStatus.Triage)
                 .ToList();
             _allTasks = tasks.OrderBy(t => t.Priority).ThenBy(t => t.CreatedAt).ToList();
 

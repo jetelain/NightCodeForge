@@ -135,6 +135,7 @@ public static class StageConversationParser
 
         return stageId switch
         {
+            string s when string.Equals(s, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase) => "Untrusted Intake Triage",
             StandardStageIds.TaskReview => "ForgeTask Review",
             StandardStageIds.PreImplementationBaseline => "Pre-Implementation Baseline",
             StandardStageIds.Implementation => "Implementation",

@@ -197,7 +197,8 @@ public class SignalRActivityBridgeService : BackgroundService
                             .ReceiveWorkerStatus(WorkerStatusConstants.Running, evt.TaskId, evt.StageId, hardwareTarget);
                     }
                     else if (isAutonomousTask &&
-                             (string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
+                             (string.Equals(evt.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(evt.StageId, StandardStageIds.Merge, StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(evt.StageId, StandardStageIds.PostReviewVerification, StringComparison.OrdinalIgnoreCase)))
                     {
                         _telemetryService.ClearActiveTask(evt.TaskId);
@@ -300,7 +301,8 @@ public class SignalRActivityBridgeService : BackgroundService
 
                     if (evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ToolName, out var noticeTool) == true
                         && noticeTool?.ToString() is { } noticeToolName
-                        && CanonicalToolNames.BacklogMutationTools.Contains(noticeToolName, StringComparer.OrdinalIgnoreCase))
+                        && (CanonicalToolNames.BacklogMutationTools.Contains(noticeToolName, StringComparer.OrdinalIgnoreCase) ||
+                            string.Equals(noticeToolName, CanonicalToolNames.ProposeTasks, StringComparison.OrdinalIgnoreCase)))
                     {
                         await _hubContext.Clients.All.ReceiveBacklogMutation(evt.TaskId, noticeToolName, evt.Content);
                     }

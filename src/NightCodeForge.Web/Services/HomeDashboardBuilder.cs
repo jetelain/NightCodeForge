@@ -159,7 +159,7 @@ public static class HomeDashboardBuilder
 
         foreach (var ws in workspaces)
         {
-            var tasks = tasksByWorkspaceId[ws.Id];
+            var tasks = tasksByWorkspaceId[ws.Id].Where(t => t.Status != TaskOverallStatus.Triage).ToList();
             var wsTaskIds = tasks.Select(t => t.Id).ToHashSet();
 
             var lastTaskActivity = tasks.Count > 0

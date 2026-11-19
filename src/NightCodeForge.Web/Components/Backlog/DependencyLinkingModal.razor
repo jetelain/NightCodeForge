@@ -51,7 +51,7 @@
                 <div class="candidate-tasks-container" style="max-height: 280px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); padding: 0.5rem; display: flex; flex-direction: column; gap: 0.4rem;">
                     @{
                         var candidateTasks = AllTasks
-                            .Where(t => t.Id != TargetTask.Id)
+                            .Where(t => t.Id != TargetTask.Id && t.Status != TaskOverallStatus.Triage)
                             .Where(t => string.IsNullOrWhiteSpace(_searchFilter) ||
                                         t.Title.Contains(_searchFilter, StringComparison.OrdinalIgnoreCase) ||
                                         t.Id.ToString().Contains(_searchFilter))
