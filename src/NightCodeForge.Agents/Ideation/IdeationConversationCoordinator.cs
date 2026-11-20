@@ -1730,37 +1730,10 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         int workspaceId,
         IWorkspacePathResolver pathResolver)
     {
-        var rawDir = pathResolver.GetAttachmentsPath(workspaceId);
-        var hostDir = !string.IsNullOrWhiteSpace(rawDir) ? pathResolver.ToHostPath(rawDir) : null;
-        var baseDir = !string.IsNullOrWhiteSpace(hostDir) ? hostDir : rawDir;
-        if (!string.IsNullOrWhiteSpace(baseDir) && !string.IsNullOrWhiteSpace(attachment.RelativePath))
-        {
-            var rel = attachment.RelativePath.Trim();
-            if (!Path.IsPathRooted(rel) && !rel.StartsWith('/') && !rel.StartsWith('\\'))
-            {
-                var candidate = Path.GetFullPath(Path.Combine(baseDir, rel.Replace('/', Path.DirectorySeparatorChar)));
-                if (SandboxPathResolver.IsPathInsideDirectory(candidate, baseDir) && File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        if (attachment.IsSymlink && !string.IsNullOrWhiteSpace(attachment.SourceRef))
-        {
-            if (File.Exists(attachment.SourceRef))
-            {
-                return attachment.SourceRef;
-            }
-
-            var mapped = pathResolver.ToHostPath(attachment.SourceRef);
-            if (!string.IsNullOrWhiteSpace(mapped) && File.Exists(mapped))
-            {
-                return mapped;
-            }
-        }
-
-        return null;
+        var hostDir = AttachmentHostPathResolver.ResolveHostAttachmentsDirectory(workspaceId, pathResolver);
+        return AttachmentHostPathResolver
+            .EnumerateReadableAttachmentPaths(attachment, hostDir, pathResolver, readPrimaryFile: true)
+            .FirstOrDefault();
     }
 
     private async Task<IdeationResult> ExecuteTurnCoreAsync(

@@ -1111,12 +1111,12 @@ public class TaskOrchestrator : ITaskOrchestrator
                     var proposalAttachments = new List<IReadOnlyList<int>>(pendingProposals.Count);
                     foreach (var p in pendingProposals)
                     {
-                        var validatedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                        var resolvedAttachmentIds = await ResolveExistingWorkspaceAttachmentIdsAsync(
                             workspace.Id,
                             p.AttachmentIds,
                             p.Description,
                             cancellationToken);
-                        proposalAttachments.Add(validatedAttachmentIds);
+                        proposalAttachments.Add(resolvedAttachmentIds);
                     }
 
                     for (var proposalIndex = 0; proposalIndex < pendingProposals.Count; proposalIndex++)
@@ -1145,7 +1145,13 @@ public class TaskOrchestrator : ITaskOrchestrator
                         await _mergeAndCascadeCoordinator.UpdateTaskStatusInStoreAsync(suggestedTask.Id, suggestedTask.Status, cancellationToken);
                         if (attachmentIds.Count > 0)
                         {
-                            await _attachmentRepository.SetTaskAttachmentLinksAsync(suggestedTask.Id, attachmentIds, cancellationToken);
+                            await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+                                _attachmentRepository,
+                                workspace.Id,
+                                suggestedTask.Id,
+                                attachmentIds,
+                                _logger,
+                                cancellationToken);
                         }
                         _logger.LogInformation("Triage/Discovery created suggested task #{NewTaskId}: {Title}", suggestedTask.Id, suggestedTask.Title);
                         await _workspacePreparer.SyncMarkdownTaskSafeAsync(workspace, suggestedTask, cancellationToken);
@@ -1253,9 +1259,21 @@ public class TaskOrchestrator : ITaskOrchestrator
                         {
                             throw;
                         }
-                        catch (AttachmentNotFoundException)
+                        catch (AttachmentNotFoundException attEx)
                         {
-                            throw;
+                            _logger.LogWarning(
+                                attEx,
+                                "Ignoring missing attachment reference during post-stage disk sync for stage '{StageId}' on task #{TaskId}.",
+                                stage.StageId,
+                                task.Id);
+                            await _taskRepository.AddExecutionLogAsync(new ExecutionLog
+                            {
+                                TaskId = task.Id,
+                                Level = LogLevel.Warning,
+                                Message = $"Post-stage disk synchronization skipped due to missing attachment reference (#{attEx.AttachmentId}) during stage '{stage.StageId}': {attEx.Message}",
+                                Timestamp = DateTime.UtcNow
+                            }, cancellationToken);
+                            break;
                         }
                         catch (Exception ex)
                         {
@@ -3300,16 +3318,17 @@ public class TaskOrchestrator : ITaskOrchestrator
             smartFilteringEnabled: optFlags?.SmartCliOutputFiltering ?? true);
     }
 
-    private Task<IReadOnlyList<int>> ValidateAndResolveWorkspaceAttachmentIdsAsync(
+    private Task<IReadOnlyList<int>> ResolveExistingWorkspaceAttachmentIdsAsync(
         int workspaceId,
         IReadOnlyList<int>? explicitIds,
         string? description,
         CancellationToken cancellationToken) =>
-        AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+        AttachmentCitationParser.ResolveExistingWorkspaceIdsAsync(
             _attachmentRepository,
             workspaceId,
             explicitIds,
             description,
+            _logger,
             cancellationToken);
 
     private async Task<IReadOnlyList<TaskAttachment>?> LoadStageTaskAttachmentsAsync(

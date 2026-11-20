@@ -1545,21 +1545,6 @@ code, kbd, samp, pre {
     flex-shrink: 0;
 }
 
-.proposals-header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.proposals-header-left h2 {
-    font-size: 1.1rem;
-    margin: 0;
-}
-
-.proposals-header-icon {
-    font-size: 1.2rem;
-}
-
 .proposals-header-right {
     display: flex;
     align-items: center;
@@ -7008,12 +6993,18 @@ html, body, .forge-layout, .forge-main-content {
 
     .ideation-switch-btn {
         flex: 1;
+        min-width: 0;
         min-height: 44px;
+        padding: 0.35rem 0.4rem;
         border: none;
         border-radius: var(--radius-md);
         background: transparent;
         color: var(--text-secondary);
+        font-size: 0.8rem;
         font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         cursor: pointer;
     }
 
@@ -7269,28 +7260,63 @@ html, body, .forge-layout, .forge-main-content {
    Step 12.2C: Workspace Attachments, Chips & Preview Drawer
    ========================================================================== */
 
-.workspace-attachments-panel {
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-}
-
-.workspace-attachments-header {
-    padding: 0.4rem 0.85rem;
-}
-
-.workspace-attachments-toggle-btn {
-    width: 100%;
+.ideation-side-tabs {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.ideation-side-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
     background: transparent;
-    border: none;
-    color: var(--text-primary);
-    font-size: 0.82rem;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
     font-weight: 600;
     cursor: pointer;
-    padding: 0.2rem 0;
+    transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ideation-side-tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.ideation-side-tab-btn.active {
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.16);
+    border-color: rgba(99, 102, 241, 0.38);
+}
+
+.workspace-attachments-panel.side-pane-attachments {
+    background: transparent;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.workspace-attachments-panel.side-pane-attachments .workspace-attachments-body {
+    flex: 1;
+    min-height: 0;
+    padding: 1rem;
+    overflow: hidden;
+}
+
+.workspace-attachments-panel.side-pane-attachments .workspace-attachment-meta {
+    word-break: break-word;
+    max-width: 100%;
+    white-space: normal;
+}
+
+.attachment-content-read-error {
+    margin-top: 0.25rem;
 }
 
 .workspace-attachments-body {
@@ -7310,7 +7336,8 @@ html, body, .forge-layout, .forge-main-content {
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    max-height: 180px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
 }
 

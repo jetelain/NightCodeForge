@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Net;
 using System.Text;
 using Bunit;
 using Microsoft.AspNetCore.Components;
@@ -52,26 +51,25 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public void AttachmentPresentationHelper_ExtractsCitationsFormatsStatusSizeSymlinkReachabilityAndFilters()
+    public void AttachmentPresentationHelper_ResolvesExplicitCitationsFormatsStatusSizeSymlinkReachabilityAndFilters()
     {
-        // 1. Message citation extraction
-        const string msg = "Inspect C:\\dev\\poc\\router-spikes.md, `~/docs/guide.md`, and https://example.com/rfc along with @attachment:7.";
-        var extraction = AttachmentPresentationHelper.ExtractMessageCitations(msg);
-        Assert.Contains("C:\\dev\\poc\\router-spikes.md", extraction.HostPaths);
-        Assert.Contains("~/docs/guide.md", extraction.HostPaths);
-        Assert.Contains("https://example.com/rfc", extraction.Urls);
-        Assert.Equal([7], extraction.CitedAttachmentIds);
-        Assert.True(extraction.HasAny);
+        // 1. Supported format helpers
+        Assert.True(AttachmentConstants.IsSupportedFileName("spec.md"));
+        Assert.True(AttachmentConstants.IsSupportedFileName(@"C:\path\shot.png"));
+        Assert.False(AttachmentConstants.IsSupportedFileName("ComicGen.App.exe"));
+        Assert.False(AttachmentConstants.IsSupportedFileName("extensionless"));
+        Assert.False(AttachmentConstants.IsSupportedFileName(null));
+        Assert.Contains(".md", AttachmentConstants.HtmlAcceptExtensions);
+        Assert.Contains(".png", AttachmentConstants.HtmlAcceptExtensions);
+        Assert.DoesNotContain(".exe", AttachmentConstants.HtmlAcceptExtensions);
 
         // 2. Status, symlink, and reachability formatting
         Assert.Equal("stored", AttachmentPresentationHelper.FormatIntakeStatusLabel(AttachmentIntakeStatus.Stored));
         Assert.Equal("symlinked", AttachmentPresentationHelper.FormatIntakeStatusLabel(AttachmentIntakeStatus.Symlinked));
         Assert.Equal("converting", AttachmentPresentationHelper.FormatIntakeStatusLabel(AttachmentIntakeStatus.Converting));
-        Assert.Equal("failed", AttachmentPresentationHelper.FormatIntakeStatusLabel(AttachmentIntakeStatus.Failed));
         Assert.Equal("badge-teal", AttachmentPresentationHelper.GetIntakeStatusBadgeClass(AttachmentIntakeStatus.Stored));
         Assert.Equal("badge-indigo", AttachmentPresentationHelper.GetIntakeStatusBadgeClass(AttachmentIntakeStatus.Symlinked));
         Assert.Equal("badge-amber", AttachmentPresentationHelper.GetIntakeStatusBadgeClass(AttachmentIntakeStatus.Converting));
-        Assert.Equal("badge-crimson", AttachmentPresentationHelper.GetIntakeStatusBadgeClass(AttachmentIntakeStatus.Failed));
 
         var symlinkAtt = new TaskAttachment
         {
@@ -88,7 +86,6 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         };
 
         Assert.Equal(AttachmentIntakeStatus.Symlinked, AttachmentPresentationHelper.ResolveIntakeStatus(symlinkAtt));
-        Assert.Equal(@"🔗 C:\dev\poc\router-spikes.md", AttachmentPresentationHelper.FormatSymlinkBadge(symlinkAtt));
         Assert.Equal("Reachable", AttachmentPresentationHelper.FormatTargetReachabilityLabel(true));
         Assert.Equal("Target Missing", AttachmentPresentationHelper.FormatTargetReachabilityLabel(false));
         Assert.Equal("badge-emerald", AttachmentPresentationHelper.GetTargetReachabilityBadgeClass(true));
@@ -108,7 +105,19 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         Assert.Equal("Review @attachment:2 router-spikes.md", appended);
         Assert.Equal(appended, AttachmentPresentationHelper.AppendCitationToPrompt(appended, symlinkAtt));
 
-        // 5. Filtering by title, source ref, and #id
+        // 5. Restored message chips resolve ONLY explicit @attachment:{id} citations (never raw host paths or URLs)
+        var restoredFromRaw = AttachmentPresentationHelper.ResolveRestoredMessageChips(
+            @"Inspect C:\dev\poc\router-spikes.md and https://example.com/rfc",
+            [symlinkAtt]);
+        Assert.Empty(restoredFromRaw);
+
+        var restoredExplicit = AttachmentPresentationHelper.ResolveRestoredMessageChips(
+            @"Inspect @attachment:2 router-spikes.md alongside C:\dev\poc\router-spikes.md",
+            [symlinkAtt]);
+        var restoredChip = Assert.Single(restoredExplicit);
+        Assert.Equal(2, restoredChip.AttachmentId);
+
+        // 6. Filtering by title, source ref, and #id
         var att1 = new TaskAttachment { Id = 1, Title = "OpenAI API Spec", Slug = "openai", SourceRef = "openai.pdf", SizeBytes = 100 };
         var att2 = symlinkAtt;
         var all = new[] { att1, att2 };
@@ -119,51 +128,39 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public async Task AttachmentUiService_CoordinatesIngestionCitationsPreviewReachabilityAndSafeDeletion()
+    public async Task AttachmentUiService_CoordinatesExplicitIngestionPreviewReachabilityAndSafeDeletion()
     {
         var harness = await CreateAttachmentHarnessAsync(workspaceId: 10);
         var hostFile = Path.Combine(_tempRoot, "host-spikes.md");
         await File.WriteAllTextAsync(hostFile, "# Host Spikes\nImportant routing rules.");
+        var unattachedHostFile = Path.Combine(_tempRoot, "unattached-host.md");
+        await File.WriteAllTextAsync(unattachedHostFile, "# Unattached\nShould never be auto-ingested.");
 
-        // 1. Upload file drop + image file drop
+        // 1. Upload file drop + image file drop + explicit host path attach
         await using var mdStream = new MemoryStream(Encoding.UTF8.GetBytes("# Design Doc\nToken rotation spec."));
         var uploadedMd = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "design-doc.md", mdStream);
 
         await using var pngStream = new MemoryStream(CreateValidPngBytes(1280, 720));
         var uploadedImg = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "ui-mockup.png", pngStream);
 
-        // 2. Host path symlink attach + URL capture + message citation ingestion (valid + missing)
-        var missingHostPath = Path.Combine(_tempRoot, "does-not-exist.md");
-        var observedTransitions = new List<(string Title, AttachmentIntakeStatus Status)>();
-        var chips = await harness.UiService.IngestMessageCitationsAsync(
+        var symlinkAtt = await harness.UiService.AttachHostFileAsync(harness.Workspace.Id, hostFile);
+
+        // 2. ResolveCitedAttachmentChipsAsync resolves ONLY explicit @attachment:{id} and never auto-ingests paths or URLs
+        var resolvedChips = await harness.UiService.ResolveCitedAttachmentChipsAsync(
             harness.Workspace.Id,
-            $"Check \"{hostFile}\", https://example.com/rfc, and \"{missingHostPath}\" plus @attachment:{uploadedMd.Id}",
-            chip => observedTransitions.Add((chip.Title, chip.Status)));
+            $"Check \"{unattachedHostFile}\", C:\\app\\Tool.exe, https://example.com/rfc, and @attachment:{uploadedMd.Id} plus @attachment:{symlinkAtt.Id}");
 
-        Assert.Contains(observedTransitions, t => t.Title == "host-spikes.md" && t.Status == AttachmentIntakeStatus.Converting);
-        Assert.Contains(observedTransitions, t => t.Title == "host-spikes.md" && t.Status == AttachmentIntakeStatus.Symlinked);
-        Assert.Contains(observedTransitions, t => t.Title == "does-not-exist.md" && t.Status == AttachmentIntakeStatus.Failed);
-        Assert.Contains(observedTransitions, t => t.Status == AttachmentIntakeStatus.Stored && t.Title == "Mock Page");
-
-        var symlinkChip = Assert.Single(chips, c => c.SourceRef == hostFile || c.IsSymlink && c.Title == "host-spikes.md");
-        Assert.Equal(AttachmentIntakeStatus.Symlinked, symlinkChip.Status);
-        Assert.NotNull(symlinkChip.AttachmentId);
-
-        var urlChip = Assert.Single(chips, c => c.SourceRef == "https://example.com/rfc");
-        Assert.Equal(AttachmentIntakeStatus.Stored, urlChip.Status);
-        Assert.NotNull(urlChip.AttachmentId);
-
-        var failedChip = Assert.Single(chips, c => c.Status == AttachmentIntakeStatus.Failed);
-        Assert.False(string.IsNullOrWhiteSpace(failedChip.ErrorMessage));
-
-        var citedChip = Assert.Single(chips, c => c.AttachmentId == uploadedMd.Id);
-        Assert.Equal(AttachmentIntakeStatus.Stored, citedChip.Status);
+        Assert.Equal(2, resolvedChips.Count);
+        Assert.Contains(resolvedChips, c => c.AttachmentId == uploadedMd.Id && c.Status == AttachmentIntakeStatus.Stored);
+        Assert.Contains(resolvedChips, c => c.AttachmentId == symlinkAtt.Id && c.Status == AttachmentIntakeStatus.Symlinked);
+        Assert.Equal(3, (await harness.AttachmentRepo.GetByWorkspaceIdAsync(harness.Workspace.Id)).Count);
 
         // 3. Preview loading (markdown HTML + image DataUri + symlink reachability)
         var mdPreview = await harness.UiService.LoadPreviewAsync(uploadedMd.Id);
         Assert.Contains("<h1", mdPreview.RenderedHtml);
         Assert.Contains("Token rotation spec.", mdPreview.RenderedHtml);
         Assert.True(mdPreview.IsTargetReachable);
+        Assert.Null(mdPreview.ContentReadError);
 
         var imgPreview = await harness.UiService.LoadPreviewAsync(uploadedImg.Id);
         Assert.NotNull(imgPreview.ImageDataUri);
@@ -171,28 +168,31 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         Assert.Equal(1280, imgPreview.Attachment.WidthPx);
         Assert.Equal(720, imgPreview.Attachment.HeightPx);
 
-        var symlinkPreviewOk = await harness.UiService.LoadPreviewAsync(symlinkChip.AttachmentId!.Value);
+        // Even when the POSIX symlink inside attachments/ isn't directly readable on Windows,
+        // LoadPreviewAsync resolves the direct host target without failing.
+        var symlinkPreviewOk = await harness.UiService.LoadPreviewAsync(symlinkAtt.Id);
         Assert.True(symlinkPreviewOk.IsTargetReachable);
         Assert.Contains("Important routing rules.", symlinkPreviewOk.RenderedHtml);
+        Assert.Null(symlinkPreviewOk.ContentReadError);
 
-        // Delete impact + safe deletion preserves host file
+        // 4. Delete impact + safe deletion preserves host file
         var task = await harness.TaskRepo.CreateAsync(new ForgeTask
         {
             WorkspaceId = harness.Workspace.Id,
             Title = "Task Linking Host File",
             BaseBranch = "main"
         });
-        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(task.Id, [symlinkChip.AttachmentId.Value]);
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(task.Id, [symlinkAtt.Id]);
 
-        var impact = await harness.UiService.GetDeleteImpactAsync(symlinkChip.AttachmentId.Value);
+        var impact = await harness.UiService.GetDeleteImpactAsync(symlinkAtt.Id);
         Assert.Single(impact.LinkedTasks, t => t.Id == task.Id);
 
-        await harness.UiService.DeleteAttachmentAsync(symlinkChip.AttachmentId.Value);
-        Assert.Null(await harness.AttachmentRepo.GetByIdAsync(symlinkChip.AttachmentId.Value));
+        await harness.UiService.DeleteAttachmentAsync(symlinkAtt.Id);
+        Assert.Null(await harness.AttachmentRepo.GetByIdAsync(symlinkAtt.Id));
         Assert.Empty(await harness.AttachmentRepo.GetByTaskIdAsync(task.Id));
         Assert.True(File.Exists(hostFile));
 
-        // 4. Target Missing detection when host target disappears
+        // 5. Target Missing detection when host target disappears
         var disappearingHost = Path.Combine(_tempRoot, "temp-host.md");
         await File.WriteAllTextAsync(disappearingHost, "# Temp");
         var tempSymlink = await harness.UiService.AttachHostFileAsync(harness.Workspace.Id, disappearingHost);
@@ -285,7 +285,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
     }
 
     [Fact]
-    public async Task IdeationPage_SupportsDropZoneHostFileAttachMessageCitationsWorkspacePanelAndCiteInChat()
+    public async Task IdeationPage_ManagesAttachmentsInSidePaneTabs_RejectsUnsupportedFilesAndDirs_AndDropsAutoAttachmentFromChat()
     {
         var harness = await CreateAttachmentHarnessAsync(workspaceId: 30);
         harness.WorkspaceRepo.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
@@ -307,27 +307,49 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         ];
 
         var hostFile1 = Path.Combine(_tempRoot, "router-spikes.md");
-        var hostFile2 = Path.Combine(_tempRoot, "cited-in-msg.md");
+        var unattachedDoc = Path.Combine(_tempRoot, "ignored-in-chat.md");
+        var unsupportedExe = Path.Combine(_tempRoot, "ComicGen.App.exe");
+        var subDirectory = Path.Combine(_tempRoot, "some-directory");
         await File.WriteAllTextAsync(hostFile1, "# Router Spikes\nSpike content.");
-        await File.WriteAllTextAsync(hostFile2, "# Cited In Message\nMessage citation content.");
+        await File.WriteAllTextAsync(unattachedDoc, "# Ignored\nMust not be auto-attached from message text.");
+        await File.WriteAllBytesAsync(unsupportedExe, [0x4D, 0x5A, 0x90, 0x00]);
+        Directory.CreateDirectory(subDirectory);
 
         RegisterHarnessServices(harness, wsState, sessionState, mockIdeation);
 
         var cut = Render<Ideation>();
 
-        // 1. File drop via <InputFile>
+        // 0. Side pane tabs: Attachments live on the right pane, NOT inline inside .chat-pane
+        Assert.Empty(cut.Find(".chat-pane").QuerySelectorAll(".workspace-attachments-panel"));
+        Assert.Empty(cut.FindAll("#btn-toggle-workspace-attachments"));
+        Assert.NotNull(cut.Find("#ideation-side-tab-proposals"));
+        Assert.NotNull(cut.Find("#ideation-side-tab-attachments"));
+        Assert.Equal("true", cut.Find("#ideation-side-tab-proposals").GetAttribute("aria-selected"));
+
+        // 1. File drop via <InputFile> (valid markdown + rejected .exe)
         var inputFile = cut.FindComponent<InputFile>();
+        Assert.Contains(".md", inputFile.Instance.AdditionalAttributes!["accept"]?.ToString());
         inputFile.UploadFiles(
-            InputFileContent.CreateFromText("# Drop Spec\nDropped markdown.", "drop-spec.md", contentType: "text/markdown"));
+            InputFileContent.CreateFromText("# Drop Spec\nDropped markdown.", "drop-spec.md", contentType: "text/markdown"),
+            InputFileContent.CreateFromText("MZ", "payload.exe", contentType: "application/octet-stream"));
 
         cut.WaitForAssertion(() =>
         {
-            Assert.Contains("drop-spec.md", cut.Find(".composer-attachment-chips").TextContent);
-            Assert.Contains("stored", cut.Find(".composer-attachment-chips").TextContent);
-            Assert.Contains("drop-spec.md", cut.Find(".workspace-attachments-list").TextContent);
+            var chipsText = cut.Find(".composer-attachment-chips").TextContent;
+            Assert.Contains("drop-spec.md", chipsText);
+            Assert.Contains("stored", chipsText);
+            Assert.DoesNotContain("payload.exe", chipsText);
+            Assert.Contains("📎 Attachments", cut.Find("#ideation-side-tab-attachments").TextContent);
         });
 
-        // 2. Attach Host File path input
+        // 2. Attach Host File path input (directory & .exe rejected without leaving failed chips; valid file succeeds)
+        cut.Find("#ideation-host-file-input").Input(subDirectory);
+        cut.Find("#btn-attach-host-file").Click();
+        cut.Find("#ideation-host-file-input").Input(unsupportedExe);
+        cut.Find("#btn-attach-host-file").Click();
+        Assert.DoesNotContain("ComicGen.App.exe", cut.Find(".composer-attachment-chips").TextContent);
+        Assert.DoesNotContain("some-directory", cut.Find(".composer-attachment-chips").TextContent);
+
         cut.Find("#ideation-host-file-input").Input(hostFile1);
         cut.Find("#btn-attach-host-file").Click();
 
@@ -336,11 +358,24 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             var chipsText = cut.Find(".composer-attachment-chips").TextContent;
             Assert.Contains("router-spikes.md", chipsText);
             Assert.Contains("symlinked", chipsText);
-            Assert.Contains($"🔗 {VirtualMountEntry.ToDefaultWslPath(hostFile1)}", chipsText);
-            Assert.Contains("router-spikes.md", cut.Find(".workspace-attachments-list").TextContent);
+            Assert.Empty(cut.FindAll(".composer-attachment-chips .attachment-symlink-badge"));
+            Assert.DoesNotContain(VirtualMountEntry.ToDefaultWslPath(hostFile1), chipsText);
         });
 
-        // 3. Cite in Chat from Workspace Attachments panel inserts @attachment:{id}
+        // 3. Switch right side pane to Attachments tab -> lists attachments, filters, and cites in chat (including mobile pane switch)
+        await cut.InvokeAsync(() => cut.Find("#ideation-side-tab-attachments").Click());
+        await cut.InvokeAsync(() => cut.Find("#ideation-tab-attachments").Click());
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal("true", cut.Find("#ideation-side-tab-attachments").GetAttribute("aria-selected"));
+            Assert.Equal("true", cut.Find("#ideation-tab-attachments").GetAttribute("aria-selected"));
+            Assert.Equal("false", cut.Find("#ideation-tab-chat").GetAttribute("aria-selected"));
+            var listText = cut.Find(".workspace-attachments-list").TextContent;
+            Assert.Contains("drop-spec.md", listText);
+            Assert.Contains("router-spikes.md", listText);
+            Assert.Empty(cut.FindAll(".workspace-attachment-title-line .attachment-symlink-badge"));
+        });
+
         await cut.InvokeAsync(() =>
         {
             var dropRow = cut.FindAll(".workspace-attachment-row").First(r => r.TextContent.Contains("drop-spec.md"));
@@ -351,54 +386,15 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         {
             var textareaVal = cut.Find("textarea.chat-textarea").GetAttribute("value");
             Assert.Contains("@attachment:", textareaVal);
+            Assert.Equal("true", cut.Find("#ideation-tab-chat").GetAttribute("aria-selected"));
         });
 
-        // Filter workspace attachments panel
+        // Filter workspace attachments panel in side pane
         cut.Find("#ideation-attachment-search-input").Input("router-spikes");
         var filteredRows = cut.FindAll(".workspace-attachment-row");
         Assert.Single(filteredRows);
         Assert.Contains("router-spikes.md", filteredRows[0].TextContent);
-
-        // Clear search filter and collapse/expand panel
         cut.Find("#ideation-attachment-search-input").Input(string.Empty);
-        cut.Find("#btn-toggle-workspace-attachments").Click();
-        Assert.Empty(cut.FindAll(".workspace-attachments-body"));
-        cut.Find("#btn-toggle-workspace-attachments").Click();
-        Assert.NotEmpty(cut.FindAll(".workspace-attachments-body"));
-
-        // 4. Send message with cited host path and missing path -> creates message chips with live status
-        var missingPath = Path.Combine(_tempRoot, "missing-cite.md");
-        cut.Find("textarea.chat-textarea").Input($"Please review \"{hostFile2}\" and \"{missingPath}\"");
-        cut.Find("button.send-btn").Click();
-
-        cut.WaitForAssertion(() =>
-        {
-            Assert.False(sessionState.IsGenerating);
-            Assert.Equal(2, sessionState.Messages.Count);
-            var msgChips = cut.FindAll(".message-attachment-chips .attachment-chip");
-            Assert.Contains(msgChips, c => c.TextContent.Contains("cited-in-msg.md") && c.TextContent.Contains("symlinked"));
-            Assert.Contains(msgChips, c => c.TextContent.Contains("missing-cite.md") && c.TextContent.Contains("failed"));
-        });
-
-        // 5. Clicking a conversation chip opens AttachmentPreviewDrawer
-        await cut.InvokeAsync(() =>
-        {
-            var clickableMsgChip = cut.FindAll(".message-attachment-chips .attachment-chip")
-                .First(c => c.TextContent.Contains("cited-in-msg.md"));
-            clickableMsgChip.Click();
-        });
-
-        cut.WaitForAssertion(() =>
-        {
-            var drawer = cut.Find(".attachment-preview-drawer");
-            Assert.Contains("cited-in-msg.md", drawer.TextContent);
-            Assert.Contains("Message citation content.", drawer.InnerHtml);
-            Assert.Contains("Reachable", cut.Find("#attachment-reachability-badge").TextContent);
-        });
-
-        // 6. Close preview, add proposal with linked attachment to backlog, and verify TaskAttachmentLinks
-        await cut.InvokeAsync(() => cut.Find("#btn-close-attachment-preview").Click());
-        Assert.Empty(cut.FindAll(".attachment-preview-drawer"));
 
         var dropRowId = int.Parse(
             cut.FindAll(".workspace-attachment-row")
@@ -406,6 +402,53 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
                 .GetAttribute("data-attachment-id")!,
             System.Globalization.CultureInfo.InvariantCulture);
 
+        // 4. Send message with raw .exe path, directory, unattached doc, URL, AND explicit @attachment:{id}
+        // -> NO auto-attachment for paths or URLs; ONLY explicit @attachment:{id} and composer chips appear
+        var beforeCount = (await harness.AttachmentRepo.GetByWorkspaceIdAsync(harness.Workspace.Id)).Count;
+        Assert.Equal(2, beforeCount);
+
+        cut.Find("textarea.chat-textarea").Input(
+            $"Please analyze \"{unsupportedExe}\", \"{subDirectory}\", \"{unattachedDoc}\", https://example.com/docs and @attachment:{dropRowId}");
+        cut.Find("button.send-btn").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.False(sessionState.IsGenerating);
+            Assert.Equal(2, sessionState.Messages.Count);
+            var msgChips = cut.FindAll(".message-attachment-chips .attachment-chip");
+            Assert.Equal(2, msgChips.Count);
+            Assert.Contains(msgChips, c => c.TextContent.Contains("drop-spec.md"));
+            Assert.Contains(msgChips, c => c.TextContent.Contains("router-spikes.md"));
+            Assert.DoesNotContain(msgChips, c => c.TextContent.Contains("ComicGen.App.exe"));
+            Assert.DoesNotContain(msgChips, c => c.TextContent.Contains("ignored-in-chat.md"));
+            Assert.DoesNotContain(msgChips, c => c.TextContent.Contains("failed"));
+            Assert.DoesNotContain(msgChips, c => c.TextContent.Contains(VirtualMountEntry.ToDefaultWslPath(hostFile1)));
+            Assert.Empty(cut.FindAll(".message-attachment-chips .attachment-symlink-badge"));
+        });
+        Assert.Equal(2, (await harness.AttachmentRepo.GetByWorkspaceIdAsync(harness.Workspace.Id)).Count);
+
+        // 5. Clicking a conversation chip opens AttachmentPreviewDrawer
+        await cut.InvokeAsync(() =>
+        {
+            var clickableMsgChip = cut.FindAll(".message-attachment-chips .attachment-chip")
+                .First(c => c.TextContent.Contains("router-spikes.md"));
+            clickableMsgChip.Click();
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var drawer = cut.Find(".attachment-preview-drawer");
+            Assert.Contains("router-spikes.md", drawer.TextContent);
+            Assert.Contains("Spike content.", drawer.InnerHtml);
+            Assert.Contains("Reachable", cut.Find("#attachment-reachability-badge").TextContent);
+            Assert.Empty(cut.FindAll(".attachment-symlink-badge"));
+        });
+
+        // 6. Close preview, switch back to Proposals tab, add proposal with linked attachment to backlog
+        await cut.InvokeAsync(() => cut.Find("#btn-close-attachment-preview").Click());
+        Assert.Empty(cut.FindAll(".attachment-preview-drawer"));
+
+        cut.Find("#ideation-side-tab-proposals").Click();
         sessionState.AddProposal(new IdeationProposalViewModel
         {
             Title = "Proposal With Linked Drop Spec",
@@ -422,23 +465,27 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         var linkedForCreatedTask = await harness.AttachmentRepo.GetByTaskIdAsync(createdTask.Id);
         Assert.Single(linkedForCreatedTask, a => a.Id == dropRowId);
 
-        // 7. Workspace Attachments panel Preview & Delete buttons open drawer and delete safely
-        var citedRowId = cut.FindAll(".workspace-attachment-row")
-            .First(r => r.TextContent.Contains("cited-in-msg.md"))
+        // 7. Side-pane Attachments tab Preview & Delete buttons open drawer and delete safely
+        cut.Find("#ideation-side-tab-attachments").Click();
+        var routerRowId = cut.FindAll(".workspace-attachment-row")
+            .First(r => r.TextContent.Contains("router-spikes.md"))
             .GetAttribute("data-attachment-id");
         await cut.InvokeAsync(() =>
-            cut.Find($".workspace-attachment-row[data-attachment-id='{citedRowId}'] .attachment-preview-btn").Click());
-        cut.WaitForAssertion(() => Assert.Contains("cited-in-msg.md", cut.Find(".attachment-preview-drawer").TextContent));
+            cut.Find($".workspace-attachment-row[data-attachment-id='{routerRowId}'] .attachment-preview-btn").Click());
+        cut.WaitForAssertion(() => Assert.Contains("router-spikes.md", cut.Find(".attachment-preview-drawer").TextContent));
         await cut.InvokeAsync(() => cut.Find("#btn-close-attachment-preview").Click());
 
         await cut.InvokeAsync(() =>
-            cut.Find($".workspace-attachment-row[data-attachment-id='{citedRowId}'] .attachment-delete-btn").Click());
+            cut.Find($".workspace-attachment-row[data-attachment-id='{routerRowId}'] .attachment-delete-btn").Click());
         cut.WaitForAssertion(() => Assert.NotEmpty(cut.FindAll(".attachment-delete-confirm-modal")));
         await cut.InvokeAsync(() => cut.Find("#btn-confirm-delete-attachment").Click());
 
         cut.WaitForAssertion(() =>
-            Assert.DoesNotContain("cited-in-msg.md", cut.Find(".workspace-attachments-list").TextContent));
-        Assert.True(File.Exists(hostFile2));
+        {
+            Assert.Empty(cut.FindAll(".attachment-preview-drawer"));
+            Assert.DoesNotContain("router-spikes.md", cut.Find(".workspace-attachments-list").TextContent);
+        });
+        Assert.True(File.Exists(hostFile1));
     }
 
     [Fact]
@@ -447,23 +494,34 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         var harness = await CreateAttachmentHarnessAsync(workspaceId: 35);
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("# API Spec\nEndpoints specification."));
         var att = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "api-spec.md", stream);
+        var hostFile = Path.Combine(_tempRoot, "host-proposal.md");
+        await File.WriteAllTextAsync(hostFile, "# Host Proposal\nSymlinked proposal context.");
+        var symlinkAtt = await harness.UiService.AttachHostFileAsync(harness.Workspace.Id, hostFile);
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
         RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         var proposal = IdeationProposalViewModel.FromProposal(
-            new IdeationProposal("Implement Endpoints", $"Follow @attachment:{att.Id} guidelines."));
+            new IdeationProposal("Implement Endpoints", $"Follow @attachment:{att.Id} guidelines.", AttachmentIds: [symlinkAtt.Id]));
 
         var cut = Render<IdeationProposalCard>(p => p
             .Add(c => c.Proposal, proposal)
-            .Add(c => c.WorkspaceAttachments, [att]));
+            .Add(c => c.WorkspaceAttachments, [att, symlinkAtt]));
 
-        var chip = cut.Find(".proposal-attachment-chip");
-        Assert.Contains($"#{att.Id}", chip.TextContent);
-        Assert.Contains("api-spec.md", chip.TextContent);
+        Assert.Empty(cut.FindAll(".attachment-symlink-badge"));
+        var chips = cut.FindAll(".proposal-attachment-chip");
+        Assert.Equal(2, chips.Count);
 
-        chip.Click();
+        var apiChip = Assert.Single(chips, c => c.TextContent.Contains("api-spec.md"));
+        Assert.Contains($"#{att.Id}", apiChip.TextContent);
+
+        var symlinkChip = Assert.Single(chips, c => c.TextContent.Contains("host-proposal.md"));
+        Assert.Contains($"#{symlinkAtt.Id}", symlinkChip.TextContent);
+        Assert.Equal(symlinkAtt.SourceRef, symlinkChip.GetAttribute("title"));
+        Assert.DoesNotContain(symlinkAtt.SourceRef, symlinkChip.TextContent);
+
+        apiChip.Click();
 
         cut.WaitForAssertion(() =>
         {
@@ -512,7 +570,8 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         {
             var selectedChips = cut.Find(".selected-attachments-chips").TextContent;
             Assert.Contains("create-task-host.md", selectedChips);
-            Assert.Contains($"🔗 {VirtualMountEntry.ToDefaultWslPath(hostFile)}", selectedChips);
+            Assert.Empty(cut.FindAll(".attachment-symlink-badge"));
+            Assert.DoesNotContain(VirtualMountEntry.ToDefaultWslPath(hostFile), selectedChips);
         });
 
         // 4. Submit task creation and verify TaskAttachmentLinks persisted
@@ -540,6 +599,9 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         var harness = await CreateAttachmentHarnessAsync(workspaceId: 50);
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("# Architecture Spec\nDetailed layout rules."));
         var att = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "arch-spec.md", stream);
+        var hostDetailFile = Path.Combine(_tempRoot, "host-detail.md");
+        await File.WriteAllTextAsync(hostDetailFile, "# Host Detail\nSymlinked task context.");
+        var symlinkAtt = await harness.UiService.AttachHostFileAsync(harness.Workspace.Id, hostDetailFile);
 
         var task = await harness.TaskRepo.CreateAsync(new ForgeTask
         {
@@ -549,7 +611,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             Status = TaskOverallStatus.Open,
             BaseBranch = "main"
         });
-        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(task.Id, [att.Id]);
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(task.Id, [att.Id, symlinkAtt.Id]);
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
@@ -557,9 +619,14 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         // 1. TaskDetail.razor
         var detailCut = Render<TaskDetail>(p => p.Add(t => t.TaskId, task.Id));
-        var detailChip = detailCut.Find(".task-attachments-section .task-attachment-chip");
+        Assert.Empty(detailCut.FindAll(".attachment-symlink-badge"));
+        var detailChips = detailCut.FindAll(".task-attachments-section .task-attachment-chip");
+        Assert.Equal(2, detailChips.Count);
+        var detailChip = Assert.Single(detailChips, c => c.TextContent.Contains("arch-spec.md"));
         Assert.Contains($"#{att.Id}", detailChip.TextContent);
-        Assert.Contains("arch-spec.md", detailChip.TextContent);
+        var detailSymlinkChip = Assert.Single(detailChips, c => c.TextContent.Contains("host-detail.md"));
+        Assert.Equal(symlinkAtt.SourceRef, detailSymlinkChip.GetAttribute("title"));
+        Assert.DoesNotContain(symlinkAtt.SourceRef, detailSymlinkChip.TextContent);
 
         detailChip.Click();
         detailCut.WaitForAssertion(() =>
@@ -573,8 +640,13 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             .Add(d => d.IsOpen, true)
             .Add(d => d.Task, task));
 
-        var drawerChip = drawerCut.Find(".task-attachments-section .task-attachment-chip");
-        Assert.Contains("arch-spec.md", drawerChip.TextContent);
+        Assert.Empty(drawerCut.FindAll(".attachment-symlink-badge"));
+        var drawerChips = drawerCut.FindAll(".task-attachments-section .task-attachment-chip");
+        Assert.Equal(2, drawerChips.Count);
+        var drawerChip = Assert.Single(drawerChips, c => c.TextContent.Contains("arch-spec.md"));
+        var drawerSymlinkChip = Assert.Single(drawerChips, c => c.TextContent.Contains("host-detail.md"));
+        Assert.Equal(symlinkAtt.SourceRef, drawerSymlinkChip.GetAttribute("title"));
+        Assert.DoesNotContain(symlinkAtt.SourceRef, drawerSymlinkChip.TextContent);
 
         drawerChip.Click();
         drawerCut.WaitForAssertion(() =>
@@ -632,7 +704,12 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         symlinkCut.WaitForAssertion(() =>
         {
+            Assert.Empty(symlinkCut.FindAll(".attachment-symlink-badge"));
+            var headerText = symlinkCut.Find(".attachment-drawer-header").TextContent;
+            Assert.Contains("preserved-host-notes.md", headerText);
+            Assert.DoesNotContain(symlinkAtt.SourceRef, headerText);
             Assert.Equal("Reachable", symlinkCut.Find("#attachment-reachability-badge").TextContent.Trim());
+            Assert.Contains(symlinkAtt.SourceRef, symlinkCut.Find(".attachment-provenance-grid").TextContent);
             Assert.Contains("Must never be deleted by UI.", symlinkCut.Find(".attachment-markdown-preview").InnerHtml);
             Assert.Contains("Impacted Downstream Task", symlinkCut.Find(".attachment-linked-tasks-section").TextContent);
         });
@@ -675,7 +752,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
     [Fact]
     public async Task RemoveAttachmentCitation_AndDeletingCitedAttachmentInProposalAndCreateTask_AllowsCleanTaskCreation()
     {
-        // 1. Unit assertions for RemoveAttachmentCitation & FilterAttachments/ExtractMessageCitations null-safety
+        // 1. Unit assertions for RemoveAttachmentCitation & FilterAttachments null-safety
         Assert.Equal(string.Empty, AttachmentPresentationHelper.RemoveAttachmentCitation(null, 5));
         Assert.Equal("Keep text", AttachmentPresentationHelper.RemoveAttachmentCitation("Keep text", 0));
         Assert.Equal(
@@ -701,13 +778,6 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         };
         var filtered = AttachmentPresentationHelper.FilterAttachments(nullFieldAttachments, "alpha");
         Assert.Single(filtered, a => a.Id == 2);
-
-        var unconfiguredIntakeMock = new Mock<IAttachmentIntakeService>();
-        var fallbackExtracted = AttachmentPresentationHelper.ExtractMessageCitations(
-            "Read https://example.com/spec and C:\\dev\\note.md",
-            unconfiguredIntakeMock.Object);
-        Assert.Contains("https://example.com/spec", fallbackExtracted.Urls);
-        Assert.Contains("C:\\dev\\note.md", fallbackExtracted.HostPaths);
 
         // 2. Deleting a cited attachment from IdeationProposalCard standalone drawer strips citation and permits promotion
         var harness = await CreateAttachmentHarnessAsync(workspaceId: 70);
@@ -788,10 +858,10 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         await File.WriteAllTextAsync(hostFile, "# Dedup Host\nContent.");
         var existingAtt = await harness.UiService.AttachHostFileAsync(harness.Workspace.Id, hostFile);
 
-        // 1. IngestMessageCitationsAsync deduplicates duplicate citations resolving to the same AttachmentId
-        var serviceChips = await harness.UiService.IngestMessageCitationsAsync(
+        // 1. ResolveCitedAttachmentChipsAsync deduplicates duplicate explicit citations resolving to the same AttachmentId
+        var serviceChips = await harness.UiService.ResolveCitedAttachmentChipsAsync(
             harness.Workspace.Id,
-            $"Check \"{hostFile}\" and also @attachment:{existingAtt.Id}");
+            $"Check @attachment:{existingAtt.Id} and @attachment:#{existingAtt.Id}");
         Assert.Single(serviceChips, c => c.AttachmentId == existingAtt.Id);
 
         // 2. ResolveRestoredMessageChips resolves user-turn chips from saved history
@@ -807,7 +877,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         await harness.TaskRepo.AddConversationTurnAsync(
             conv.Id,
             StageTurnRole.User,
-            content: $"Initial review of \"{hostFile}\"");
+            content: $"Initial review of @attachment:{existingAtt.Id}");
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
@@ -1029,6 +1099,594 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             Assert.Contains("cited-after-edit.md", cut.Find(".task-attachments-section").TextContent));
     }
 
+    [Fact]
+    public async Task AttachmentPreviewDrawer_WhenLoadPreviewFailsWithPathError_StillAllowsDeletion()
+    {
+        var harness = await CreateAttachmentHarnessAsync(workspaceId: 76);
+        var brokenAtt = new TaskAttachment
+        {
+            Id = 202,
+            WorkspaceId = harness.Workspace.Id,
+            Title = "config.json",
+            Slug = "config",
+            RelativePath = "002-config.json",
+            ContentKind = TaskAttachmentContentKind.PlainText,
+            MediaType = "application/json",
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = "/mnt/c/Users/Test/config.json",
+            IsSymlink = true,
+            Sha256 = new string('a', 64),
+            SizeBytes = 2700
+        };
+
+        var uiMock = new Mock<IAttachmentUiService>();
+        uiMock.Setup(u => u.LoadPreviewAsync(brokenAtt.Id, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DirectoryNotFoundException(
+                @"Could not find a part of the path '\\wsl.localhost\Ubuntu\home\gruearbre\.nightcodeforge\wks\1\attachments\002-config.json'."));
+        uiMock.Setup(u => u.GetDeleteImpactAsync(brokenAtt.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AttachmentDeleteImpact(brokenAtt, Array.Empty<ForgeTask>()));
+        uiMock.Setup(u => u.DeleteAttachmentAsync(brokenAtt.Id, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var wsState = new WorkspaceStateService();
+        wsState.SetActiveWorkspace(harness.Workspace);
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: uiMock.Object), new MockIdeationConversationCoordinator(harness.TaskRepo));
+        Services.AddSingleton<IAttachmentUiService>(uiMock.Object);
+
+        int? deletedId = null;
+        var closed = false;
+        var cut = Render<AttachmentPreviewDrawer>(p => p
+            .Add(d => d.IsOpen, true)
+            .Add(d => d.AttachmentId, brokenAtt.Id)
+            .Add(d => d.StartInDeleteConfirmation, true)
+            .Add(d => d.OnClose, EventCallback.Factory.Create(this, () => closed = true))
+            .Add(d => d.OnDeleted, EventCallback.Factory.Create<int>(this, id => deletedId = id)));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotEmpty(cut.FindAll(".attachment-delete-confirm-modal"));
+            Assert.Contains("Unable to read preview content", cut.Find(".attachment-content-read-error").TextContent);
+            Assert.Empty(cut.FindAll("#attachment-reachability-badge"));
+            Assert.Empty(cut.FindAll(".attachment-target-missing-alert"));
+            Assert.NotNull(cut.Find("#btn-confirm-delete-attachment"));
+        });
+
+        await cut.InvokeAsync(() => cut.Find("#btn-confirm-delete-attachment").Click());
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(brokenAtt.Id, deletedId);
+            Assert.True(closed);
+        });
+        uiMock.Verify(u => u.DeleteAttachmentAsync(brokenAtt.Id, It.IsAny<CancellationToken>()), Times.Once);
+
+        // When even GetDeleteImpactAsync fails, fallback delete requires a two-step confirmation before deleting
+        uiMock.Setup(u => u.GetDeleteImpactAsync(brokenAtt.Id, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new IOException("Metadata lookup failed"));
+
+        int? fallbackDeletedId = null;
+        var fallbackClosed = false;
+        var fallbackCut = Render<AttachmentPreviewDrawer>(p => p
+            .Add(d => d.IsOpen, true)
+            .Add(d => d.AttachmentId, brokenAtt.Id)
+            .Add(d => d.OnClose, EventCallback.Factory.Create(this, () => fallbackClosed = true))
+            .Add(d => d.OnDeleted, EventCallback.Factory.Create<int>(this, id => fallbackDeletedId = id)));
+
+        fallbackCut.WaitForAssertion(() => Assert.NotNull(fallbackCut.Find("#btn-fallback-delete-attachment")));
+        await fallbackCut.InvokeAsync(() => fallbackCut.Find("#btn-fallback-delete-attachment").Click());
+
+        // Clicking the initial fallback delete button only reveals confirmation, without deleting yet
+        fallbackCut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(fallbackCut.Find("#btn-cancel-fallback-delete-attachment"));
+            Assert.NotNull(fallbackCut.Find("#btn-confirm-fallback-delete-attachment"));
+        });
+        uiMock.Verify(u => u.DeleteAttachmentAsync(brokenAtt.Id, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Null(fallbackDeletedId);
+        Assert.False(fallbackClosed);
+
+        // Cancelling returns to the initial fallback button
+        await fallbackCut.InvokeAsync(() => fallbackCut.Find("#btn-cancel-fallback-delete-attachment").Click());
+        fallbackCut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(fallbackCut.Find("#btn-fallback-delete-attachment"));
+            Assert.Empty(fallbackCut.FindAll("#btn-confirm-fallback-delete-attachment"));
+        });
+        uiMock.Verify(u => u.DeleteAttachmentAsync(brokenAtt.Id, It.IsAny<CancellationToken>()), Times.Once);
+
+        // Confirming deletes the attachment and closes the drawer
+        await fallbackCut.InvokeAsync(() => fallbackCut.Find("#btn-fallback-delete-attachment").Click());
+        fallbackCut.WaitForAssertion(() => Assert.NotNull(fallbackCut.Find("#btn-confirm-fallback-delete-attachment")));
+        await fallbackCut.InvokeAsync(() => fallbackCut.Find("#btn-confirm-fallback-delete-attachment").Click());
+        fallbackCut.WaitForAssertion(() =>
+        {
+            Assert.Equal(brokenAtt.Id, fallbackDeletedId);
+            Assert.True(fallbackClosed);
+        });
+        uiMock.Verify(u => u.DeleteAttachmentAsync(brokenAtt.Id, It.IsAny<CancellationToken>()), Times.Exactly(2));
+
+        // When GetDeleteImpactAsync throws AttachmentNotFoundException, do not offer fallback delete for a non-existent attachment
+        uiMock.Setup(u => u.GetDeleteImpactAsync(brokenAtt.Id, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new AttachmentNotFoundException(brokenAtt.Id));
+
+        var missingFallbackCut = Render<AttachmentPreviewDrawer>(p => p
+            .Add(d => d.IsOpen, true)
+            .Add(d => d.AttachmentId, brokenAtt.Id));
+
+        missingFallbackCut.WaitForAssertion(() =>
+        {
+            var errText = missingFallbackCut.Find(".attachment-load-error").TextContent;
+            Assert.Contains($"#{brokenAtt.Id}", errText);
+            Assert.Empty(missingFallbackCut.FindAll("#btn-fallback-delete-attachment"));
+        });
+    }
+
+    [Fact]
+    public async Task TaskDetailDrawer_DeleteAttachment_PersistsCitationCleanupAcrossWorkspaceTasksAndSyncsMarkdown()
+    {
+        var harness = await CreateAttachmentHarnessAsync(workspaceId: 75);
+        await using var imgStream = new MemoryStream(CreateValidPngBytes(32, 32));
+        var att = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "bug-capture.png", imgStream);
+
+        var depStore = new InMemoryTaskDependencyStore();
+        var depEngine = new DependencyResolutionEngine(depStore);
+        var syncServices = new ServiceCollection();
+        syncServices.AddSingleton<ITaskRepository>(harness.TaskRepo);
+        syncServices.AddSingleton<ITaskAttachmentRepository>(harness.AttachmentRepo);
+        syncServices.AddSingleton<ITaskDependencyStore>(depStore);
+        syncServices.AddSingleton<IDependencyResolutionEngine>(depEngine);
+        using var syncSp = syncServices.BuildServiceProvider();
+
+        var realSyncService = new TaskMarkdownSyncService(
+            syncSp.GetRequiredService<IServiceScopeFactory>(),
+            harness.PathResolver,
+            NullLogger<TaskMarkdownSyncService>.Instance);
+
+        var visionMock = new Mock<IVisionCapabilityUiService>();
+        var realUiService = new AttachmentUiService(
+            harness.IntakeService,
+            harness.AttachmentRepo,
+            harness.TaskRepo,
+            harness.WorkspaceRepo,
+            harness.PathResolver,
+            Mock.Of<IIdeationConversationCoordinator>(),
+            visionMock.Object,
+            realSyncService,
+            harness.LockProvider,
+            NullLogger<AttachmentUiService>.Instance);
+
+        var task1 = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Drawer Task One",
+            Description = $"Fix bug shown in @attachment:{att.Id} {att.Title} right away.",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(task1.Id, [att.Id]);
+
+        var task2 = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Sibling Task Two",
+            Description = $"Also check (@attachment:{att.Id} {att.Title}).",
+            Status = TaskOverallStatus.Suggested,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(task2.Id, [att.Id]);
+
+        var closedTask = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Archived Closed Task",
+            Description = $"Historical reference @attachment:{att.Id}",
+            Status = TaskOverallStatus.Closed,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+        var closedInitialVersion = closedTask.Version;
+
+        await realSyncService.SyncAllTasksToDiskAsync(harness.Workspace, harness.RepoDir);
+        var tasksDir = Path.Combine(harness.RepoDir, "docs", "tasks");
+        Assert.Contains(Directory.GetFiles(tasksDir, "*.md"), f => File.ReadAllText(f).Contains($"@attachment:{att.Id}"));
+
+        var wsState = new WorkspaceStateService();
+        wsState.SetActiveWorkspace(harness.Workspace);
+        var mockCoordinator = new MockIdeationConversationCoordinator(harness.TaskRepo);
+        RegisterHarnessServices(
+            harness,
+            wsState,
+            TestServices.CreateIdeationSessionState(
+                taskRepository: harness.TaskRepo,
+                workflowRepository: harness.WorkflowRepo,
+                attachmentRepository: harness.AttachmentRepo,
+                attachmentUiService: realUiService),
+            mockCoordinator);
+        Services.AddSingleton<ITaskMarkdownSyncService>(realSyncService);
+        Services.AddSingleton<IAttachmentUiService>(realUiService);
+
+        ForgeTask? callbackTask = null;
+        var drawerCut = Render<TaskDetailDrawer>(p => p
+            .Add(d => d.IsOpen, true)
+            .Add(d => d.Task, task1)
+            .Add(d => d.OnTaskUpdated, EventCallback.Factory.Create<ForgeTask>(this, t => callbackTask = t)));
+
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find(".task-attachment-chip")));
+        await drawerCut.InvokeAsync(() => drawerCut.Find(".task-attachment-chip").Click());
+
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-open-delete-attachment")));
+        await drawerCut.InvokeAsync(() => drawerCut.Find("#btn-open-delete-attachment").Click());
+
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-confirm-delete-attachment")));
+        await drawerCut.InvokeAsync(() => drawerCut.Find("#btn-confirm-delete-attachment").Click());
+
+        drawerCut.WaitForAssertion(() => Assert.NotNull(callbackTask));
+
+        Assert.Null(await harness.AttachmentRepo.GetByIdAsync(att.Id));
+
+        var task1Persisted = await harness.TaskRepo.GetByIdAsync(task1.Id);
+        Assert.NotNull(task1Persisted);
+        Assert.DoesNotContain($"@attachment:{att.Id}", task1Persisted!.Description);
+        Assert.Equal("Fix bug shown in right away.", task1Persisted.Description);
+        Assert.True(task1Persisted.Version > 1);
+        Assert.Equal(task1Persisted.Version, callbackTask!.Version);
+        Assert.Empty(await harness.AttachmentRepo.GetByTaskIdAsync(task1.Id));
+
+        var task2Persisted = await harness.TaskRepo.GetByIdAsync(task2.Id);
+        Assert.NotNull(task2Persisted);
+        Assert.DoesNotContain($"@attachment:{att.Id}", task2Persisted!.Description);
+        Assert.True(task2Persisted.Version > 1);
+        Assert.Empty(await harness.AttachmentRepo.GetByTaskIdAsync(task2.Id));
+
+        var closedPersisted = await harness.TaskRepo.GetByIdAsync(closedTask.Id);
+        Assert.Equal(closedInitialVersion, closedPersisted!.Version);
+
+        // Disk markdown for active tasks must no longer contain @attachment:{id} or attachment_ids
+        var task1MdPath = Directory.GetFiles(tasksDir, "*drawer-task-one*.md").Single();
+        var task2MdPath = Directory.GetFiles(tasksDir, "*sibling-task-two*.md").Single();
+        Assert.DoesNotContain("@attachment:", await File.ReadAllTextAsync(task1MdPath));
+        Assert.DoesNotContain("attachment_ids:", await File.ReadAllTextAsync(task1MdPath));
+        Assert.DoesNotContain("@attachment:", await File.ReadAllTextAsync(task2MdPath));
+        Assert.DoesNotContain("attachment_ids:", await File.ReadAllTextAsync(task2MdPath));
+
+        // Syncing back from disk afterwards must succeed cleanly
+        await realSyncService.SyncAllTasksFromDiskAsync(
+            harness.Workspace,
+            harness.RepoDir,
+            hostRepositoryPath: null,
+            baselineSnapshot: null,
+            changeActor: AuditActors.User,
+            changeReason: "test sync after delete");
+    }
+
+    [Fact]
+    public async Task AttachmentUiService_LoadPreviewAsync_ReturnsDegradedPreviewModelWhenPathResolverThrows()
+    {
+        var harness = await CreateAttachmentHarnessAsync(workspaceId: 77);
+        var att = await harness.AttachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "broken-symlink.json",
+            Slug = "broken-symlink",
+            RelativePath = "001-broken-symlink.json",
+            ContentKind = TaskAttachmentContentKind.PlainText,
+            MediaType = "application/json",
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = "/mnt/c/Users/Test/broken-symlink.json",
+            IsSymlink = true,
+            Sha256 = new string('a', 64),
+            SizeBytes = 128
+        });
+
+        var linkedTask = await harness.TaskRepo.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Task Linking Broken Preview",
+            BaseBranch = "main"
+        });
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(linkedTask.Id, [att.Id]);
+
+        var throwingResolverMock = new Mock<IWorkspacePathResolver>();
+        throwingResolverMock.Setup(p => p.GetAttachmentsPath(harness.Workspace.Id))
+            .Throws(new DirectoryNotFoundException(@"Could not find a part of the path '\\wsl.localhost\Ubuntu\home\missing'."));
+
+        var uiService = new AttachmentUiService(
+            harness.IntakeService,
+            harness.AttachmentRepo,
+            harness.TaskRepo,
+            harness.WorkspaceRepo,
+            throwingResolverMock.Object,
+            Mock.Of<IIdeationConversationCoordinator>(),
+            Mock.Of<IVisionCapabilityUiService>(),
+            Mock.Of<ITaskMarkdownSyncService>(),
+            harness.LockProvider,
+            NullLogger<AttachmentUiService>.Instance);
+
+        var preview = await uiService.LoadPreviewAsync(att.Id);
+
+        Assert.Equal(att.Id, preview.Attachment.Id);
+        Assert.Contains("Could not find a part of the path", preview.ContentReadError);
+        Assert.True(preview.IsReachabilityUnknown);
+        Assert.True(preview.IsTargetReachable);
+        Assert.Single(preview.LinkedTasks, t => t.Id == linkedTask.Id);
+    }
+
+    [Fact]
+    public async Task AttachmentUiService_DeleteAttachment_SkipsLockedOrInFlightTasks_IsolatesTaskUpdateFailure_AndMarksContextDirty()
+    {
+        var harness = await CreateAttachmentHarnessAsync(workspaceId: 78);
+        await using var imgStream = new MemoryStream(CreateValidPngBytes(16, 16));
+        var att = await harness.UiService.UploadFileAsync(harness.Workspace.Id, "shared.png", imgStream);
+
+        var lockedTask = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Locked Task",
+            Description = $"Keep while locked @attachment:{att.Id}.",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+
+        var inFlightTask = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "InFlight Task",
+            Description = $"Keep while running @attachment:{att.Id}.",
+            Status = TaskOverallStatus.Reviewed,
+            HasExecutionRun = true,
+            CurrentStageId = StandardStageIds.Implementation,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+
+        var failingTask = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Failing Update Task",
+            Description = $"Will fail update @attachment:{att.Id}.",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+
+        var siblingTask = await harness.TaskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "Sibling Open Task",
+            Description = $"Clean up @attachment:{att.Id} right now.",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(lockedTask.Id, [att.Id]);
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(inFlightTask.Id, [att.Id]);
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(failingTask.Id, [att.Id]);
+        await harness.AttachmentRepo.SetTaskAttachmentLinksAsync(siblingTask.Id, [att.Id]);
+
+        var taskRepoMock = new Mock<ITaskRepository>();
+        taskRepoMock.Setup(r => r.GetByWorkspaceIdAsync(harness.Workspace.Id, It.IsAny<CancellationToken>()))
+            .Returns<int, CancellationToken>((wsId, ct) => harness.TaskRepo.GetByWorkspaceIdAsync(wsId, ct));
+        taskRepoMock.Setup(r => r.GetByIdAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns<int, CancellationToken>(async (id, ct) =>
+            {
+                var found = await harness.TaskRepo.GetByIdAsync(id, ct);
+                if (found != null && id == failingTask.Id)
+                {
+                    // Match EfCoreTaskRepository.GetByIdAsync AsNoTracking semantics so failed updates never mutate stored state.
+                    return new ForgeTask
+                    {
+                        Id = found.Id,
+                        WorkspaceId = found.WorkspaceId,
+                        Title = found.Title,
+                        Description = found.Description,
+                        Status = found.Status,
+                        BaseBranch = found.BaseBranch,
+                        Version = found.Version
+                    };
+                }
+                return found;
+            });
+        taskRepoMock.Setup(r => r.GetDependenciesAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Returns<int, CancellationToken>((id, ct) => harness.TaskRepo.GetDependenciesAsync(id, ct));
+        taskRepoMock.Setup(r => r.UpdateWithHistoryAsync(
+                It.IsAny<ForgeTask>(),
+                It.IsAny<IEnumerable<int>?>(),
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Returns<ForgeTask, IEnumerable<int>?, string, string?, CancellationToken>((t, deps, actor, reason, ct) =>
+            {
+                if (t.Id == failingTask.Id)
+                {
+                    throw new InvalidOperationException("Simulated DB failure");
+                }
+                return harness.TaskRepo.UpdateWithHistoryAsync(t, deps, actor, reason, ct);
+            });
+
+        var coordinatorMock = new Mock<IIdeationConversationCoordinator>();
+        var uiService = new AttachmentUiService(
+            harness.IntakeService,
+            harness.AttachmentRepo,
+            taskRepoMock.Object,
+            harness.WorkspaceRepo,
+            harness.PathResolver,
+            coordinatorMock.Object,
+            Mock.Of<IVisionCapabilityUiService>(),
+            Mock.Of<ITaskMarkdownSyncService>(),
+            harness.LockProvider,
+            NullLogger<AttachmentUiService>.Instance);
+
+        Assert.True(harness.LockProvider.TryAcquireTaskLock(harness.Workspace.Id, lockedTask.Id, out var activeLock));
+        try
+        {
+            await uiService.DeleteAttachmentAsync(att.Id);
+        }
+        finally
+        {
+            activeLock!.Dispose();
+        }
+
+        Assert.Null(await harness.AttachmentRepo.GetByIdAsync(att.Id));
+        Assert.Contains($"@attachment:{att.Id}", (await harness.TaskRepo.GetByIdAsync(lockedTask.Id))!.Description);
+        Assert.Contains($"@attachment:{att.Id}", (await harness.TaskRepo.GetByIdAsync(inFlightTask.Id))!.Description);
+        Assert.Contains($"@attachment:{att.Id}", (await harness.TaskRepo.GetByIdAsync(failingTask.Id))!.Description);
+
+        var siblingAfter = await harness.TaskRepo.GetByIdAsync(siblingTask.Id);
+        Assert.DoesNotContain($"@attachment:{att.Id}", siblingAfter!.Description);
+        Assert.Equal("Clean up right now.", siblingAfter.Description);
+
+        coordinatorMock.Verify(c => c.MarkWorkspaceContextDirty(harness.Workspace.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task AttachmentUiService_ResolveCitedAttachmentChipsAsync_DoesNotCallIntakeGetAttachmentForMissingIds()
+    {
+        var harness = await CreateAttachmentHarnessAsync(workspaceId: 79);
+        var otherWs = await harness.WorkspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 80,
+            Name = "Other WS",
+            RepositoryPath = harness.RepoDir,
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var validAtt = await harness.AttachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = harness.Workspace.Id,
+            Title = "local.md",
+            Slug = "local",
+            RelativePath = "001-local.md",
+            ContentKind = TaskAttachmentContentKind.PlainText,
+            MediaType = "text/markdown",
+            SourceKind = TaskAttachmentSourceKind.FileDrop,
+            SourceRef = "local.md",
+            Sha256 = new string('b', 64),
+            SizeBytes = 10
+        });
+        var foreignAtt = await harness.AttachmentRepo.CreateAsync(new TaskAttachment
+        {
+            WorkspaceId = otherWs.Id,
+            Title = "foreign.md",
+            Slug = "foreign",
+            RelativePath = "001-foreign.md",
+            ContentKind = TaskAttachmentContentKind.PlainText,
+            MediaType = "text/markdown",
+            SourceKind = TaskAttachmentSourceKind.FileDrop,
+            SourceRef = "foreign.md",
+            Sha256 = new string('c', 64),
+            SizeBytes = 10
+        });
+
+        var intakeMock = new Mock<IAttachmentIntakeService>();
+        var uiService = new AttachmentUiService(
+            intakeMock.Object,
+            harness.AttachmentRepo,
+            harness.TaskRepo,
+            harness.WorkspaceRepo,
+            harness.PathResolver,
+            Mock.Of<IIdeationConversationCoordinator>(),
+            Mock.Of<IVisionCapabilityUiService>(),
+            Mock.Of<ITaskMarkdownSyncService>(),
+            harness.LockProvider,
+            NullLogger<AttachmentUiService>.Instance);
+
+        var chips = await uiService.ResolveCitedAttachmentChipsAsync(
+            harness.Workspace.Id,
+            $"Check @attachment:{validAtt.Id}, missing @attachment:99999, and foreign @attachment:{foreignAtt.Id}");
+
+        var single = Assert.Single(chips);
+        Assert.Equal(validAtt.Id, single.AttachmentId);
+        intakeMock.Verify(i => i.GetAttachmentAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task IdeationAndCreateTask_FileUpload_HandlesOpenReadStreamAndBatchLimitErrorsWithoutAbortingValidFiles()
+    {
+        var harness = await CreateAttachmentHarnessAsync(workspaceId: 81);
+        harness.WorkspaceRepo.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
+        var wsState = new WorkspaceStateService();
+        wsState.SetActiveWorkspace(harness.Workspace);
+
+        var mockIdeation = new MockIdeationConversationCoordinator(harness.TaskRepo);
+        var sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: mockIdeation,
+            taskRepository: harness.TaskRepo,
+            workflowRepository: harness.WorkflowRepo,
+            attachmentRepository: harness.AttachmentRepo,
+            attachmentUiService: harness.UiService);
+        sessionState.BoundWorkspaceId = harness.Workspace.Id;
+
+        RegisterHarnessServices(harness, wsState, sessionState, mockIdeation);
+        var toastService = Services.GetRequiredService<ToastService>();
+
+        // 1. Ideation.razor: OpenReadStream failure on first file does not crash or prevent valid second file; > max batch files shows error toast
+        var ideationCut = Render<Ideation>();
+        var ideationInput = ideationCut.FindComponent<InputFile>();
+
+        await ideationCut.InvokeAsync(() => ideationInput.Instance.OnChange.InvokeAsync(new InputFileChangeEventArgs(
+        [
+            new FailingReadBrowserFile("oversized-ideation.md", "Stream exceeds max allowed size"),
+            new ValidMemoryBrowserFile("ideation-valid.md", "# Ideation Valid")
+        ])));
+
+        ideationCut.WaitForAssertion(() =>
+        {
+            Assert.Contains("ideation-valid.md", ideationCut.Find(".composer-attachment-chips").TextContent);
+            Assert.Contains(toastService.Toasts, t => t.Title == "Attachment Upload Failed" && t.Message.Contains("Stream exceeds max allowed size"));
+        });
+
+        var tooManyFiles = Enumerable.Range(1, AttachmentPresentationHelper.MaxBatchUploadFiles + 1)
+            .Select(i => (IBrowserFile)new ValidMemoryBrowserFile($"batch-{i}.md", $"# Batch {i}"))
+            .ToArray();
+        var failedToastCountBeforeBatch = toastService.Toasts.Count(t => t.Title == "Attachment Upload Failed");
+
+        await ideationCut.InvokeAsync(() => ideationInput.Instance.OnChange.InvokeAsync(new InputFileChangeEventArgs(tooManyFiles)));
+        ideationCut.WaitForAssertion(() =>
+            Assert.True(toastService.Toasts.Count(t => t.Title == "Attachment Upload Failed") > failedToastCountBeforeBatch));
+
+        // 2. CreateTask.razor: OpenReadStream failure on first file does not crash or prevent valid second file; > max batch files shows error toast
+        var createTaskCut = Render<CreateTask>();
+        var createTaskInput = createTaskCut.FindComponent<InputFile>();
+        var failedToastCountBeforeCreate = toastService.Toasts.Count(t => t.Title == "Attachment Upload Failed");
+
+        await createTaskCut.InvokeAsync(() => createTaskInput.Instance.OnChange.InvokeAsync(new InputFileChangeEventArgs(
+        [
+            new FailingReadBrowserFile("oversized-create.md", "Create stream failure"),
+            new ValidMemoryBrowserFile("create-valid.md", "# Create Valid")
+        ])));
+
+        createTaskCut.WaitForAssertion(() =>
+        {
+            Assert.Contains("create-valid.md", createTaskCut.Find(".selected-attachments-chips").TextContent);
+            Assert.Contains(toastService.Toasts, t => t.Title == "Attachment Upload Failed" && t.Message.Contains("Create stream failure"));
+            Assert.True(toastService.Toasts.Count(t => t.Title == "Attachment Upload Failed") > failedToastCountBeforeCreate);
+        });
+
+        var failedToastCountBeforeCreateBatch = toastService.Toasts.Count(t => t.Title == "Attachment Upload Failed");
+        await createTaskCut.InvokeAsync(() => createTaskInput.Instance.OnChange.InvokeAsync(new InputFileChangeEventArgs(tooManyFiles)));
+        createTaskCut.WaitForAssertion(() =>
+            Assert.True(toastService.Toasts.Count(t => t.Title == "Attachment Upload Failed") > failedToastCountBeforeCreateBatch));
+    }
+
+    private sealed class FailingReadBrowserFile(string name, string errorMessage) : IBrowserFile
+    {
+        public string Name => name;
+        public DateTimeOffset LastModified => DateTimeOffset.UtcNow;
+        public long Size => AttachmentConstants.MaxFileDropBytes + 1024;
+        public string ContentType => "text/markdown";
+
+        public Stream OpenReadStream(long maxAllowedSize = 512000, CancellationToken cancellationToken = default) =>
+            throw new IOException(errorMessage);
+    }
+
+    private sealed class ValidMemoryBrowserFile(string name, string content) : IBrowserFile
+    {
+        private readonly byte[] _bytes = Encoding.UTF8.GetBytes(content);
+        public string Name => name;
+        public DateTimeOffset LastModified => DateTimeOffset.UtcNow;
+        public long Size => _bytes.LongLength;
+        public string ContentType => "text/markdown";
+
+        public Stream OpenReadStream(long maxAllowedSize = 512000, CancellationToken cancellationToken = default) =>
+            new MemoryStream(_bytes, writable: false);
+    }
+
     private void RegisterHarnessServices(
         AttachmentUiTestHarness harness,
         WorkspaceStateService wsState,
@@ -1065,6 +1723,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         Services.AddSingleton<IWorkspacePathResolver>(harness.PathResolver);
         Services.AddSingleton<IAttachmentIntakeService>(harness.IntakeService);
         Services.AddSingleton<IAttachmentUiService>(harness.UiService);
+        Services.AddSingleton<IWorkspaceLockProvider>(harness.LockProvider);
         Services.AddSingleton<ITaskDependencyStore>(depStore);
         Services.AddSingleton<IDependencyResolutionEngine>(new DependencyResolutionEngine(depStore));
         Services.AddSingleton<ITaskMarkdownSyncService>(markdownSync);
@@ -1116,15 +1775,12 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         processRunnerMock.Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
 
-        var intakeService = new TestableAttachmentIntakeService(
+        var intakeService = new AttachmentIntakeService(
             attachmentRepo,
             workspaceRepo,
             pathResolverMock.Object,
             processRunnerMock.Object,
             new Markitdown(new MarkitdownOptions { IncludeTitle = true, CleanHtml = true, FilterHiddenText = true }),
-            new HttpClient(new FakeHttpMessageHandler()),
-            Options.Create(new SecurityOptions { AirGappedMode = false }),
-            Options.Create(new AttachmentIntakeOptions()),
             NullLogger<AttachmentIntakeService>.Instance);
 
         var visionMock = new Mock<IVisionCapabilityUiService>();
@@ -1135,6 +1791,8 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         visionMock.Setup(v => v.EvaluateWorkspaceTaskVisionAsync(It.IsAny<int>(), It.IsAny<TaskDifficulty>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new VisionCapabilityStatus(true, "test-vision", false, null));
 
+        var lockProvider = new WorkspaceLockProvider();
+
         var uiService = new AttachmentUiService(
             intakeService,
             attachmentRepo,
@@ -1143,6 +1801,8 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             pathResolverMock.Object,
             Mock.Of<IIdeationConversationCoordinator>(),
             visionMock.Object,
+            Mock.Of<ITaskMarkdownSyncService>(),
+            lockProvider,
             NullLogger<AttachmentUiService>.Instance);
 
         return new AttachmentUiTestHarness(
@@ -1154,6 +1814,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             attachmentRepo,
             workflowRepo,
             pathResolverMock.Object,
+            lockProvider,
             intakeService,
             uiService);
     }
@@ -1184,43 +1845,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         InMemoryTaskAttachmentRepository AttachmentRepo,
         InMemoryWorkflowRepository WorkflowRepo,
         IWorkspacePathResolver PathResolver,
+        IWorkspaceLockProvider LockProvider,
         AttachmentIntakeService IntakeService,
         AttachmentUiService UiService);
-
-    private sealed class TestableAttachmentIntakeService(
-        ITaskAttachmentRepository attachmentRepository,
-        IWorkspaceRepository workspaceRepository,
-        IWorkspacePathResolver pathResolver,
-        IProcessRunner processRunner,
-        IMarkitdown markitdown,
-        HttpClient httpClient,
-        IOptions<SecurityOptions> securityOptions,
-        IOptions<AttachmentIntakeOptions> intakeOptions,
-        Microsoft.Extensions.Logging.ILogger<AttachmentIntakeService> logger)
-        : AttachmentIntakeService(
-            attachmentRepository,
-            workspaceRepository,
-            pathResolver,
-            processRunner,
-            markitdown,
-            httpClient,
-            securityOptions,
-            intakeOptions,
-            logger)
-    {
-        protected override Task<IPAddress[]> ResolveHostAddressesAsync(string host, CancellationToken cancellationToken) =>
-            Task.FromResult(new[] { IPAddress.Parse("93.184.216.34") });
-    }
-
-    private sealed class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var resp = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("<html><title>Mock Page</title><body><h1>Hello</h1></body></html>", Encoding.UTF8, "text/html")
-            };
-            return Task.FromResult(resp);
-        }
-    }
 }

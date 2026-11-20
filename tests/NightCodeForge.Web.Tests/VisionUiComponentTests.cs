@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
@@ -180,10 +181,8 @@ public class VisionUiComponentTests : BunitContext
             .ReturnsAsync([storedAttachment]);
         attachmentUiMock.Setup(a => a.LoadImageThumbnailDataUriAsync(storedAttachment.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync($"data:image/png;base64,{Valid1x1PngBase64}");
-        attachmentUiMock.Setup(a => a.ExtractMessageCitations(It.IsAny<string?>()))
-            .Returns<string?>(s => AttachmentPresentationHelper.ExtractMessageCitations(s));
-        attachmentUiMock.Setup(a => a.IngestMessageCitationsAsync(ws.Id, It.IsAny<string?>(), It.IsAny<Action<ConversationAttachmentChipViewModel>?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        attachmentUiMock.Setup(a => a.ResolveCitedAttachmentChipsAsync(ws.Id, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<ConversationAttachmentChipViewModel>());
         attachmentUiMock.Setup(a => a.EvaluateIdeationVisionAsync(ws.Id, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => visionEnabled
                 ? new VisionCapabilityStatus(true, "qwen3-vl:8b", false, null)
@@ -372,8 +371,6 @@ public class VisionUiComponentTests : BunitContext
         var attachmentUiMock = new Mock<IAttachmentUiService>();
         attachmentUiMock.Setup(a => a.LoadWorkspaceAttachmentsAsync(ws.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<TaskAttachment>());
-        attachmentUiMock.Setup(a => a.ExtractMessageCitations(It.IsAny<string?>()))
-            .Returns<string?>(s => AttachmentPresentationHelper.ExtractMessageCitations(s));
         attachmentUiMock.Setup(a => a.EvaluateIdeationVisionAsync(ws.Id, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new VisionCapabilityStatus(false, "text-model", false, "Active model 'text-model' does not support vision."));
 
@@ -521,8 +518,6 @@ public class VisionUiComponentTests : BunitContext
         var attachmentUiMock = new Mock<IAttachmentUiService>();
         attachmentUiMock.Setup(a => a.LoadWorkspaceAttachmentsAsync(ws.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<TaskAttachment>());
-        attachmentUiMock.Setup(a => a.ExtractMessageCitations(It.IsAny<string?>()))
-            .Returns<string?>(s => AttachmentPresentationHelper.ExtractMessageCitations(s));
         attachmentUiMock.Setup(a => a.EvaluateIdeationVisionAsync(ws.Id, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((int _, string? ov, CancellationToken _) => string.IsNullOrWhiteSpace(ov)
                 ? new VisionCapabilityStatus(true, "default-vision", false, null)
@@ -555,8 +550,7 @@ public class VisionUiComponentTests : BunitContext
         Assert.Equal("default-vision", session.ActiveVisionStatus?.ModelName);
 
         session.ReportClipboardImageError("huge.png", "Pasted image exceeds maximum allowed vision image size.");
-        var failedChip = Assert.Single(session.PendingComposerChips);
-        Assert.Equal(AttachmentIntakeStatus.Failed, failedChip.Status);
+        Assert.Empty(session.PendingComposerChips);
         Assert.Equal("Clipboard Image Error", notifiedTitle);
         Assert.Contains("exceeds maximum", notifiedMessage);
         Assert.Equal(ToastLevel.Error, notifiedLevel);
@@ -605,6 +599,8 @@ public class VisionUiComponentTests : BunitContext
                 pathResolverMock.Object,
                 Mock.Of<IIdeationConversationCoordinator>(),
                 Mock.Of<IVisionCapabilityUiService>(),
+                Mock.Of<ITaskMarkdownSyncService>(),
+                new WorkspaceLockProvider(),
                 NullLogger<AttachmentUiService>.Instance);
 
             var dataUri = await uiService.LoadImageThumbnailDataUriAsync(att.Id);
@@ -650,8 +646,6 @@ public class VisionUiComponentTests : BunitContext
         var attachmentUiMock = new Mock<IAttachmentUiService>();
         attachmentUiMock.Setup(a => a.LoadWorkspaceAttachmentsAsync(ws.Id, It.IsAny<CancellationToken>()))
             .ReturnsAsync([citedImg]);
-        attachmentUiMock.Setup(a => a.ExtractMessageCitations(It.IsAny<string?>()))
-            .Returns<string?>(s => AttachmentPresentationHelper.ExtractMessageCitations(s));
         attachmentUiMock.Setup(a => a.EvaluateIdeationVisionAsync(ws.Id, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new VisionCapabilityStatus(false, "text-model", false, "Active model 'text-model' does not support vision."));
 

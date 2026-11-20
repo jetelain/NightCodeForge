@@ -1,57 +1,27 @@
 using System.Globalization;
-using System.Net;
-using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
-using NightCodeForge.Core.Security;
 using Pmad.Markitdown;
 
 namespace NightCodeForge.Core.Services;
 
 /// <summary>
-/// Implements the three-channel workspace attachment intake pipeline (file drop, WSL2 symlink host paths, URL capture),
+/// Implements the workspace attachment intake pipeline (file drop and WSL2 symlink host paths),
 /// MarkItDown conversion, SHA-256 deduplication, manifest synchronization, and host-safe deletion.
 /// </summary>
 public partial class AttachmentIntakeService : IAttachmentIntakeService
 {
     private static readonly byte[] PdfMagicBytes = [(byte)'%', (byte)'P', (byte)'D', (byte)'F', (byte)'-'];
     private static readonly byte[] ZipMagicBytes = [0x50, 0x4B, 0x03, 0x04];
-    private static readonly IPAddress AwsIpv6MetadataAddress = IPAddress.Parse("fd00:ec2::254");
     private static readonly JsonSerializerOptions ManifestJsonOptions = new() { WriteIndented = true };
-    private static readonly char[] TrailingCitationPunctuation = ['.', ',', ';', ':', '!', '?', ')', ']', '>', '}', '\'', '"', '`'];
-
-    [GeneratedRegex(@"""(?<path>(?:[a-zA-Z]:[\\/]|\\\\(?:wsl\.localhost|wsl\$|[a-zA-Z0-9._-]+)\\|/(?:home|mnt|Users|tmp|var|opt)/|~/)(?:[^""\r\n])+)""", RegexOptions.Compiled)]
-    private static partial Regex QuotedHostPathRegex();
-
-    [GeneratedRegex(@"`(?<path>(?:[a-zA-Z]:[\\/]|\\\\(?:wsl\.localhost|wsl\$|[a-zA-Z0-9._-]+)\\|/(?:home|mnt|Users|tmp|var|opt)/|~/)(?:[^`\r\n])+)`", RegexOptions.Compiled)]
-    private static partial Regex BacktickHostPathRegex();
-
-    [GeneratedRegex(@"<title\b[^>]*>(?<title>[\s\S]*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
-    private static partial Regex HtmlTitleRegex();
-
-    [GeneratedRegex(@"\s+", RegexOptions.Compiled)]
-    private static partial Regex WhitespaceCollapseRegex();
-
-    [GeneratedRegex(@"(?<![:\w])(?<path>[a-zA-Z]:[\\/][^\s""'`<>|*?]+)", RegexOptions.Compiled)]
-    private static partial Regex WindowsDrivePathRegex();
-
-    [GeneratedRegex(@"(?<![:\\/])(?<path>\\\\[^\s""'`<>|*?\\]+\\[^\s""'`<>|*?]+)", RegexOptions.Compiled)]
-    private static partial Regex UncPathRegex();
-
-    [GeneratedRegex(@"(?<=^|[\s(\['""`])(?<path>(?:/(?:home|mnt|Users|tmp|var|opt)/|~/)[A-Za-z0-9._/\-~+%:@-]+)", RegexOptions.Compiled)]
-    private static partial Regex PosixOrTildePathRegex();
-
-    [GeneratedRegex(@"(?<url>https?://[^\s<>""'`\)\]]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
-    private static partial Regex HttpUrlRegex();
 
     [GeneratedRegex(@"[^a-z0-9]+", RegexOptions.Compiled)]
     private static partial Regex NonAlphanumericSlugRegex();
@@ -61,9 +31,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IProcessRunner _processRunner;
     private readonly IMarkitdown _markitdown;
-    private readonly HttpClient _httpClient;
-    private readonly SecurityOptions _securityOptions;
-    private readonly AttachmentIntakeOptions _intakeOptions;
     private readonly ILogger<AttachmentIntakeService> _logger;
 
     public AttachmentIntakeService(
@@ -72,9 +39,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
         IMarkitdown markitdown,
-        HttpClient httpClient,
-        IOptions<SecurityOptions> securityOptions,
-        IOptions<AttachmentIntakeOptions> intakeOptions,
         ILogger<AttachmentIntakeService> logger)
     {
         _attachmentRepository = attachmentRepository ?? throw new ArgumentNullException(nameof(attachmentRepository));
@@ -82,11 +46,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _markitdown = markitdown ?? throw new ArgumentNullException(nameof(markitdown));
-        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
-        _securityOptions = (securityOptions ?? throw new ArgumentNullException(nameof(securityOptions))).Value
-            ?? throw new ArgumentException("Security options value cannot be null.", nameof(securityOptions));
-        _intakeOptions = (intakeOptions ?? throw new ArgumentNullException(nameof(intakeOptions))).Value
-            ?? throw new ArgumentException("Attachment intake options value cannot be null.", nameof(intakeOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -115,7 +74,7 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
         {
             throw new AttachmentConversionException(
                 cleanFileName,
-                $"Unsupported attachment format '{extension}' for '{cleanFileName}'.");
+                AttachmentConstants.BuildUnsupportedFormatMessage(cleanFileName, extension));
         }
 
         var bytes = await ReadStreamBoundedAsync(
@@ -228,6 +187,20 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
             wslAttachmentsDir,
             hostAttachmentsDir);
 
+        var fileName = Path.GetFileName(hostReadablePath.Replace('\\', '/'));
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = Path.GetFileName(canonicalWslSourceRef.Replace('\\', '/'));
+        }
+
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        if (!AttachmentConstants.TryClassifyExtension(extension, out var contentKind))
+        {
+            throw new AttachmentConversionException(
+                fileName,
+                AttachmentConstants.BuildUnsupportedFormatMessage(fileName, extension));
+        }
+
         byte[] bytes;
         try
         {
@@ -258,20 +231,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
                 canonicalWslSourceRef,
                 $"Attachment host target '{hostPath}' (resolved to '{hostReadablePath}') does not exist or is unreadable.",
                 ex);
-        }
-
-        var fileName = Path.GetFileName(hostReadablePath.Replace('\\', '/'));
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            fileName = Path.GetFileName(canonicalWslSourceRef.Replace('\\', '/'));
-        }
-
-        var extension = Path.GetExtension(fileName).ToLowerInvariant();
-        if (!AttachmentConstants.TryClassifyExtension(extension, out var contentKind))
-        {
-            throw new AttachmentConversionException(
-                fileName,
-                $"Unsupported attachment format '{extension}' for host file '{canonicalWslSourceRef}'.");
         }
 
         if (bytes.Length == 0)
@@ -365,107 +324,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
         }
     }
 
-    public async Task<TaskAttachment> CaptureUrlAsync(
-        int workspaceId,
-        string url,
-        bool allowInternalNetwork = false,
-        CancellationToken cancellationToken = default)
-    {
-        if (_securityOptions.AirGappedMode)
-        {
-            throw new AirGappedOperationException(
-                "URL attachment capture is prohibited because NightCodeForge is operating in Air-Gapped mode.");
-        }
-
-        if (string.IsNullOrWhiteSpace(url) ||
-            !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var initialUri) ||
-            (initialUri.Scheme != Uri.UriSchemeHttp && initialUri.Scheme != Uri.UriSchemeHttps))
-        {
-            throw new AttachmentConversionException(
-                url ?? string.Empty,
-                $"URL '{url}' must be an absolute http:// or https:// URL.");
-        }
-
-        var workspace = await RequireWorkspaceAsync(workspaceId, cancellationToken);
-        var effectiveAllowInternal = allowInternalNetwork || _intakeOptions.AllowInternalNetworkUrlCapture;
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(AttachmentConstants.UrlFetchTimeoutSeconds));
-
-        var (finalUri, downloadedBytes, contentTypeMediaType) = await FetchUrlWithRedirectsAndSsrfGuardAsync(
-            initialUri,
-            effectiveAllowInternal,
-            timeoutCts.Token,
-            cancellationToken);
-
-        var sourceSha256 = ComputeSha256Hex(downloadedBytes);
-        var existing = await _attachmentRepository.GetByWorkspaceAndSha256Async(workspaceId, sourceSha256, cancellationToken);
-        if (existing != null)
-        {
-            return existing;
-        }
-
-        var (convertedBody, extractedTitle) = await ConvertCapturedResponseAsync(
-            finalUri,
-            downloadedBytes,
-            contentTypeMediaType,
-            cancellationToken);
-
-        var (_, hostAttachmentsDir) = EnsureAttachmentsDirectories(workspace);
-        var title = string.IsNullOrWhiteSpace(extractedTitle) ? BuildFallbackUrlTitle(finalUri) : extractedTitle;
-        var slug = Slugify(BuildUrlSlugSeed(finalUri, extractedTitle));
-        var capturedAt = DateTime.UtcNow;
-        var fullMarkdown = BuildUrlCaptureMarkdown(finalUri.AbsoluteUri, capturedAt, title, sourceSha256, convertedBody);
-        var storedBytes = Encoding.UTF8.GetBytes(fullMarkdown);
-
-        var pending = new TaskAttachment
-        {
-            WorkspaceId = workspaceId,
-            Title = title,
-            Slug = slug,
-            RelativePath = BuildPendingRelativePath(AttachmentConstants.UrlCaptureSuffix),
-            MarkdownPath = null,
-            ContentKind = TaskAttachmentContentKind.RichDocument,
-            MediaType = AttachmentConstants.ResolveMediaType(AttachmentConstants.MarkdownExtension),
-            WidthPx = null,
-            HeightPx = null,
-            SourceKind = TaskAttachmentSourceKind.UrlCapture,
-            SourceRef = finalUri.AbsoluteUri,
-            IsSymlink = false,
-            Sha256 = sourceSha256,
-            SizeBytes = storedBytes.LongLength,
-            CreatedAt = capturedAt
-        };
-
-        var created = await _attachmentRepository.CreateAsync(pending, cancellationToken);
-        var writtenFiles = new List<string>();
-        try
-        {
-            var seqPrefix = FormatSequencePrefix(created.Id);
-            var relativePath = $"{seqPrefix}-{slug}{AttachmentConstants.UrlCaptureSuffix}";
-            var hostFilePath = Path.Combine(hostAttachmentsDir, relativePath);
-
-            await File.WriteAllBytesAsync(hostFilePath, storedBytes, cancellationToken);
-            writtenFiles.Add(hostFilePath);
-
-            created.RelativePath = relativePath;
-            created.MarkdownPath = relativePath;
-            await _attachmentRepository.UpdateAsync(created, cancellationToken);
-            await SyncManifestInternalAsync(workspaceId, hostAttachmentsDir, cancellationToken);
-
-            _logger.LogInformation(
-                "Captured URL attachment #{AttachmentId} ('{SourceRef}' -> '{RelativePath}', {SizeBytes} bytes) in Workspace #{WorkspaceId}.",
-                created.Id, created.SourceRef, created.RelativePath, created.SizeBytes, workspaceId);
-
-            return created;
-        }
-        catch (Exception ex)
-        {
-            await RollbackFailedAttachmentAsync(created.Id, writtenFiles, ex);
-            throw;
-        }
-    }
-
     public async Task DeleteAttachmentAsync(int attachmentId, CancellationToken cancellationToken = default)
     {
         var attachment = await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken)
@@ -488,27 +346,23 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
 
             // In unit tests with mocked IProcessRunner or on non-WSL hosts, ensure the link entry itself
             // inside attachments/ is removed while strictly verifying it is never the external SourceRef.
-            if (hostPrimaryPath != null &&
-                !PathsEqual(hostPrimaryPath, attachment.SourceRef) &&
-                File.Exists(hostPrimaryPath))
+            if (hostPrimaryPath != null && !PathsEqual(hostPrimaryPath, attachment.SourceRef))
             {
-                File.Delete(hostPrimaryPath);
+                TryDeleteLocalFileIfPresent(hostPrimaryPath);
             }
         }
-        else if (hostPrimaryPath != null && File.Exists(hostPrimaryPath))
+        else if (hostPrimaryPath != null)
         {
-            File.Delete(hostPrimaryPath);
+            TryDeleteLocalFileIfPresent(hostPrimaryPath);
         }
 
         if (!string.IsNullOrWhiteSpace(attachment.MarkdownPath) &&
             !string.Equals(attachment.MarkdownPath, attachment.RelativePath, StringComparison.OrdinalIgnoreCase))
         {
             var hostMarkdownPath = ResolveContainedFilePath(hostAttachmentsDir, attachment.MarkdownPath);
-            if (hostMarkdownPath != null &&
-                !PathsEqual(hostMarkdownPath, attachment.SourceRef) &&
-                File.Exists(hostMarkdownPath))
+            if (hostMarkdownPath != null && !PathsEqual(hostMarkdownPath, attachment.SourceRef))
             {
-                File.Delete(hostMarkdownPath);
+                TryDeleteLocalFileIfPresent(hostMarkdownPath);
             }
         }
 
@@ -545,105 +399,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
         await SyncManifestInternalAsync(workspaceId, hostAttachmentsDir, cancellationToken);
     }
 
-    public IReadOnlyList<string> ExtractCitedHostPaths(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return Array.Empty<string>();
-        }
-
-        var results = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        void TryAdd(string raw, bool isQuoted)
-        {
-            var candidate = raw.Trim();
-            if (!isQuoted)
-            {
-                candidate = candidate.TrimEnd(TrailingCitationPunctuation);
-            }
-
-            if (string.IsNullOrWhiteSpace(candidate))
-            {
-                return;
-            }
-
-            if (candidate.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase) ||
-                candidate.Equals("/workspace", StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            if (seen.Add(candidate))
-            {
-                results.Add(candidate);
-            }
-        }
-
-        foreach (Match match in QuotedHostPathRegex().Matches(message))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: true);
-        }
-
-        var scrubbed = QuotedHostPathRegex().Replace(message, " ");
-
-        foreach (Match match in BacktickHostPathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: true);
-        }
-
-        scrubbed = BacktickHostPathRegex().Replace(scrubbed, " ");
-
-        foreach (Match match in UncPathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: false);
-        }
-
-        scrubbed = UncPathRegex().Replace(scrubbed, " ");
-
-        foreach (Match match in WindowsDrivePathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: false);
-        }
-
-        foreach (Match match in PosixOrTildePathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: false);
-        }
-
-        return results;
-    }
-
-    public IReadOnlyList<string> ExtractCitedUrls(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return Array.Empty<string>();
-        }
-
-        var results = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (Match match in HttpUrlRegex().Matches(message))
-        {
-            var candidate = match.Groups["url"].Value.Trim().TrimEnd(TrailingCitationPunctuation);
-            if (!string.IsNullOrWhiteSpace(candidate) &&
-                Uri.TryCreate(candidate, UriKind.Absolute, out var uri) &&
-                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
-                seen.Add(uri.AbsoluteUri))
-            {
-                results.Add(uri.AbsoluteUri);
-            }
-        }
-
-        return results;
-    }
-
-    protected virtual Task<IPAddress[]> ResolveHostAddressesAsync(string host, CancellationToken cancellationToken)
-    {
-        return Dns.GetHostAddressesAsync(host, cancellationToken);
-    }
-
     private async Task<Workspace> RequireWorkspaceAsync(int workspaceId, CancellationToken cancellationToken)
     {
         return await _workspaceRepository.GetByIdAsync(workspaceId, cancellationToken)
@@ -658,7 +413,7 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
             throw new InvalidOperationException($"Attachments path could not be resolved for Workspace #{workspace.Id}.");
         }
 
-        var expandedUnixDir = ExpandLeadingTildeForWslOrHost(rawAttachmentsDir);
+        var expandedUnixDir = AttachmentHostPathResolver.ExpandLeadingTilde(rawAttachmentsDir, _pathResolver);
         var wslAttachmentsDir = VirtualMountEntry.ToDefaultWslPath(expandedUnixDir);
         var hostAttachmentsDir = _pathResolver.ToHostPath(expandedUnixDir);
         if (string.IsNullOrWhiteSpace(hostAttachmentsDir))
@@ -678,33 +433,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
         }
 
         return (wslAttachmentsDir, hostAttachmentsDir);
-    }
-
-    private string ExpandLeadingTildeForWslOrHost(string path)
-    {
-        if (path != "~" && !path.StartsWith("~/", StringComparison.Ordinal) && !path.StartsWith("~\\", StringComparison.Ordinal))
-        {
-            return path;
-        }
-
-        var rel = path.Length > 1 ? path[1..].TrimStart('/', '\\').Replace('\\', '/') : string.Empty;
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            var wslUser = _pathResolver.GetWslUserName();
-            if (!string.IsNullOrWhiteSpace(wslUser))
-            {
-                return string.IsNullOrEmpty(rel) ? $"/home/{wslUser}" : $"/home/{wslUser}/{rel}";
-            }
-        }
-
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(userProfile))
-        {
-            var baseDir = userProfile.Replace('\\', '/').TrimEnd('/');
-            return string.IsNullOrEmpty(rel) ? baseDir : $"{baseDir}/{rel}";
-        }
-
-        return path;
     }
 
     private (string HostReadablePath, string CanonicalWslSourceRef) ResolveAndValidateHostPath(
@@ -738,7 +466,7 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
             canonicalWslSourceRef = VirtualMountEntry.ToDefaultWslPath(trimmed);
             hostReadablePath = isWindowsHost ? trimmed.Replace('/', '\\') : canonicalWslSourceRef;
         }
-        else if (IsWindowsDrivePath(trimmed))
+        else if (AttachmentHostPathResolver.IsWindowsDrivePath(trimmed))
         {
             canonicalWslSourceRef = VirtualMountEntry.ToDefaultWslPath(trimmed);
             hostReadablePath = isWindowsHost ? Path.GetFullPath(trimmed) : canonicalWslSourceRef;
@@ -787,8 +515,7 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
             canonicalWslSourceRef = normalizedSlashes;
             if (isWindowsHost)
             {
-                if (TryConvertMntDriveToWindowsPath(canonicalWslSourceRef, out var windowsDrivePath) &&
-                    File.Exists(windowsDrivePath))
+                if (AttachmentHostPathResolver.TryConvertMntDriveToWindowsPath(canonicalWslSourceRef, out var windowsDrivePath))
                 {
                     hostReadablePath = windowsDrivePath;
                 }
@@ -822,6 +549,13 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
                 $"Host path '{trimmed}' cannot reference a file inside the workspace attachments directory.");
         }
 
+        if (Directory.Exists(hostReadablePath))
+        {
+            throw new AttachmentConversionException(
+                trimmed,
+                $"Host path '{trimmed}' is a directory. Only individual supported files can be attached.");
+        }
+
         if (!File.Exists(hostReadablePath))
         {
             throw new AttachmentTargetNotFoundException(
@@ -831,26 +565,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
 
         return (hostReadablePath, canonicalWslSourceRef);
     }
-
-    private static bool TryConvertMntDriveToWindowsPath(string posixPath, out string windowsPath)
-    {
-        windowsPath = string.Empty;
-        if (posixPath.Length >= 7 &&
-            posixPath.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) &&
-            char.IsAsciiLetter(posixPath[5]) &&
-            posixPath[6] == '/')
-        {
-            var drive = char.ToUpperInvariant(posixPath[5]);
-            var rest = posixPath[7..].Replace('/', '\\');
-            windowsPath = $"{drive}:\\{rest}";
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsWindowsDrivePath(string path) =>
-        path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/');
 
     private static bool IsInsideDirectory(string candidatePath, string directoryPath)
     {
@@ -1013,335 +727,6 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
                 $"Failed to convert '{sourceName}' via Pmad.Markitdown: {ex.Message}",
                 ex);
         }
-    }
-
-    private async Task<(Uri FinalUri, byte[] Bytes, string? ContentTypeMediaType)> FetchUrlWithRedirectsAndSsrfGuardAsync(
-        Uri initialUri,
-        bool allowInternalNetwork,
-        CancellationToken fetchCancellationToken,
-        CancellationToken callerCancellationToken)
-    {
-        var currentUri = initialUri;
-
-        for (var redirectCount = 0; redirectCount <= AttachmentConstants.MaxUrlRedirects; redirectCount++)
-        {
-            await ValidateUriSsrfSafeAsync(currentUri, allowInternalNetwork, fetchCancellationToken);
-
-            try
-            {
-                using var request = new HttpRequestMessage(HttpMethod.Get, currentUri);
-                using var response = await _httpClient.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    fetchCancellationToken);
-
-                if (IsRedirectStatusCode(response.StatusCode))
-                {
-                    if (redirectCount >= AttachmentConstants.MaxUrlRedirects)
-                    {
-                        throw new AttachmentConversionException(
-                            initialUri.AbsoluteUri,
-                            $"URL '{initialUri.AbsoluteUri}' exceeded maximum redirect limit ({AttachmentConstants.MaxUrlRedirects}).");
-                    }
-
-                    var location = response.Headers.Location
-                        ?? throw new AttachmentConversionException(
-                            currentUri.AbsoluteUri,
-                            $"Redirect response ({(int)response.StatusCode}) from '{currentUri.AbsoluteUri}' omitted the Location header.");
-
-                    var nextUri = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
-                    if (nextUri.Scheme != Uri.UriSchemeHttp && nextUri.Scheme != Uri.UriSchemeHttps)
-                    {
-                        throw new AttachmentConversionException(
-                            nextUri.AbsoluteUri,
-                            $"Redirect target '{nextUri.AbsoluteUri}' uses unsupported scheme '{nextUri.Scheme}'.");
-                    }
-
-                    currentUri = nextUri;
-                    continue;
-                }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new AttachmentConversionException(
-                        currentUri.AbsoluteUri,
-                        $"Failed to capture URL '{currentUri.AbsoluteUri}': HTTP {(int)response.StatusCode} ({response.ReasonPhrase}).");
-                }
-
-                if (response.Content.Headers.ContentLength is long contentLength &&
-                    contentLength > AttachmentConstants.MaxUrlDownloadBytes)
-                {
-                    throw new AttachmentConversionException(
-                        currentUri.AbsoluteUri,
-                        $"URL '{currentUri.AbsoluteUri}' exceeds maximum download size of {AttachmentConstants.MaxUrlDownloadBytes} bytes (Content-Length: {contentLength}).");
-                }
-
-                await using var responseStream = await response.Content.ReadAsStreamAsync(fetchCancellationToken);
-                var bytes = await ReadStreamBoundedAsync(
-                    responseStream,
-                    AttachmentConstants.MaxUrlDownloadBytes,
-                    currentUri.AbsoluteUri,
-                    fetchCancellationToken);
-
-                var mediaType = response.Content.Headers.ContentType?.MediaType;
-                return (currentUri, bytes, mediaType);
-            }
-            catch (AttachmentConversionException)
-            {
-                throw;
-            }
-            catch (OperationCanceledException) when (!callerCancellationToken.IsCancellationRequested)
-            {
-                throw new AttachmentConversionException(
-                    currentUri.AbsoluteUri,
-                    $"Capturing URL '{currentUri.AbsoluteUri}' timed out after {AttachmentConstants.UrlFetchTimeoutSeconds}s.");
-            }
-            catch (HttpRequestException ex)
-            {
-                throw new AttachmentConversionException(
-                    currentUri.AbsoluteUri,
-                    $"HTTP request failed while capturing URL '{currentUri.AbsoluteUri}': {ex.Message}",
-                    ex);
-            }
-        }
-
-        throw new AttachmentConversionException(
-            initialUri.AbsoluteUri,
-            $"URL '{initialUri.AbsoluteUri}' exceeded maximum redirect limit ({AttachmentConstants.MaxUrlRedirects}).");
-    }
-
-    private async Task ValidateUriSsrfSafeAsync(
-        Uri uri,
-        bool allowInternalNetwork,
-        CancellationToken cancellationToken)
-    {
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new AttachmentConversionException(
-                uri.AbsoluteUri,
-                $"URL '{uri.AbsoluteUri}' uses unsupported scheme '{uri.Scheme}'. Only http and https are allowed.");
-        }
-
-        var host = uri.DnsSafeHost.TrimEnd('.');
-        if (string.IsNullOrWhiteSpace(host))
-        {
-            throw new AttachmentConversionException(uri.AbsoluteUri, $"URL '{uri.AbsoluteUri}' does not contain a valid host.");
-        }
-
-        if ((host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-             host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase)) &&
-            !allowInternalNetwork)
-        {
-            throw new AttachmentConversionException(
-                uri.AbsoluteUri,
-                $"URL '{uri.AbsoluteUri}' blocked by SSRF guard: localhost targets are prohibited.");
-        }
-
-        if (IPAddress.TryParse(host, out var literalIp))
-        {
-            ValidateIpAddressSsrfSafe(uri, literalIp, allowInternalNetwork);
-            return;
-        }
-
-        IPAddress[] addresses;
-        try
-        {
-            addresses = await ResolveHostAddressesAsync(host, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            throw new AttachmentConversionException(
-                uri.AbsoluteUri,
-                $"DNS resolution failed for host '{host}' in URL '{uri.AbsoluteUri}': {ex.Message}",
-                ex);
-        }
-
-        if (addresses.Length == 0)
-        {
-            throw new AttachmentConversionException(
-                uri.AbsoluteUri,
-                $"DNS resolution returned no addresses for host '{host}' in URL '{uri.AbsoluteUri}'.");
-        }
-
-        foreach (var address in addresses)
-        {
-            ValidateIpAddressSsrfSafe(uri, address, allowInternalNetwork);
-        }
-    }
-
-    private static void ValidateIpAddressSsrfSafe(Uri uri, IPAddress rawAddress, bool allowInternalNetwork)
-    {
-        var address = rawAddress.IsIPv4MappedToIPv6 ? rawAddress.MapToIPv4() : rawAddress;
-
-        if (IsAlwaysBlockedAddress(address))
-        {
-            throw new AttachmentConversionException(
-                uri.AbsoluteUri,
-                $"URL '{uri.AbsoluteUri}' blocked by SSRF guard: link-local, cloud metadata, or unspecified address '{address}' is prohibited.");
-        }
-
-        if (!allowInternalNetwork && IsPrivateOrLoopbackAddress(address))
-        {
-            throw new AttachmentConversionException(
-                uri.AbsoluteUri,
-                $"URL '{uri.AbsoluteUri}' blocked by SSRF guard: loopback or private network address '{address}' is prohibited.");
-        }
-    }
-
-    private static bool IsAlwaysBlockedAddress(IPAddress address)
-    {
-        if (IPAddress.Any.Equals(address) ||
-            IPAddress.IPv6Any.Equals(address) ||
-            IPAddress.Broadcast.Equals(address))
-        {
-            return true;
-        }
-
-        if (address.AddressFamily == AddressFamily.InterNetwork)
-        {
-            var bytes = address.GetAddressBytes();
-            // 0.0.0.0/8 ("this" network)
-            if (bytes[0] == 0)
-            {
-                return true;
-            }
-            // 169.254.0.0/16 (link-local & cloud metadata 169.254.169.254)
-            if (bytes[0] == 169 && bytes[1] == 254)
-            {
-                return true;
-            }
-            return false;
-        }
-
-        if (address.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            return address.IsIPv6LinkLocal ||
-                   address.Equals(IPAddress.IPv6None) ||
-                   address.Equals(AwsIpv6MetadataAddress);
-        }
-
-        return false;
-    }
-
-    private static bool IsPrivateOrLoopbackAddress(IPAddress address)
-    {
-        if (IPAddress.IsLoopback(address))
-        {
-            return true;
-        }
-
-        if (address.AddressFamily == AddressFamily.InterNetwork)
-        {
-            var bytes = address.GetAddressBytes();
-            return bytes[0] == 127 // 127.0.0.0/8 loopback
-                || bytes[0] == 10 // 10.0.0.0/8 private
-                || (bytes[0] == 100 && (bytes[1] & 0xC0) == 64) // 100.64.0.0/10 CGNAT
-                || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31) // 172.16.0.0/12 private
-                || (bytes[0] == 192 && bytes[1] == 168); // 192.168.0.0/16 private
-        }
-
-        if (address.AddressFamily == AddressFamily.InterNetworkV6)
-        {
-            var bytes = address.GetAddressBytes();
-            // fc00::/7 Unique Local IPv6 Unicast
-            return (bytes[0] & 0xFE) == 0xFC || address.IsIPv6SiteLocal;
-        }
-
-        return false;
-    }
-
-    private static bool IsRedirectStatusCode(HttpStatusCode statusCode) =>
-        statusCode is HttpStatusCode.MovedPermanently
-            or HttpStatusCode.Found
-            or HttpStatusCode.SeeOther
-            or HttpStatusCode.TemporaryRedirect
-            or HttpStatusCode.PermanentRedirect;
-
-    private async Task<(string MarkdownBody, string? ExtractedTitle)> ConvertCapturedResponseAsync(
-        Uri finalUri,
-        byte[] bytes,
-        string? contentTypeMediaType,
-        CancellationToken cancellationToken)
-    {
-        if (bytes.Length == 0)
-        {
-            throw new AttachmentConversionException(
-                finalUri.AbsoluteUri,
-                $"URL '{finalUri.AbsoluteUri}' returned an empty response body.");
-        }
-
-        var normalizedMediaType = ResolveEffectiveUrlMediaType(finalUri, contentTypeMediaType);
-
-        string markdown;
-        if (normalizedMediaType is "text/markdown" or "text/plain" or "application/json")
-        {
-            markdown = Encoding.UTF8.GetString(bytes);
-        }
-        else if (normalizedMediaType is "application/pdf" or "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or "text/html" or "application/xhtml+xml")
-        {
-            var expectedExt = normalizedMediaType == "application/pdf"
-                ? ".pdf"
-                : normalizedMediaType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    ? ".docx"
-                    : ".html";
-            ValidateRichDocumentSignature(bytes, expectedExt, finalUri.AbsoluteUri);
-            markdown = await ConvertRichDocumentWithMarkitdownAsync(
-                bytes,
-                normalizedMediaType,
-                finalUri.AbsoluteUri,
-                finalUri,
-                cancellationToken);
-        }
-        else
-        {
-            throw new AttachmentConversionException(
-                finalUri.AbsoluteUri,
-                $"URL '{finalUri.AbsoluteUri}' returned unsupported content type '{normalizedMediaType}'.");
-        }
-
-        string? title = null;
-        if (normalizedMediaType is "text/html" or "application/xhtml+xml")
-        {
-            title = ExtractHtmlTitle(bytes);
-        }
-
-        title ??= ExtractLeadingMarkdownHeading(markdown);
-        return (markdown, title);
-    }
-
-    private static string ResolveEffectiveUrlMediaType(Uri finalUri, string? contentTypeMediaType)
-    {
-        var raw = contentTypeMediaType?.Split(';')[0].Trim().ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(raw) && !string.Equals(raw, "application/octet-stream", StringComparison.Ordinal))
-        {
-            return raw;
-        }
-
-        var ext = Path.GetExtension(finalUri.AbsolutePath);
-        var fromExtension = AttachmentConstants.ResolveMediaType(ext);
-        return string.Equals(fromExtension, "application/octet-stream", StringComparison.OrdinalIgnoreCase)
-            ? "text/html"
-            : fromExtension.ToLowerInvariant();
-    }
-
-    private static string? ExtractHtmlTitle(byte[] bytes)
-    {
-        using var stream = new MemoryStream(bytes, writable: false);
-        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-        var html = reader.ReadToEnd();
-        var match = HtmlTitleRegex().Match(html);
-        if (!match.Success)
-        {
-            return null;
-        }
-
-        var decoded = WebUtility.HtmlDecode(match.Groups["title"].Value);
-        var collapsed = WhitespaceCollapseRegex().Replace(decoded, " ").Trim();
-        return string.IsNullOrWhiteSpace(collapsed) ? null : collapsed;
     }
 
     private async Task CreatePosixSymlinkAsync(
@@ -1622,97 +1007,20 @@ public partial class AttachmentIntakeService : IAttachmentIntakeService
                string.Equals(wslLeft, wslRight, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string? ExtractLeadingMarkdownHeading(string markdown)
+    private void TryDeleteLocalFileIfPresent(string path)
     {
-        if (string.IsNullOrWhiteSpace(markdown))
+        try
         {
-            return null;
-        }
-
-        using var reader = new StringReader(markdown);
-        string? line;
-        while ((line = reader.ReadLine()) != null)
-        {
-            var trimmed = line.Trim();
-            if (string.IsNullOrEmpty(trimmed))
+            if (File.Exists(path))
             {
-                continue;
-            }
-
-            if (trimmed.StartsWith("# ", StringComparison.Ordinal))
-            {
-                var heading = trimmed[2..].Trim();
-                return string.IsNullOrWhiteSpace(heading) ? null : heading;
-            }
-
-            break;
-        }
-
-        return null;
-    }
-
-    private static string BuildFallbackUrlTitle(Uri uri)
-    {
-        var path = uri.AbsolutePath.Trim('/');
-        return string.IsNullOrEmpty(path) ? uri.Host : $"{uri.Host}/{path}";
-    }
-
-    private static string BuildUrlSlugSeed(Uri uri, string? extractedTitle)
-    {
-        if (!string.IsNullOrWhiteSpace(extractedTitle))
-        {
-            return extractedTitle;
-        }
-
-        var lastSegment = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-        if (!string.IsNullOrWhiteSpace(lastSegment))
-        {
-            var withoutExtension = Path.GetFileNameWithoutExtension(lastSegment);
-            if (!string.IsNullOrWhiteSpace(withoutExtension))
-            {
-                return withoutExtension;
-            }
-
-            var trimmedDots = lastSegment.TrimStart('.');
-            if (!string.IsNullOrWhiteSpace(trimmedDots))
-            {
-                return trimmedDots;
+                File.Delete(path);
             }
         }
-
-        return uri.Host;
-    }
-
-    private static string BuildUrlCaptureMarkdown(
-        string sourceUrl,
-        DateTime capturedAtUtc,
-        string title,
-        string sha256,
-        string markdownBody)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("---");
-        sb.AppendLine($"source: \"{EscapeYamlDoubleQuoted(sourceUrl)}\"");
-        sb.AppendLine($"capturedAt: \"{capturedAtUtc:O}\"");
-        sb.AppendLine($"title: \"{EscapeYamlDoubleQuoted(title)}\"");
-        sb.AppendLine($"sha256: \"{sha256}\"");
-        sb.AppendLine("---");
-        sb.AppendLine();
-        sb.Append(markdownBody);
-        if (!markdownBody.EndsWith('\n'))
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            sb.AppendLine();
+            _logger.LogDebug(ex, "Attachment file '{Path}' was already absent on disk during deletion.", path);
         }
-
-        return sb.ToString();
     }
-
-    private static string EscapeYamlDoubleQuoted(string value) =>
-        (value ?? string.Empty)
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal)
-            .Replace("\r", " ", StringComparison.Ordinal)
-            .Replace("\n", " ", StringComparison.Ordinal);
 
     private readonly record struct PreparedAttachmentContent(
         string MediaType,

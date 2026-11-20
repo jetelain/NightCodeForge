@@ -249,11 +249,21 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 IReadOnlyList<int> requestedAttachmentIds;
                 if (request.AttachmentIds != null)
                 {
-                    requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                    var validExplicitIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
                         scope.WorkspaceId,
                         request.AttachmentIds,
+                        description: null,
+                        cancellationToken);
+                    var resolvedCitedIds = await ResolveExistingWorkspaceAttachmentIdsAsync(
+                        scope.WorkspaceId,
+                        explicitIds: null,
                         effectiveDescription,
                         cancellationToken);
+                    requestedAttachmentIds = validExplicitIds
+                        .Concat(resolvedCitedIds)
+                        .Distinct()
+                        .OrderBy(id => id)
+                        .ToList();
                 }
                 else
                 {
@@ -264,7 +274,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                     var retainedExplicitIds = currentAttachments
                         .Where(id => !oldCitedIds.Contains(id))
                         .ToList();
-                    requestedAttachmentIds = await ValidateAndResolveWorkspaceAttachmentIdsAsync(
+                    requestedAttachmentIds = await ResolveExistingWorkspaceAttachmentIdsAsync(
                         scope.WorkspaceId,
                         retainedExplicitIds,
                         effectiveDescription,
@@ -329,7 +339,13 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             await _taskRepository.UpdateWithHistoryAsync(task, newDependencies, scope.EffectiveActor, reason, cancellationToken);
             if (newAttachmentIds != null)
             {
-                await _attachmentRepository.SetTaskAttachmentLinksAsync(task.Id, newAttachmentIds, cancellationToken);
+                await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+                    _attachmentRepository,
+                    scope.WorkspaceId,
+                    task.Id,
+                    newAttachmentIds,
+                    _logger,
+                    cancellationToken);
             }
 
             await SyncMarkdownAsync(scope, task, cancellationToken);
@@ -740,6 +756,19 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             workspaceId,
             explicitIds,
             description,
+            cancellationToken);
+
+    private Task<IReadOnlyList<int>> ResolveExistingWorkspaceAttachmentIdsAsync(
+        int workspaceId,
+        IReadOnlyList<int>? explicitIds,
+        string? description,
+        CancellationToken cancellationToken) =>
+        AttachmentCitationParser.ResolveExistingWorkspaceIdsAsync(
+            _attachmentRepository,
+            workspaceId,
+            explicitIds,
+            description,
+            _logger,
             cancellationToken);
 
     private static TaskDifficulty ParseDifficulty(string rawDifficulty, string paramName)

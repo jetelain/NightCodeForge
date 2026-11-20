@@ -417,7 +417,6 @@
                             <div class="task-attachments-chips">
                                 @foreach (var att in _taskAttachments)
                                 {
-                                    var symlinkBadge = AttachmentPresentationHelper.FormatSymlinkBadge(att);
                                     <button type="button"
                                             class="forge-chip attachment-chip task-attachment-chip clickable"
                                             @onclick="() => _previewAttachmentId = att.Id"
@@ -428,12 +427,6 @@
                                         <span class="forge-badge badge-gray" style="font-size: 0.7rem;">
                                             @AttachmentPresentationHelper.FormatContentKindLabel(att.ContentKind)
                                         </span>
-                                        @if (!string.IsNullOrEmpty(symlinkBadge))
-                                        {
-                                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge" style="font-size: 0.7rem;">
-                                                @symlinkBadge
-                                            </span>
-                                        }
                                         <span class="font-mono text-muted" style="font-size: 0.72rem;">
                                             @AttachmentPresentationHelper.FormatSizeBytes(att.SizeBytes)
                                         </span>

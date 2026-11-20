@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Repositories;
 
@@ -94,33 +95,205 @@ public static partial class AttachmentCitationParser
         string? description,
         CancellationToken cancellationToken = default)
     {
+        var (resolvedIds, missingIds) = await ResolveWorkspaceAttachmentIdsCoreAsync(
+            attachmentRepository,
+            workspaceId,
+            explicitIds,
+            description,
+            cancellationToken);
+
+        if (missingIds.Count > 0)
+        {
+            throw new AttachmentNotFoundException(missingIds[0], workspaceId);
+        }
+
+        return resolvedIds;
+    }
+
+    /// <summary>
+    /// Unions explicit attachment IDs with citations in <paramref name="description"/> and resolves
+    /// only those IDs that currently exist in <paramref name="attachmentRepository"/> and belong to
+    /// <paramref name="workspaceId"/>. Missing, deleted, or cross-workspace IDs are logged and ignored.
+    /// </summary>
+    public static async Task<IReadOnlyList<int>> ResolveExistingWorkspaceIdsAsync(
+        ITaskAttachmentRepository attachmentRepository,
+        int workspaceId,
+        IEnumerable<int>? explicitIds,
+        string? description,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        var (resolvedIds, missingIds) = await ResolveWorkspaceAttachmentIdsCoreAsync(
+            attachmentRepository,
+            workspaceId,
+            explicitIds,
+            description,
+            cancellationToken);
+
+        if (missingIds.Count > 0)
+        {
+            logger?.LogWarning(
+                "Ignoring missing or inaccessible attachment IDs [{AttachmentIds}] in workspace #{WorkspaceId}.",
+                string.Join(", ", missingIds),
+                workspaceId);
+        }
+
+        return resolvedIds;
+    }
+
+    /// <summary>
+    /// Replaces attachment links for <paramref name="taskId"/> using only currently existing workspace
+    /// attachments, retrying safely if an attachment is deleted concurrently before persistence completes.
+    /// </summary>
+    public static async Task<IReadOnlyList<int>> SetExistingTaskAttachmentLinksAsync(
+        ITaskAttachmentRepository attachmentRepository,
+        int workspaceId,
+        int taskId,
+        IEnumerable<int>? candidateAttachmentIds,
+        ILogger? logger = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(attachmentRepository);
+
+        var remaining = (candidateAttachmentIds ?? Array.Empty<int>())
+            .Where(id => id > 0)
+            .Distinct()
+            .OrderBy(id => id)
+            .ToList();
+
+        while (true)
+        {
+            try
+            {
+                await attachmentRepository.SetTaskAttachmentLinksAsync(taskId, remaining, cancellationToken);
+                return remaining;
+            }
+            catch (AttachmentNotFoundException ex) when (remaining.Count > 0)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Attachment #{AttachmentId} was missing while updating links for task #{TaskId} in workspace #{WorkspaceId}; filtering to remaining existing attachments.",
+                    ex.AttachmentId,
+                    taskId,
+                    workspaceId);
+
+                var candidates = remaining.Where(id => id != ex.AttachmentId).ToList();
+                var nextRemaining = (await ResolveExistingWorkspaceIdsAsync(
+                        attachmentRepository,
+                        workspaceId,
+                        candidates,
+                        description: null,
+                        logger,
+                        cancellationToken))
+                    .ToList();
+
+                if (nextRemaining.Count >= remaining.Count)
+                {
+                    logger?.LogWarning(
+                        ex,
+                        "Unable to shrink candidate attachment links for task #{TaskId} in workspace #{WorkspaceId} after missing attachment #{AttachmentId}; aborting link update safely.",
+                        taskId,
+                        workspaceId,
+                        ex.AttachmentId);
+                    var persisted = await attachmentRepository.GetByTaskIdAsync(taskId, cancellationToken)
+                        ?? Array.Empty<TaskAttachment>();
+                    return persisted
+                        .Where(a => a != null && a.Id > 0)
+                        .Select(a => a.Id)
+                        .Distinct()
+                        .OrderBy(id => id)
+                        .ToList();
+                }
+
+                remaining = nextRemaining;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Removes all <c>@attachment:{id}</c> (and optional trailing attachment title) citations
+    /// from <paramref name="text"/> cleanly while collapsing redundant inline whitespace.
+    /// </summary>
+    public static string RemoveAttachmentCitation(string? text, int attachmentId, string? title = null)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        if (attachmentId <= 0)
+        {
+            return text;
+        }
+
+        var idStr = attachmentId.ToString(CultureInfo.InvariantCulture);
+        var tokenPattern = $@"(?<![A-Za-z0-9._%+-])@attachment:#?{idStr}\b";
+        if (!string.IsNullOrWhiteSpace(title))
+        {
+            var escapedTitle = Regex.Escape(title.Trim());
+            tokenPattern = $@"{tokenPattern}(?:[ \t]+{escapedTitle}(?=$|[\s.,;:!?)\]\}}>'""`]))?";
+        }
+
+        var fullPattern = $@"(?<lead>[ \t]*)(?:{tokenPattern})(?<trail>[ \t]*)";
+        var updated = Regex.Replace(
+            text,
+            fullPattern,
+            match =>
+            {
+                var atLineStart = match.Index == 0 || text[match.Index - 1] is '\n' or '\r';
+                var endIndex = match.Index + match.Length;
+                var atLineEnd = endIndex >= text.Length || text[endIndex] is '\r' or '\n';
+                if (!atLineStart && !atLineEnd && match.Groups["lead"].Length > 0 && match.Groups["trail"].Length > 0)
+                {
+                    return " ";
+                }
+
+                return string.Empty;
+            },
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        return updated.Trim(' ', '\t');
+    }
+
+    private static async Task<(IReadOnlyList<int> ResolvedIds, IReadOnlyList<int> MissingIds)> ResolveWorkspaceAttachmentIdsCoreAsync(
+        ITaskAttachmentRepository attachmentRepository,
+        int workspaceId,
+        IEnumerable<int>? explicitIds,
+        string? description,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(attachmentRepository);
 
         var unionIds = UnionAttachmentIds(explicitIds, description);
         if (unionIds.Count == 0)
         {
-            return Array.Empty<int>();
+            return (Array.Empty<int>(), Array.Empty<int>());
         }
 
+        var positiveIds = unionIds.Where(id => id > 0).ToList();
+        var existing = positiveIds.Count > 0
+            ? await attachmentRepository.GetByIdsAsync(positiveIds, cancellationToken) ?? Array.Empty<TaskAttachment>()
+            : Array.Empty<TaskAttachment>();
+        var byId = existing
+            .Where(a => a != null)
+            .ToDictionary(a => a.Id);
+
+        var resolved = new List<int>(unionIds.Count);
+        var missing = new List<int>();
         foreach (var id in unionIds)
         {
-            if (id <= 0)
+            if (id > 0 && byId.TryGetValue(id, out var attachment) && attachment.WorkspaceId == workspaceId)
             {
-                throw new AttachmentNotFoundException(id, workspaceId);
+                resolved.Add(id);
+            }
+            else
+            {
+                missing.Add(id);
             }
         }
 
-        var existing = await attachmentRepository.GetByIdsAsync(unionIds, cancellationToken);
-        var byId = existing.ToDictionary(a => a.Id);
-        foreach (var id in unionIds)
-        {
-            if (!byId.TryGetValue(id, out var attachment) || attachment.WorkspaceId != workspaceId)
-            {
-                throw new AttachmentNotFoundException(id, workspaceId);
-            }
-        }
-
-        return unionIds.OrderBy(id => id).ToList();
+        resolved.Sort();
+        return (resolved, missing);
     }
 }
 

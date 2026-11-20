@@ -1583,7 +1583,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 var difficulty = ParseDifficulty(nt.Item.Frontmatter.Difficulty, nt.Item.FilePath) ?? TaskDifficulty.Standard;
                 var newTaskDescription = !string.IsNullOrWhiteSpace(nt.Item.Description) ? nt.Item.Description : nt.Item.Body;
 
-                var resolvedAttachmentIds = await ValidateAndResolveMarkdownAttachmentsAsync(
+                var resolvedAttachmentIds = await ResolveMarkdownAttachmentsTolerantlyAsync(
                     scope.ServiceProvider,
                     workspace.Id,
                     nt.Item.Frontmatter.AttachmentIds,
@@ -1627,7 +1627,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                 if (resolvedAttachmentIds.Count > 0)
                 {
                     var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
-                    await attachmentRepo.SetTaskAttachmentLinksAsync(created.Id, resolvedAttachmentIds, cancellationToken);
+                    await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+                        attachmentRepo,
+                        workspace.Id,
+                        created.Id,
+                        resolvedAttachmentIds,
+                        _logger,
+                        cancellationToken);
                 }
 
                 newTaskIdMap[newIdx] = created.Id;
@@ -1962,8 +1968,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                     if (attachmentUpdate.Changed)
                     {
                         var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
-                        await attachmentRepo.SetTaskAttachmentLinksAsync(task.Id, attachmentUpdate.TargetAttachmentIds, cancellationToken);
-                        task.AttachmentLinks = attachmentUpdate.TargetAttachmentIds
+                        var appliedAttachmentIds = await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+                            attachmentRepo,
+                            workspace.Id,
+                            task.Id,
+                            attachmentUpdate.TargetAttachmentIds,
+                            _logger,
+                            cancellationToken);
+                        task.AttachmentLinks = appliedAttachmentIds
                             .Select(attId => new TaskAttachmentLink
                             {
                                 TaskId = task.Id,
@@ -2524,8 +2536,14 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
                         if (attachmentUpdate.Changed)
                         {
                             var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
-                            await attachmentRepo.SetTaskAttachmentLinksAsync(task.Id, attachmentUpdate.TargetAttachmentIds, cancellationToken);
-                            task.AttachmentLinks = attachmentUpdate.TargetAttachmentIds
+                            var appliedAttachmentIds = await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+                                attachmentRepo,
+                                workspaceId,
+                                task.Id,
+                                attachmentUpdate.TargetAttachmentIds,
+                                _logger,
+                                cancellationToken);
+                            task.AttachmentLinks = appliedAttachmentIds
                                 .Select(attId => new TaskAttachmentLink
                                 {
                                     TaskId = task.Id,
@@ -2613,7 +2631,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             }
 
             var newTaskDescription = !string.IsNullOrWhiteSpace(description) ? description : body;
-            var resolvedAttachmentIds = await ValidateAndResolveMarkdownAttachmentsAsync(
+            var resolvedAttachmentIds = await ResolveMarkdownAttachmentsTolerantlyAsync(
                 scope.ServiceProvider,
                 workspaceId,
                 frontmatter.AttachmentIds,
@@ -2659,7 +2677,13 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             if (resolvedAttachmentIds.Count > 0)
             {
                 var attachmentRepo = ResolveAttachmentRepository(scope.ServiceProvider, taskRepo);
-                await attachmentRepo.SetTaskAttachmentLinksAsync(created.Id, resolvedAttachmentIds, cancellationToken);
+                await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+                    attachmentRepo,
+                    workspaceId,
+                    created.Id,
+                    resolvedAttachmentIds,
+                    _logger,
+                    cancellationToken);
             }
 
             frontmatter.Id = created.Id;
@@ -3046,7 +3070,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         serviceProvider.GetService<ITaskAttachmentRepository>()
         ?? new InMemoryTaskAttachmentRepository(taskRepository);
 
-    private static async Task<IReadOnlyList<int>> ValidateAndResolveMarkdownAttachmentsAsync(
+    private async Task<IReadOnlyList<int>> ResolveMarkdownAttachmentsTolerantlyAsync(
         IServiceProvider serviceProvider,
         int workspaceId,
         IReadOnlyList<int>? explicitIds,
@@ -3061,15 +3085,16 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
 
         var taskRepo = serviceProvider.GetRequiredService<ITaskRepository>();
         var attachmentRepo = ResolveAttachmentRepository(serviceProvider, taskRepo);
-        return await AttachmentCitationParser.ValidateAndResolveWorkspaceIdsAsync(
+        return await AttachmentCitationParser.ResolveExistingWorkspaceIdsAsync(
             attachmentRepo,
             workspaceId,
             explicitIds,
             description,
+            _logger,
             cancellationToken);
     }
 
-    private static async Task<(bool Changed, IReadOnlyList<int> TargetAttachmentIds)> ResolveExistingTaskAttachmentUpdateAsync(
+    private async Task<(bool Changed, IReadOnlyList<int> TargetAttachmentIds)> ResolveExistingTaskAttachmentUpdateAsync(
         IServiceProvider serviceProvider,
         ITaskRepository taskRepo,
         int workspaceId,
@@ -3112,7 +3137,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
             return (currentIds.Count > 0, Array.Empty<int>());
         }
 
-        var targetIds = await ValidateAndResolveMarkdownAttachmentsAsync(
+        var targetIds = await ResolveMarkdownAttachmentsTolerantlyAsync(
             serviceProvider,
             workspaceId,
             baseIds,

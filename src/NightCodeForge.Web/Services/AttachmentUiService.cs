@@ -44,17 +44,9 @@ public interface IAttachmentUiService
         string hostPath,
         CancellationToken cancellationToken = default);
 
-    Task<TaskAttachment> CaptureUrlAsync(
-        int workspaceId,
-        string url,
-        CancellationToken cancellationToken = default);
-
-    MessageCitationExtraction ExtractMessageCitations(string? message);
-
-    Task<IReadOnlyList<ConversationAttachmentChipViewModel>> IngestMessageCitationsAsync(
+    Task<IReadOnlyList<ConversationAttachmentChipViewModel>> ResolveCitedAttachmentChipsAsync(
         int workspaceId,
         string? message,
-        Action<ConversationAttachmentChipViewModel>? onChipChanged = null,
         CancellationToken cancellationToken = default);
 
     Task<AttachmentPreviewModel> LoadPreviewAsync(
@@ -94,6 +86,8 @@ public class AttachmentUiService : IAttachmentUiService
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IIdeationConversationCoordinator _ideationCoordinator;
     private readonly IVisionCapabilityUiService _visionCapabilityUiService;
+    private readonly ITaskMarkdownSyncService _markdownSyncService;
+    private readonly IWorkspaceLockProvider _lockProvider;
     private readonly ILogger<AttachmentUiService> _logger;
 
     public AttachmentUiService(
@@ -104,6 +98,8 @@ public class AttachmentUiService : IAttachmentUiService
         IWorkspacePathResolver pathResolver,
         IIdeationConversationCoordinator ideationCoordinator,
         IVisionCapabilityUiService visionCapabilityUiService,
+        ITaskMarkdownSyncService markdownSyncService,
+        IWorkspaceLockProvider lockProvider,
         ILogger<AttachmentUiService> logger)
     {
         _intakeService = intakeService ?? throw new ArgumentNullException(nameof(intakeService));
@@ -113,6 +109,8 @@ public class AttachmentUiService : IAttachmentUiService
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _ideationCoordinator = ideationCoordinator ?? throw new ArgumentNullException(nameof(ideationCoordinator));
         _visionCapabilityUiService = visionCapabilityUiService ?? throw new ArgumentNullException(nameof(visionCapabilityUiService));
+        _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
+        _lockProvider = lockProvider ?? throw new ArgumentNullException(nameof(lockProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -277,23 +275,9 @@ public class AttachmentUiService : IAttachmentUiService
         return attachment;
     }
 
-    public async Task<TaskAttachment> CaptureUrlAsync(
-        int workspaceId,
-        string url,
-        CancellationToken cancellationToken = default)
-    {
-        var attachment = await _intakeService.CaptureUrlAsync(workspaceId, url, cancellationToken: cancellationToken);
-        _ideationCoordinator.MarkWorkspaceContextDirty(workspaceId);
-        return attachment;
-    }
-
-    public MessageCitationExtraction ExtractMessageCitations(string? message) =>
-        AttachmentPresentationHelper.ExtractMessageCitations(message, _intakeService);
-
-    public async Task<IReadOnlyList<ConversationAttachmentChipViewModel>> IngestMessageCitationsAsync(
+    public async Task<IReadOnlyList<ConversationAttachmentChipViewModel>> ResolveCitedAttachmentChipsAsync(
         int workspaceId,
         string? message,
-        Action<ConversationAttachmentChipViewModel>? onChipChanged = null,
         CancellationToken cancellationToken = default)
     {
         if (workspaceId <= 0 || string.IsNullOrWhiteSpace(message))
@@ -301,84 +285,30 @@ public class AttachmentUiService : IAttachmentUiService
             return Array.Empty<ConversationAttachmentChipViewModel>();
         }
 
-        var extraction = ExtractMessageCitations(message);
-        if (!extraction.HasAny)
+        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(message);
+        if (citedIds.Count == 0)
         {
             return Array.Empty<ConversationAttachmentChipViewModel>();
         }
 
+        var loaded = await _attachmentRepository.GetByIdsAsync(citedIds, cancellationToken)
+            ?? Array.Empty<TaskAttachment>();
+        var existingById = new Dictionary<int, TaskAttachment>();
+        foreach (var att in loaded)
+        {
+            if (att != null && att.WorkspaceId == workspaceId)
+            {
+                existingById[att.Id] = att;
+            }
+        }
+
         var chips = new List<ConversationAttachmentChipViewModel>();
-
-        foreach (var hostPath in extraction.HostPaths)
+        foreach (var citedId in citedIds)
         {
-            var chip = ConversationAttachmentChipViewModel.CreatePendingHostPath(hostPath);
-            AttachmentPresentationHelper.UpsertChip(chips, chip);
-            onChipChanged?.Invoke(chip);
-
-            try
+            if (existingById.TryGetValue(citedId, out var existing))
             {
-                var ingested = await _intakeService.IngestHostPathAsync(workspaceId, hostPath, cancellationToken);
-                chip.ApplyIngested(ingested);
-                AttachmentPresentationHelper.UpsertChip(chips, chip);
+                AttachmentPresentationHelper.UpsertChip(chips, ConversationAttachmentChipViewModel.FromAttachment(existing));
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed ingesting cited host path '{HostPath}' in Workspace #{WorkspaceId}", hostPath, workspaceId);
-                chip.MarkFailed(ex.Message);
-            }
-
-            onChipChanged?.Invoke(chip);
-        }
-
-        foreach (var url in extraction.Urls)
-        {
-            var chip = ConversationAttachmentChipViewModel.CreatePendingUrl(url);
-            AttachmentPresentationHelper.UpsertChip(chips, chip);
-            onChipChanged?.Invoke(chip);
-
-            try
-            {
-                var ingested = await _intakeService.CaptureUrlAsync(workspaceId, url, cancellationToken: cancellationToken);
-                chip.ApplyIngested(ingested);
-                AttachmentPresentationHelper.UpsertChip(chips, chip);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed capturing cited URL '{Url}' in Workspace #{WorkspaceId}", url, workspaceId);
-                chip.MarkFailed(ex.Message);
-            }
-
-            onChipChanged?.Invoke(chip);
-        }
-
-        foreach (var citedId in extraction.CitedAttachmentIds)
-        {
-            if (chips.Any(c => c.AttachmentId == citedId))
-            {
-                continue;
-            }
-
-            var existing = await _attachmentRepository.GetByIdAsync(citedId, cancellationToken)
-                ?? await _intakeService.GetAttachmentAsync(citedId, cancellationToken);
-            if (existing != null && existing.WorkspaceId == workspaceId)
-            {
-                var chip = ConversationAttachmentChipViewModel.FromAttachment(existing);
-                AttachmentPresentationHelper.UpsertChip(chips, chip);
-                onChipChanged?.Invoke(chip);
-            }
-        }
-
-        if (chips.Count > 0)
-        {
-            _ideationCoordinator.MarkWorkspaceContextDirty(workspaceId);
         }
 
         return chips;
@@ -395,66 +325,98 @@ public class AttachmentUiService : IAttachmentUiService
             ? await _workspaceRepository.GetByIdAsync(attachment.WorkspaceId, cancellationToken)
             : null;
 
-        var hostAttachmentsDir = ResolveHostAttachmentsDirectory(attachment.WorkspaceId);
-        var (isTargetReachable, resolvedSymlinkTarget) = EvaluateSymlinkReachability(attachment);
-
-        if (attachment.IsSymlink && !isTargetReachable)
+        try
         {
-            return new AttachmentPreviewModel
+            var hostAttachmentsDir = AttachmentHostPathResolver.ResolveHostAttachmentsDirectory(attachment.WorkspaceId, _pathResolver);
+            var isTargetReachable = IsSymlinkTargetReachable(attachment);
+
+            if (attachment.IsSymlink && !isTargetReachable)
             {
-                Attachment = attachment,
-                WorkspaceName = workspace?.Name,
-                IsTargetReachable = false,
-                LinkedTasks = linkedTasks
-            };
-        }
+                return new AttachmentPreviewModel
+                {
+                    Attachment = attachment,
+                    WorkspaceName = workspace?.Name,
+                    IsTargetReachable = false,
+                    LinkedTasks = linkedTasks
+                };
+            }
 
-        if (attachment.ContentKind == TaskAttachmentContentKind.Image)
-        {
-            string? imageDataUri = await TryLoadImageDataUriAsync(
+            if (attachment.ContentKind == TaskAttachmentContentKind.Image)
+            {
+                var (imageDataUri, imageReadError) = await TryLoadImageDataUriWithErrorAsync(
+                    attachment,
+                    hostAttachmentsDir,
+                    downscaleForThumbnail: false,
+                    cancellationToken);
+
+                return new AttachmentPreviewModel
+                {
+                    Attachment = attachment,
+                    WorkspaceName = workspace?.Name,
+                    ImageDataUri = imageDataUri,
+                    ContentReadError = imageDataUri == null ? imageReadError : null,
+                    IsTargetReachable = isTargetReachable,
+                    LinkedTasks = linkedTasks
+                };
+            }
+
+            var candidates = AttachmentHostPathResolver.EnumerateReadableAttachmentPaths(
                 attachment,
                 hostAttachmentsDir,
-                resolvedSymlinkTarget,
-                downscaleForThumbnail: false,
-                cancellationToken);
+                _pathResolver);
 
+            var markdownContent = string.Empty;
+            string? lastReadError = null;
+            var readSucceeded = false;
+
+            foreach (var candidate in candidates)
+            {
+                try
+                {
+                    markdownContent = await File.ReadAllTextAsync(candidate, cancellationToken);
+                    readSucceeded = true;
+                    lastReadError = null;
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Failed reading preview content for attachment #{AttachmentId} from '{Path}'.",
+                        attachment.Id,
+                        candidate);
+                    lastReadError ??= ex.Message;
+                }
+            }
+
+            var renderedHtml = readSucceeded ? MarkdownHelper.ToHtml(markdownContent) : string.Empty;
             return new AttachmentPreviewModel
             {
                 Attachment = attachment,
                 WorkspaceName = workspace?.Name,
-                ImageDataUri = imageDataUri,
+                MarkdownContent = markdownContent,
+                RenderedHtml = renderedHtml,
+                ContentReadError = readSucceeded ? null : lastReadError,
                 IsTargetReachable = isTargetReachable,
                 LinkedTasks = linkedTasks
             };
         }
-
-        var markdownRelPath = !string.IsNullOrWhiteSpace(attachment.MarkdownPath)
-            ? attachment.MarkdownPath
-            : attachment.RelativePath;
-        var allowDirectSymlinkFallback = attachment.IsSymlink &&
-                                         attachment.ContentKind == TaskAttachmentContentKind.PlainText;
-        var markdownPath = ResolvePrimaryReadableFile(
-            hostAttachmentsDir,
-            markdownRelPath,
-            resolvedSymlinkTarget,
-            allowDirectSymlinkFallback);
-
-        var markdownContent = string.Empty;
-        if (!string.IsNullOrWhiteSpace(markdownPath) && File.Exists(markdownPath))
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            markdownContent = await File.ReadAllTextAsync(markdownPath, cancellationToken);
+            _logger.LogWarning(
+                ex,
+                "Failed resolving preview paths or reading content for attachment #{AttachmentId}; returning degraded metadata preview.",
+                attachmentId);
+            return new AttachmentPreviewModel
+            {
+                Attachment = attachment,
+                WorkspaceName = workspace?.Name,
+                IsTargetReachable = true,
+                IsReachabilityUnknown = attachment.IsSymlink,
+                ContentReadError = ex.Message,
+                LinkedTasks = linkedTasks
+            };
         }
-
-        var renderedHtml = MarkdownHelper.ToHtml(markdownContent);
-        return new AttachmentPreviewModel
-        {
-            Attachment = attachment,
-            WorkspaceName = workspace?.Name,
-            MarkdownContent = markdownContent,
-            RenderedHtml = renderedHtml,
-            IsTargetReachable = isTargetReachable,
-            LinkedTasks = linkedTasks
-        };
     }
 
     public async Task<AttachmentDeleteImpact> GetDeleteImpactAsync(
@@ -472,6 +434,10 @@ public class AttachmentUiService : IAttachmentUiService
         CancellationToken cancellationToken = default)
     {
         var existing = await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken);
+        var linkedTaskIds = existing != null
+            ? (await _attachmentRepository.GetLinkedTaskIdsAsync(attachmentId, cancellationToken) ?? Array.Empty<int>()).ToHashSet()
+            : new HashSet<int>();
+
         await _intakeService.DeleteAttachmentAsync(attachmentId, cancellationToken);
 
         // If a test mocked IAttachmentIntakeService without backing the shared repository, ensure DB/repo link cleanup too.
@@ -482,7 +448,138 @@ public class AttachmentUiService : IAttachmentUiService
 
         if (existing is { WorkspaceId: > 0 })
         {
-            _ideationCoordinator.MarkWorkspaceContextDirty(existing.WorkspaceId);
+            try
+            {
+                await CleanupDeletedAttachmentReferencesAsync(existing, linkedTaskIds, cancellationToken);
+            }
+            finally
+            {
+                _ideationCoordinator.MarkWorkspaceContextDirty(existing.WorkspaceId);
+            }
+        }
+    }
+
+    private async Task CleanupDeletedAttachmentReferencesAsync(
+        TaskAttachment deletedAttachment,
+        HashSet<int> preLinkedTaskIds,
+        CancellationToken cancellationToken)
+    {
+        var workspaceTasks = await _taskRepository.GetByWorkspaceIdAsync(deletedAttachment.WorkspaceId, cancellationToken)
+            ?? Array.Empty<ForgeTask>();
+        if (workspaceTasks.Count == 0)
+        {
+            return;
+        }
+
+        var candidateTaskIds = new List<int>();
+        foreach (var task in workspaceTasks)
+        {
+            if (task == null ||
+                task.Status == TaskOverallStatus.Triage ||
+                TaskMarkdownSyncService.IsArchivedStatus(task.Status))
+            {
+                continue;
+            }
+
+            var citedIds = AttachmentCitationParser.ExtractAttachmentIds(task.Description);
+            var hasCitation = citedIds.Contains(deletedAttachment.Id);
+            var hasInMemoryLink = task.AttachmentLinks?.Any(l => l.TaskAttachmentId == deletedAttachment.Id) ?? false;
+            var hadLink = preLinkedTaskIds.Contains(task.Id) || hasInMemoryLink;
+            if (hasCitation || hadLink)
+            {
+                candidateTaskIds.Add(task.Id);
+            }
+        }
+
+        var distinctCandidateIds = candidateTaskIds.Distinct().ToList();
+        if (distinctCandidateIds.Count == 0)
+        {
+            return;
+        }
+
+        var workspace = await _workspaceRepository.GetByIdAsync(deletedAttachment.WorkspaceId, cancellationToken);
+        var canSyncToDisk = workspace != null &&
+            !string.IsNullOrWhiteSpace(workspace.RepositoryPath) &&
+            Directory.Exists(workspace.RepositoryPath);
+
+        foreach (var taskId in distinctCandidateIds)
+        {
+            try
+            {
+                if (!_lockProvider.TryAcquireTaskLock(deletedAttachment.WorkspaceId, taskId, out var taskLock) ||
+                    taskLock == null)
+                {
+                    _logger.LogWarning(
+                        "Skipping attachment #{AttachmentId} citation cleanup for task #{TaskId} because the task is currently locked.",
+                        deletedAttachment.Id,
+                        taskId);
+                    continue;
+                }
+
+                using (taskLock)
+                {
+                    var freshTask = await _taskRepository.GetByIdAsync(taskId, cancellationToken);
+                    if (freshTask == null ||
+                        freshTask.Status == TaskOverallStatus.Triage ||
+                        TaskMarkdownSyncService.IsArchivedStatus(freshTask.Status) ||
+                        BacklogStatusClassifier.GetColumn(freshTask) == BacklogKanbanColumn.InFlight)
+                    {
+                        continue;
+                    }
+
+                    var hasCitation = AttachmentCitationParser.ExtractAttachmentIds(freshTask.Description)
+                        .Contains(deletedAttachment.Id);
+                    if (hasCitation)
+                    {
+                        var updatedDescription = AttachmentCitationParser.RemoveAttachmentCitation(
+                            freshTask.Description,
+                            deletedAttachment.Id,
+                            deletedAttachment.Title);
+                        if (!string.Equals(updatedDescription, freshTask.Description, StringComparison.Ordinal))
+                        {
+                            freshTask.Description = updatedDescription;
+                            freshTask.UpdatedAt = DateTime.UtcNow;
+                            var reason = $"Removed citation to deleted attachment #{deletedAttachment.Id} ('{deletedAttachment.Title}').";
+                            await _taskRepository.UpdateWithHistoryAsync(
+                                freshTask,
+                                dependsOn: null,
+                                changedBy: AuditActors.User,
+                                reason: reason,
+                                cancellationToken: cancellationToken);
+                        }
+                    }
+
+                    if (canSyncToDisk)
+                    {
+                        var remaining = await _attachmentRepository.GetByTaskIdAsync(freshTask.Id, cancellationToken)
+                            ?? Array.Empty<TaskAttachment>();
+                        freshTask.AttachmentLinks = remaining
+                            .Where(a => a != null && a.Id > 0 && a.Id != deletedAttachment.Id)
+                            .Select(a => new TaskAttachmentLink
+                            {
+                                TaskId = freshTask.Id,
+                                TaskAttachmentId = a.Id
+                            })
+                            .ToList();
+
+                        var deps = (await _taskRepository.GetDependenciesAsync(freshTask.Id, cancellationToken))?.ToList()
+                            ?? new List<int>();
+                        await _markdownSyncService.SyncTaskToDiskAsync(
+                            freshTask,
+                            workspace!.RepositoryPath,
+                            deps,
+                            cancellationToken: cancellationToken);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to clean up deleted attachment #{AttachmentId} references on task #{TaskId}.",
+                    deletedAttachment.Id,
+                    taskId);
+            }
         }
     }
 
@@ -522,67 +619,72 @@ public class AttachmentUiService : IAttachmentUiService
             return null;
         }
 
-        var hostAttachmentsDir = ResolveHostAttachmentsDirectory(attachment.WorkspaceId);
-        var (isTargetReachable, resolvedSymlinkTarget) = EvaluateSymlinkReachability(attachment);
+        var hostAttachmentsDir = AttachmentHostPathResolver.ResolveHostAttachmentsDirectory(attachment.WorkspaceId, _pathResolver);
+        var isTargetReachable = IsSymlinkTargetReachable(attachment);
         if (attachment.IsSymlink && !isTargetReachable)
         {
             return null;
         }
 
-        return await TryLoadImageDataUriAsync(
+        var (dataUri, _) = await TryLoadImageDataUriWithErrorAsync(
             attachment,
             hostAttachmentsDir,
-            resolvedSymlinkTarget,
             downscaleForThumbnail: true,
             cancellationToken);
+        return dataUri;
     }
 
-    private async Task<string?> TryLoadImageDataUriAsync(
+    private async Task<(string? DataUri, string? ReadError)> TryLoadImageDataUriWithErrorAsync(
         TaskAttachment attachment,
         string hostAttachmentsDir,
-        string? resolvedSymlinkTarget,
         bool downscaleForThumbnail,
         CancellationToken cancellationToken)
     {
-        var imagePath = ResolvePrimaryReadableFile(hostAttachmentsDir, attachment.RelativePath, resolvedSymlinkTarget, attachment.IsSymlink);
-        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        var candidates = AttachmentHostPathResolver.EnumerateReadableAttachmentPaths(
+            attachment,
+            hostAttachmentsDir,
+            _pathResolver,
+            readPrimaryFile: true);
+
+        string? lastError = null;
+        foreach (var imagePath in candidates)
         {
-            return null;
-        }
-
-        try
-        {
-            var fileInfo = new FileInfo(imagePath);
-            if (fileInfo.Length <= 0 || fileInfo.Length > VisionConstants.MaxVisionImageBytes)
+            try
             {
-                return null;
-            }
-
-            var bytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
-            if (bytes.Length == 0 || bytes.Length > VisionConstants.MaxVisionImageBytes)
-            {
-                return null;
-            }
-
-            if (downscaleForThumbnail)
-            {
-                var thumb = VisionImageNormalizer.TryCreateThumbnailBytes(bytes, VisionConstants.ThumbnailMaxDimensionPx);
-                if (thumb is var (thumbBytes, thumbMediaType))
+                var fileInfo = new FileInfo(imagePath);
+                if (fileInfo.Length <= 0 || fileInfo.Length > VisionConstants.MaxVisionImageBytes)
                 {
-                    return $"data:{thumbMediaType};base64,{Convert.ToBase64String(thumbBytes)}";
+                    continue;
                 }
-            }
 
-            var mediaType = ImageHeaderInspector.TryInspect(bytes, out var header)
-                ? header.MediaType
-                : (string.IsNullOrWhiteSpace(attachment.MediaType) ? "image/png" : attachment.MediaType);
-            return $"data:{mediaType};base64,{Convert.ToBase64String(bytes)}";
+                var bytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
+                if (bytes.Length == 0 || bytes.Length > VisionConstants.MaxVisionImageBytes)
+                {
+                    continue;
+                }
+
+                if (downscaleForThumbnail)
+                {
+                    var thumb = VisionImageNormalizer.TryCreateThumbnailBytes(bytes, VisionConstants.ThumbnailMaxDimensionPx);
+                    if (thumb is var (thumbBytes, thumbMediaType))
+                    {
+                        return ($"data:{thumbMediaType};base64,{Convert.ToBase64String(thumbBytes)}", null);
+                    }
+                }
+
+                var mediaType = ImageHeaderInspector.TryInspect(bytes, out var header)
+                    ? header.MediaType
+                    : (string.IsNullOrWhiteSpace(attachment.MediaType) ? "image/png" : attachment.MediaType);
+                return ($"data:{mediaType};base64,{Convert.ToBase64String(bytes)}", null);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogWarning(ex, "Failed reading image preview bytes for attachment #{AttachmentId} from '{Path}'.", attachment.Id, imagePath);
+                lastError ??= ex.Message;
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning(ex, "Failed reading image preview bytes for attachment #{AttachmentId} from '{Path}'.", attachment.Id, imagePath);
-            return null;
-        }
+
+        return (null, lastError);
     }
 
     private async Task<TaskAttachment> RequireAttachmentAsync(int attachmentId, CancellationToken cancellationToken)
@@ -592,148 +694,14 @@ public class AttachmentUiService : IAttachmentUiService
             ?? throw new AttachmentNotFoundException(attachmentId);
     }
 
-    private string ResolveHostAttachmentsDirectory(int workspaceId)
-    {
-        var rawAttachmentsDir = _pathResolver.GetAttachmentsPath(workspaceId);
-        if (string.IsNullOrWhiteSpace(rawAttachmentsDir))
-        {
-            return string.Empty;
-        }
-
-        var expanded = ExpandLeadingTilde(rawAttachmentsDir);
-        var hostPath = _pathResolver.ToHostPath(expanded);
-        return string.IsNullOrWhiteSpace(hostPath) ? expanded : hostPath;
-    }
-
-    private string ExpandLeadingTilde(string path)
-    {
-        if (!IsTildePrefixedPath(path))
-        {
-            return path;
-        }
-
-        var relativePart = path.Length > 1
-            ? path[1..].TrimStart('/', '\\').Replace('\\', '/')
-            : string.Empty;
-
-        var baseDirectory = ResolveHomeBaseDirectory();
-        if (string.IsNullOrWhiteSpace(baseDirectory))
-        {
-            return path;
-        }
-
-        return string.IsNullOrEmpty(relativePart)
-            ? baseDirectory
-            : $"{baseDirectory}/{relativePart}";
-    }
-
-    private string? ResolveHomeBaseDirectory()
-    {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
-            _pathResolver.GetWslUserName() is { Length: > 0 } wslUser &&
-            !string.IsNullOrWhiteSpace(wslUser))
-        {
-            return $"/home/{wslUser}";
-        }
-
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return string.IsNullOrWhiteSpace(userProfile)
-            ? null
-            : userProfile.Replace('\\', '/').TrimEnd('/');
-    }
-
-    private static bool IsTildePrefixedPath(string path) =>
-        path == "~" ||
-        path.StartsWith("~/", StringComparison.Ordinal) ||
-        path.StartsWith("~\\", StringComparison.Ordinal);
-
-    private (bool IsReachable, string? ResolvedHostTarget) EvaluateSymlinkReachability(TaskAttachment attachment)
+    private bool IsSymlinkTargetReachable(TaskAttachment attachment)
     {
         if (!attachment.IsSymlink)
         {
-            return (true, null);
-        }
-
-        var resolvedTarget = ResolveHostReadableSourceRef(attachment.SourceRef);
-        var reachable = !string.IsNullOrWhiteSpace(resolvedTarget) && File.Exists(resolvedTarget);
-        return (reachable, resolvedTarget);
-    }
-
-    private string? ResolveHostReadableSourceRef(string? sourceRef)
-    {
-        if (string.IsNullOrWhiteSpace(sourceRef))
-        {
-            return null;
-        }
-
-        var expanded = ExpandLeadingTilde(sourceRef.Trim());
-        if (File.Exists(expanded))
-        {
-            return expanded;
-        }
-
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
-            TryConvertMntDriveToWindowsPath(expanded, out var windowsDrivePath) &&
-            File.Exists(windowsDrivePath))
-        {
-            return windowsDrivePath;
-        }
-
-        var mapped = _pathResolver.ToHostPath(expanded);
-        if (!string.IsNullOrWhiteSpace(mapped) && File.Exists(mapped))
-        {
-            return mapped;
-        }
-
-        return expanded;
-    }
-
-    private static string? ResolvePrimaryReadableFile(
-        string hostAttachmentsDir,
-        string? relativePath,
-        string? resolvedSymlinkTarget,
-        bool allowSymlinkTargetFallback)
-    {
-        if (!string.IsNullOrWhiteSpace(hostAttachmentsDir) && !string.IsNullOrWhiteSpace(relativePath))
-        {
-            var fullBase = Path.TrimEndingDirectorySeparator(Path.GetFullPath(hostAttachmentsDir))
-                + Path.DirectorySeparatorChar;
-            var cleanRel = relativePath.Replace('/', Path.DirectorySeparatorChar).TrimStart(Path.DirectorySeparatorChar);
-            var candidate = Path.Combine(hostAttachmentsDir, cleanRel);
-            var fullCandidate = Path.GetFullPath(candidate);
-            var comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            if (fullCandidate.StartsWith(fullBase, comparison) && File.Exists(fullCandidate))
-            {
-                return fullCandidate;
-            }
-        }
-
-        if (allowSymlinkTargetFallback &&
-            !string.IsNullOrWhiteSpace(resolvedSymlinkTarget) &&
-            File.Exists(resolvedSymlinkTarget))
-        {
-            return resolvedSymlinkTarget;
-        }
-
-        return null;
-    }
-
-    private static bool TryConvertMntDriveToWindowsPath(string posixPath, out string windowsPath)
-    {
-        windowsPath = string.Empty;
-        if (posixPath.Length >= 7 &&
-            posixPath.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) &&
-            char.IsAsciiLetter(posixPath[5]) &&
-            posixPath[6] == '/')
-        {
-            var drive = char.ToUpperInvariant(posixPath[5]);
-            var rest = posixPath[7..].Replace('/', '\\');
-            windowsPath = $"{drive}:\\{rest}";
             return true;
         }
 
-        return false;
+        var resolvedTarget = AttachmentHostPathResolver.ResolveHostReadableSourceRef(attachment.SourceRef, _pathResolver);
+        return !string.IsNullOrWhiteSpace(resolvedTarget) && File.Exists(resolvedTarget);
     }
 }

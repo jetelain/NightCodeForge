@@ -130,7 +130,6 @@
                 @foreach (var attId in linkedAttachmentIds)
                 {
                     _resolvedAttachmentMap.TryGetValue(attId, out var att);
-                    var symlinkBadge = att != null ? AttachmentPresentationHelper.FormatSymlinkBadge(att) : string.Empty;
                     <button type="button"
                             class="forge-chip attachment-chip proposal-attachment-chip clickable"
                             @onclick="() => HandlePreviewAttachmentAsync(attId)"
@@ -138,10 +137,6 @@
                         <span>@(att != null ? AttachmentPresentationHelper.GetContentKindIcon(att.ContentKind) : "📎")</span>
                         <span class="font-mono">#@attId</span>
                         <span>@(att?.Title ?? AttachmentPresentationHelper.FormatCitationToken(attId))</span>
-                        @if (!string.IsNullOrEmpty(symlinkBadge))
-                        {
-                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge">@symlinkBadge</span>
-                        }
                     </button>
                 }
             </div>

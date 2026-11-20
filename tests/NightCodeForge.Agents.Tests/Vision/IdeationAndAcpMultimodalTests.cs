@@ -346,8 +346,14 @@ public class IdeationAndAcpMultimodalTests : IDisposable
             ]
         };
 
-        await Assert.ThrowsAsync<AttachmentTargetNotFoundException>(() =>
-            acpHarness.BuildPromptContentBlocksAsync(acpContext, "Prompt", supportsImagePrompt: true, sandboxPathResolver: null, CancellationToken.None));
+        // 1. AcpAgentHarness skips invalid traversal attachment without throwing so tasks never fail due to bad/missing attachments
+        var traversalBlocks = await acpHarness.BuildPromptContentBlocksAsync(
+            acpContext,
+            "Prompt",
+            supportsImagePrompt: true,
+            sandboxPathResolver: null,
+            CancellationToken.None);
+        Assert.Single(traversalBlocks);
 
         // 2. IdeationConversationCoordinator must reject '../outside-secret.png'
         var gatewayMock = new Mock<ILlmGatewayService>();
@@ -510,5 +516,307 @@ public class IdeationAndAcpMultimodalTests : IDisposable
                 handle.Conversation.Id,
                 "Check @attachment:81",
                 new IdeationSessionOptions(ModelOverride: "qwen2.5-coder:32b"))));
+    }
+
+    [Fact]
+    public async Task AcpHarness_And_IdeationCoordinator_SymlinkedImageAttachment_ReadsDirectHostTargetInsteadOfAttachmentsSymlink()
+    {
+        var realHostImage = Path.Combine(_tempRoot, "real-host-capture.png");
+        var imgBytes = CreatePngBytes(120, 80);
+        await File.WriteAllBytesAsync(realHostImage, imgBytes);
+
+        // Simulate unreadable/corrupt symlink entry inside attachments/ (as seen over Windows \\wsl.localhost)
+        var placeholderRel = "009-capture.png";
+        await File.WriteAllBytesAsync(Path.Combine(_attachmentsDir, placeholderRel), [0x00, 0x01, 0x02]);
+
+        var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(r => r.GetAttachmentsPath(It.IsAny<int>())).Returns(_attachmentsDir);
+        pathResolverMock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+        pathResolverMock.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>())).Returns(_repoDir);
+
+        var symlinkImgAtt = new TaskAttachment
+        {
+            Id = 9,
+            WorkspaceId = 1,
+            Title = "capture.png",
+            RelativePath = placeholderRel,
+            MediaType = "image/png",
+            ContentKind = TaskAttachmentContentKind.Image,
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = realHostImage,
+            IsSymlink = true,
+            WidthPx = 120,
+            HeightPx = 80,
+            SizeBytes = imgBytes.Length
+        };
+
+        // 1. AcpAgentHarness reads directly from realHostImage (even when SandboxPathResolver maps virtualPath -> placeholder)
+        var acpWorkspace = new Workspace { Id = 1, Name = "W", RepositoryPath = _repoDir };
+        var mountTable = SandboxMountTable.ForWorkspace(
+            _repoDir,
+            isReadOnly: false,
+            hostAttachmentsDirectory: _attachmentsDir);
+        var sandboxScope = SandboxScopeDescriptor.ForWorkspace(
+            acpWorkspace,
+            SandboxSecurityTier.Standard,
+            taskId: 44,
+            mountTable);
+        var sandboxResolver = new SandboxPathResolver(sandboxScope);
+
+        var acpHarness = new TestAcpHarnessBuilder { PathResolver = pathResolverMock.Object }.Build();
+        var acpContext = new AgentSessionContext
+        {
+            Workspace = acpWorkspace,
+            ForgeTask = new ForgeTask { Id = 44, WorkspaceId = 1, Title = "Symlink Image", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            WorkspacePath = _repoDir,
+            Profile = new AgentProfile { Id = StandardStageIds.Implementation, Name = "ACP", HarnessId = StandardHarnessIds.Acp },
+            TaskAttachments = [symlinkImgAtt]
+        };
+
+        var blocks = await acpHarness.BuildPromptContentBlocksAsync(
+            acpContext,
+            "Inspect screenshot",
+            supportsImagePrompt: true,
+            sandboxPathResolver: sandboxResolver,
+            CancellationToken.None);
+        var json = JsonSerializer.Serialize(blocks);
+        Assert.Contains(Convert.ToBase64String(imgBytes), json);
+
+        // 2. IdeationConversationCoordinator reads directly from realHostImage
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var taskRepo = new InMemoryTaskRepository();
+        var attachmentRepo = new InMemoryTaskAttachmentRepository(taskRepo);
+        var ws = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "SymlinkVisionWS",
+            RepositoryPath = _repoDir,
+            AgentProfiles =
+            [
+                new AgentProfile
+                {
+                    Id = StandardStageIds.Ideation,
+                    Name = "Ideation",
+                    HarnessId = StandardHarnessIds.Crucible,
+                    ModelName = "qwen3-vl:8b",
+                    Mode = AgentMode.ReadOnly,
+                    PermittedTools = DefaultAgentTools.Ideation
+                }
+            ]
+        });
+        await attachmentRepo.CreateAsync(symlinkImgAtt);
+
+        var gatewayMock = new Mock<ILlmGatewayService>();
+        gatewayMock.Setup(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(65536);
+        gatewayMock.Setup(g => g.ResolveVisionCapabilityAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var captured = new List<List<ChatMessage>>();
+        using var builder = new TestIdeationCoordinatorBuilder
+        {
+            PathResolver = pathResolverMock.Object,
+            GatewayService = gatewayMock.Object,
+            WorkspaceRepository = workspaceRepo,
+            TaskRepository = taskRepo,
+            TaskAttachmentRepository = attachmentRepo,
+            BaseChatClient = new VisionImageNormalizerAndReadToolTests.DelegateTestChatClient((msgs, _, _) =>
+            {
+                captured.Add(msgs.ToList());
+                return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Saw host image.")));
+            })
+        };
+
+        var coordinator = builder.Build();
+        var handle = await coordinator.StartConversationAsync(ws.Id, "Symlink Image Turn");
+        var tcs = new TaskCompletionSource<IdeationStreamUpdate>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (coordinator.Subscribe(handle.Conversation.Id, u =>
+        {
+            if (u.Kind is IdeationStreamUpdateKind.Completed or IdeationStreamUpdateKind.Error)
+                tcs.TrySetResult(u);
+        }))
+        {
+            Assert.True(await coordinator.StartTurnAsync(new IdeationSendRequest(ws.Id, handle.Conversation.Id, "Inspect @attachment:9")));
+            var done = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(IdeationStreamUpdateKind.Completed, done.Kind);
+        }
+
+        var userMsg = Assert.Single(captured[0], m => m.Role == ChatRole.User);
+        var data = Assert.Single(userMsg.Contents.OfType<DataContent>());
+        Assert.Equal(imgBytes, data.Data.ToArray());
+    }
+
+    [Fact]
+    public async Task AcpHarnessSkips_And_IdeationCoordinatorThrows_ForSymlinkedImageWithMissingHostTargetEvenWhenPlaceholderExists()
+    {
+        var missingHostImage = Path.Combine(_tempRoot, "missing-host-capture.png");
+        var placeholderRel = "010-capture.png";
+        await File.WriteAllBytesAsync(Path.Combine(_attachmentsDir, placeholderRel), [0x00, 0x01, 0x02]);
+
+        var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(r => r.GetAttachmentsPath(It.IsAny<int>())).Returns(_attachmentsDir);
+        pathResolverMock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+        pathResolverMock.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>())).Returns(_repoDir);
+
+        var symlinkImgAtt = new TaskAttachment
+        {
+            Id = 10,
+            WorkspaceId = 1,
+            Title = "capture.png",
+            RelativePath = placeholderRel,
+            MediaType = "image/png",
+            ContentKind = TaskAttachmentContentKind.Image,
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = missingHostImage,
+            IsSymlink = true,
+            WidthPx = 120,
+            HeightPx = 80,
+            SizeBytes = 123
+        };
+
+        var acpWorkspace = new Workspace { Id = 1, Name = "W", RepositoryPath = _repoDir };
+        var mountTable = SandboxMountTable.ForWorkspace(
+            _repoDir,
+            isReadOnly: false,
+            hostAttachmentsDirectory: _attachmentsDir);
+        var sandboxScope = SandboxScopeDescriptor.ForWorkspace(
+            acpWorkspace,
+            SandboxSecurityTier.Standard,
+            taskId: 45,
+            mountTable);
+        var sandboxResolver = new SandboxPathResolver(sandboxScope);
+
+        var acpHarness = new TestAcpHarnessBuilder { PathResolver = pathResolverMock.Object }.Build();
+        var acpContext = new AgentSessionContext
+        {
+            Workspace = acpWorkspace,
+            ForgeTask = new ForgeTask { Id = 45, WorkspaceId = 1, Title = "Missing Symlink Image", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            WorkspacePath = _repoDir,
+            Profile = new AgentProfile { Id = StandardStageIds.Implementation, Name = "ACP", HarnessId = StandardHarnessIds.Acp },
+            TaskAttachments = [symlinkImgAtt]
+        };
+
+        var missingSymlinkBlocks = await acpHarness.BuildPromptContentBlocksAsync(
+            acpContext,
+            "Inspect screenshot",
+            supportsImagePrompt: true,
+            sandboxPathResolver: sandboxResolver,
+            CancellationToken.None);
+        Assert.Single(missingSymlinkBlocks);
+
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var taskRepo = new InMemoryTaskRepository();
+        var attachmentRepo = new InMemoryTaskAttachmentRepository(taskRepo);
+        var ws = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "MissingSymlinkVisionWS",
+            RepositoryPath = _repoDir,
+            AgentProfiles =
+            [
+                new AgentProfile
+                {
+                    Id = StandardStageIds.Ideation,
+                    Name = "Ideation",
+                    HarnessId = StandardHarnessIds.Crucible,
+                    ModelName = "qwen3-vl:8b",
+                    Mode = AgentMode.ReadOnly,
+                    PermittedTools = DefaultAgentTools.Ideation
+                }
+            ]
+        });
+        await attachmentRepo.CreateAsync(symlinkImgAtt);
+
+        var gatewayMock = new Mock<ILlmGatewayService>();
+        gatewayMock.Setup(g => g.ResolveContextWindowAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(65536);
+        gatewayMock.Setup(g => g.ResolveVisionCapabilityAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        using var builder = new TestIdeationCoordinatorBuilder
+        {
+            PathResolver = pathResolverMock.Object,
+            GatewayService = gatewayMock.Object,
+            WorkspaceRepository = workspaceRepo,
+            TaskRepository = taskRepo,
+            TaskAttachmentRepository = attachmentRepo,
+            BaseChatClient = new VisionImageNormalizerAndReadToolTests.DelegateTestChatClient((_, _, _) =>
+                Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Should not run."))))
+        };
+
+        var coordinator = builder.Build();
+        var handle = await coordinator.StartConversationAsync(ws.Id, "Missing Symlink Image Turn");
+
+        await Assert.ThrowsAsync<AttachmentTargetNotFoundException>(() =>
+            coordinator.StartTurnAsync(new IdeationSendRequest(ws.Id, handle.Conversation.Id, "Inspect @attachment:10")));
+    }
+
+    [Fact]
+    public async Task AcpHarness_BuildPromptContentBlocksAsync_SkipsCorruptOrEmptyImageAttachmentAndKeepsValidImages()
+    {
+        var corruptImgPath = Path.Combine(_attachmentsDir, "011-corrupt.png");
+        var emptyImgPath = Path.Combine(_attachmentsDir, "012-empty.png");
+        var validImgPath = Path.Combine(_attachmentsDir, "013-valid.png");
+        var validBytes = CreatePngBytes(80, 60);
+        await File.WriteAllBytesAsync(corruptImgPath, [0x00, 0x01, 0x02]);
+        await File.WriteAllBytesAsync(emptyImgPath, []);
+        await File.WriteAllBytesAsync(validImgPath, validBytes);
+
+        var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(r => r.GetAttachmentsPath(It.IsAny<int>())).Returns(_attachmentsDir);
+        pathResolverMock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+
+        var acpHarness = new TestAcpHarnessBuilder { PathResolver = pathResolverMock.Object }.Build();
+        var acpContext = new AgentSessionContext
+        {
+            Workspace = new Workspace { Id = 1, Name = "W", RepositoryPath = _repoDir },
+            ForgeTask = new ForgeTask { Id = 46, WorkspaceId = 1, Title = "Corrupt Image", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            WorkspacePath = _repoDir,
+            Profile = new AgentProfile { Id = StandardStageIds.Implementation, Name = "ACP", HarnessId = StandardHarnessIds.Acp },
+            TaskAttachments =
+            [
+                new TaskAttachment
+                {
+                    Id = 11,
+                    WorkspaceId = 1,
+                    Title = "corrupt.png",
+                    RelativePath = "011-corrupt.png",
+                    MediaType = "image/png",
+                    ContentKind = TaskAttachmentContentKind.Image
+                },
+                new TaskAttachment
+                {
+                    Id = 12,
+                    WorkspaceId = 1,
+                    Title = "empty.png",
+                    RelativePath = "012-empty.png",
+                    MediaType = "image/png",
+                    ContentKind = TaskAttachmentContentKind.Image
+                },
+                new TaskAttachment
+                {
+                    Id = 13,
+                    WorkspaceId = 1,
+                    Title = "valid.png",
+                    RelativePath = "013-valid.png",
+                    MediaType = "image/png",
+                    ContentKind = TaskAttachmentContentKind.Image
+                }
+            ]
+        };
+
+        var blocks = await acpHarness.BuildPromptContentBlocksAsync(
+            acpContext,
+            "Inspect images",
+            supportsImagePrompt: true,
+            sandboxPathResolver: null,
+            CancellationToken.None);
+
+        var serialized = JsonSerializer.Serialize(blocks);
+        using var parsedDoc = JsonDocument.Parse(serialized);
+        var arr = parsedDoc.RootElement.EnumerateArray().ToList();
+        Assert.Equal(2, arr.Count);
+        Assert.Equal("text", arr[0].GetProperty("type").GetString());
+        Assert.Equal("image", arr[1].GetProperty("type").GetString());
+        Assert.Equal(Convert.ToBase64String(validBytes), arr[1].GetProperty("data").GetString());
     }
 }

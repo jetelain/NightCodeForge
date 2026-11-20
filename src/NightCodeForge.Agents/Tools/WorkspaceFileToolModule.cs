@@ -442,7 +442,6 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         }
 
         if ((isPrimaryRelativeMatch || (manifestEntry == null && dbAttachment == null)) &&
-            !File.Exists(resolvedFullPath) &&
             !string.IsNullOrWhiteSpace(hostTargetPath) &&
             File.Exists(hostTargetPath))
         {
@@ -724,28 +723,8 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         return string.Equals(wslLink, wslSource, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryConvertMntDriveToWindowsPath(string path, out string windowsPath)
-    {
-        windowsPath = string.Empty;
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return false;
-        }
-
-        var norm = NormalizeSlash(path);
-        if (norm.Length >= 7 &&
-            norm.StartsWith("/mnt/", StringComparison.OrdinalIgnoreCase) &&
-            char.IsAsciiLetter(norm[5]) &&
-            norm[6] == '/')
-        {
-            var drive = char.ToUpperInvariant(norm[5]);
-            var rest = norm[7..].Replace('/', '\\');
-            windowsPath = $"{drive}:\\{rest}";
-            return true;
-        }
-
-        return false;
-    }
+    private static bool TryConvertMntDriveToWindowsPath(string path, out string windowsPath) =>
+        AttachmentHostPathResolver.TryConvertMntDriveToWindowsPath(path, out windowsPath);
 
     private static bool IsPathInsideDirectory(string filePath, string directoryPath)
     {

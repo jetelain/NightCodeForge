@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -15,8 +14,7 @@ public enum AttachmentIntakeStatus
 {
     Converting = 0,
     Stored = 1,
-    Symlinked = 2,
-    Failed = 3
+    Symlinked = 2
 }
 
 /// <summary>
@@ -33,7 +31,6 @@ public sealed class ConversationAttachmentChipViewModel
     public TaskAttachmentContentKind ContentKind { get; set; }
     public string MediaType { get; set; } = string.Empty;
     public long SizeBytes { get; set; }
-    public string? ErrorMessage { get; set; }
     public string? ThumbnailDataUri { get; set; }
     public bool IsImage => ContentKind == TaskAttachmentContentKind.Image;
 
@@ -81,18 +78,6 @@ public sealed class ConversationAttachmentChipViewModel
         };
     }
 
-    public static ConversationAttachmentChipViewModel CreatePendingUrl(string url)
-    {
-        var normalized = url?.Trim() ?? string.Empty;
-        return new ConversationAttachmentChipViewModel
-        {
-            Title = normalized,
-            Status = AttachmentIntakeStatus.Converting,
-            IsSymlink = false,
-            SourceRef = normalized
-        };
-    }
-
     public void ApplyIngested(TaskAttachment ingested)
     {
         ArgumentNullException.ThrowIfNull(ingested);
@@ -104,25 +89,7 @@ public sealed class ConversationAttachmentChipViewModel
         MediaType = ingested.MediaType;
         SizeBytes = ingested.SizeBytes;
         Status = AttachmentPresentationHelper.ResolveIntakeStatus(ingested);
-        ErrorMessage = null;
     }
-
-    public void MarkFailed(string? errorMessage)
-    {
-        Status = AttachmentIntakeStatus.Failed;
-        ErrorMessage = errorMessage;
-    }
-}
-
-/// <summary>
-/// Result of extracting host paths, URLs, and <c>@attachment:{id}</c> tokens from a chat message.
-/// </summary>
-public sealed record MessageCitationExtraction(
-    IReadOnlyList<string> HostPaths,
-    IReadOnlyList<string> Urls,
-    IReadOnlyList<int> CitedAttachmentIds)
-{
-    public bool HasAny => HostPaths.Count > 0 || Urls.Count > 0 || CitedAttachmentIds.Count > 0;
 }
 
 /// <summary>
@@ -135,7 +102,9 @@ public sealed record AttachmentPreviewModel
     public string RenderedHtml { get; init; } = string.Empty;
     public string MarkdownContent { get; init; } = string.Empty;
     public string? ImageDataUri { get; init; }
+    public string? ContentReadError { get; init; }
     public bool IsTargetReachable { get; init; } = true;
+    public bool IsReachabilityUnknown { get; init; }
     public IReadOnlyList<ForgeTask> LinkedTasks { get; init; } = Array.Empty<ForgeTask>();
 }
 
@@ -147,19 +116,17 @@ public sealed record AttachmentDeleteImpact(
     IReadOnlyList<ForgeTask> LinkedTasks);
 
 /// <summary>
-/// Pure presentation, formatting, filtering, and citation extraction helpers for workspace attachments.
+/// Pure presentation, formatting, filtering, and citation helpers for workspace attachments.
 /// </summary>
-public static partial class AttachmentPresentationHelper
+public static class AttachmentPresentationHelper
 {
     public const string StatusStored = "stored";
     public const string StatusSymlinked = "symlinked";
     public const string StatusConverting = "converting";
-    public const string StatusFailed = "failed";
 
     public const string ReachableLabel = "Reachable";
     public const string TargetMissingLabel = "Target Missing";
 
-    public const string SymlinkIconPrefix = "🔗";
     public const string CitationPrefix = "@attachment:";
     public const int MaxBatchUploadFiles = 10;
 
@@ -167,26 +134,18 @@ public static partial class AttachmentPresentationHelper
     private const double Megabyte = Kilobyte * 1024d;
     private const double Gigabyte = Megabyte * 1024d;
 
-    private static readonly char[] TrailingCitationPunctuation =
-        ['.', ',', ';', ':', '!', '?', ')', ']', '>', '}', '\'', '"', '`'];
-
-    [GeneratedRegex(@"""(?<path>(?:[a-zA-Z]:[\\/]|\\\\(?:wsl\.localhost|wsl\$|[a-zA-Z0-9._-]+)\\|/(?:home|mnt|Users|tmp|var|opt)/|~/)(?:[^""\r\n])+)""", RegexOptions.Compiled)]
-    private static partial Regex QuotedHostPathRegex();
-
-    [GeneratedRegex(@"`(?<path>(?:[a-zA-Z]:[\\/]|\\\\(?:wsl\.localhost|wsl\$|[a-zA-Z0-9._-]+)\\|/(?:home|mnt|Users|tmp|var|opt)/|~/)(?:[^`\r\n])+)`", RegexOptions.Compiled)]
-    private static partial Regex BacktickHostPathRegex();
-
-    [GeneratedRegex(@"(?<![:\w])(?<path>[a-zA-Z]:[\\/][^\s""'`<>|*?]+)", RegexOptions.Compiled)]
-    private static partial Regex WindowsDrivePathRegex();
-
-    [GeneratedRegex(@"(?<![:\\/])(?<path>\\\\[^\s""'`<>|*?\\]+\\[^\s""'`<>|*?]+)", RegexOptions.Compiled)]
-    private static partial Regex UncPathRegex();
-
-    [GeneratedRegex(@"(?<=^|[\s(\['""`])(?<path>(?:/(?:home|mnt|Users|tmp|var|opt)/|~/)[A-Za-z0-9._/\-~+%:@-]+)", RegexOptions.Compiled)]
-    private static partial Regex PosixOrTildePathRegex();
-
-    [GeneratedRegex(@"(?<url>https?://[^\s<>""'`\)\]]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
-    private static partial Regex HttpUrlRegex();
+    public static AttachmentPreviewModel BuildDegradedPreview(AttachmentDeleteImpact impact, string errorMessage)
+    {
+        ArgumentNullException.ThrowIfNull(impact);
+        return new AttachmentPreviewModel
+        {
+            Attachment = impact.Attachment,
+            LinkedTasks = impact.LinkedTasks,
+            IsTargetReachable = true,
+            IsReachabilityUnknown = impact.Attachment.IsSymlink,
+            ContentReadError = errorMessage
+        };
+    }
 
     public static AttachmentIntakeStatus ResolveIntakeStatus(TaskAttachment attachment)
     {
@@ -199,7 +158,6 @@ public static partial class AttachmentPresentationHelper
         AttachmentIntakeStatus.Converting => StatusConverting,
         AttachmentIntakeStatus.Stored => StatusStored,
         AttachmentIntakeStatus.Symlinked => StatusSymlinked,
-        AttachmentIntakeStatus.Failed => StatusFailed,
         _ => StatusStored
     };
 
@@ -208,20 +166,8 @@ public static partial class AttachmentPresentationHelper
         AttachmentIntakeStatus.Converting => "badge-amber",
         AttachmentIntakeStatus.Stored => "badge-teal",
         AttachmentIntakeStatus.Symlinked => "badge-indigo",
-        AttachmentIntakeStatus.Failed => "badge-crimson",
         _ => "badge-gray"
     };
-
-    public static string FormatSymlinkBadge(TaskAttachment attachment)
-    {
-        ArgumentNullException.ThrowIfNull(attachment);
-        return FormatSymlinkBadge(attachment.IsSymlink, attachment.SourceRef);
-    }
-
-    public static string FormatSymlinkBadge(bool isSymlink, string? sourceRef) =>
-        isSymlink && !string.IsNullOrWhiteSpace(sourceRef)
-            ? $"{SymlinkIconPrefix} {sourceRef.Trim()}"
-            : string.Empty;
 
     public static string FormatTargetReachabilityLabel(bool isReachable) =>
         isReachable ? ReachableLabel : TargetMissingLabel;
@@ -320,29 +266,6 @@ public static partial class AttachmentPresentationHelper
         return $"{currentPrompt}{separator}{snippet}";
     }
 
-    public static MessageCitationExtraction ExtractMessageCitations(
-        string? message,
-        IAttachmentIntakeService? intakeService = null)
-    {
-        if (string.IsNullOrWhiteSpace(message))
-        {
-            return new MessageCitationExtraction(
-                Array.Empty<string>(),
-                Array.Empty<string>(),
-                Array.Empty<int>());
-        }
-
-        var hostPaths = (intakeService != null ? intakeService.ExtractCitedHostPaths(message) : null)
-            ?? ExtractCitedHostPathsFallback(message);
-
-        var urls = (intakeService != null ? intakeService.ExtractCitedUrls(message) : null)
-            ?? ExtractCitedUrlsFallback(message);
-
-        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(message);
-
-        return new MessageCitationExtraction(hostPaths, urls, citedIds);
-    }
-
     public static void UpsertChip(
         IList<ConversationAttachmentChipViewModel> chips,
         ConversationAttachmentChipViewModel chip)
@@ -369,46 +292,12 @@ public static partial class AttachmentPresentationHelper
         }
     }
 
-    public static string RemoveAttachmentCitation(string? text, int attachmentId, string? title = null)
-    {
-        if (string.IsNullOrEmpty(text))
-        {
-            return string.Empty;
-        }
-
-        if (attachmentId <= 0)
-        {
-            return text;
-        }
-
-        var idStr = attachmentId.ToString(CultureInfo.InvariantCulture);
-        var tokenPattern = $@"(?<![A-Za-z0-9._%+-])@attachment:#?{idStr}\b";
-        if (!string.IsNullOrWhiteSpace(title))
-        {
-            var escapedTitle = Regex.Escape(title.Trim());
-            tokenPattern = $@"{tokenPattern}(?:[ \t]+{escapedTitle}(?=$|[\s.,;:!?)\]\}}>'""`]))?";
-        }
-
-        var fullPattern = $@"(?<lead>[ \t]*)(?:{tokenPattern})(?<trail>[ \t]*)";
-        var updated = Regex.Replace(
-            text,
-            fullPattern,
-            match =>
-            {
-                var atLineStart = match.Index == 0 || text[match.Index - 1] is '\n' or '\r';
-                var endIndex = match.Index + match.Length;
-                var atLineEnd = endIndex >= text.Length || text[endIndex] is '\r' or '\n';
-                if (!atLineStart && !atLineEnd && match.Groups["lead"].Length > 0 && match.Groups["trail"].Length > 0)
-                {
-                    return " ";
-                }
-
-                return string.Empty;
-            },
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-        return updated.Trim(' ', '\t');
-    }
+    /// <summary>
+    /// Removes all <c>@attachment:{id}</c> (and optional trailing attachment title) citations
+    /// from <paramref name="text"/> cleanly while collapsing redundant inline whitespace.
+    /// </summary>
+    public static string RemoveAttachmentCitation(string? text, int attachmentId, string? title = null) =>
+        AttachmentCitationParser.RemoveAttachmentCitation(text, attachmentId, title);
 
     public static IReadOnlyList<ConversationAttachmentChipViewModel> ResolveRestoredMessageChips(
         string? message,
@@ -419,8 +308,8 @@ public static partial class AttachmentPresentationHelper
             return Array.Empty<ConversationAttachmentChipViewModel>();
         }
 
-        var extraction = ExtractMessageCitations(message);
-        if (!extraction.HasAny)
+        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(message);
+        if (citedIds.Count == 0)
         {
             return Array.Empty<ConversationAttachmentChipViewModel>();
         }
@@ -431,31 +320,7 @@ public static partial class AttachmentPresentationHelper
             .ToList();
 
         var chips = new List<ConversationAttachmentChipViewModel>();
-
-        foreach (var hostPath in extraction.HostPaths)
-        {
-            var canonicalWsl = VirtualMountEntry.ToDefaultWslPath(hostPath);
-            var matched = orderedAttachments.FirstOrDefault(a =>
-                string.Equals(a.SourceRef, hostPath, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrWhiteSpace(canonicalWsl) &&
-                 string.Equals(a.SourceRef, canonicalWsl, StringComparison.OrdinalIgnoreCase)));
-            if (matched != null)
-            {
-                UpsertChip(chips, ConversationAttachmentChipViewModel.FromAttachment(matched));
-            }
-        }
-
-        foreach (var url in extraction.Urls)
-        {
-            var matched = orderedAttachments.FirstOrDefault(a =>
-                string.Equals(a.SourceRef, url, StringComparison.OrdinalIgnoreCase));
-            if (matched != null)
-            {
-                UpsertChip(chips, ConversationAttachmentChipViewModel.FromAttachment(matched));
-            }
-        }
-
-        foreach (var citedId in extraction.CitedAttachmentIds)
+        foreach (var citedId in citedIds)
         {
             var matched = orderedAttachments.FirstOrDefault(a => a.Id == citedId);
             if (matched != null)
@@ -547,86 +412,6 @@ public static partial class AttachmentPresentationHelper
                 a.Slug?.Contains(search, StringComparison.OrdinalIgnoreCase) == true ||
                 a.RelativePath?.Contains(search, StringComparison.OrdinalIgnoreCase) == true)
             .ToList();
-    }
-
-    private static IReadOnlyList<string> ExtractCitedHostPathsFallback(string message)
-    {
-        var results = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        void TryAdd(string raw, bool isQuoted)
-        {
-            var candidate = raw.Trim();
-            if (!isQuoted)
-            {
-                candidate = candidate.TrimEnd(TrailingCitationPunctuation);
-            }
-
-            if (string.IsNullOrWhiteSpace(candidate) ||
-                candidate.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase) ||
-                candidate.Equals("/workspace", StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            if (seen.Add(candidate))
-            {
-                results.Add(candidate);
-            }
-        }
-
-        foreach (Match match in QuotedHostPathRegex().Matches(message))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: true);
-        }
-
-        var scrubbed = QuotedHostPathRegex().Replace(message, " ");
-
-        foreach (Match match in BacktickHostPathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: true);
-        }
-
-        scrubbed = BacktickHostPathRegex().Replace(scrubbed, " ");
-
-        foreach (Match match in UncPathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: false);
-        }
-
-        scrubbed = UncPathRegex().Replace(scrubbed, " ");
-
-        foreach (Match match in WindowsDrivePathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: false);
-        }
-
-        foreach (Match match in PosixOrTildePathRegex().Matches(scrubbed))
-        {
-            TryAdd(match.Groups["path"].Value, isQuoted: false);
-        }
-
-        return results;
-    }
-
-    private static IReadOnlyList<string> ExtractCitedUrlsFallback(string message)
-    {
-        var results = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (Match match in HttpUrlRegex().Matches(message))
-        {
-            var candidate = match.Groups["url"].Value.Trim().TrimEnd(TrailingCitationPunctuation);
-            if (!string.IsNullOrWhiteSpace(candidate) &&
-                Uri.TryCreate(candidate, UriKind.Absolute, out var uri) &&
-                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
-                seen.Add(uri.AbsoluteUri))
-            {
-                results.Add(uri.AbsoluteUri);
-            }
-        }
-
-        return results;
     }
 
     public static bool CanSubmitIdeationComposer(

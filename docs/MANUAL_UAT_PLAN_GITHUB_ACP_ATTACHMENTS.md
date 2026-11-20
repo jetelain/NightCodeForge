@@ -43,7 +43,7 @@ Before running the tests, verify the test environment is prepared:
 2. Click **`📎 Drop / Upload File`** (`#ideation-attachment-file-input`) and select a `.md`, `.txt`, or `.cs` file.
 3. **Expected Results:**
    - [ ] A pending chip appears in the composer bar above the chat textarea, resolving to **`#<id>`**, the original filename/title, and a teal **`stored`** status badge (`✕` remove button is present on pending chips).
-   - [ ] Expand **`📎 Workspace Attachments (N)`** (`#btn-toggle-workspace-attachments`). The new entry appears with `#<id>`, 📄 icon, **`Plain Text`** badge, human-readable size, and timestamp.
+   - [ ] Switch the right side pane to the **`📎 Attachments`** tab (`#ideation-side-tab-attachments`). The new entry appears with `#<id>`, 📄 icon, **`Plain Text`** badge, human-readable size, and timestamp.
    - [ ] In WSL2, inspect `~/.nightcodeforge/wks/{workspaceId}/attachments/`:
      ```bash
      ls -la ~/.nightcodeforge/wks/{workspaceId}/attachments/
@@ -57,7 +57,7 @@ Before running the tests, verify the test environment is prepared:
 **Goal:** Verify convertible rich documents generate a companion `.md` file and render in the Preview Drawer.
 
 1. In **`/ideation`**, click **`📎 Drop / Upload File`** and upload a `.pdf`, `.docx`, or `.html` document.
-2. Expand **`📎 Workspace Attachments`**, locate the newly added entry, and click **`👁️ Preview`**.
+2. Open the **`📎 Attachments`** tab (`#ideation-side-tab-attachments`), locate the newly added entry, and click **`👁️ Preview`**.
 3. **Expected Results:**
    - [ ] The workspace attachments row shows a 📑 icon and **`Rich Document`** badge.
    - [ ] In WSL2 (`ls -la ~/.nightcodeforge/wks/{workspaceId}/attachments/`), **both** the original file (`{seq:000}-{slug}.pdf` / `.docx` / `.html`) **and** the generated companion (`{seq:000}-{slug}.md`) exist.
@@ -78,7 +78,7 @@ Before running the tests, verify the test environment is prepared:
    - [ ] For the valid image: row displays 🖼️ icon and **`Image`** badge.
    - [ ] In **`AttachmentPreviewDrawer`**, **Provenance & Metadata** displays `Dimensions: <WidthPx> x <HeightPx>` and `Sandbox Path: /workspace/attachments/{seq:000}-{slug}.png` (no `.md` companion generated).
    - [ ] **Content Preview** displays the inline image alongside dimension and MIME-type badges (`image/png`).
-   - [ ] For the `.zip` and corrupt `.png`: upload fails fast with an error toast / **`failed`** chip status, and **no** partial file or DB/manifest entry is left in `~/.nightcodeforge/wks/{workspaceId}/attachments/`.
+   - [ ] For the `.zip` and corrupt `.png`: upload fails fast with a warning/error toast (without leaving failed composer chips behind), and **no** partial file or DB/manifest entry is left in `~/.nightcodeforge/wks/{workspaceId}/attachments/`.
 
 ---
 
@@ -88,28 +88,25 @@ Before running the tests, verify the test environment is prepared:
 1. Ensure `C:\temp\ncf-uat\ncf-uat-spec.md` exists on the Windows host.
 2. In **`/ideation`**, paste `C:\temp\ncf-uat\ncf-uat-spec.md` into the **`Attach host file path...`** input (`#ideation-host-file-input`) and click **`🔗 Attach Host File`** (`#btn-attach-host-file`).
 3. Click the resulting chip to open **`AttachmentPreviewDrawer`**.
-4. Also try attaching a non-existent path (`C:\temp\ncf-uat\does-not-exist.md`) or a traversal path (`C:\temp\..\secret.txt`).
+4. Also try attaching a directory path, an unsupported `.exe`, a non-existent path (`C:\temp\ncf-uat\does-not-exist.md`), or a traversal path (`C:\temp\..\secret.txt`).
 5. **Expected Results:**
-   - [ ] The attachment chip displays the indigo symlink badge **`🔗 C:\temp\ncf-uat\ncf-uat-spec.md`** and **`symlinked`** status badge.
+   - [ ] The attachment chip displays **`#<id>`**, the filename, and **`symlinked`** status badge (with the host/WSL source path available via tooltip rather than an inline path badge).
    - [ ] In WSL2 (`ls -la ~/.nightcodeforge/wks/{workspaceId}/attachments/`), `{seq:000}-ncf-uat-spec.md` is a **POSIX symbolic link** pointing to `/mnt/c/temp/ncf-uat/ncf-uat-spec.md` (verify no symlink was created on Windows NTFS).
    - [ ] In **`AttachmentPreviewDrawer`**, `#attachment-reachability-badge` displays **`Reachable`**, `Storage Mode` is **`Symlink`**, and `Source Ref` shows the resolved host/WSL path.
-   - [ ] Non-existent or traversal paths fail fast with an error message and create no attachment record.
+   - [ ] Directories, unsupported extensions, non-existent paths, or traversal paths fail fast with an error toast (without leaving failed chips) and create no attachment record.
 
 ---
 
-### UAT-12.2-05 — Automatic Message Citation Intake (Host Path & URL Capture + SSRF Guard)
-**Goal:** Verify host paths and URLs written directly in chat messages are ingested automatically, while SSRF targets are blocked.
+### UAT-12.2-05 — Explicit Citation Only (No Auto-Ingestion from Raw Chat Paths or URLs)
+**Goal:** Verify raw host paths and HTTP(S) URLs typed in chat messages are never auto-attached, while explicit `@attachment:{id}` tokens resolve chips cleanly.
 
-1. Create a fresh host file `C:\temp\ncf-uat\notes-cited-in-chat.md`.
+1. Create a fresh host file `C:\temp\ncf-uat\not-attached-in-chat.md`.
 2. In the **`/ideation`** chat textarea, type:
-   `Please inspect C:\temp\ncf-uat\notes-cited-in-chat.md and https://example.com before answering.`
+   `Please note C:\temp\ncf-uat\not-attached-in-chat.md and https://example.com alongside @attachment:<existing-id>.`
    and click **`🚀 Send`**.
-3. After the turn finishes, attempt to send a message citing an SSRF target:
-   `Check http://127.0.0.1:8080/health and http://169.254.169.254/latest/meta-data/`
-4. **Expected Results:**
-   - [ ] On the first message, both the host file and `https://example.com` are ingested and rendered as attachment chips on the sent user chat bubble (`symlinked` for the host file, `stored` for `example.com`).
-   - [ ] In WSL2 `attachments/`, the captured URL exists as `{seq:000}-example-com.html.md` with provenance YAML frontmatter (`source`, `capturedAt`, `title`, `sha256`).
-   - [ ] The SSRF test URLs (`127.0.0.1`, `169.254.169.254`, private LAN ranges) are rejected with an error chip/notification (`failed`) and never fetched.
+3. **Expected Results:**
+   - [ ] Only the explicitly attached/cited `@attachment:<existing-id>` chip renders on the user message bubble.
+   - [ ] Neither `not-attached-in-chat.md` nor `https://example.com` is ingested into the **`📎 Attachments`** tab or `~/.nightcodeforge/wks/{workspaceId}/attachments/`.
 
 ---
 
@@ -118,7 +115,7 @@ Before running the tests, verify the test environment is prepared:
 
 1. In **`/ideation`**, upload the exact same `.md` or `.pdf` file used in **UAT-12.2-01** or **UAT-12.2-02** a second time.
 2. **Expected Results:**
-   - [ ] No duplicate attachment ID is created in **`📎 Workspace Attachments (N)`** (total count stays unchanged).
+   - [ ] No duplicate attachment ID is created in the **`📎 Attachments`** tab (total count stays unchanged).
    - [ ] The composer chip reuses the original `#<id>`.
    - [ ] In WSL2 `attachments/`, only one file entry exists for that SHA-256 hash.
 
@@ -127,15 +124,15 @@ Before running the tests, verify the test environment is prepared:
 ### UAT-12.2-07 — `💬 Cite in Chat` (`@attachment:{id}`), Ideation Inspection & Proposal Card Chips
 **Goal:** Verify progressive disclosure via `<workspace_attachments>`, canonical `read` tool usage by Ideation Agent, and linked chips on Proposal Cards.
 
-1. In **`📎 Workspace Attachments`** (or inside **`AttachmentPreviewDrawer`**), click **`💬 Cite in Chat`** on an attachment (e.g., `#1`).
-2. Verify `@attachment:1 <Title>` is appended to the chat composer input.
+1. In the **`📎 Attachments`** tab (or inside **`AttachmentPreviewDrawer`**), click **`💬 Cite in Chat`** on an attachment (e.g., `#1`).
+2. Verify `@attachment:1 <Title>` is appended to the chat composer input (and on mobile viewports, switches back to the Chat pane).
 3. Ask the Architect Agent:
    `Read @attachment:1 and propose 1 backlog task summarizing the implementation requirements.`
 4. Inspect the agent's streamed tool calls and the generated card in **Discovered Proposals**.
 5. Click **`➕ Add to Backlog`** on the Proposal Card.
 6. **Expected Results:**
    - [ ] The Ideation Agent reads the attachment using the canonical **`read`** tool targeting `/workspace/attachments/...` (no custom attachment-specific tool exists).
-   - [ ] The resulting **`IdeationProposalCard`** displays a **`📎 Linked Attachments (N)`** section with clickable attachment chips (`#1`, title, symlink badge if symlinked).
+   - [ ] The resulting **`IdeationProposalCard`** displays a **`📎 Linked Attachments (N)`** section with clickable attachment chips (`#1`, title, tooltip showing source ref).
    - [ ] Clicking a chip on the Proposal Card opens **`AttachmentPreviewDrawer`**.
    - [ ] Clicking **`➕ Add to Backlog`** creates a `Suggested` task with the `TaskAttachmentLink` persisted.
 
@@ -187,7 +184,7 @@ Before running the tests, verify the test environment is prepared:
    - [ ] In the delete confirmation modal (`role="alertdialog"`), **Linked Tasks Impacted (N)** accurately lists every linked task, and the warning explicitly states the external host file will never be deleted or modified.
    - [ ] After confirming delete:
      - Toast confirms deletion (`Attachment Deleted`).
-     - Attachment disappears from **`📎 Workspace Attachments`**, `manifest.json`, and `~/.nightcodeforge/wks/{workspaceId}/attachments/`.
+     - Attachment disappears from **`📎 Attachments`** (`#ideation-side-tab-attachments`), `manifest.json`, and `~/.nightcodeforge/wks/{workspaceId}/attachments/`.
      - Linked tasks no longer show the deleted chip.
      - **`C:\temp\ncf-uat\ncf-uat-spec.md` on Windows NTFS still exists and is completely unmodified.**
 

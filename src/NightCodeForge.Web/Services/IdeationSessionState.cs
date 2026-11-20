@@ -842,7 +842,8 @@ public class IdeationSessionState : IDisposable
         }
 
         bool hasImagePending = PendingComposerChips.Any(c => c.IsImage && c.AttachmentId is > 0);
-        bool hasCitedImage = _attachmentUiService.ExtractMessageCitations(prompt).CitedAttachmentIds
+        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(prompt);
+        bool hasCitedImage = citedIds
             .Any(id => WorkspaceAttachments.Any(a => a.Id == id && a.ContentKind == TaskAttachmentContentKind.Image));
         if (hasImagePending || hasCitedImage)
         {
@@ -883,24 +884,23 @@ public class IdeationSessionState : IDisposable
 
         try
         {
-            if (_attachmentUiService.ExtractMessageCitations(prompt).HasAny)
+            if (citedIds.Count > 0)
             {
-                await _attachmentUiService.IngestMessageCitationsAsync(
+                var citedChips = await _attachmentUiService.ResolveCitedAttachmentChipsAsync(
                     workspace.Id,
                     prompt,
-                    onChipChanged: chip =>
-                    {
-                        AttachmentPresentationHelper.UpsertChip(messageChips, chip);
-                        NotifyStateChanged();
-                    },
-                    cancellationToken: cancellationToken);
-
-                foreach (var chip in messageChips)
+                    cancellationToken);
+                foreach (var chip in citedChips)
                 {
-                    await PopulateChipThumbnailBestEffortAsync(chip, cancellationToken);
+                    AttachmentPresentationHelper.UpsertChip(messageChips, chip);
                 }
 
-                WorkspaceAttachments = await _attachmentUiService.LoadWorkspaceAttachmentsAsync(workspace.Id, cancellationToken);
+                NotifyStateChanged();
+            }
+
+            foreach (var chip in messageChips)
+            {
+                await PopulateChipThumbnailBestEffortAsync(chip, cancellationToken);
             }
 
             if (!ActiveConversationId.HasValue)
@@ -1217,11 +1217,30 @@ public class IdeationSessionState : IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed uploading attachment file '{FileName}' in Ideation.", fileName);
-            chip.MarkFailed(ex.Message);
+            PendingComposerChips.Remove(chip);
             OnNotification?.Invoke("Attachment Upload Failed", ex.Message, ToastLevel.Error);
         }
 
         NotifyStateChanged();
+    }
+
+    public void ReportUnsupportedAttachmentUpload(string fileName)
+    {
+        var message = AttachmentConstants.BuildUnsupportedFormatMessage(fileName, Path.GetExtension(fileName));
+        _logger.LogWarning("Rejected unsupported attachment upload '{FileName}' in Ideation: {Reason}", fileName, message);
+        OnNotification?.Invoke("Unsupported Attachment", message, ToastLevel.Warning);
+    }
+
+    public void ReportAttachmentUploadError(string? fileName, string? errorMessage)
+    {
+        var effectiveMessage = string.IsNullOrWhiteSpace(errorMessage)
+            ? "Failed uploading attachment file."
+            : errorMessage;
+        _logger.LogWarning(
+            "Failed reading or uploading attachment '{FileName}' in Ideation: {Reason}",
+            string.IsNullOrWhiteSpace(fileName) ? "(batch)" : fileName,
+            effectiveMessage);
+        OnNotification?.Invoke("Attachment Upload Failed", effectiveMessage, ToastLevel.Error);
     }
 
     public async Task PasteImageFromClipboardAsync(
@@ -1255,10 +1274,7 @@ public class IdeationSessionState : IDisposable
     public void ReportClipboardImageError(string? fileName, string? errorMessage)
     {
         var effectiveError = string.IsNullOrWhiteSpace(errorMessage) ? "Invalid pasted image." : errorMessage;
-        var failedChip = ConversationAttachmentChipViewModel.CreatePendingUpload(
-            string.IsNullOrWhiteSpace(fileName) ? "clipboard-image" : fileName);
-        failedChip.MarkFailed(effectiveError);
-        AttachmentPresentationHelper.UpsertChip(PendingComposerChips, failedChip);
+        _logger.LogWarning("Rejected clipboard image paste '{FileName}' in Ideation: {Reason}", fileName, effectiveError);
         OnNotification?.Invoke("Clipboard Image Error", effectiveError, ToastLevel.Error);
         NotifyStateChanged();
     }
@@ -1292,7 +1308,7 @@ public class IdeationSessionState : IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed attaching host file '{HostPath}' in Ideation.", hostPath);
-            chip.MarkFailed(ex.Message);
+            PendingComposerChips.Remove(chip);
             OnNotification?.Invoke("Host File Attach Failed", ex.Message, ToastLevel.Error);
             NotifyStateChanged();
             return false;

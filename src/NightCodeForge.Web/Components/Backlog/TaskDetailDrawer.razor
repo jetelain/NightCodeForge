@@ -343,7 +343,6 @@
                         <div class="task-attachments-chips">
                             @foreach (var att in _taskAttachments)
                             {
-                                var symlinkBadge = AttachmentPresentationHelper.FormatSymlinkBadge(att);
                                 <button type="button"
                                         class="forge-chip attachment-chip task-attachment-chip clickable"
                                         @onclick="() => _previewAttachmentId = att.Id"
@@ -351,12 +350,6 @@
                                     <span>@AttachmentPresentationHelper.GetContentKindIcon(att.ContentKind)</span>
                                     <span class="font-mono">#@att.Id</span>
                                     <span class="attachment-chip-title">@att.Title</span>
-                                    @if (!string.IsNullOrEmpty(symlinkBadge))
-                                    {
-                                        <span class="forge-badge badge-indigo font-mono attachment-symlink-badge" style="font-size: 0.7rem;">
-                                            @symlinkBadge
-                                        </span>
-                                    }
                                     <span class="font-mono text-muted" style="font-size: 0.72rem;">
                                         @AttachmentPresentationHelper.FormatSizeBytes(att.SizeBytes)
                                     </span>
@@ -609,6 +602,15 @@
         if (Task != null)
         {
             var deletedTitle = _taskAttachments.FirstOrDefault(a => a.Id == deletedAttachmentId)?.Title;
+            var persisted = await TaskRepository.GetByIdAsync(Task.Id);
+            if (persisted != null)
+            {
+                Task.Description = persisted.Description;
+                Task.Version = persisted.Version;
+                Task.UpdatedAt = persisted.UpdatedAt;
+                Task.AttachmentLinks = persisted.AttachmentLinks;
+            }
+
             if (Task.AttachmentLinks != null)
             {
                 if (Task.AttachmentLinks.IsReadOnly)

@@ -11,6 +11,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Core.Concurrency;
 using NightCodeForge.Core.Dependencies;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
@@ -289,6 +290,8 @@ public class IdeationCoordinatorWebIntegrationTests
             Mock.Of<IWorkspacePathResolver>(),
             coordinatorMock.Object,
             Mock.Of<IVisionCapabilityUiService>(),
+            Mock.Of<ITaskMarkdownSyncService>(),
+            new WorkspaceLockProvider(),
             NullLogger<AttachmentUiService>.Instance);
 
         await using var ms = new MemoryStream(Encoding.UTF8.GetBytes("# Notes"));

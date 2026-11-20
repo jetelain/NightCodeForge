@@ -424,6 +424,51 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadAsync_SymlinkedAttachment_ReadsDirectHostTargetEvenWhenPlaceholderExistsInAttachmentsDir()
+    {
+        var (repoDir, attachmentsDir) = CreateWorkspaceDirectories();
+        var hostTarget = Path.Combine(_tempRoot, "actual-windows-config.json");
+        await File.WriteAllTextAsync(hostTarget, "{\n  \"target\": \"actual-windows-host\"\n}");
+
+        // Simulate a POSIX symlink entry visible on Windows \\wsl.localhost whose File.Exists is true
+        // but contains placeholder/unusable data compared to the direct host target.
+        var symlinkPlaceholder = Path.Combine(attachmentsDir, "002-config.json");
+        await File.WriteAllTextAsync(symlinkPlaceholder, "broken-wsl-symlink-placeholder");
+
+        var manifestJson = JsonSerializer.Serialize(new AttachmentManifest
+        {
+            WorkspaceId = 1,
+            Attachments =
+            [
+                new AttachmentManifestEntry
+                {
+                    Id = 2,
+                    WorkspaceId = 1,
+                    Title = "config.json",
+                    Slug = "config",
+                    RelativePath = "002-config.json",
+                    MarkdownPath = "002-config.json",
+                    ContentKind = TaskAttachmentContentKind.PlainText,
+                    MediaType = "application/json",
+                    SourceKind = TaskAttachmentSourceKind.HostPath,
+                    SourceRef = hostTarget,
+                    IsSymlink = true,
+                    TargetPath = hostTarget,
+                    Sha256 = new string('f', 64),
+                    SizeBytes = 38
+                }
+            ]
+        });
+        await File.WriteAllTextAsync(Path.Combine(attachmentsDir, AttachmentConstants.ManifestFileName), manifestJson);
+
+        var module = CreateFileModule(repoDir, attachmentsDir, workspaceId: 1);
+        var content = await module.ReadAsync("/workspace/attachments/002-config.json");
+
+        Assert.Contains("\"target\": \"actual-windows-host\"", content);
+        Assert.DoesNotContain("broken-wsl-symlink-placeholder", content);
+    }
+
+    [Fact]
     public async Task Stage0TriageIsolation_OmitsAttachmentsMount_AndBlocksReadBashAndContainerMount()
     {
         var (repoDir, attachmentsDir) = CreateWorkspaceDirectories();
@@ -947,8 +992,130 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             """;
         await File.WriteAllTextAsync(invalidDiskFile, badDiskContent);
 
+        await syncService.ProcessFileContentAsync(invalidDiskFile, badDiskContent, ws1.Id);
+        var invalidRefTask = (await taskRepo.GetByWorkspaceIdAsync(ws1.Id))
+            .Single(t => t.Title == "Invalid Attachment Markdown");
+        Assert.Empty(await attachmentRepo.GetByTaskIdAsync(invalidRefTask.Id));
+    }
+
+    [Fact]
+    public async Task EditTaskAsync_And_SyncAllTasksFromDiskAsync_TolerateDeletedAttachmentCitations()
+    {
+        var (repoDir, _) = CreateWorkspaceDirectories();
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var attachmentRepo = new InMemoryTaskAttachmentRepository(taskRepo);
+
+        var ws = await workspaceRepo.CreateAsync(CreateWorkspace(1, repoDir));
+        var keptAtt = await attachmentRepo.CreateAsync(CreateDomainAttachment(ws.Id, "kept.md", "1-kept.md", null, TaskAttachmentContentKind.PlainText));
+        var deletedAtt = await attachmentRepo.CreateAsync(CreateDomainAttachment(ws.Id, "deleted.png", "2-deleted.png", null, TaskAttachmentContentKind.Image));
+
+        var pathResolver = new WorkspacePathResolver(
+            Mock.Of<IWslMetadataService>(),
+            Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride: false);
+
+        var (_, serviceProvider) = BuildRealBacklogContext(taskRepo, attachmentRepo, workspaceRepo, pathResolver, repoDir);
+        var mutationService = serviceProvider.GetRequiredService<IBacklogMutationToolService>();
+        var syncService = serviceProvider.GetRequiredService<ITaskMarkdownSyncService>();
+        var scope = new BacklogToolScope(ws.Id, repoDir, BacklogMutationMode.Ideation);
+
+        var createdTask = await taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Task With Stale Citation",
+            Description = $"Follow @attachment:{keptAtt.Id} and @attachment:{deletedAtt.Id}.",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+        await attachmentRepo.SetTaskAttachmentLinksAsync(createdTask.Id, [keptAtt.Id, deletedAtt.Id]);
+
+        // Simulate UI deleting the second attachment while its citation remains in text
+        await attachmentRepo.DeleteAsync(deletedAtt.Id);
+
+        // Editing priority or description without explicit attachment_ids must succeed without failing on stale @attachment:{deletedAtt.Id}
+        await mutationService.EditTaskAsync(
+            scope,
+            new TaskEditRequest(createdTask.Id, Description: $"Updated plan still citing @attachment:{keptAtt.Id} and @attachment:{deletedAtt.Id}."),
+            CancellationToken.None);
+
+        var survivingLinks = await attachmentRepo.GetByTaskIdAsync(createdTask.Id);
+        Assert.Equal([keptAtt.Id], survivingLinks.Select(a => a.Id).ToArray());
+
+        // Markdown sync from disk must also ignore the deleted attachment ID instead of throwing AttachmentNotFoundException
+        var tasksDir = Path.Combine(repoDir, "docs", "tasks");
+        Directory.CreateDirectory(tasksDir);
+        var mdPath = Path.Combine(tasksDir, $"task-{createdTask.Id}.md");
+        await File.WriteAllTextAsync(mdPath, $"""
+            ---
+            id: {createdTask.Id}
+            title: Task With Stale Citation
+            attachment_ids:
+              - {keptAtt.Id}
+              - {deletedAtt.Id}
+            ---
+            # Task With Stale Citation
+
+            ## 📋 Requirements & Description
+            Updated from disk with @attachment:{keptAtt.Id} and @attachment:{deletedAtt.Id}.
+            """);
+
+        await syncService.SyncAllTasksFromDiskAsync(
+            ws,
+            repoDir,
+            hostRepositoryPath: null,
+            baselineSnapshot: null,
+            changeActor: AuditActors.User,
+            changeReason: "test sync");
+        var linksAfterDiskSync = await attachmentRepo.GetByTaskIdAsync(createdTask.Id);
+        Assert.Equal([keptAtt.Id], linksAfterDiskSync.Select(a => a.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task EditTaskAsync_WithExplicitAttachmentIds_ToleratesStaleDescriptionCitation_WhileStillRejectingInvalidExplicitId()
+    {
+        var (repoDir, _) = CreateWorkspaceDirectories();
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var attachmentRepo = new InMemoryTaskAttachmentRepository(taskRepo);
+
+        var ws = await workspaceRepo.CreateAsync(CreateWorkspace(1, repoDir));
+        var keptAtt = await attachmentRepo.CreateAsync(CreateDomainAttachment(ws.Id, "kept.md", "1-kept.md", null, TaskAttachmentContentKind.PlainText));
+        var deletedAtt = await attachmentRepo.CreateAsync(CreateDomainAttachment(ws.Id, "deleted.png", "2-deleted.png", null, TaskAttachmentContentKind.Image));
+
+        var pathResolver = new WorkspacePathResolver(
+            Mock.Of<IWslMetadataService>(),
+            Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride: false);
+
+        var (_, serviceProvider) = BuildRealBacklogContext(taskRepo, attachmentRepo, workspaceRepo, pathResolver, repoDir);
+        var mutationService = serviceProvider.GetRequiredService<IBacklogMutationToolService>();
+        var scope = new BacklogToolScope(ws.Id, repoDir, BacklogMutationMode.Ideation);
+
+        var createdTask = await taskRepo.CreateWithBaselineAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Task With Explicit Update And Stale Citation",
+            Description = $"Follow @attachment:{deletedAtt.Id}.",
+            Status = TaskOverallStatus.Open,
+            BaseBranch = "main"
+        }, null, AuditActors.User, "initial");
+        await attachmentRepo.SetTaskAttachmentLinksAsync(createdTask.Id, [deletedAtt.Id]);
+        await attachmentRepo.DeleteAsync(deletedAtt.Id);
+
+        await mutationService.EditTaskAsync(
+            scope,
+            new TaskEditRequest(createdTask.Id, AttachmentIds: [keptAtt.Id]),
+            CancellationToken.None);
+
+        var updatedLinks = await attachmentRepo.GetByTaskIdAsync(createdTask.Id);
+        Assert.Equal([keptAtt.Id], updatedLinks.Select(a => a.Id).ToArray());
+
         await Assert.ThrowsAsync<AttachmentNotFoundException>(() =>
-            syncService.ProcessFileContentAsync(invalidDiskFile, badDiskContent, ws1.Id));
+            mutationService.EditTaskAsync(
+                scope,
+                new TaskEditRequest(createdTask.Id, AttachmentIds: [99999]),
+                CancellationToken.None));
     }
 
     [Fact]
@@ -981,9 +1148,6 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             pathResolverMock.Object,
             Mock.Of<IProcessRunner>(),
             Mock.Of<Pmad.Markitdown.IMarkitdown>(),
-            new HttpClient(),
-            Options.Create(new SecurityOptions()),
-            Options.Create(new AttachmentIntakeOptions()),
             NullLogger<AttachmentIntakeService>.Instance);
 
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("# Design Contract\nMust support token refresh."));

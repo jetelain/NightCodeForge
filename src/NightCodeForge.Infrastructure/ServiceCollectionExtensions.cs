@@ -149,18 +149,13 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ICompanionTriageDraftStore, CompanionTriageDraftStore>();
 
         // 13. Workspace Attachments Intake & MarkItDown Conversion
-        services.BindConfigurationSectionAsDefault<AttachmentIntakeOptions>(AttachmentIntakeOptions.SectionName);
         services.TryAddSingleton<IMarkitdown>(_ => new Markitdown(new MarkitdownOptions
         {
             IncludeTitle = true,
             CleanHtml = true,
             FilterHiddenText = true
         }));
-        services.AddHttpClient<IAttachmentIntakeService, AttachmentIntakeService>()
-            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-            {
-                AllowAutoRedirect = false
-            });
+        services.TryAddScoped<IAttachmentIntakeService, AttachmentIntakeService>();
 
         return services;
     }

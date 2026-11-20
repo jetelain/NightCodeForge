@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Core.Dependencies;
@@ -99,6 +100,82 @@ public class AttachmentCitationAndDigestTests
     }
 
     [Fact]
+    public async Task ResolveExistingWorkspaceIdsAsync_FiltersOutMissingNonPositiveAndForeignAttachments()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var attachmentRepo = new InMemoryTaskAttachmentRepository(taskRepo);
+
+        var a1 = await attachmentRepo.CreateAsync(CreateAttachment(id: 0, workspaceId: 10, title: "Spec", relPath: "1-spec.pdf", mdPath: "1-spec.pdf.md", kind: TaskAttachmentContentKind.RichDocument));
+        var a2 = await attachmentRepo.CreateAsync(CreateAttachment(id: 0, workspaceId: 10, title: "Logo", relPath: "2-logo.png", mdPath: null, kind: TaskAttachmentContentKind.Image));
+        var foreignAttachment = await attachmentRepo.CreateAsync(CreateAttachment(id: 0, workspaceId: 99, title: "Foreign", relPath: "1-foreign.md", mdPath: null, kind: TaskAttachmentContentKind.PlainText));
+
+        var resolved = await AttachmentCitationParser.ResolveExistingWorkspaceIdsAsync(
+            attachmentRepo,
+            workspaceId: 10,
+            explicitIds: [0, -3, 9999, foreignAttachment.Id, a2.Id],
+            description: $"See @attachment:{a1.Id}, missing @attachment:7777, and foreign @attachment:{foreignAttachment.Id}.",
+            NullLogger.Instance);
+
+        Assert.Equal([a1.Id, a2.Id], resolved);
+    }
+
+    [Fact]
+    public async Task SetExistingTaskAttachmentLinksAsync_RetriesOnConcurrentDeletion_AndTerminatesOnUnrelatedExceptionId()
+    {
+        var surviving = CreateAttachment(id: 1, workspaceId: 10, title: "Surviving", relPath: "1-surv.md", mdPath: null, kind: TaskAttachmentContentKind.PlainText);
+        var vanishing = CreateAttachment(id: 2, workspaceId: 10, title: "Vanishing", relPath: "2-vanish.md", mdPath: null, kind: TaskAttachmentContentKind.PlainText);
+
+        var repoMock = new Mock<ITaskAttachmentRepository>();
+        var callCount = 0;
+        repoMock.Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<int>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => [surviving]);
+        repoMock.Setup(r => r.SetTaskAttachmentLinksAsync(42, It.IsAny<IEnumerable<int>>(), It.IsAny<CancellationToken>()))
+            .Callback<int, IEnumerable<int>, CancellationToken>((_, ids, _) =>
+            {
+                callCount++;
+                if (ids.Contains(vanishing.Id))
+                {
+                    throw new AttachmentNotFoundException(vanishing.Id, 10);
+                }
+            })
+            .Returns(Task.CompletedTask);
+
+        var applied = await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+            repoMock.Object,
+            workspaceId: 10,
+            taskId: 42,
+            [surviving.Id, vanishing.Id],
+            NullLogger.Instance);
+
+        Assert.Equal([surviving.Id], applied);
+        Assert.Equal(2, callCount);
+
+        // Faulty repository throwing for an ID not present in candidates must not loop infinitely
+        var faultyRepoMock = new Mock<ITaskAttachmentRepository>();
+        var faultyCalls = 0;
+        faultyRepoMock.Setup(r => r.GetByIdsAsync(It.IsAny<IEnumerable<int>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => [surviving]);
+        faultyRepoMock.Setup(r => r.GetByTaskIdAsync(43, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => [surviving]);
+        faultyRepoMock.Setup(r => r.SetTaskAttachmentLinksAsync(43, It.IsAny<IEnumerable<int>>(), It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                faultyCalls++;
+                throw new AttachmentNotFoundException(99999, 10);
+            });
+
+        var aborted = await AttachmentCitationParser.SetExistingTaskAttachmentLinksAsync(
+            faultyRepoMock.Object,
+            workspaceId: 10,
+            taskId: 43,
+            [surviving.Id],
+            NullLogger.Instance);
+
+        Assert.Equal([surviving.Id], aborted);
+        Assert.Equal(1, faultyCalls);
+    }
+
+    [Fact]
     public void DigestFormatter_ReturnsEmptyWhenNullOrEmpty()
     {
         Assert.Equal(string.Empty, AttachmentDigestFormatter.FormatWorkspaceAttachmentsDigest(null));
@@ -150,7 +227,7 @@ public class AttachmentCitationAndDigestTests
     }
 
     [Fact]
-    public async Task TaskOrchestrator_PersistsAttachmentLinksFromPendingProposals_AndRethrowsAttachmentNotFoundException()
+    public async Task TaskOrchestrator_And_WorkspacePreparer_IgnoreMissingAttachmentsWithoutFailingTasks()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "ncf-orch-att-" + Guid.NewGuid().ToString("N"));
         var repoDir = Path.Combine(tempRoot, "clone");
@@ -179,8 +256,8 @@ public class AttachmentCitationAndDigestTests
                 [
                     new AgentProfile
                     {
-                        Id = StandardStageIds.TaskReview,
-                        Name = "Review",
+                        Id = StandardStageIds.Implementation,
+                        Name = "Implementation",
                         HarnessId = "crucible",
                         ModelName = "test-model",
                         Mode = AgentMode.Full,
@@ -213,13 +290,13 @@ public class AttachmentCitationAndDigestTests
                 Title = "Analyze specs",
                 Description = "Parent discovery task",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = StandardStageIds.TaskReview,
+                CurrentStageId = StandardStageIds.Implementation,
                 BaseBranch = "main"
             });
             depStore.AddTask(parentTask.Id, workspace.Id, TaskOverallStatus.Open);
 
-            var reviewStage = TestWorkflowPipelines.CreateReviewStage();
-            builder.PipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline([reviewStage]));
+            var implStage = TestWorkflowPipelines.CreateImplementationStage();
+            builder.PipelineProvider = new DefaultWorkflowPipelineProvider(new WorkflowPipeline([implStage]));
 
             var wp = builder.BuildWorkspacePreparer();
             var mc = builder.BuildMergeAndCascadeCoordinator(wp);
@@ -243,23 +320,26 @@ public class AttachmentCitationAndDigestTests
             var linked = await attachmentRepo.GetByTaskIdAsync(suggested.Id);
             Assert.Equal([att1.Id, att2.Id], linked.Select(a => a.Id).OrderBy(id => id).ToArray());
 
-            // Unknown @attachment in PendingProposals fails fast with AttachmentNotFoundException
-            proposalsToEmit = [new("Broken Child", "Cites @attachment:999999")];
-            var badProposalTask = await taskRepo.CreateAsync(new ForgeTask
+            // Missing @attachment in PendingProposals is ignored while retaining valid attachment links; task does not fail
+            proposalsToEmit = [new("Child With Missing Attachment", $"Uses @attachment:{att1.Id} and stale @attachment:999999")];
+            var partialProposalTask = await taskRepo.CreateAsync(new ForgeTask
             {
                 WorkspaceId = workspace.Id,
-                Title = "Bad proposal parent",
+                Title = "Partial proposal parent",
                 Description = "Parent",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = StandardStageIds.TaskReview,
+                CurrentStageId = StandardStageIds.Implementation,
                 BaseBranch = "main"
             });
-            depStore.AddTask(badProposalTask.Id, workspace.Id, TaskOverallStatus.Open);
+            depStore.AddTask(partialProposalTask.Id, workspace.Id, TaskOverallStatus.Open);
 
-            await Assert.ThrowsAsync<AttachmentNotFoundException>(() =>
-                orchestrator.ProcessTaskAsync(badProposalTask.Id));
+            await orchestrator.ProcessTaskAsync(partialProposalTask.Id);
+            var partialParentAfter = await taskRepo.GetByIdAsync(partialProposalTask.Id);
+            Assert.NotEqual(TaskOverallStatus.Failed, partialParentAfter!.Status);
+            var childAfter = Assert.Single(await taskRepo.GetByWorkspaceIdAsync(workspace.Id), t => t.Title == "Child With Missing Attachment");
+            Assert.Equal([att1.Id], (await attachmentRepo.GetByTaskIdAsync(childAfter.Id)).Select(a => a.Id).ToArray());
 
-            // Post-stage markdown sync AttachmentNotFoundException propagates un-wrapped (not wrapped in TaskMarkdownSyncException)
+            // Post-stage & pre-stage markdown sync AttachmentNotFoundException must be tolerated without failing the task
             proposalsToEmit = null;
             var syncMock = new Mock<ITaskMarkdownSyncService>();
             syncMock.Setup(s => s.SyncAllTasksFromDiskAsync(
@@ -272,6 +352,12 @@ public class AttachmentCitationAndDigestTests
                     It.IsAny<int?>(),
                     It.IsAny<CancellationToken>()))
                 .ThrowsAsync(new AttachmentNotFoundException(777, workspace.Id));
+            syncMock.Setup(s => s.SyncAllTasksToDiskAsync(
+                    It.IsAny<Workspace>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new AttachmentNotFoundException(888, workspace.Id));
             builder.MarkdownSyncService = syncMock.Object;
 
             var wp2 = builder.BuildWorkspacePreparer();
@@ -289,21 +375,129 @@ public class AttachmentCitationAndDigestTests
                 attachmentRepo,
                 NullLogger<TaskOrchestrator>.Instance);
 
-            var syncFailTask = await taskRepo.CreateAsync(new ForgeTask
+            var syncTolerantTask = await taskRepo.CreateAsync(new ForgeTask
             {
                 WorkspaceId = workspace.Id,
-                Title = "Post stage sync fail",
+                Title = "Post stage sync missing attachment",
                 Description = "Parent",
                 Status = TaskOverallStatus.Open,
-                CurrentStageId = StandardStageIds.TaskReview,
+                CurrentStageId = StandardStageIds.Implementation,
                 BaseBranch = "main"
             });
-            depStore.AddTask(syncFailTask.Id, workspace.Id, TaskOverallStatus.Open);
-            var resolvedWorktree = await fakeGit.EnsureWorktreeAsync(workspace, syncFailTask.Id, "main");
+            depStore.AddTask(syncTolerantTask.Id, workspace.Id, TaskOverallStatus.Open);
+            var resolvedWorktree = await fakeGit.EnsureWorktreeAsync(workspace, syncTolerantTask.Id, "main");
             Directory.CreateDirectory(resolvedWorktree);
 
-            await Assert.ThrowsAsync<AttachmentNotFoundException>(() =>
-                orch2.ProcessTaskAsync(syncFailTask.Id));
+            var preStageOutcome = await wp2.SyncPreStageMarkdownAsync(
+                workspace,
+                syncTolerantTask,
+                new PipelineContext(syncTolerantTask, workspace),
+                implStage,
+                resolvedWorktree,
+                repoDir,
+                isResumedRun: false,
+                CancellationToken.None);
+            Assert.False(preStageOutcome.ModifiedDuringPreResumeSync);
+
+            await orch2.ProcessTaskAsync(syncTolerantTask.Id);
+            var syncTolerantAfter = await taskRepo.GetByIdAsync(syncTolerantTask.Id);
+            Assert.NotEqual(TaskOverallStatus.Failed, syncTolerantAfter!.Status);
+            Assert.Contains(
+                syncTolerantAfter.ExecutionLogs,
+                l => l.Level == LogLevel.Warning &&
+                     l.Message.Contains("Post-stage disk synchronization skipped due to missing attachment reference", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task TaskWorkspacePreparer_SyncPreStageMarkdownAsync_ResumedRunStillWritesBaselineWhenPreResumeSyncThrowsAttachmentNotFound()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf-wp-att-" + Guid.NewGuid().ToString("N"));
+        var repoDir = Path.Combine(tempRoot, "clone");
+        Directory.CreateDirectory(repoDir);
+
+        try
+        {
+            var builder = new TestOrchestratorBuilder
+            {
+                GitWorkspaceManager = new FakeGitWorkspaceManager()
+            };
+            var wsRepo = (InMemoryWorkspaceRepository)builder.WorkspaceRepository;
+            var taskRepo = (InMemoryTaskRepository)builder.TaskRepository;
+            var workspace = await wsRepo.CreateAsync(new Workspace
+            {
+                Name = "wp-att-ws",
+                RepositoryPath = repoDir,
+                Ext4MirrorPath = repoDir,
+                DefaultBaseBranch = "main"
+            });
+            var task = await taskRepo.CreateAsync(new ForgeTask
+            {
+                WorkspaceId = workspace.Id,
+                Title = "Resumed Task",
+                Description = "Desc",
+                Status = TaskOverallStatus.Reviewed,
+                HasExecutionRun = true,
+                CurrentStageId = StandardStageIds.Implementation,
+                BaseBranch = "main"
+            });
+
+            var expectedFile = Path.Combine(repoDir, "docs", "tasks", $"task-{task.Id}.md");
+            var expectedBaseline = new Dictionary<int, TaskBaselineEntry>
+            {
+                [task.Id] = new(task.Id, 1, DateTime.UtcNow, "hash-1", expectedFile, new TaskFrontmatter { Id = task.Id, Title = task.Title }, "Desc")
+            };
+
+            var syncMock = new Mock<ITaskMarkdownSyncService>();
+            syncMock.Setup(s => s.SyncAllTasksFromDiskAsync(
+                    It.IsAny<Workspace>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<IReadOnlyDictionary<int, TaskBaselineEntry>?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<int?>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new AttachmentNotFoundException(777, workspace.Id));
+            syncMock.Setup(s => s.SyncAllTasksToDiskAsync(
+                    It.IsAny<Workspace>(),
+                    It.IsAny<string>(),
+                    It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new SyncAllToDiskResult(
+                    new Dictionary<int, string> { [task.Id] = expectedFile },
+                    expectedBaseline));
+            builder.MarkdownSyncService = syncMock.Object;
+
+            var wp = builder.BuildWorkspacePreparer();
+            var pipelineContext = new PipelineContext(task, workspace);
+            var implStage = TestWorkflowPipelines.CreateImplementationStage();
+
+            var outcome = await wp.SyncPreStageMarkdownAsync(
+                workspace,
+                task,
+                pipelineContext,
+                implStage,
+                repoDir,
+                repoDir,
+                isResumedRun: true,
+                CancellationToken.None);
+
+            syncMock.Verify(s => s.SyncAllTasksToDiskAsync(
+                workspace,
+                repoDir,
+                repoDir,
+                It.IsAny<CancellationToken>()), Times.Once);
+            Assert.NotNull(outcome.BaselineSnapshot);
+            Assert.True(outcome.BaselineSnapshot!.ContainsKey(task.Id));
+            Assert.Equal($"docs/tasks/task-{task.Id}.md", pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath));
         }
         finally
         {

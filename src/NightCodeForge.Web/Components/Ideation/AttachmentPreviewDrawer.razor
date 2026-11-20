@@ -1,5 +1,6 @@
 @namespace NightCodeForge.Web.Components.Ideation
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Exceptions
 @using NightCodeForge.Web.Services
 @inject IAttachmentUiService AttachmentUiService
 @inject ToastService ToastService
@@ -25,11 +26,8 @@
                                     @AttachmentPresentationHelper.GetContentKindIcon(att.ContentKind) @AttachmentPresentationHelper.FormatContentKindLabel(att.ContentKind)
                                 </span>
                                 <span class="forge-badge badge-gray font-mono">@att.MediaType</span>
-                                @if (att.IsSymlink)
+                                @if (att.IsSymlink && !_preview.IsReachabilityUnknown)
                                 {
-                                    <span class="forge-badge badge-indigo font-mono attachment-symlink-badge" title="@att.SourceRef">
-                                        @AttachmentPresentationHelper.FormatSymlinkBadge(att)
-                                    </span>
                                     <span id="attachment-reachability-badge"
                                           class="forge-badge @AttachmentPresentationHelper.GetTargetReachabilityBadgeClass(_preview.IsTargetReachable)">
                                         @AttachmentPresentationHelper.FormatTargetReachabilityLabel(_preview.IsTargetReachable)
@@ -95,6 +93,52 @@
                 {
                     <div class="forge-alert alert-error attachment-load-error">
                         <span>⚠️ @_loadError</span>
+                        @if (_canFallbackDelete && _loadedAttachmentId.HasValue)
+                        {
+                            @if (!_confirmingFallbackDelete)
+                            {
+                                <div style="margin-top: 0.75rem; display: flex; justify-content: flex-end;">
+                                    <button type="button"
+                                            id="btn-fallback-delete-attachment"
+                                            class="forge-btn forge-btn-danger btn-sm"
+                                            @onclick="() => _confirmingFallbackDelete = true"
+                                            disabled="@_isDeleting">
+                                        🗑️ Delete Attachment
+                                    </button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="attachment-delete-confirm-modal"
+                                     role="alertdialog"
+                                     aria-modal="true"
+                                     aria-label="Confirm Fallback Attachment Deletion"
+                                     style="margin-top: 0.75rem;">
+                                    <div class="attachment-delete-confirm-header">
+                                        <strong>⚠️ Delete Attachment #@_loadedAttachmentId.Value?</strong>
+                                    </div>
+                                    <p class="attachment-delete-confirm-desc">
+                                        Attachment metadata and linked tasks could not be loaded. Deleting removes this attachment record and any stored copy in <code>attachments/</code>; external host files remain untouched.
+                                    </p>
+                                    <div class="attachment-delete-confirm-actions">
+                                        <button type="button"
+                                                id="btn-cancel-fallback-delete-attachment"
+                                                class="forge-btn forge-btn-secondary btn-sm"
+                                                @onclick="() => _confirmingFallbackDelete = false"
+                                                disabled="@_isDeleting">
+                                            Cancel
+                                        </button>
+                                        <button type="button"
+                                                id="btn-confirm-fallback-delete-attachment"
+                                                class="forge-btn forge-btn-danger btn-sm"
+                                                @onclick="ConfirmFallbackDeleteAsync"
+                                                disabled="@_isDeleting">
+                                            @(_isDeleting ? "Deleting..." : "Confirm Delete")
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        }
                     </div>
                 }
                 else if (_preview != null)
@@ -257,7 +301,7 @@
                     <div class="drawer-section attachment-preview-content">
                         <h4 class="section-title" style="margin-bottom: 0.5rem;">Content Preview</h4>
 
-                        @if (att.IsSymlink && !_preview.IsTargetReachable)
+                        @if (att.IsSymlink && !_preview.IsReachabilityUnknown && !_preview.IsTargetReachable)
                         {
                             <div class="attachment-target-missing-alert">
                                 <strong>⚠️ Target Missing</strong>
@@ -266,42 +310,51 @@
                                 </div>
                             </div>
                         }
-                        else if (att.ContentKind == TaskAttachmentContentKind.Image)
+                        @if (!string.IsNullOrWhiteSpace(_preview.ContentReadError))
                         {
-                            var dims = AttachmentPresentationHelper.FormatDimensions(att);
-                            <div class="attachment-image-preview">
-                                <div class="attachment-image-meta-bar">
-                                    @if (!string.IsNullOrEmpty(dims))
-                                    {
-                                        <span class="forge-badge badge-indigo font-mono attachment-dimensions-badge">@dims</span>
-                                    }
-                                    <span class="forge-badge badge-gray font-mono attachment-mediatype-badge">@att.MediaType</span>
-                                </div>
-                                @if (!string.IsNullOrWhiteSpace(_preview.ImageDataUri))
-                                {
-                                    <img class="attachment-preview-image"
-                                         src="@_preview.ImageDataUri"
-                                         alt="@att.Title" />
-                                }
-                                else
-                                {
-                                    <div class="text-muted" style="font-size: 0.84rem;">
-                                        Image bytes are not currently available on disk for inline preview.
+                            <div class="forge-alert alert-error attachment-content-read-error">
+                                <span>⚠️ Unable to read preview content: @_preview.ContentReadError</span>
+                            </div>
+                        }
+                        @if (!(att.IsSymlink && !_preview.IsReachabilityUnknown && !_preview.IsTargetReachable) && string.IsNullOrWhiteSpace(_preview.ContentReadError))
+                        {
+                            @if (att.ContentKind == TaskAttachmentContentKind.Image)
+                            {
+                                var dims = AttachmentPresentationHelper.FormatDimensions(att);
+                                <div class="attachment-image-preview">
+                                    <div class="attachment-image-meta-bar">
+                                        @if (!string.IsNullOrEmpty(dims))
+                                        {
+                                            <span class="forge-badge badge-indigo font-mono attachment-dimensions-badge">@dims</span>
+                                        }
+                                        <span class="forge-badge badge-gray font-mono attachment-mediatype-badge">@att.MediaType</span>
                                     </div>
-                                }
-                            </div>
-                        }
-                        else if (!string.IsNullOrWhiteSpace(_preview.RenderedHtml))
-                        {
-                            <div class="attachment-markdown-preview forge-markdown">
-                                @((MarkupString)_preview.RenderedHtml)
-                            </div>
-                        }
-                        else
-                        {
-                            <div class="text-muted" style="font-size: 0.84rem;">
-                                No previewable Markdown content available on disk for this attachment.
-                            </div>
+                                    @if (!string.IsNullOrWhiteSpace(_preview.ImageDataUri))
+                                    {
+                                        <img class="attachment-preview-image"
+                                             src="@_preview.ImageDataUri"
+                                             alt="@att.Title" />
+                                    }
+                                    else
+                                    {
+                                        <div class="text-muted" style="font-size: 0.84rem;">
+                                            Image bytes are not currently available on disk for inline preview.
+                                        </div>
+                                    }
+                                </div>
+                            }
+                            else if (!string.IsNullOrWhiteSpace(_preview.RenderedHtml))
+                            {
+                                <div class="attachment-markdown-preview forge-markdown">
+                                    @((MarkupString)_preview.RenderedHtml)
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="text-muted" style="font-size: 0.84rem;">
+                                    No previewable Markdown content available on disk for this attachment.
+                                </div>
+                            }
                         }
                     </div>
                 }
@@ -325,6 +378,8 @@
     private bool _isDeleting;
     private bool _showDeleteConfirmation;
     private bool _appliedStartInDelete;
+    private bool _canFallbackDelete;
+    private bool _confirmingFallbackDelete;
     private string? _loadError;
     private bool _wasOpen;
     private int? _loadedAttachmentId;
@@ -338,6 +393,8 @@
             _preview = null;
             _deleteImpact = null;
             _loadError = null;
+            _canFallbackDelete = false;
+            _confirmingFallbackDelete = false;
             _showDeleteConfirmation = false;
             _appliedStartInDelete = false;
             return;
@@ -348,6 +405,8 @@
         {
             _preview = null;
             _loadError = "No attachment selected.";
+            _canFallbackDelete = false;
+            _confirmingFallbackDelete = false;
             return;
         }
 
@@ -373,6 +432,8 @@
         _loadedAttachmentId = effectiveId.Value;
         _isLoading = true;
         _loadError = null;
+        _canFallbackDelete = false;
+        _confirmingFallbackDelete = false;
         _showDeleteConfirmation = false;
         _appliedStartInDelete = false;
         _deleteImpact = null;
@@ -387,11 +448,43 @@
                 _deleteImpact = new AttachmentDeleteImpact(_preview.Attachment, _preview.LinkedTasks);
             }
         }
+        catch (AttachmentNotFoundException ex)
+        {
+            Logger.LogWarning(ex, "Attachment #{AttachmentId} was not found when loading preview.", effectiveId.Value);
+            _preview = null;
+            _loadError = ex.Message;
+            _canFallbackDelete = false;
+            _confirmingFallbackDelete = false;
+        }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to load preview for attachment #{AttachmentId}", effectiveId.Value);
-            _preview = null;
-            _loadError = ex.Message;
+            try
+            {
+                var impact = await AttachmentUiService.GetDeleteImpactAsync(effectiveId.Value);
+                _preview = AttachmentPresentationHelper.BuildDegradedPreview(impact, ex.Message);
+                if (StartInDeleteConfirmation)
+                {
+                    _showDeleteConfirmation = true;
+                    _appliedStartInDelete = true;
+                    _deleteImpact = impact;
+                }
+            }
+            catch (AttachmentNotFoundException notFoundEx)
+            {
+                Logger.LogWarning(notFoundEx, "Attachment #{AttachmentId} was not found while loading fallback metadata.", effectiveId.Value);
+                _preview = null;
+                _loadError = notFoundEx.Message;
+                _canFallbackDelete = false;
+                _confirmingFallbackDelete = false;
+            }
+            catch (Exception fallbackEx)
+            {
+                Logger.LogWarning(fallbackEx, "Failed to resolve fallback metadata for attachment #{AttachmentId}", effectiveId.Value);
+                _preview = null;
+                _loadError = ex.Message;
+                _canFallbackDelete = true;
+            }
         }
         finally
         {
@@ -443,7 +536,7 @@
                 $"Removed attachment #{id} ({title}). External host files remain untouched.",
                 ToastLevel.Info);
             await OnDeleted.InvokeAsync(id);
-            await CloseAsync();
+            await CloseCoreAsync();
         }
         catch (Exception ex)
         {
@@ -464,15 +557,45 @@
         }
     }
 
-    private async Task CloseAsync()
+    private async Task ConfirmFallbackDeleteAsync()
     {
-        if (_isDeleting)
+        if (!_loadedAttachmentId.HasValue || _isDeleting)
         {
             return;
         }
 
+        var id = _loadedAttachmentId.Value;
+        _isDeleting = true;
+
+        try
+        {
+            await AttachmentUiService.DeleteAttachmentAsync(id);
+            ToastService.Show(
+                "Attachment Deleted",
+                $"Removed attachment #{id}. External host files remain untouched.",
+                ToastLevel.Info);
+            await OnDeleted.InvokeAsync(id);
+            await CloseCoreAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete attachment #{AttachmentId}", id);
+            ToastService.Show("Delete Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
+    }
+
+    private Task CloseAsync() => _isDeleting ? Task.CompletedTask : CloseCoreAsync();
+
+    private async Task CloseCoreAsync()
+    {
         _showDeleteConfirmation = false;
         _appliedStartInDelete = false;
+        _canFallbackDelete = false;
+        _confirmingFallbackDelete = false;
         await OnClose.InvokeAsync();
     }
 }

@@ -19,6 +19,7 @@ public enum TaskAttachmentSourceKind
 {
     FileDrop = 0,
     HostPath = 1,
+    /// <summary>Legacy read-only value retained so existing database rows remain readable and deletable.</summary>
     UrlCapture = 2
 }
 
@@ -169,13 +170,9 @@ public static class AttachmentConstants
     public const string VirtualAttachmentsMountPath = "/workspace/attachments";
     public const string ManifestFileName = "manifest.json";
     public const string MarkdownExtension = ".md";
-    public const string UrlCaptureSuffix = ".html.md";
 
     public const long MaxFileDropBytes = 50L * 1024 * 1024;
     public const long MaxHostFileBytes = 50L * 1024 * 1024;
-    public const long MaxUrlDownloadBytes = 10L * 1024 * 1024;
-    public const int MaxUrlRedirects = 5;
-    public const int UrlFetchTimeoutSeconds = 30;
     public const int SymlinkCreationTimeoutSeconds = 15;
     public const int MaxSlugLength = 64;
     public const string DefaultSlug = "attachment";
@@ -198,6 +195,13 @@ public static class AttachmentConstants
     {
         ".pdf", ".docx", ".html", ".htm", ".xhtml"
     };
+
+    public static readonly string HtmlAcceptExtensions = string.Join(
+        ",",
+        PlainTextExtensions
+            .Concat(ImageExtensions)
+            .Concat(RichDocumentExtensions)
+            .OrderBy(e => e, StringComparer.OrdinalIgnoreCase));
 
     private static readonly IReadOnlyDictionary<string, string> ExtensionMediaTypes =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -269,6 +273,30 @@ public static class AttachmentConstants
 
         contentKind = default;
         return false;
+    }
+
+    public static bool IsSupportedFileName(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        var cleanFileName = Path.GetFileName(fileName.Trim().Replace('\\', '/'));
+        if (string.IsNullOrWhiteSpace(cleanFileName))
+        {
+            return false;
+        }
+
+        return TryClassifyExtension(Path.GetExtension(cleanFileName), out _);
+    }
+
+    public static string BuildUnsupportedFormatMessage(string fileName, string? extension)
+    {
+        var displayName = string.IsNullOrWhiteSpace(fileName) ? "attachment" : fileName.Trim();
+        return string.IsNullOrWhiteSpace(extension)
+            ? $"Unsupported attachment format (missing file extension) for '{displayName}'."
+            : $"Unsupported attachment format '{extension}' for '{displayName}'.";
     }
 
     public static string ResolveMediaType(string? extension)

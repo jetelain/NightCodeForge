@@ -242,18 +242,13 @@
                             @foreach (var attId in _selectedAttachmentIds.OrderBy(id => id))
                             {
                                 var att = _availableAttachments.FirstOrDefault(a => a.Id == attId);
-                                var symlinkBadge = att != null ? AttachmentPresentationHelper.FormatSymlinkBadge(att) : string.Empty;
                                 <span class="forge-chip attachment-chip selected-attachment-chip">
                                     <button type="button"
                                             class="attachment-chip-main-btn"
                                             @onclick="() => _previewAttachmentId = attId"
-                                            title="Preview attachment #@attId">
+                                            title="@(att?.SourceRef ?? $"Preview attachment #{attId}")">
                                         <span class="font-mono text-secondary">#@attId</span>
                                         <span>@(att?.Title ?? AttachmentPresentationHelper.FormatCitationToken(attId))</span>
-                                        @if (!string.IsNullOrEmpty(symlinkBadge))
-                                        {
-                                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge">@symlinkBadge</span>
-                                        }
                                     </button>
                                     <button type="button"
                                             class="btn-chip-remove"
@@ -269,6 +264,7 @@
                                style="cursor: pointer; margin: 0;">
                             <InputFile id="create-task-attachment-file-input"
                                        class="create-task-attachment-input-file"
+                                       accept="@AttachmentConstants.HtmlAcceptExtensions"
                                        OnChange="HandleAttachmentFilesSelectedAsync"
                                        multiple
                                        disabled="@(_isSubmitting || _isUploadingAttachment)" />
@@ -318,7 +314,6 @@
                             @foreach (var opt in filteredAttachments)
                             {
                                 var isChecked = _selectedAttachmentIds.Contains(opt.Id);
-                                var symlinkBadge = AttachmentPresentationHelper.FormatSymlinkBadge(opt);
                                 <div class="attachment-option-item @(isChecked ? "selected" : "")"
                                      @onclick="() => ToggleAttachment(opt.Id)"
                                      style="display: flex; align-items: center; justify-content: space-between; padding: 0.4rem 0.6rem; border-radius: var(--radius-sm); cursor: pointer; background: @(isChecked ? "rgba(99, 102, 241, 0.15)" : "transparent"); margin-bottom: 2px;">
@@ -329,11 +324,7 @@
                                                @onchange="() => ToggleAttachment(opt.Id)" />
                                         <span class="font-mono text-secondary" style="font-size: 0.8rem;">#@opt.Id</span>
                                         <span>@AttachmentPresentationHelper.GetContentKindIcon(opt.ContentKind)</span>
-                                        <span style="font-size: 0.85rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">@opt.Title</span>
-                                        @if (!string.IsNullOrEmpty(symlinkBadge))
-                                        {
-                                            <span class="forge-badge badge-indigo font-mono attachment-symlink-badge" style="font-size: 0.7rem;" title="@opt.SourceRef">@symlinkBadge</span>
-                                        }
+                                        <span style="font-size: 0.85rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="@opt.SourceRef">@opt.Title</span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
                                         <span class="forge-badge badge-gray" style="font-size: 0.7rem;">@AttachmentPresentationHelper.FormatContentKindLabel(opt.ContentKind)</span>
@@ -740,23 +731,52 @@
         var active = WorkspaceState.ActiveWorkspace;
         if (active == null) return;
 
-        _isUploadingAttachment = true;
+        IReadOnlyList<IBrowserFile> files;
         try
         {
-            foreach (var file in e.GetMultipleFiles(maximumFileCount: AttachmentPresentationHelper.MaxBatchUploadFiles))
+            files = e.GetMultipleFiles(maximumFileCount: AttachmentPresentationHelper.MaxBatchUploadFiles);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "Failed reading selected attachment batch during task creation.");
+            ToastService.Show("Attachment Upload Failed", ex.Message, ToastLevel.Error);
+            return;
+        }
+
+        _isUploadingAttachment = true;
+        var uploadedAny = false;
+        try
+        {
+            foreach (var file in files)
             {
-                await using var stream = file.OpenReadStream(AttachmentConstants.MaxFileDropBytes);
-                var ingested = await AttachmentUiService.UploadFileAsync(active.Id, file.Name, stream);
-                _selectedAttachmentIds.Add(ingested.Id);
-                ToastService.Show("Attachment Added", $"#{ingested.Id} {ingested.Title} linked to new task.", ToastLevel.Success);
+                if (!AttachmentConstants.IsSupportedFileName(file.Name))
+                {
+                    ToastService.Show(
+                        "Unsupported Attachment",
+                        AttachmentConstants.BuildUnsupportedFormatMessage(file.Name, Path.GetExtension(file.Name)),
+                        ToastLevel.Warning);
+                    continue;
+                }
+
+                try
+                {
+                    await using var stream = file.OpenReadStream(AttachmentConstants.MaxFileDropBytes);
+                    var ingested = await AttachmentUiService.UploadFileAsync(active.Id, file.Name, stream);
+                    _selectedAttachmentIds.Add(ingested.Id);
+                    uploadedAny = true;
+                    ToastService.Show("Attachment Added", $"#{ingested.Id} {ingested.Title} linked to new task.", ToastLevel.Success);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.LogWarning(ex, "Failed uploading attachment '{FileName}' during task creation.", file.Name);
+                    ToastService.Show("Attachment Upload Failed", ex.Message, ToastLevel.Error);
+                }
             }
 
-            _availableAttachments = (await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id)).ToList();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed uploading attachment during task creation.");
-            ToastService.Show("Attachment Upload Failed", ex.Message, ToastLevel.Error);
+            if (uploadedAny)
+            {
+                _availableAttachments = (await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id)).ToList();
+            }
         }
         finally
         {

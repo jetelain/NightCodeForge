@@ -1,16 +1,14 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
-using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using Pmad.Markitdown;
 
@@ -78,26 +76,15 @@ public class AttachmentIntakeServiceTests : IDisposable
         }
     }
 
-    private TestableAttachmentIntakeService CreateSut(
-        HttpMessageHandler? httpHandler = null,
-        SecurityOptions? securityOptions = null,
-        AttachmentIntakeOptions? intakeOptions = null,
-        Func<string, IPAddress[]>? dnsResolver = null)
+    private AttachmentIntakeService CreateSut()
     {
-        var client = httpHandler != null
-            ? new HttpClient(httpHandler)
-            : new HttpClient(new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
-
-        return new TestableAttachmentIntakeService(
+        return new AttachmentIntakeService(
             _attachmentRepo,
             _workspaceRepo,
             _pathResolverMock.Object,
             _processRunnerMock.Object,
             _markitdown,
-            client,
-            Options.Create(securityOptions ?? new SecurityOptions()),
-            Options.Create(intakeOptions ?? new AttachmentIntakeOptions()),
-            dnsResolver);
+            NullLogger<AttachmentIntakeService>.Instance);
     }
 
     [Fact]
@@ -304,30 +291,6 @@ public class AttachmentIntakeServiceTests : IDisposable
     }
 
     [Fact]
-    public void ExtractCitedHostPaths_ExtractsWindowsWslUncPosixAndTilde_WhileIgnoringVirtualWorkspaceAndUrls()
-    {
-        var sut = CreateSut();
-        const string message = """
-            Please review C:\dev\poc\router-spikes.md, "C:\Program Files\My App\spec.pdf",
-            \\wsl.localhost\Ubuntu\home\dev\notes.txt, \\fileserver\docs\rfc.md,
-            /home/dev/architecture.md, /mnt/d/benchmarks/run.json, and ~/scratch/plan.md.
-            Also ignore /workspace/attachments/001-existing.md and https://example.com/home/ignored.html.
-            """;
-
-        var paths = sut.ExtractCitedHostPaths(message);
-
-        Assert.Contains(@"C:\dev\poc\router-spikes.md", paths);
-        Assert.Contains(@"C:\Program Files\My App\spec.pdf", paths);
-        Assert.Contains(@"\\wsl.localhost\Ubuntu\home\dev\notes.txt", paths);
-        Assert.Contains(@"\\fileserver\docs\rfc.md", paths);
-        Assert.Contains("/home/dev/architecture.md", paths);
-        Assert.Contains("/mnt/d/benchmarks/run.json", paths);
-        Assert.Contains("~/scratch/plan.md", paths);
-        Assert.DoesNotContain("/workspace/attachments/001-existing.md", paths);
-        Assert.DoesNotContain("/home/ignored.html", paths);
-    }
-
-    [Fact]
     public async Task IngestHostPathAsync_CreatesPosixSymlinkViaProcessRunner_GeneratesCompanionWithoutModifyingHostFile_AndPreservesHostOnDelete()
     {
         var hostHtmlPath = Path.Combine(_hostFilesDir, "api-guide.html");
@@ -414,169 +377,6 @@ public class AttachmentIntakeServiceTests : IDisposable
             sut.IngestHostPathAsync(1, "relative/path.md"));
     }
 
-    [Fact]
-    public void ExtractCitedUrls_ExtractsHttpAndHttpsUrlsWithoutTrailingPunctuation()
-    {
-        var sut = CreateSut();
-        const string message = "Compare https://datatracker.ietf.org/doc/html/rfc9110. and http://docs.example.com/spec?v=1).";
-
-        var urls = sut.ExtractCitedUrls(message);
-
-        Assert.Equal(
-            [
-                "https://datatracker.ietf.org/doc/html/rfc9110",
-                "http://docs.example.com/spec?v=1"
-            ],
-            urls);
-    }
-
-    [Fact]
-    public async Task CaptureUrlAsync_WhenAirGapped_ThrowsAirGappedOperationException()
-    {
-        var sut = CreateSut(securityOptions: new SecurityOptions { AirGappedMode = true });
-
-        await Assert.ThrowsAsync<AirGappedOperationException>(() =>
-            sut.CaptureUrlAsync(1, "https://example.com/spec.html"));
-    }
-
-    [Theory]
-    [InlineData("file:///etc/passwd")]
-    [InlineData("ftp://example.com/doc.txt")]
-    [InlineData("gopher://example.com/1")]
-    [InlineData("http://localhost/admin")]
-    [InlineData("http://127.0.0.1/admin")]
-    [InlineData("http://[::1]/admin")]
-    [InlineData("http://169.254.169.254/latest/meta-data/")]
-    [InlineData("http://[fe80::1]/meta")]
-    [InlineData("http://10.0.0.5/internal")]
-    [InlineData("http://172.16.4.2/internal")]
-    [InlineData("http://192.168.1.10/internal")]
-    [InlineData("http://[fc00::1]/internal")]
-    public async Task CaptureUrlAsync_RejectsNonHttpSchemesAndSsrfTargets(string blockedUrl)
-    {
-        var sut = CreateSut(dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sut.CaptureUrlAsync(1, blockedUrl));
-    }
-
-    [Fact]
-    public async Task CaptureUrlAsync_BlocksDnsResolvingToPrivateIp_AndBlocksRedirectToLoopbackOrMetadata()
-    {
-        // 1. Public-looking domain resolving to 127.0.0.1 via DNS
-        var dnsBlockedSut = CreateSut(dnsResolver: _ => [IPAddress.Loopback]);
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            dnsBlockedSut.CaptureUrlAsync(1, "https://evil-rebind.example.com/page"));
-
-        // 2. HTTP redirect targeting 169.254.169.254
-        var redirectHandler = new StubHttpMessageHandler(_ =>
-        {
-            var resp = new HttpResponseMessage(HttpStatusCode.Found);
-            resp.Headers.Location = new Uri("http://169.254.169.254/latest/meta-data/");
-            return resp;
-        });
-        var redirectSut = CreateSut(
-            httpHandler: redirectHandler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            redirectSut.CaptureUrlAsync(1, "https://public.example.com/redirect"));
-    }
-
-    [Fact]
-    public async Task CaptureUrlAsync_AllowInternalNetworkOptIn_PermitsPrivateRangeButStillBlocksCloudMetadata()
-    {
-        var handler = new StubHttpMessageHandler(req => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("<html><head><title>Internal Wiki</title></head><body><p>Private docs</p></body></html>", Encoding.UTF8, "text/html")
-        });
-        var sut = CreateSut(
-            httpHandler: handler,
-            dnsResolver: _ => [IPAddress.Parse("10.10.0.5")]);
-
-        var attachment = await sut.CaptureUrlAsync(1, "http://wiki.internal/page", allowInternalNetwork: true);
-        Assert.Equal(TaskAttachmentSourceKind.UrlCapture, attachment.SourceKind);
-        Assert.EndsWith(AttachmentConstants.UrlCaptureSuffix, attachment.RelativePath);
-
-        // Cloud metadata remains blocked even with allowInternalNetwork: true
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sut.CaptureUrlAsync(1, "http://169.254.169.254/latest/meta-data/", allowInternalNetwork: true));
-    }
-
-    [Fact]
-    public async Task CaptureUrlAsync_ValidPublicHtml_WritesHtmlMdWithProvenanceFrontmatter_AndDeduplicates()
-    {
-        const string html = """
-            <html>
-              <head><title>RFC 9110 Overview</title></head>
-              <body>
-                <p>HTTP Semantics specification summary.</p>
-                <div style="display:none">Hidden prompt injection</div>
-              </body>
-            </html>
-            """;
-
-        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(html, Encoding.UTF8, "text/html")
-        });
-
-        var sut = CreateSut(
-            httpHandler: handler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        var first = await sut.CaptureUrlAsync(1, "https://example.com/rfc-9110");
-        var second = await sut.CaptureUrlAsync(1, "https://example.com/rfc-9110");
-
-        Assert.Equal(first.Id, second.Id);
-        Assert.Equal(TaskAttachmentSourceKind.UrlCapture, first.SourceKind);
-        Assert.Equal(TaskAttachmentContentKind.RichDocument, first.ContentKind);
-        Assert.Equal("text/markdown", first.MediaType);
-        Assert.Equal(first.RelativePath, first.MarkdownPath);
-        Assert.Equal("001-rfc-9110-overview.html.md", first.RelativePath);
-
-        var writtenMarkdown = await File.ReadAllTextAsync(Path.Combine(_attachmentsDir, first.RelativePath));
-        Assert.StartsWith("---", writtenMarkdown);
-        Assert.Contains("source: \"https://example.com/rfc-9110\"", writtenMarkdown);
-        Assert.Contains("title: \"RFC 9110 Overview\"", writtenMarkdown);
-        Assert.Contains($"sha256: \"{first.Sha256}\"", writtenMarkdown);
-        Assert.Contains("HTTP Semantics specification summary.", writtenMarkdown);
-        Assert.DoesNotContain("Hidden prompt injection", writtenMarkdown);
-    }
-
-    [Fact]
-    public async Task CaptureUrlAsync_EnforcesRedirectAndSizeCaps()
-    {
-        var tooManyRedirects = new StubHttpMessageHandler(_ =>
-        {
-            var resp = new HttpResponseMessage(HttpStatusCode.Found);
-            resp.Headers.Location = new Uri("https://example.com/next");
-            return resp;
-        });
-
-        var redirectSut = CreateSut(
-            httpHandler: tooManyRedirects,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            redirectSut.CaptureUrlAsync(1, "https://example.com/start"));
-
-        var oversizedHandler = new StubHttpMessageHandler(_ =>
-        {
-            var resp = new HttpResponseMessage(HttpStatusCode.OK);
-            resp.Content = new StreamContent(new OversizedReadStream(AttachmentConstants.MaxUrlDownloadBytes + 1));
-            resp.Content.Headers.ContentLength = AttachmentConstants.MaxUrlDownloadBytes + 1;
-            return resp;
-        });
-
-        var sizeSut = CreateSut(
-            httpHandler: oversizedHandler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sizeSut.CaptureUrlAsync(1, "https://example.com/huge"));
-    }
-
     [Theory]
     [InlineData("webp-vp8", ".webp", "image/webp", 640, 480)]
     [InlineData("webp-vp8x", ".webp", "image/webp", 1920, 1080)]
@@ -638,7 +438,7 @@ public class AttachmentIntakeServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task IngestFileDropAsync_And_CaptureUrlAsync_RejectEmptyOrScriptOnlyHtml()
+    public async Task IngestFileDropAsync_RejectsEmptyOrScriptOnlyHtml()
     {
         const string scriptOnlyHtml = """
             <html>
@@ -649,134 +449,185 @@ public class AttachmentIntakeServiceTests : IDisposable
             </html>
             """;
 
-        var handler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(scriptOnlyHtml, Encoding.UTF8, "text/html")
-        });
-
-        var sut = CreateSut(
-            httpHandler: handler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
+        var sut = CreateSut();
 
         await using var htmlStream = new MemoryStream(Encoding.UTF8.GetBytes(scriptOnlyHtml));
         await Assert.ThrowsAsync<AttachmentConversionException>(() =>
             sut.IngestFileDropAsync(1, "empty-page.html", htmlStream));
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sut.CaptureUrlAsync(1, "https://example.com/empty-script-only"));
 
         Assert.Empty(await sut.ListWorkspaceAttachmentsAsync(1));
         Assert.Empty(Directory.GetFiles(_attachmentsDir));
     }
 
     [Fact]
-    public async Task CaptureUrlAsync_ExtractsHtmlTitleWhenH1Present_AndFallsBackToUrlExtensionForOctetStreamOrMissingContentType()
-    {
-        // 1. HTML with both <title> and <h1> should preserve the decoded <title>
-        const string htmlWithBoth = """
-            <html>
-              <head><title>RFC 9110 &amp; HTTP Semantics</title></head>
-              <body>
-                <h1>Section 1: Overview</h1>
-                <p>Protocol details here.</p>
-              </body>
-            </html>
-            """;
-        var htmlHandler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(htmlWithBoth, Encoding.UTF8, "text/html")
-        });
-        var htmlSut = CreateSut(
-            httpHandler: htmlHandler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        var htmlAttachment = await htmlSut.CaptureUrlAsync(1, "https://example.com/rfc");
-        Assert.Equal("RFC 9110 & HTTP Semantics", htmlAttachment.Title);
-        Assert.Equal("001-rfc-9110-http-semantics.html.md", htmlAttachment.RelativePath);
-
-        // 2. application/octet-stream falling back to .md extension
-        var mdHandler = new StubHttpMessageHandler(_ =>
-        {
-            var content = new ByteArrayContent("# Raw Markdown Spec\n\nBody."u8.ToArray());
-            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
-        });
-        var mdSut = CreateSut(
-            httpHandler: mdHandler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        var mdAttachment = await mdSut.CaptureUrlAsync(1, "https://example.com/docs/spec.md");
-        Assert.Equal("Raw Markdown Spec", mdAttachment.Title);
-        Assert.Equal("002-raw-markdown-spec.html.md", mdAttachment.RelativePath);
-
-        // 3. Missing Content-Type falling back to .pdf extension
-        var pdfBytes = CreateValidMinimalPdf("PDF without Content-Type");
-        var pdfHandler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new ByteArrayContent(pdfBytes)
-        });
-        var pdfSut = CreateSut(
-            httpHandler: pdfHandler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        var pdfAttachment = await pdfSut.CaptureUrlAsync(1, "https://example.com/files/guide.pdf");
-        var pdfMarkdown = await File.ReadAllTextAsync(Path.Combine(_attachmentsDir, pdfAttachment.RelativePath));
-        Assert.Contains("PDF without Content-Type", pdfMarkdown);
-
-        // 4. Dotfile URL without title or heading uses trimmed dotfile name for slug
-        var dotHandler = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent("<html><body><p>Config data</p></body></html>", Encoding.UTF8, "text/html")
-        });
-        var dotSut = CreateSut(
-            httpHandler: dotHandler,
-            dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        var dotAttachment = await dotSut.CaptureUrlAsync(1, "https://example.com/.well-known");
-        Assert.Equal("well-known", dotAttachment.Slug);
-    }
-
-    [Theory]
-    [InlineData("http://localhost./admin")]
-    [InlineData("http://sub.localhost./admin")]
-    [InlineData("http://100.64.0.1/cgnat")]
-    [InlineData("http://255.255.255.255/broadcast")]
-    [InlineData("http://[fd00:ec2::254]/latest/meta-data/")]
-    public async Task CaptureUrlAsync_BlocksTrailingDotLocalhostCgnatBroadcastAndAwsIpv6Metadata(string blockedUrl)
-    {
-        var sut = CreateSut(dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sut.CaptureUrlAsync(1, blockedUrl));
-    }
-
-    [Fact]
-    public async Task CaptureUrlAsync_AllowInternalNetworkOptIn_StillBlocksAwsIpv6MetadataAndBroadcast()
-    {
-        var sut = CreateSut(dnsResolver: _ => [IPAddress.Parse("93.184.216.34")]);
-
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sut.CaptureUrlAsync(1, "http://[fd00:ec2::254]/latest/meta-data/", allowInternalNetwork: true));
-        await Assert.ThrowsAsync<AttachmentConversionException>(() =>
-            sut.CaptureUrlAsync(1, "http://255.255.255.255/broadcast", allowInternalNetwork: true));
-    }
-
-    [Fact]
-    public async Task IngestHostPathAsync_RejectsDotSegmentSelfReference_AndExtractsBacktickQuotedPathsWithSpaces()
+    public async Task IngestHostPathAsync_RejectsDotSegmentSelfReference()
     {
         var sut = CreateSut();
-
-        const string message = """
-            Check `C:\Program Files\My App\spec.pdf` and `/home/dev/my docs/readme.md`.
-            """;
-        var extracted = sut.ExtractCitedHostPaths(message);
-        Assert.Contains(@"C:\Program Files\My App\spec.pdf", extracted);
-        Assert.Contains("/home/dev/my docs/readme.md", extracted);
 
         var insideWithDot = Path.Combine(_attachmentsDir, ".", "001-internal.md");
         await File.WriteAllTextAsync(insideWithDot, "internal");
         await Assert.ThrowsAsync<AttachmentTargetNotFoundException>(() =>
             sut.IngestHostPathAsync(1, insideWithDot));
+    }
+
+    [Fact]
+    public async Task AttachmentHostPathResolver_ResolvesMntDriveAndPrefersDirectTargetForSymlinks()
+    {
+        Assert.True(AttachmentHostPathResolver.TryConvertMntDriveToWindowsPath("/mnt/c/Users/Julien/config.json", out var winC));
+        Assert.Equal(@"C:\Users\Julien\config.json", winC);
+        Assert.True(AttachmentHostPathResolver.TryConvertMntDriveToWindowsPath("/mnt/d/foo/bar.png", out var winD));
+        Assert.Equal(@"D:\foo\bar.png", winD);
+        Assert.False(AttachmentHostPathResolver.TryConvertMntDriveToWindowsPath("/home/user/a.md", out _));
+
+        var realHostFile = Path.Combine(_hostFilesDir, "config.json");
+        var placeholderLink = Path.Combine(_attachmentsDir, "002-config.json");
+        await File.WriteAllTextAsync(realHostFile, "{\"real\":true}");
+        await File.WriteAllTextAsync(placeholderLink, "{\"placeholder\":true}");
+
+        var symlinkPlainText = new TaskAttachment
+        {
+            Id = 2,
+            WorkspaceId = 1,
+            RelativePath = "002-config.json",
+            MarkdownPath = "002-config.json",
+            ContentKind = TaskAttachmentContentKind.PlainText,
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = realHostFile,
+            IsSymlink = true
+        };
+
+        var plainCandidates = AttachmentHostPathResolver.EnumerateReadableAttachmentPaths(
+            symlinkPlainText,
+            _attachmentsDir,
+            _pathResolverMock.Object);
+        Assert.Equal(realHostFile, plainCandidates[0]);
+
+        var companionMd = Path.Combine(_attachmentsDir, "003-guide.md");
+        var hostHtml = Path.Combine(_hostFilesDir, "guide.html");
+        await File.WriteAllTextAsync(companionMd, "# Companion Markdown");
+        await File.WriteAllTextAsync(hostHtml, "<h1>Raw HTML</h1>");
+
+        var symlinkRichDoc = new TaskAttachment
+        {
+            Id = 3,
+            WorkspaceId = 1,
+            RelativePath = "003-guide.html",
+            MarkdownPath = "003-guide.md",
+            ContentKind = TaskAttachmentContentKind.RichDocument,
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = hostHtml,
+            IsSymlink = true
+        };
+
+        var richCandidates = AttachmentHostPathResolver.EnumerateReadableAttachmentPaths(
+            symlinkRichDoc,
+            _attachmentsDir,
+            _pathResolverMock.Object);
+        var singleRich = Assert.Single(richCandidates);
+        Assert.Equal(companionMd, singleRich);
+    }
+
+    [Fact]
+    public async Task AttachmentHostPathResolver_DoesNotFallBackToPlaceholderWhenSymlinkTargetIsMissing_AndLogsCorruptManifest()
+    {
+        var missingHostTarget = Path.Combine(_hostFilesDir, "missing-config.json");
+        var placeholderLink = Path.Combine(_attachmentsDir, "004-missing-config.json");
+        await File.WriteAllTextAsync(placeholderLink, "{\"placeholder\":true}");
+
+        var symlinkWithMissingTarget = new TaskAttachment
+        {
+            Id = 4,
+            WorkspaceId = 1,
+            RelativePath = "004-missing-config.json",
+            MarkdownPath = "004-missing-config.json",
+            ContentKind = TaskAttachmentContentKind.PlainText,
+            SourceKind = TaskAttachmentSourceKind.HostPath,
+            SourceRef = missingHostTarget,
+            IsSymlink = true
+        };
+
+        var candidates = AttachmentHostPathResolver.EnumerateReadableAttachmentPaths(
+            symlinkWithMissingTarget,
+            _attachmentsDir,
+            _pathResolverMock.Object,
+            readPrimaryFile: true);
+        Assert.Empty(candidates);
+
+        await File.WriteAllTextAsync(Path.Combine(_attachmentsDir, AttachmentConstants.ManifestFileName), "{corrupt json");
+        var loggerMock = new Mock<ILogger>();
+
+        var resolvedTarget = AttachmentHostPathResolver.TryResolveManifestSymlinkHostTarget(
+            _attachmentsDir,
+            "004-missing-config.json",
+            _pathResolverMock.Object,
+            loggerMock.Object);
+
+        Assert.Null(resolvedTarget);
+        loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, _) => v.ToString()!.Contains("004-missing-config.json")),
+                It.IsAny<JsonException>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task IngestHostPathAsync_RejectsDirectoriesAndUnsupportedExtensionsBeforeReadingBytes()
+    {
+        var sut = CreateSut();
+
+        var subDir = Path.Combine(_hostFilesDir, "folder.md");
+        Directory.CreateDirectory(subDir);
+        var dirEx = await Assert.ThrowsAsync<AttachmentConversionException>(() =>
+            sut.IngestHostPathAsync(1, subDir));
+        Assert.Contains("directory", dirEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        var exePath = Path.Combine(_hostFilesDir, "ComicGen.App.exe");
+        await File.WriteAllBytesAsync(exePath, [0x4D, 0x5A, 0x90, 0x00]);
+        var exeEx = await Assert.ThrowsAsync<AttachmentConversionException>(() =>
+            sut.IngestHostPathAsync(1, exePath));
+        Assert.Contains(".exe", exeEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        var oversizedExePath = Path.Combine(_hostFilesDir, "huge-installer.exe");
+        await using (var fs = File.Create(oversizedExePath))
+        {
+            fs.SetLength(AttachmentConstants.MaxHostFileBytes + 4096);
+        }
+        var oversizedExeEx = await Assert.ThrowsAsync<AttachmentConversionException>(() =>
+            sut.IngestHostPathAsync(1, oversizedExePath));
+        Assert.Contains("Unsupported attachment format '.exe'", oversizedExeEx.Message);
+
+        var noExtPath = Path.Combine(_hostFilesDir, "README_WITHOUT_EXT");
+        await File.WriteAllTextAsync(noExtPath, "plain content");
+        var noExtEx = await Assert.ThrowsAsync<AttachmentConversionException>(() =>
+            sut.IngestHostPathAsync(1, noExtPath));
+        Assert.Contains("missing file extension", noExtEx.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Empty(await sut.ListWorkspaceAttachmentsAsync(1));
+        Assert.Empty(Directory.GetFiles(_attachmentsDir));
+    }
+
+    [Fact]
+    public async Task DeleteAttachmentAsync_WhenDiskFileIsAlreadyMissing_StillDeletesDbRecordAndSyncsManifest()
+    {
+        var sut = CreateSut();
+        await using var stream = new MemoryStream("# Temp Spec\nBody."u8.ToArray());
+        var attachment = await sut.IngestFileDropAsync(1, "temp-spec.md", stream);
+
+        var storedPath = Path.Combine(_attachmentsDir, attachment.RelativePath);
+        File.Delete(storedPath);
+        Assert.False(File.Exists(storedPath));
+
+        await sut.DeleteAttachmentAsync(attachment.Id);
+
+        Assert.Null(await sut.GetAttachmentAsync(attachment.Id));
+        Assert.Empty(await sut.ListWorkspaceAttachmentsAsync(1));
+        var manifest = JsonSerializer.Deserialize<AttachmentManifest>(
+            await File.ReadAllTextAsync(Path.Combine(_attachmentsDir, AttachmentConstants.ManifestFileName)));
+        Assert.NotNull(manifest);
+        Assert.Empty(manifest!.Attachments);
     }
 
     [Fact]
@@ -800,49 +651,22 @@ public class AttachmentIntakeServiceTests : IDisposable
             sut.DeleteAttachmentAsync(badAttachment.Id));
     }
 
-    private sealed class TestableAttachmentIntakeService : AttachmentIntakeService
+    [Fact]
+    public async Task IngestHostPathAsync_MissingMntDrivePath_ReportsWindowsDrivePathOnWindows()
     {
-        private readonly Func<string, IPAddress[]>? _dnsResolver;
-
-        public TestableAttachmentIntakeService(
-            ITaskAttachmentRepository attachmentRepository,
-            IWorkspaceRepository workspaceRepository,
-            IWorkspacePathResolver pathResolver,
-            IProcessRunner processRunner,
-            IMarkitdown markitdown,
-            HttpClient httpClient,
-            IOptions<SecurityOptions> securityOptions,
-            IOptions<AttachmentIntakeOptions> intakeOptions,
-            Func<string, IPAddress[]>? dnsResolver)
-            : base(
-                attachmentRepository,
-                workspaceRepository,
-                pathResolver,
-                processRunner,
-                markitdown,
-                httpClient,
-                securityOptions,
-                intakeOptions,
-                NullLogger<AttachmentIntakeService>.Instance)
+        if (!OperatingSystem.IsWindows())
         {
-            _dnsResolver = dnsResolver;
+            return;
         }
 
-        protected override Task<IPAddress[]> ResolveHostAddressesAsync(string host, CancellationToken cancellationToken)
-        {
-            if (_dnsResolver != null)
-            {
-                return Task.FromResult(_dnsResolver(host));
-            }
+        var sut = CreateSut();
+        var missingDrivePath = "/mnt/z/nonexistent-ncf-dir/missing-spec.md";
 
-            return base.ResolveHostAddressesAsync(host, cancellationToken);
-        }
-    }
+        var ex = await Assert.ThrowsAsync<AttachmentTargetNotFoundException>(() =>
+            sut.IngestHostPathAsync(1, missingDrivePath));
 
-    private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(handler(request));
+        Assert.Contains(@"Z:\nonexistent-ncf-dir\missing-spec.md", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\wsl.localhost", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class OversizedReadStream(long totalBytes) : Stream

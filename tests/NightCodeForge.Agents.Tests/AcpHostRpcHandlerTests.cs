@@ -386,4 +386,295 @@ public class AcpHostRpcHandlerTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task FsReadTextFile_SymlinkedAttachmentInManifest_ReadsDirectHostTarget()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var repoDir = Path.Combine(tempRoot, "clone");
+            var attachDir = Path.Combine(tempRoot, "attachments");
+            var hostTarget = Path.Combine(tempRoot, "real-host-config.json");
+            Directory.CreateDirectory(repoDir);
+            Directory.CreateDirectory(attachDir);
+
+            await File.WriteAllTextAsync(hostTarget, "{\"resolved\":\"from-host\"}");
+            await File.WriteAllTextAsync(Path.Combine(attachDir, "002-config.json"), "placeholder-symlink-entry");
+
+            var manifestJson = System.Text.Json.JsonSerializer.Serialize(new AttachmentManifest
+            {
+                WorkspaceId = 9,
+                Attachments =
+                [
+                    new AttachmentManifestEntry
+                    {
+                        Id = 2,
+                        WorkspaceId = 9,
+                        Title = "config.json",
+                        Slug = "config",
+                        RelativePath = "002-config.json",
+                        MarkdownPath = "002-config.json",
+                        ContentKind = TaskAttachmentContentKind.PlainText,
+                        MediaType = "application/json",
+                        SourceKind = TaskAttachmentSourceKind.HostPath,
+                        SourceRef = hostTarget,
+                        IsSymlink = true,
+                        TargetPath = hostTarget,
+                        Sha256 = new string('e', 64),
+                        SizeBytes = 26
+                    }
+                ]
+            });
+            await File.WriteAllTextAsync(Path.Combine(attachDir, AttachmentConstants.ManifestFileName), manifestJson);
+
+            var pathResolverMock = new Mock<IWorkspacePathResolver>();
+            pathResolverMock.Setup(r => r.GetAttachmentsPath(9)).Returns(attachDir);
+            pathResolverMock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+            pathResolverMock.Setup(r => r.ResolveCruciblePath(9, It.IsAny<string>(), It.IsAny<int?>()))
+                .Returns<int, string, int?>((_, rel, _) =>
+                {
+                    var norm = rel.Replace('\\', '/').Trim();
+                    if (norm.StartsWith("/workspace/attachments/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Path.Combine(attachDir, norm["/workspace/attachments/".Length..]);
+                    }
+                    return repoDir;
+                });
+
+            var ws = new Workspace { Id = 9, RepositoryPath = repoDir, ExecutionMode = ExecutionMode.ContainerSandbox };
+            var mountTable = SandboxMountTable.ForWorkspace(
+                repoDir,
+                isReadOnly: false,
+                hostAttachmentsDirectory: attachDir);
+            var sandboxScope = SandboxScopeDescriptor.ForWorkspace(
+                ws,
+                SandboxSecurityTier.Standard,
+                taskId: 1,
+                mountTable);
+            var sandboxResolver = new SandboxPathResolver(sandboxScope);
+
+            var handler = new AcpHostRpcHandler(
+                new Mock<IExecutionEnvironmentProvider>().Object,
+                new EditorConfigService(),
+                new EditorConfigFileApplier(),
+                pathResolverMock.Object,
+                new Mock<NightCodeForge.Agents.Memory.IAgentMemoryWriteNotifier>().Object,
+                NullLogger<AcpHostRpcHandler>.Instance);
+
+            var ctx = new AcpHostRpcContext(
+                "s-attach",
+                new AgentSessionContext
+                {
+                    ForgeTask = new ForgeTask { Id = 1, Title = "T", Description = "D" },
+                    Profile = new AgentProfile { Name = "p" },
+                    StageId = "s",
+                    Workspace = ws
+                },
+                repoDir,
+                repoDir,
+                sandboxResolver);
+
+            var readRes = await handler.HandleAsync(
+                AcpHostMethods.FsReadTextFile,
+                JsonNode.Parse("{\"path\":\"/workspace/attachments/002-config.json\"}"),
+                ctx,
+                CancellationToken.None);
+
+            Assert.False(readRes.IsError, readRes.ErrorMessage);
+            var content = readRes.Result!.GetType().GetProperty("content")!.GetValue(readRes.Result)?.ToString();
+            Assert.Equal("{\"resolved\":\"from-host\"}", content);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FsReadTextFile_RepoCommittedAttachmentsManifest_DoesNotReadExternalHostTarget()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var repoDir = Path.Combine(tempRoot, "clone");
+            var repoAttachDir = Path.Combine(repoDir, "attachments");
+            var workspaceAttachDir = Path.Combine(tempRoot, "trusted-attachments");
+            var externalSecret = Path.Combine(tempRoot, "external-secret.txt");
+            Directory.CreateDirectory(repoAttachDir);
+            Directory.CreateDirectory(workspaceAttachDir);
+
+            await File.WriteAllTextAsync(externalSecret, "TOP_SECRET_HOST_DATA");
+            await File.WriteAllTextAsync(Path.Combine(repoAttachDir, "001-secret.txt"), "repo-local-content");
+
+            var maliciousManifestJson = System.Text.Json.JsonSerializer.Serialize(new AttachmentManifest
+            {
+                WorkspaceId = 9,
+                Attachments =
+                [
+                    new AttachmentManifestEntry
+                    {
+                        Id = 1,
+                        WorkspaceId = 9,
+                        Title = "secret.txt",
+                        Slug = "secret",
+                        RelativePath = "001-secret.txt",
+                        MarkdownPath = "001-secret.txt",
+                        ContentKind = TaskAttachmentContentKind.PlainText,
+                        MediaType = "text/plain",
+                        SourceKind = TaskAttachmentSourceKind.HostPath,
+                        SourceRef = externalSecret,
+                        IsSymlink = true,
+                        TargetPath = externalSecret,
+                        Sha256 = new string('a', 64),
+                        SizeBytes = 20
+                    }
+                ]
+            });
+            await File.WriteAllTextAsync(Path.Combine(repoAttachDir, AttachmentConstants.ManifestFileName), maliciousManifestJson);
+
+            var pathResolverMock = new Mock<IWorkspacePathResolver>();
+            pathResolverMock.Setup(r => r.GetAttachmentsPath(9)).Returns(workspaceAttachDir);
+            pathResolverMock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+            pathResolverMock.Setup(r => r.ResolveCruciblePath(9, It.IsAny<string>(), It.IsAny<int?>()))
+                .Returns<int, string, int?>((_, rel, _) =>
+                {
+                    var norm = rel.Replace('\\', '/').Trim();
+                    if (norm.StartsWith("/workspace/attachments/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Path.Combine(repoAttachDir, norm["/workspace/attachments/".Length..]);
+                    }
+                    return repoDir;
+                });
+
+            var ws = new Workspace { Id = 9, RepositoryPath = repoDir, ExecutionMode = ExecutionMode.BareHost };
+            var handler = new AcpHostRpcHandler(
+                new Mock<IExecutionEnvironmentProvider>().Object,
+                new EditorConfigService(),
+                new EditorConfigFileApplier(),
+                pathResolverMock.Object,
+                new Mock<NightCodeForge.Agents.Memory.IAgentMemoryWriteNotifier>().Object,
+                NullLogger<AcpHostRpcHandler>.Instance);
+
+            var ctx = new AcpHostRpcContext(
+                "s-malicious-manifest",
+                new AgentSessionContext
+                {
+                    ForgeTask = new ForgeTask { Id = 1, Title = "T", Description = "D" },
+                    Profile = new AgentProfile { Name = "p" },
+                    StageId = "s",
+                    Workspace = ws
+                },
+                repoDir,
+                repoDir,
+                SandboxPathResolver: null);
+
+            var readRes = await handler.HandleAsync(
+                AcpHostMethods.FsReadTextFile,
+                JsonNode.Parse("{\"path\":\"/workspace/attachments/001-secret.txt\"}"),
+                ctx,
+                CancellationToken.None);
+
+            Assert.False(readRes.IsError, readRes.ErrorMessage);
+            var content = readRes.Result!.GetType().GetProperty("content")!.GetValue(readRes.Result)?.ToString();
+            Assert.Equal("repo-local-content", content);
+            Assert.NotEqual("TOP_SECRET_HOST_DATA", content);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FsReadTextFile_SymlinkedAttachmentWithMissingHostTarget_ReturnsError()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var repoDir = Path.Combine(tempRoot, "clone");
+            var attachDir = Path.Combine(tempRoot, "attachments");
+            var missingHostTarget = Path.Combine(tempRoot, "missing-host-config.json");
+            Directory.CreateDirectory(repoDir);
+            Directory.CreateDirectory(attachDir);
+
+            await File.WriteAllTextAsync(Path.Combine(attachDir, "002-config.json"), "placeholder-symlink-entry");
+
+            var manifestJson = System.Text.Json.JsonSerializer.Serialize(new AttachmentManifest
+            {
+                WorkspaceId = 9,
+                Attachments =
+                [
+                    new AttachmentManifestEntry
+                    {
+                        Id = 2,
+                        WorkspaceId = 9,
+                        Title = "config.json",
+                        Slug = "config",
+                        RelativePath = "002-config.json",
+                        MarkdownPath = "002-config.json",
+                        ContentKind = TaskAttachmentContentKind.PlainText,
+                        MediaType = "application/json",
+                        SourceKind = TaskAttachmentSourceKind.HostPath,
+                        SourceRef = missingHostTarget,
+                        IsSymlink = true,
+                        TargetPath = missingHostTarget,
+                        Sha256 = new string('e', 64),
+                        SizeBytes = 26
+                    }
+                ]
+            });
+            await File.WriteAllTextAsync(Path.Combine(attachDir, AttachmentConstants.ManifestFileName), manifestJson);
+
+            var pathResolverMock = new Mock<IWorkspacePathResolver>();
+            pathResolverMock.Setup(r => r.GetAttachmentsPath(9)).Returns(attachDir);
+            pathResolverMock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+
+            var ws = new Workspace { Id = 9, RepositoryPath = repoDir, ExecutionMode = ExecutionMode.ContainerSandbox };
+            var mountTable = SandboxMountTable.ForWorkspace(
+                repoDir,
+                isReadOnly: false,
+                hostAttachmentsDirectory: attachDir);
+            var sandboxScope = SandboxScopeDescriptor.ForWorkspace(
+                ws,
+                SandboxSecurityTier.Standard,
+                taskId: 1,
+                mountTable);
+            var sandboxResolver = new SandboxPathResolver(sandboxScope);
+
+            var handler = new AcpHostRpcHandler(
+                new Mock<IExecutionEnvironmentProvider>().Object,
+                new EditorConfigService(),
+                new EditorConfigFileApplier(),
+                pathResolverMock.Object,
+                new Mock<NightCodeForge.Agents.Memory.IAgentMemoryWriteNotifier>().Object,
+                NullLogger<AcpHostRpcHandler>.Instance);
+
+            var ctx = new AcpHostRpcContext(
+                "s-missing-target",
+                new AgentSessionContext
+                {
+                    ForgeTask = new ForgeTask { Id = 1, Title = "T", Description = "D" },
+                    Profile = new AgentProfile { Name = "p" },
+                    StageId = "s",
+                    Workspace = ws
+                },
+                repoDir,
+                repoDir,
+                sandboxResolver);
+
+            var readRes = await handler.HandleAsync(
+                AcpHostMethods.FsReadTextFile,
+                JsonNode.Parse("{\"path\":\"/workspace/attachments/002-config.json\"}"),
+                ctx,
+                CancellationToken.None);
+
+            Assert.True(readRes.IsError);
+            Assert.Contains("does not exist or is unreadable", readRes.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
 }

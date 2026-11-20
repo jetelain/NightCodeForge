@@ -247,32 +247,42 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         {
             if (isResumedRun)
             {
-                var preResumeVersion = task.Version;
-                var preResumeDescription = task.Description;
-                var preResumeTitle = task.Title;
-                var preResumeDifficulty = task.Difficulty;
-                var preserveActor = AuditActors.GetActorForStage(stage.StageId);
-                var preResumeTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
-                    workspace,
-                    targetSyncPath,
-                    hostRepoPath,
-                    baselineSnapshot: null,
-                    preserveActor,
-                    TaskSyncConstants.PreserveEditsBeforeResumeReason,
-                    currentTaskId: task.Id,
-                    cancellationToken: cancellationToken);
-                var preResumeTask = preResumeTasks?.FirstOrDefault(t => t.Id == task.Id);
-                if (preResumeTask != null)
+                try
                 {
-                    if (preResumeTask.Version > preResumeVersion ||
-                        preResumeTask.Difficulty != preResumeDifficulty ||
-                        !string.Equals(preResumeTask.Description?.Trim(), preResumeDescription?.Trim(), StringComparison.Ordinal) ||
-                        !string.Equals(preResumeTask.Title?.Trim(), preResumeTitle?.Trim(), StringComparison.Ordinal))
+                    var preResumeVersion = task.Version;
+                    var preResumeDescription = task.Description;
+                    var preResumeTitle = task.Title;
+                    var preResumeDifficulty = task.Difficulty;
+                    var preserveActor = AuditActors.GetActorForStage(stage.StageId);
+                    var preResumeTasks = await _markdownSyncService.SyncAllTasksFromDiskAsync(
+                        workspace,
+                        targetSyncPath,
+                        hostRepoPath,
+                        baselineSnapshot: null,
+                        preserveActor,
+                        TaskSyncConstants.PreserveEditsBeforeResumeReason,
+                        currentTaskId: task.Id,
+                        cancellationToken: cancellationToken);
+                    var preResumeTask = preResumeTasks?.FirstOrDefault(t => t.Id == task.Id);
+                    if (preResumeTask != null)
                     {
-                        modifiedDuringPreResumeSync = true;
-                    }
+                        if (preResumeTask.Version > preResumeVersion ||
+                            preResumeTask.Difficulty != preResumeDifficulty ||
+                            !string.Equals(preResumeTask.Description?.Trim(), preResumeDescription?.Trim(), StringComparison.Ordinal) ||
+                            !string.Equals(preResumeTask.Title?.Trim(), preResumeTitle?.Trim(), StringComparison.Ordinal))
+                        {
+                            modifiedDuringPreResumeSync = true;
+                        }
 
-                    CopyTaskMetadata(task, preResumeTask);
+                        CopyTaskMetadata(task, preResumeTask);
+                    }
+                }
+                catch (AttachmentNotFoundException ex)
+                {
+                    _logger.LogWarning(
+                        ex,
+                        "Ignoring missing attachment reference during pre-resume markdown synchronization for task #{TaskId}.",
+                        task.Id);
                 }
             }
 
@@ -303,9 +313,13 @@ public class TaskWorkspacePreparer : ITaskWorkspacePreparer
         {
             throw;
         }
-        catch (AttachmentNotFoundException)
+        catch (AttachmentNotFoundException ex)
         {
-            throw;
+            _logger.LogWarning(
+                ex,
+                "Ignoring missing attachment reference during pre-stage markdown synchronization for task #{TaskId}.",
+                task.Id);
+            return new PreStageMarkdownSyncOutcome(baselineSnapshot, modifiedDuringPreResumeSync);
         }
         catch (Exception ex)
         {

@@ -5,9 +5,11 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Memory;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Execution;
 
@@ -624,6 +626,7 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
     private string ReadWorkspaceFile(string workspacePath, string filePath, int? offset, int? limit, int? workspaceId, int? taskId, ExecutionMode? executionMode, ISandboxPathResolver? sandboxPathResolver = null)
     {
         var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, executionMode, sandboxPathResolver, forWrite: false);
+        resolvedPath = ResolveSymlinkAttachmentReadPathIfApplicable(resolvedPath, workspaceId, sandboxPathResolver);
         if (!File.Exists(resolvedPath))
         {
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
@@ -645,6 +648,82 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         int skip = offset.HasValue && offset.Value > 0 ? offset.Value - 1 : 0;
         int take = limit.HasValue && limit.Value > 0 ? limit.Value : Math.Max(0, lines.Count - skip);
         return string.Join(Environment.NewLine, lines.Skip(skip).Take(take));
+    }
+
+    private string ResolveSymlinkAttachmentReadPathIfApplicable(
+        string resolvedPath,
+        int? workspaceId,
+        ISandboxPathResolver? sandboxPathResolver)
+    {
+        if (!TryGetAttachmentLocation(resolvedPath, workspaceId, sandboxPathResolver, out var attachmentsRoot, out var relativeAttachmentPath))
+        {
+            return resolvedPath;
+        }
+
+        var directHostTarget = AttachmentHostPathResolver.TryResolveManifestSymlinkHostTarget(
+            attachmentsRoot,
+            relativeAttachmentPath,
+            _pathResolver,
+            _logger);
+        if (string.IsNullOrWhiteSpace(directHostTarget))
+        {
+            return resolvedPath;
+        }
+
+        if (!File.Exists(directHostTarget))
+        {
+            throw new AttachmentTargetNotFoundException(
+                directHostTarget,
+                $"Attachment symlink target '{directHostTarget}' does not exist or is unreadable.");
+        }
+
+        return directHostTarget;
+    }
+
+    private bool TryGetAttachmentLocation(
+        string resolvedPath,
+        int? workspaceId,
+        ISandboxPathResolver? sandboxPathResolver,
+        out string attachmentsRoot,
+        out string relativeAttachmentPath)
+    {
+        attachmentsRoot = string.Empty;
+        relativeAttachmentPath = string.Empty;
+
+        var normResolved = NormalizeForSandbox(resolvedPath);
+        if (sandboxPathResolver != null)
+        {
+            var attachEntry = sandboxPathResolver.MountTable?.Entries.FirstOrDefault(e =>
+                string.Equals(e.VirtualMountPath, AttachmentConstants.VirtualAttachmentsMountPath, StringComparison.OrdinalIgnoreCase));
+            if (attachEntry != null && !string.IsNullOrWhiteSpace(attachEntry.HostDirectoryPath))
+            {
+                var normAttachHost = NormalizeForSandbox(attachEntry.HostDirectoryPath);
+                if (!string.IsNullOrEmpty(normAttachHost) &&
+                    normResolved.StartsWith(normAttachHost + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    attachmentsRoot = attachEntry.HostDirectoryPath;
+                    relativeAttachmentPath = normResolved[(normAttachHost.Length + 1)..];
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (workspaceId.HasValue && workspaceId.Value > 0)
+        {
+            var hostAttachDir = AttachmentHostPathResolver.ResolveHostAttachmentsDirectory(workspaceId.Value, _pathResolver);
+            var normHostAttach = NormalizeForSandbox(hostAttachDir);
+            if (!string.IsNullOrEmpty(normHostAttach) &&
+                normResolved.StartsWith(normHostAttach + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                attachmentsRoot = hostAttachDir;
+                relativeAttachmentPath = normResolved[(normHostAttach.Length + 1)..];
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task<(string ResolvedPath, bool Created, AgentMemoryScope MemoryScope, string? ContentSha256)> WriteWorkspaceFileAsync(

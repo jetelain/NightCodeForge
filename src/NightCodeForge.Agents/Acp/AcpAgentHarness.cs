@@ -12,6 +12,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
@@ -781,19 +782,33 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
             var hostPath = ResolveAcpAttachmentHostPath(attachment, virtualPath, context, sandboxPathResolver);
             if (string.IsNullOrWhiteSpace(hostPath) || !File.Exists(hostPath))
             {
-                throw new AttachmentTargetNotFoundException(
+                _logger.LogWarning(
+                    "Skipping missing or unreadable attachment #{AttachmentId} ('{AttachmentTitle}') at '{TargetPath}' while building ACP prompt.",
                     attachment.Id,
-                    !string.IsNullOrWhiteSpace(attachment.SourceRef) ? attachment.SourceRef : virtualPath,
-                    $"Attachment #{attachment.Id} ('{attachment.Title}') target does not exist or is unreadable.");
+                    attachment.Title,
+                    !string.IsNullOrWhiteSpace(attachment.SourceRef) ? attachment.SourceRef : virtualPath);
+                continue;
             }
 
-            var normalized = await VisionImageNormalizer.LoadAndNormalizeAsync(hostPath, virtualPath, cancellationToken);
-            blocks.Add(new
+            try
             {
-                type = "image",
-                data = Convert.ToBase64String(normalized.Bytes),
-                mimeType = normalized.MediaType
-            });
+                var normalized = await VisionImageNormalizer.LoadAndNormalizeAsync(hostPath, virtualPath, cancellationToken);
+                blocks.Add(new
+                {
+                    type = "image",
+                    data = Convert.ToBase64String(normalized.Bytes),
+                    mimeType = normalized.MediaType
+                });
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AttachmentTargetNotFoundException or AttachmentConversionException)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Skipping unreadable image attachment #{AttachmentId} ('{AttachmentTitle}') at '{TargetPath}' while building ACP prompt.",
+                    attachment.Id,
+                    attachment.Title,
+                    !string.IsNullOrWhiteSpace(attachment.SourceRef) ? attachment.SourceRef : virtualPath);
+            }
         }
 
         return blocks;
@@ -841,14 +856,22 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         AgentSessionContext context,
         SandboxPathResolver? sandboxPathResolver)
     {
+        if (attachment.IsSymlink && !string.IsNullOrWhiteSpace(attachment.SourceRef))
+        {
+            var directTarget = AttachmentHostPathResolver.ResolveHostReadableSourceRef(attachment.SourceRef, PathResolver);
+            return !string.IsNullOrWhiteSpace(directTarget) && File.Exists(directTarget)
+                ? directTarget
+                : null;
+        }
+
         if (sandboxPathResolver != null)
         {
             try
             {
-                var resolved = sandboxPathResolver.ResolveHostPath(virtualPath, forWrite: false);
-                if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+                var sandboxResolved = sandboxPathResolver.ResolveHostPath(virtualPath, forWrite: false);
+                if (!string.IsNullOrWhiteSpace(sandboxResolved) && File.Exists(sandboxResolved))
                 {
-                    return resolved;
+                    return sandboxResolved;
                 }
             }
             catch (UnauthorizedAccessException)
@@ -860,35 +883,10 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         int workspaceId = attachment.WorkspaceId > 0 ? attachment.WorkspaceId : (context.Workspace?.Id ?? 0);
         if (workspaceId > 0)
         {
-            var rawAttachDir = PathResolver.GetAttachmentsPath(workspaceId);
-            var hostAttachDir = !string.IsNullOrWhiteSpace(rawAttachDir) ? PathResolver.ToHostPath(rawAttachDir) : null;
-            var effectiveDir = !string.IsNullOrWhiteSpace(hostAttachDir) ? hostAttachDir : rawAttachDir;
-            if (!string.IsNullOrWhiteSpace(effectiveDir) && !string.IsNullOrWhiteSpace(attachment.RelativePath))
-            {
-                var rel = attachment.RelativePath.Trim();
-                if (!Path.IsPathRooted(rel) && !rel.StartsWith('/') && !rel.StartsWith('\\'))
-                {
-                    var candidate = Path.GetFullPath(Path.Combine(effectiveDir, rel.Replace('/', Path.DirectorySeparatorChar)));
-                    if (SandboxPathResolver.IsPathInsideDirectory(candidate, effectiveDir) && File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-            }
-        }
-
-        if (attachment.IsSymlink && !string.IsNullOrWhiteSpace(attachment.SourceRef))
-        {
-            if (File.Exists(attachment.SourceRef))
-            {
-                return attachment.SourceRef;
-            }
-
-            var mapped = PathResolver.ToHostPath(attachment.SourceRef);
-            if (!string.IsNullOrWhiteSpace(mapped) && File.Exists(mapped))
-            {
-                return mapped;
-            }
+            var hostDir = AttachmentHostPathResolver.ResolveHostAttachmentsDirectory(workspaceId, PathResolver);
+            return AttachmentHostPathResolver
+                .EnumerateReadableAttachmentPaths(attachment, hostDir, PathResolver, readPrimaryFile: true)
+                .FirstOrDefault();
         }
 
         return null;
