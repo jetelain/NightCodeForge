@@ -46,6 +46,7 @@ public class TaskDetailPageTests : BunitContext
             _markdownSync,
             _orchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance);
 
         Services.AddSingleton<ITaskRepository>(_taskRepository);

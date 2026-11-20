@@ -10,7 +10,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void InitialState_ShouldBeEmpty()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
 
         Assert.Empty(session.Messages);
         Assert.Empty(session.Proposals);
@@ -25,7 +25,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void AddMessage_ShouldAppendAndNotify()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var notified = false;
         session.OnChange += () => notified = true;
 
@@ -40,7 +40,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void AddProposal_And_RemoveProposal_ShouldModifyListAndNotify()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var notifyCount = 0;
         session.OnChange += () => notifyCount++;
 
@@ -63,7 +63,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void Reset_ShouldClearAllBuffersAndNotify()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         session.Messages.Add(new ChatMessage("user", "test"));
         session.Proposals.Add(new IdeationProposalViewModel { Title = "Task 1" });
         session.CurrentThinkingBuffer = "thinking...";
@@ -216,7 +216,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void SelectedRoutingTarget_DefaultsToAuto_AndCanBeConfiguredAndReset()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         Assert.Equal(OllamaRoutingTarget.Auto, session.SelectedRoutingTarget);
         Assert.Null(session.SelectedModelOverride);
 
@@ -278,7 +278,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void SyncProposalsWithWorkspaceTasks_UpdatesEditedDraft_MarksPromotedAsAdded_AndRemovesCancelledDraft()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var p1 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 1", "Desc 1", 3, TaskId: 101));
         var p2 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 2", "Desc 2", 3, TaskId: 102, DependsOnIds: [101]));
         var p3 = IdeationProposalViewModel.FromProposal(new IdeationProposal("Draft 3", "Desc 3", 3, TaskId: 103, DependsOnIds: [102]));
@@ -331,7 +331,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void RemoveProposal_UnlinksDismissedTaskIdAndTitleFromRemainingProposals()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var first = IdeationProposalViewModel.FromProposal(new IdeationProposal("Base Task", "Base", 2, TaskId: 101));
         var second = IdeationProposalViewModel.FromProposal(new IdeationProposal("Dependent Task", "Dep", 3, DependsOnTitles: ["Base Task"], TaskId: 102, DependsOnIds: [101]));
         session.AddProposal(first);
@@ -379,7 +379,7 @@ public class IdeationSessionStateTests
             Dependencies = null!
         };
 
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         session.Proposals.AddRange([draftEmptyDeps, draftNullDeps]);
         session.SyncProposalsWithWorkspaceTasks([prereq, updatedEmpty, updatedNull]);
 
@@ -401,7 +401,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void SyncProposalsWithWorkspaceTasks_ReversingDependencyBetweenTwoDrafts_DoesNotRestoreOldDependency()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var taskAVm = IdeationProposalViewModel.FromProposal(
             new IdeationProposal("Task A", "First", 2, TaskId: 101));
         var taskBVm = IdeationProposalViewModel.FromProposal(
@@ -483,7 +483,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void SyncProposalsWithWorkspaceTasks_UpdatesFieldsInPlace_AndFiresOnChangeWithoutRemovals()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var vm = IdeationProposalViewModel.FromProposal(new IdeationProposal("Original Title", "Original Desc", 3, TaskId: 301));
         session.Proposals.Add(vm);
 
@@ -518,7 +518,7 @@ public class IdeationSessionStateTests
     [InlineData(TaskOverallStatus.Rejected)]
     public void ReconcileProposedTasks_DoesNotResurrectCancelledOrRejectedTasks_AndSyncsRemaining(TaskOverallStatus terminalStatus)
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var activeProposal = new IdeationProposal("Active Draft", "Initial", 3, TaskId: 401);
         var cancelledProposal = new IdeationProposal("Cancelled Draft", "Removed", 2, TaskId: 402);
 
@@ -559,7 +559,7 @@ public class IdeationSessionStateTests
     [InlineData(TaskOverallStatus.Rejected)]
     public void SyncProposalsWithWorkspaceTasks_RemovesPromotedIsAddedProposals_WhenCancelledOrRejected(TaskOverallStatus terminalStatus)
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var promotedProposal = IdeationProposalViewModel.FromProposal(
             new IdeationProposal("Promoted Task", "Scope", 2, TaskId: 451));
         promotedProposal.IsAdded = true;
@@ -583,7 +583,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void SyncProposalsWithWorkspaceTasks_WithRemoveMissing_RemovesDeletedPromotedProposal()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var promotedProposal = IdeationProposalViewModel.FromProposal(
             new IdeationProposal("Deleted Promoted", "Scope", 2, TaskId: 461));
         promotedProposal.IsAdded = true;
@@ -597,7 +597,7 @@ public class IdeationSessionStateTests
     [Fact]
     public void ReconcileProposedTasks_WithRemoveMissing_DoesNotResurrectDeletedPersistedProposal_WhileKeepingUnpersisted()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var deletedPersisted = new IdeationProposal("Dismissed Draft", "Deleted from DB", 2, TaskId: 501);
         var unpersisted = new IdeationProposal("Markdown Only Proposal", "Not in DB yet", 3, TaskId: null);
         var keptDraft = new IdeationProposal("Kept Draft", "Still in DB", 1, TaskId: 502);

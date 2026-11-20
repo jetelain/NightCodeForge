@@ -38,6 +38,8 @@ public static class TestServices
         services.TryAddSingleton<IWorkspaceRepository>(new InMemoryWorkspaceRepository());
         services.TryAddSingleton<IWorkflowRepository>(new InMemoryWorkflowRepository());
         services.TryAddSingleton<ITaskRepository>(new InMemoryTaskRepository());
+        services.TryAddSingleton<IIdeationConversationCoordinator>(sp =>
+            new MockIdeationConversationCoordinator(sp.GetRequiredService<ITaskRepository>()));
         services.TryAddSingleton<ITaskAttachmentRepository>(sp =>
             new InMemoryTaskAttachmentRepository(sp.GetRequiredService<ITaskRepository>()));
         services.TryAddSingleton<ITaskMarkdownSyncService>(new MockTaskMarkdownSyncService());
@@ -71,8 +73,24 @@ public static class TestServices
             sp.GetRequiredService<ITaskRepository>(),
             sp.GetRequiredService<IWorkspaceRepository>(),
             sp.GetRequiredService<IWorkspacePathResolver>(),
+            sp.GetRequiredService<IIdeationConversationCoordinator>(),
             NullLogger<AttachmentUiService>.Instance));
         services.TryAddSingleton<ICompanionTriageDraftStore>(_ => new CompanionTriageDraftStore(TimeProvider.System));
+        services.TryAddSingleton<IdeationRefinementService>(sp => new IdeationRefinementService(sp.GetRequiredService<ITaskRepository>()));
+        services.TryAddSingleton<IIdeationProposalService>(sp => new IdeationProposalService(
+            sp.GetRequiredService<ITaskRepository>(),
+            sp.GetRequiredService<IWorkflowRepository>(),
+            sp.GetRequiredService<ITaskAttachmentRepository>(),
+            sp.GetRequiredService<ITaskMarkdownSyncService>(),
+            sp.GetRequiredService<IIdeationConversationCoordinator>(),
+            NullLogger<IdeationProposalService>.Instance));
+        services.TryAddSingleton<IdeationSessionState>(sp => new IdeationSessionState(
+            sp.GetRequiredService<IIdeationConversationCoordinator>(),
+            sp.GetRequiredService<IIdeationProposalService>(),
+            sp.GetRequiredService<IdeationRefinementService>(),
+            sp.GetRequiredService<ICompanionTriageDraftStore>(),
+            sp.GetRequiredService<IAttachmentUiService>(),
+            NullLogger<IdeationSessionState>.Instance));
         services.TryAddSingleton<IAcpHarnessCatalogService>(_ =>
         {
             var mock = new Mock<IAcpHarnessCatalogService>();
@@ -115,5 +133,46 @@ public static class TestServices
             sp.GetRequiredService<ITaskAttachmentRepository>(),
             sp.GetRequiredService<IOptions<SecurityOptions>>(),
             NullLogger<TaskCreationUiService>.Instance));
+    }
+
+    public static IdeationSessionState CreateIdeationSessionState(
+        IIdeationConversationCoordinator? coordinator = null,
+        ITaskRepository? taskRepository = null,
+        IWorkflowRepository? workflowRepository = null,
+        ITaskAttachmentRepository? attachmentRepository = null,
+        ITaskMarkdownSyncService? markdownSync = null,
+        ICompanionTriageDraftStore? companionDraftStore = null,
+        IAttachmentUiService? attachmentUiService = null)
+    {
+        var tasks = taskRepository ?? new InMemoryTaskRepository();
+        var effectiveCoordinator = coordinator ?? new MockIdeationConversationCoordinator(tasks);
+        var workflows = workflowRepository ?? new InMemoryWorkflowRepository();
+        var attachments = attachmentRepository ?? new InMemoryTaskAttachmentRepository(tasks);
+        var proposalService = new IdeationProposalService(
+            tasks,
+            workflows,
+            attachments,
+            markdownSync ?? new MockTaskMarkdownSyncService(),
+            effectiveCoordinator,
+            NullLogger<IdeationProposalService>.Instance);
+
+        var effectiveAttachmentUi = attachmentUiService;
+        if (effectiveAttachmentUi == null)
+        {
+            var mock = new Mock<IAttachmentUiService>();
+            mock.Setup(a => a.LoadWorkspaceAttachmentsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(Array.Empty<TaskAttachment>());
+            mock.Setup(a => a.ExtractMessageCitations(It.IsAny<string?>()))
+                .Returns<string?>(text => AttachmentPresentationHelper.ExtractMessageCitations(text));
+            effectiveAttachmentUi = mock.Object;
+        }
+
+        return new IdeationSessionState(
+            effectiveCoordinator,
+            proposalService,
+            new IdeationRefinementService(tasks),
+            companionDraftStore ?? new CompanionTriageDraftStore(TimeProvider.System),
+            effectiveAttachmentUi,
+            NullLogger<IdeationSessionState>.Instance);
     }
 }

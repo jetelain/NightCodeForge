@@ -17,7 +17,8 @@ public class IdeationRefinementTests : BunitContext
 {
     private readonly WorkspaceStateService _workspaceState = new();
     private readonly InMemoryTaskRepository _taskRepository = new();
-    private readonly IdeationSessionState _session = new();
+    private readonly MockIdeationConversationCoordinator _coordinator;
+    private readonly IdeationSessionState _session;
     private readonly CompanionTriageDraftStore _companionDraftStore = new(TimeProvider.System);
 
     public IdeationRefinementTests()
@@ -25,13 +26,18 @@ public class IdeationRefinementTests : BunitContext
         JSInterop.Mode = JSRuntimeMode.Loose;
         var workspaceRepository = new InMemoryWorkspaceRepository();
         workspaceRepository.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
+        _coordinator = new MockIdeationConversationCoordinator(_taskRepository);
+        _session = TestServices.CreateIdeationSessionState(
+            coordinator: _coordinator,
+            taskRepository: _taskRepository,
+            companionDraftStore: _companionDraftStore);
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(new InMemoryWorkflowRepository());
         Services.AddSingleton<IWorkspaceRepository>(workspaceRepository);
         Services.AddSingleton<ITaskMarkdownSyncService>(new MockTaskMarkdownSyncService());
-        Services.AddSingleton<IIdeationService>(new MockIdeationService());
+        Services.AddSingleton<IIdeationConversationCoordinator>(_coordinator);
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton(_session);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
@@ -192,7 +198,7 @@ public class IdeationRefinementTests : BunitContext
     [Fact]
     public async Task IdeationPage_WithDraftIdQuery_StartsConversationAndPreSeedsReportPrompt()
     {
-        var ideationService = (MockIdeationService)Services.GetRequiredService<IIdeationService>();
+        var coordinator = (MockIdeationConversationCoordinator)Services.GetRequiredService<IIdeationConversationCoordinator>();
         var draft = _companionDraftStore.CreateDraft(
             workspaceId: 1,
             title: "Assay Exploratory Report — Checkout Crash",
@@ -221,7 +227,7 @@ public class IdeationRefinementTests : BunitContext
         Assert.Equal("Assay Exploratory Report — Checkout Crash", onlyConversation.Title);
         Assert.False(_session.IsGenerating);
         Assert.Empty(_session.Messages);
-        Assert.Null(ideationService.LastConversationId);
+        Assert.Null(coordinator.LastConversationId);
     }
 
     [Fact]

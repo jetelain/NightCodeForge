@@ -76,6 +76,7 @@ public class AttachmentUiService : IAttachmentUiService
     private readonly ITaskRepository _taskRepository;
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IIdeationConversationCoordinator _ideationCoordinator;
     private readonly ILogger<AttachmentUiService> _logger;
 
     public AttachmentUiService(
@@ -84,6 +85,7 @@ public class AttachmentUiService : IAttachmentUiService
         ITaskRepository taskRepository,
         IWorkspaceRepository workspaceRepository,
         IWorkspacePathResolver pathResolver,
+        IIdeationConversationCoordinator ideationCoordinator,
         ILogger<AttachmentUiService> logger)
     {
         _intakeService = intakeService ?? throw new ArgumentNullException(nameof(intakeService));
@@ -91,6 +93,7 @@ public class AttachmentUiService : IAttachmentUiService
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _ideationCoordinator = ideationCoordinator ?? throw new ArgumentNullException(nameof(ideationCoordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -234,24 +237,36 @@ public class AttachmentUiService : IAttachmentUiService
             .ToList();
     }
 
-    public Task<TaskAttachment> UploadFileAsync(
+    public async Task<TaskAttachment> UploadFileAsync(
         int workspaceId,
         string fileName,
         Stream content,
-        CancellationToken cancellationToken = default) =>
-        _intakeService.IngestFileDropAsync(workspaceId, fileName, content, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        var attachment = await _intakeService.IngestFileDropAsync(workspaceId, fileName, content, cancellationToken);
+        _ideationCoordinator.MarkWorkspaceContextDirty(workspaceId);
+        return attachment;
+    }
 
-    public Task<TaskAttachment> AttachHostFileAsync(
+    public async Task<TaskAttachment> AttachHostFileAsync(
         int workspaceId,
         string hostPath,
-        CancellationToken cancellationToken = default) =>
-        _intakeService.IngestHostPathAsync(workspaceId, hostPath, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        var attachment = await _intakeService.IngestHostPathAsync(workspaceId, hostPath, cancellationToken);
+        _ideationCoordinator.MarkWorkspaceContextDirty(workspaceId);
+        return attachment;
+    }
 
-    public Task<TaskAttachment> CaptureUrlAsync(
+    public async Task<TaskAttachment> CaptureUrlAsync(
         int workspaceId,
         string url,
-        CancellationToken cancellationToken = default) =>
-        _intakeService.CaptureUrlAsync(workspaceId, url, cancellationToken: cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        var attachment = await _intakeService.CaptureUrlAsync(workspaceId, url, cancellationToken: cancellationToken);
+        _ideationCoordinator.MarkWorkspaceContextDirty(workspaceId);
+        return attachment;
+    }
 
     public MessageCitationExtraction ExtractMessageCitations(string? message) =>
         AttachmentPresentationHelper.ExtractMessageCitations(message, _intakeService);
@@ -340,6 +355,11 @@ public class AttachmentUiService : IAttachmentUiService
                 AttachmentPresentationHelper.UpsertChip(chips, chip);
                 onChipChanged?.Invoke(chip);
             }
+        }
+
+        if (chips.Count > 0)
+        {
+            _ideationCoordinator.MarkWorkspaceContextDirty(workspaceId);
         }
 
         return chips;
@@ -434,12 +454,18 @@ public class AttachmentUiService : IAttachmentUiService
         int attachmentId,
         CancellationToken cancellationToken = default)
     {
+        var existing = await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken);
         await _intakeService.DeleteAttachmentAsync(attachmentId, cancellationToken);
 
         // If a test mocked IAttachmentIntakeService without backing the shared repository, ensure DB/repo link cleanup too.
         if (await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken) != null)
         {
             await _attachmentRepository.DeleteAsync(attachmentId, cancellationToken);
+        }
+
+        if (existing is { WorkspaceId: > 0 })
+        {
+            _ideationCoordinator.MarkWorkspaceContextDirty(existing.WorkspaceId);
         }
     }
 

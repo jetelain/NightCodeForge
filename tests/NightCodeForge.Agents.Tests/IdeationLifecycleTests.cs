@@ -91,25 +91,17 @@ public class IdeationLifecycleTests
                 new ChatResponseUpdate(ChatRole.Assistant, "I have analyzed your workspace.")
             }.ToAsyncEnumerable());
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             GatewayService = mockGateway.Object,
             TaskRepository = taskRepo,
             BaseChatClient = chatClientMock.Object
-        }.Build();
+        };
+        await builder.SeedWorkspaceAsync(ws);
+        var coordinator = builder.Build();
 
-        IdeationResult? finalResult = null;
-        await foreach (var update in service.ConverseStreamingAsync(
-            workspace: ws,
-            userPrompt: "Explore architecture",
-            conversationId: conv.Id,
-            cancellationToken: CancellationToken.None))
-        {
-            if (update.Kind == IdeationStreamUpdateKind.Completed)
-            {
-                finalResult = update.FinalResult;
-            }
-        }
+        var finalResult = await coordinator.SendMessageAsync(
+            new IdeationSendRequest(ws.Id, conv.Id, "Explore architecture"));
 
         // Verify result contains delta
         Assert.NotNull(finalResult);
@@ -140,10 +132,11 @@ public class IdeationLifecycleTests
         mockGateway.Setup(g => g.ReleaseSessionAffinityAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             GatewayService = mockGateway.Object
-        }.Build();
+        };
+        var service = builder.Build();
 
         var released = await service.ReleaseConversationSessionAsync(workspaceId: 8, conversationId: 99);
 
@@ -201,22 +194,20 @@ public class IdeationLifecycleTests
             .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
             .Returns(CancellableStream());
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             GatewayService = mockGateway.Object,
             TaskRepository = taskRepo,
             BaseChatClient = chatClientMock.Object
-        }.Build();
+        };
+        await builder.SeedWorkspaceAsync(ws);
+        var coordinator = builder.Build();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in service.ConverseStreamingAsync(
-                workspace: ws,
-                userPrompt: "Start exploration",
-                conversationId: conv.Id,
-                cancellationToken: cts.Token))
-            {
-            }
+            await coordinator.SendMessageAsync(
+                new IdeationSendRequest(ws.Id, conv.Id, "Start exploration"),
+                cts.Token);
         });
 
         var updatedConv = await taskRepo.GetConversationWithTurnsAsync(conv.Id);
@@ -261,25 +252,17 @@ public class IdeationLifecycleTests
             .Setup(c => c.GetStreamingResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions>(), It.IsAny<CancellationToken>()))
             .Returns(new[] { responseUpdate }.ToAsyncEnumerable());
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             GatewayService = mockGateway.Object,
             TaskRepository = taskRepo,
             BaseChatClient = chatClientMock.Object
-        }.Build();
+        };
+        await builder.SeedWorkspaceAsync(ws);
+        var coordinator = builder.Build();
 
-        IdeationResult? finalResult = null;
-        await foreach (var update in service.ConverseStreamingAsync(
-            workspace: ws,
-            userPrompt: "Test non-router token fallback",
-            conversationId: conv.Id,
-            cancellationToken: CancellationToken.None))
-        {
-            if (update.Kind == IdeationStreamUpdateKind.Completed)
-            {
-                finalResult = update.FinalResult;
-            }
-        }
+        var finalResult = await coordinator.SendMessageAsync(
+            new IdeationSendRequest(ws.Id, conv.Id, "Test non-router token fallback"));
 
         Assert.NotNull(finalResult);
         Assert.NotNull(finalResult.UsageDelta);

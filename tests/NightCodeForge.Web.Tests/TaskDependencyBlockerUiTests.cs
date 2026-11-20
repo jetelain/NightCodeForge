@@ -59,6 +59,7 @@ public class TaskDependencyBlockerUiTests : BunitContext
             _markdownSync,
             _orchestrator,
             telemetryMock.Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance));
 
         var reviewService = new TaskReviewService(
@@ -210,6 +211,7 @@ public class TaskDependencyBlockerUiTests : BunitContext
             _markdownSync,
             orchestratorMock.Object,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance);
 
         await svc.UpdateDependenciesAsync(task, new[] { prereq.Id });

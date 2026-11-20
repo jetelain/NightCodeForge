@@ -88,6 +88,7 @@ public class Step125BDifficultyUiTests : BunitContext
             syncMock,
             orchestrator,
             telemetryMock.Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance);
 
         var ws = await workspaceRepo.CreateAsync(new Workspace { Name = "MutWS", RepositoryPath = "/mut" });

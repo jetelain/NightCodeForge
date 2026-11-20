@@ -45,6 +45,7 @@ public class DependencyLinkingModalTests : BunitContext
             _markdownSync,
             mockOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
     }
 

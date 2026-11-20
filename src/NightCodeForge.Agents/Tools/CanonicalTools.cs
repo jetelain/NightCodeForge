@@ -78,7 +78,7 @@ public partial class CanonicalTools
         set => FileModule.TaskMarkdownValidator = value;
     }
 
-    public IWebSearchService WebSearchService => ResearchAndSkillsModule.WebSearchService;
+    public IWebSearchService? WebSearchService => ResearchAndSkillsModule.WebSearchService;
     public bool IsWebSearchConfigured => ResearchAndSkillsModule.IsWebSearchConfigured;
     public bool IsWebSearchEnabled => ResearchAndSkillsModule.IsWebSearchEnabled;
     public IWorkspaceSkillsService SkillsService => ResearchAndSkillsModule.SkillsService;

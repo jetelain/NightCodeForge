@@ -17,7 +17,7 @@ public class IdeationPageAskToolTests : BunitContext
     private readonly WorkspaceStateService _workspaceState;
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly MockTaskMarkdownSyncService _markdownSync;
-    private readonly MockIdeationService _ideationService;
+    private readonly MockIdeationConversationCoordinator _coordinator;
     private readonly ToastService _toastService;
     private readonly IdeationSessionState _sessionState;
     private readonly InMemoryWorkflowRepository _workflowRepository;
@@ -32,16 +32,20 @@ public class IdeationPageAskToolTests : BunitContext
         _workspaceRepository = new InMemoryWorkspaceRepository();
         _workspaceRepository.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         _markdownSync = new MockTaskMarkdownSyncService();
-        _ideationService = new MockIdeationService();
+        _coordinator = new MockIdeationConversationCoordinator(_taskRepository);
         _toastService = TestServices.CreateToastService();
-        _sessionState = new IdeationSessionState();
+        _sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: _coordinator,
+            taskRepository: _taskRepository,
+            workflowRepository: _workflowRepository,
+            markdownSync: _markdownSync);
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton<IWorkspaceRepository>(_workspaceRepository);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
-        Services.AddSingleton<IIdeationService>(_ideationService);
+        Services.AddSingleton<IIdeationConversationCoordinator>(_coordinator);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_sessionState);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
@@ -61,7 +65,7 @@ public class IdeationPageAskToolTests : BunitContext
             "Needed for API security design",
             new[] { "JWT Bearer", "Cookie Authentication" });
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Deciding on auth..."),
             new(IdeationStreamUpdateKind.QuestionAsked, Question: question, Questions: new[] { question })
@@ -133,7 +137,7 @@ public class IdeationPageAskToolTests : BunitContext
         var q2 = new IdeationQuestion("Select caching layer:", null, new[] { "Redis", "MemoryCache" });
         var batch = new[] { q1, q2 };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.QuestionAsked, Question: q1, Questions: batch)
         };
@@ -319,7 +323,7 @@ public class IdeationPageAskToolTests : BunitContext
         var q2 = new IdeationQuestion("Select cache:", null, new[] { "Redis", "Memcached" });
         var batch = new[] { q1, q2 };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.QuestionAsked, Question: q1, Questions: batch)
         };
@@ -367,7 +371,7 @@ public class IdeationPageAskToolTests : BunitContext
         var tc1 = new IdeationToolCallInfo("call-1", CanonicalToolNames.Ask, "{\"questions\":[{\"prompt\":\"Database?\"}]}", "Postgres");
         var tc2 = new IdeationToolCallInfo("call-2", CanonicalToolNames.Ask, "{\"questions\":[{\"prompt\":\"Cache?\"}]}", "Redis");
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: tc1),
             new(IdeationStreamUpdateKind.QuestionAsked, Question: q1, Questions: new[] { q1 }),

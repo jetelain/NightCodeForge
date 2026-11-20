@@ -21,7 +21,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `CrucibleAgentHarness`, `Dispatcher`, `IdeationService`, `TriageService`.
+- **Inbound (Who uses this):** `CrucibleAgentHarness`, `Dispatcher`, `IdeationConversationCoordinator`, `TriageService`.
 - **Outbound (What this relies on):** `NightCodeForge.Core.Execution.IExecutionEnvironment`, `NightCodeForge.Core.Workflow.HumanInterruptionException`.
 
 ## 4. Invariants & Architectural Rules

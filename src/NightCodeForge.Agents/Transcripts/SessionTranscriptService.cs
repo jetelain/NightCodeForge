@@ -37,7 +37,8 @@ public record TranscriptMetadata(
     string? MafConfiguration = null,
     IReadOnlyList<ModelCallSnapshot>? ModelCalls = null,
     int AttemptIndex = 1,
-    TranscriptCompactionMetadata? Compaction = null);
+    TranscriptCompactionMetadata? Compaction = null,
+    int? ConversationId = null);
 
 /// <summary>
 /// Saves turn-by-turn markdown execution logs embedding active optimization flags in YAML frontmatter,
@@ -78,8 +79,11 @@ public class SessionTranscriptService : ISessionTranscriptService
 
         var dateStr = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var statusStr = metadata.Status.ToString().ToLowerInvariant();
+        var convSuffix = metadata.ConversationId is > 0 && string.Equals(metadata.StageId, StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase)
+            ? $"-conv-{metadata.ConversationId.Value}"
+            : "";
         var runSuffix = metadata.AttemptIndex > 1 ? $"-run{metadata.AttemptIndex}" : "";
-        var fileName = $"{dateStr}-task-{metadata.TaskId}-{metadata.StageId}{runSuffix}-{statusStr}.md";
+        var fileName = $"{dateStr}-task-{metadata.TaskId}-{metadata.StageId}{convSuffix}{runSuffix}-{statusStr}.md";
         var filePath = Path.Combine(targetDir, fileName);
 
         var sb = new StringBuilder();
@@ -87,6 +91,10 @@ public class SessionTranscriptService : ISessionTranscriptService
         // YAML Frontmatter
         sb.AppendLine("---");
         sb.AppendLine(CultureInfo.InvariantCulture, $"task_id: {metadata.TaskId}");
+        if (metadata.ConversationId is > 0)
+        {
+            sb.AppendLine(CultureInfo.InvariantCulture, $"conversation_id: {metadata.ConversationId.Value}");
+        }
         sb.AppendLine(CultureInfo.InvariantCulture, $"stage_id: {metadata.StageId}");
         sb.AppendLine($"agent_profile: {metadata.AgentProfile}");
         sb.AppendLine($"model: {metadata.ModelName}");

@@ -173,7 +173,7 @@ public class IdeationPresentationHelperTests
     [Fact]
     public void IdeationSessionState_CancelPendingQuestions_CancelsAllInBatch()
     {
-        var session = new IdeationSessionState();
+        var session = TestServices.CreateIdeationSessionState();
         var q1 = new IdeationQuestion("Q1?", null, null);
         var q2 = new IdeationQuestion("Q2?", null, null);
         session.PendingQuestions.AddRange(new[] { q1, q2 });

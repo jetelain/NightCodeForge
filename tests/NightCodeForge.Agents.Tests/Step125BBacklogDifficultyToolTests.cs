@@ -182,17 +182,18 @@ public class Step125BBacklogDifficultyToolTests : IDisposable
         ```
         """;
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = new StaticJsonChatClient(ideationJson),
             PathResolver = TestPathResolver.Create()
-        }.Build();
+        };
+        var coordinator = builder.Build();
 
         var ws = await _workspaceRepository.GetByIdAsync(WorkspaceId);
         var ideationProfile = AgentProfile.CreateDefaultIdeationProfile(WorkspaceId);
         ws!.AgentProfiles.Add(ideationProfile);
 
-        var result = await service.ConverseAsync(ws, "Plan auth");
+        var result = await builder.ConverseAsync(coordinator, ws, "Plan auth");
         var proposal = Assert.Single(result.ProposedTasks);
         Assert.Equal("expert", proposal.Difficulty);
     }

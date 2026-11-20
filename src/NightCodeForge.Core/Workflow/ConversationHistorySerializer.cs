@@ -84,8 +84,8 @@ public static class ConversationHistorySerializer
         var orderedTurns = turns.OrderBy(t => t.TurnIndex).ToList();
         var items = new List<SerializedMessageItem>();
         int callCounter = 1;
-        string? lastCallId = null;
         var pendingCallIds = new List<string>();
+        var sawThinkingTurnInExchange = false;
 
         // A tool call without its result (crash between the two) is an invalid history for the model:
         // close every pending call with an explicit "interrupted" result.
@@ -99,6 +99,23 @@ public static class ConversationHistorySerializer
                     Contents: new List<SerializedContent> { new(ContentTypeResult, CallId: pendingId, Result: InterruptedToolResult) }));
             }
             pendingCallIds.Clear();
+        }
+
+        static object? ParseToolArguments(string? rawArguments)
+        {
+            if (string.IsNullOrWhiteSpace(rawArguments))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonSerializer.Deserialize<Dictionary<string, object?>>(rawArguments, JsonOptions);
+            }
+            catch (JsonException)
+            {
+                return rawArguments;
+            }
         }
 
         void AppendTurn(ConversationTurn turn)
@@ -118,43 +135,42 @@ public static class ConversationHistorySerializer
                         {
                             new(ContentTypeText, Text: turn.Content)
                         }));
+                    sawThinkingTurnInExchange = false;
                     break;
 
                 case StageTurnRole.Assistant:
+                    var assistantContents = new List<SerializedContent>();
+                    if (!string.IsNullOrWhiteSpace(turn.ThinkingTrace) && !sawThinkingTurnInExchange)
+                    {
+                        assistantContents.Add(new SerializedContent(ContentTypeReasoning, Text: turn.ThinkingTrace));
+                    }
+                    assistantContents.Add(new SerializedContent(ContentTypeText, Text: turn.Content));
+
                     items.Add(new SerializedMessageItem(
                         Role: RoleAssistant,
                         Text: turn.Content,
-                        Contents: new List<SerializedContent>
-                        {
-                            new(ContentTypeText, Text: turn.Content)
-                        }));
+                        Contents: assistantContents));
+                    sawThinkingTurnInExchange = false;
                     break;
 
                 case StageTurnRole.Thinking:
+                    var thinkingText = turn.ThinkingTrace ?? turn.Content;
                     items.Add(new SerializedMessageItem(
                         Role: RoleAssistant,
                         Contents: new List<SerializedContent>
                         {
-                            new(ContentTypeReasoning, Text: turn.ThinkingTrace ?? turn.Content)
+                            new(ContentTypeReasoning, Text: thinkingText)
                         }));
+                    if (!string.IsNullOrWhiteSpace(thinkingText))
+                    {
+                        sawThinkingTurnInExchange = true;
+                    }
                     break;
 
                 case StageTurnRole.Tool:
                     var callId = ExtractCallId(turn.MetadataJson) ?? $"call-{callCounter++}";
-                    lastCallId = callId;
                     pendingCallIds.Add(callId);
-                    object? parsedArgs = null;
-                    if (!string.IsNullOrWhiteSpace(turn.ToolArguments))
-                    {
-                        try
-                        {
-                            parsedArgs = JsonSerializer.Deserialize<Dictionary<string, object?>>(turn.ToolArguments, JsonOptions);
-                        }
-                        catch
-                        {
-                            parsedArgs = turn.ToolArguments;
-                        }
-                    }
+                    var parsedArgs = ParseToolArguments(turn.ToolArguments);
 
                     items.Add(new SerializedMessageItem(
                         Role: RoleAssistant,
@@ -169,18 +185,66 @@ public static class ConversationHistorySerializer
                     break;
 
                 case StageTurnRole.ToolResult:
-                    var resultCallId = ExtractCallId(turn.MetadataJson) ?? lastCallId ?? $"call-{callCounter++}";
-                    pendingCallIds.Remove(resultCallId);
-                    items.Add(new SerializedMessageItem(
-                        Role: RoleTool,
-                        FunctionResults: new List<SerializedFunctionResult>
+                    var explicitCallId = ExtractCallId(turn.MetadataJson);
+                    string? matchedCallId = null;
+                    if (!string.IsNullOrEmpty(explicitCallId))
+                    {
+                        if (pendingCallIds.Remove(explicitCallId))
                         {
-                            new(resultCallId, turn.ToolResult)
-                        },
-                        Contents: new List<SerializedContent>
-                        {
-                            new(ContentTypeResult, CallId: resultCallId, Result: turn.ToolResult)
-                        }));
+                            matchedCallId = explicitCallId;
+                        }
+                    }
+                    else if (pendingCallIds.Count > 0)
+                    {
+                        matchedCallId = pendingCallIds[0];
+                        pendingCallIds.RemoveAt(0);
+                    }
+
+                    var resultPayload = turn.ToolResult ?? turn.Content;
+                    if (!string.IsNullOrEmpty(matchedCallId))
+                    {
+                        items.Add(new SerializedMessageItem(
+                            Role: RoleTool,
+                            FunctionResults: new List<SerializedFunctionResult>
+                            {
+                                new(matchedCallId, resultPayload)
+                            },
+                            Contents: new List<SerializedContent>
+                            {
+                                new(ContentTypeResult, CallId: matchedCallId, Result: resultPayload)
+                            }));
+                    }
+                    else if (!string.IsNullOrWhiteSpace(turn.ToolName))
+                    {
+                        // Flush any preceding unclosed StageTurnRole.Tool calls so synthesized legacy
+                        // FunctionCall/FunctionResult pairs never interleave with an aborted tool step.
+                        FlushPendingCalls();
+
+                        // Legacy pre-12.31 turn guard: synthesize paired assistant FunctionCallContent so
+                        // LLM backends never reject an orphan role:"tool" message with HTTP 400.
+                        var syntheticCallId = !string.IsNullOrEmpty(explicitCallId) ? explicitCallId : $"call-{callCounter++}";
+                        var legacyArgs = ParseToolArguments(turn.ToolArguments);
+                        items.Add(new SerializedMessageItem(
+                            Role: RoleAssistant,
+                            FunctionCalls: new List<SerializedFunctionCall>
+                            {
+                                new(syntheticCallId, turn.ToolName, legacyArgs)
+                            },
+                            Contents: new List<SerializedContent>
+                            {
+                                new(ContentTypeCall, CallId: syntheticCallId, Name: turn.ToolName, Arguments: legacyArgs)
+                            }));
+                        items.Add(new SerializedMessageItem(
+                            Role: RoleTool,
+                            FunctionResults: new List<SerializedFunctionResult>
+                            {
+                                new(syntheticCallId, resultPayload)
+                            },
+                            Contents: new List<SerializedContent>
+                            {
+                                new(ContentTypeResult, CallId: syntheticCallId, Result: resultPayload)
+                            }));
+                    }
                     break;
 
                 case StageTurnRole.System:
@@ -193,6 +257,7 @@ public static class ConversationHistorySerializer
                         {
                             new(ContentTypeText, Text: turn.Content)
                         }));
+                    sawThinkingTurnInExchange = false;
                     break;
 
                 case StageTurnRole.Optimization:
@@ -710,11 +775,13 @@ public static class ConversationHistorySerializer
     public static string? ExtractCallId(ConversationTurn? turn) => ExtractCallId(turn?.MetadataJson);
 
     /// <summary>
-    /// Identifies any trailing unanswered non-ask tool turns (and any immediately preceding thinking or
+    /// Identifies any trailing unanswered tool turns (and any immediately preceding thinking or
     /// tool-call-accompanying assistant turns belonging to that aborted tool call step) that should be
-    /// removed when a conversation is cleanly paused.
+    /// removed when a conversation is cleanly paused or cancelled.
     /// </summary>
-    public static IReadOnlyList<ConversationTurn> GetTrailingInterruptedTurns(IEnumerable<ConversationTurn> turns)
+    public static IReadOnlyList<ConversationTurn> GetTrailingInterruptedTurns(
+        IEnumerable<ConversationTurn> turns,
+        bool includeUnansweredAsk = false)
     {
         ArgumentNullException.ThrowIfNull(turns);
 
@@ -764,7 +831,7 @@ public static class ConversationHistorySerializer
             while (idx >= 0 && ordered[idx].Role == StageTurnRole.Tool)
             {
                 var turn = ordered[idx];
-                if (string.Equals(turn.ToolName, "ask", StringComparison.OrdinalIgnoreCase))
+                if (!includeUnansweredAsk && string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
                 {
                     answeredToolCount++;
                 }
@@ -810,5 +877,26 @@ public static class ConversationHistorySerializer
         }
 
         return toRemove;
+    }
+
+    /// <summary>
+    /// Returns the trailing <see cref="StageTurnRole.User"/> turn when it matches <paramref name="expectedUserTurnIndex"/>
+    /// and has no subsequent assistant or tool result turns (used to roll back failed ideation turns cleanly).
+    /// </summary>
+    public static IReadOnlyList<ConversationTurn> GetTrailingOrphanUserTurn(
+        IEnumerable<ConversationTurn> turns,
+        int expectedUserTurnIndex)
+    {
+        ArgumentNullException.ThrowIfNull(turns);
+
+        var ordered = turns.OrderBy(t => t.TurnIndex).ToList();
+        if (ordered.Count > 0 &&
+            ordered[^1].Role == StageTurnRole.User &&
+            ordered[^1].TurnIndex == expectedUserTurnIndex)
+        {
+            return [ordered[^1]];
+        }
+
+        return Array.Empty<ConversationTurn>();
     }
 }

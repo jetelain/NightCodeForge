@@ -213,23 +213,17 @@ public class ModelCallTracingTests
         Directory.CreateDirectory(repo);
         try
         {
-            var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+            using var builder = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationCoordinatorBuilder
             {
                 PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
                 BaseChatClient = new EchoClient(),
                 TranscriptService = new SessionTranscriptService(Path.Combine(repo, "t"))
-            }.Build();
+            };
+            var coordinator = builder.Build();
             var workspace = new Workspace { Id = 5, RepositoryPath = repo };
             workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(5));
 
-            IdeationResult? result = null;
-            await foreach (var update in service.ConverseStreamingAsync(workspace, "Hello"))
-            {
-                if (update.Kind == IdeationStreamUpdateKind.Completed)
-                {
-                    result = update.FinalResult;
-                }
-            }
+            var result = await builder.ConverseAsync(coordinator, workspace, "Hello");
 
             Assert.NotNull(result?.FullTranscriptMarkdown);
             var markdown = result.FullTranscriptMarkdown;

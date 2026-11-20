@@ -1442,7 +1442,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         return true;
     }
 
-    private static int? ResolveCompactionCutTurnIndex(
+    internal static int? ResolveCompactionCutTurnIndex(
         IReadOnlyList<ConversationTurn>? ordered,
         string? firstKeptCallId,
         int keptRecentMessageCount)

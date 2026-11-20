@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Ideation;
+using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -8,7 +9,7 @@ namespace NightCodeForge.Agents.Tests;
 
 /// <summary>
 /// Covers the single delivery of the system prompt, the skills catalog and the transcript fidelity
-/// (coalesced deltas, active skills, tool results) of <see cref="IdeationService"/>.
+/// (coalesced deltas, active skills, tool results) of <see cref="IdeationConversationCoordinator"/>.
 /// </summary>
 public class IdeationTranscriptAndSkillsTests
 {
@@ -48,22 +49,17 @@ public class IdeationTranscriptAndSkillsTests
     private static ChatResponseUpdate Text(string text) =>
         new(ChatRole.Assistant, new List<AIContent> { new TextContent(text) });
 
-    private static async Task<IdeationResult> RunAsync(IdeationService service, Workspace workspace, string prompt)
+    private static async Task<IdeationResult> RunAsync(
+        TestIdeationCoordinatorBuilder builder,
+        IdeationConversationCoordinator coordinator,
+        Workspace workspace,
+        string prompt)
     {
         if (!workspace.AgentProfiles.Any(p => p.Id == "ideation"))
         {
             workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(workspace.Id));
         }
-        IdeationResult? result = null;
-        await foreach (var update in service.ConverseStreamingAsync(workspace, prompt))
-        {
-            if (update.Kind == IdeationStreamUpdateKind.Completed)
-            {
-                result = update.FinalResult;
-            }
-        }
-        Assert.NotNull(result);
-        return result;
+        return await builder.ConverseAsync(coordinator, workspace, prompt);
     }
 
     private static string NewTempDir(string prefix)
@@ -85,14 +81,15 @@ public class IdeationTranscriptAndSkillsTests
     public async Task ConverseStreamingAsync_SendsSystemPromptOnce_ThroughInstructionsOnly()
     {
         var client = new ScriptedStreamingClient(Text("Ready."));
-        var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
-            PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
+            PathResolver = TestPathResolver.Create(),
             BaseChatClient = client
-        }.Build();
+        };
+        var coordinator = builder.Build();
         var workspace = new Workspace { Id = 1, RepositoryPath = Directory.GetCurrentDirectory() };
 
-        await RunAsync(service, workspace, "Hello");
+        await RunAsync(builder, coordinator, workspace, "Hello");
 
         Assert.DoesNotContain(client.LastRawMessages, m => m.Role == ChatRole.System);
         Assert.NotNull(client.LastOptions);
@@ -117,15 +114,16 @@ description: Guidelines for unit testing with xUnit
 ");
 
             var client = new ScriptedStreamingClient(Text("Ready."));
-            var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+            using var builder = new TestIdeationCoordinatorBuilder
             {
-                PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
+                PathResolver = TestPathResolver.Create(),
                 BaseChatClient = client,
                 TranscriptService = new SessionTranscriptService(transcripts)
-            }.Build();
+            };
+            var coordinator = builder.Build();
             var workspace = new Workspace { Id = 2, RepositoryPath = repo };
 
-            var result = await RunAsync(service, workspace, "Hello");
+            var result = await RunAsync(builder, coordinator, workspace, "Hello");
 
             Assert.NotNull(client.LastOptions);
             Assert.Contains("<skills>", client.LastOptions.Instructions);
@@ -150,15 +148,16 @@ description: Guidelines for unit testing with xUnit
             var client = new ScriptedStreamingClient(
                 Reasoning("Let me "), Reasoning("think "), Reasoning("about it."),
                 Text("The answer "), Text("is "), Text("42."));
-            var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+            using var builder = new TestIdeationCoordinatorBuilder
             {
-                PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
+                PathResolver = TestPathResolver.Create(),
                 BaseChatClient = client,
                 TranscriptService = new SessionTranscriptService(transcripts)
-            }.Build();
+            };
+            var coordinator = builder.Build();
             var workspace = new Workspace { Id = 3, RepositoryPath = transcripts };
 
-            var result = await RunAsync(service, workspace, "Question");
+            var result = await RunAsync(builder, coordinator, workspace, "Question");
 
             var markdown = result.FullTranscriptMarkdown;
             Assert.NotNull(markdown);
@@ -177,16 +176,17 @@ description: Guidelines for unit testing with xUnit
     public async Task ConverseStreamingAsync_TreatsPlainTextThinkTagsAsAssistantOutput_StructuredReasoningOnly()
     {
         var client = new ScriptedStreamingClient(Text("<think>not reasoning</think>Answer"));
-        var service = new NightCodeForge.Agents.Tests.Fixtures.TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
-            PathResolver = NightCodeForge.Agents.Tests.Fixtures.TestPathResolver.Create(),
+            PathResolver = TestPathResolver.Create(),
             BaseChatClient = client
-        }.Build();
+        };
+        var coordinator = builder.Build();
         var workspace = new Workspace { Id = 4, RepositoryPath = Directory.GetCurrentDirectory() };
         workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(4));
 
         var kinds = new List<IdeationStreamUpdateKind>();
-        await foreach (var update in service.ConverseStreamingAsync(workspace, "Hi"))
+        await foreach (var update in builder.ConverseStreamingAsync(coordinator, workspace, "Hi"))
         {
             kinds.Add(update.Kind);
         }

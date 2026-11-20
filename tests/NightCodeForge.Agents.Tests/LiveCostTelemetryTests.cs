@@ -176,24 +176,22 @@ public class LiveCostTelemetryTests : IDisposable
         mockGateway.Setup(g => g.ReleaseSessionAffinityAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        var ideationService = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = mockChatClient.Object,
             PathResolver = TestPathResolver.Create(),
             ActivityStreamer = mockStreamer.Object,
             GatewayService = mockGateway.Object
-        }.Build();
+        };
+        var coordinator = builder.Build();
 
         var workspace = new Workspace { Id = 1, Name = "Test WS", RepositoryPath = _tempDir };
         workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(1));
 
-        var updates = new List<IdeationStreamUpdate>();
-        await foreach (var update in ideationService.ConverseStreamingAsync(
+        await builder.ConverseAsync(
+            coordinator,
             workspace,
-            "Hello architect"))
-        {
-            updates.Add(update);
-        }
+            "Hello architect");
 
         var stageCompletedEvent = recordedEvents.FirstOrDefault(e => e.Kind == AgentActivityKind.StageCompleted);
         Assert.NotNull(stageCompletedEvent);

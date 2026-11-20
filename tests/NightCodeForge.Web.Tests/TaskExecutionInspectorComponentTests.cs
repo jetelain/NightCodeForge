@@ -41,6 +41,7 @@ public class TaskExecutionInspectorComponentTests : BunitContext
             new MockTaskMarkdownSyncService(),
             mockOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton(_hubConnection);

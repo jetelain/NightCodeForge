@@ -1,20 +1,11 @@
 @page "/ideation"
 @page "/w/{WorkspaceId:int}/ideation"
-@inject IIdeationService IdeationService
 @inject WorkspaceStateService WorkspaceState
-@inject ITaskRepository TaskRepository
-@inject IWorkflowRepository WorkflowRepository
-@inject IWorkspaceRepository WorkspaceRepository
-@inject ITaskMarkdownSyncService MarkdownSync
 @inject ToastService ToastService
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
-@inject IdeationRefinementService RefinementService
-@inject ICompanionTriageDraftStore CompanionTriageDraftStore
-@inject IAttachmentUiService AttachmentUiService
-@inject ITaskAttachmentRepository AttachmentRepository
 @inject ILogger<Ideation> Logger
-@using NightCodeForge.Core.Services
+@using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @implements IDisposable
@@ -32,7 +23,7 @@
             </div>
         </div>
         <div class="ideation-header-status">
-            @if (_workspaceSessions != null && _workspaceSessions.Count > 0)
+            @if (Session.WorkspaceSessions.Count > 0)
             {
                 <div class="session-dropdown-container">
                     <select class="form-control-dark session-select"
@@ -40,7 +31,7 @@
                             @onchange="HandleSessionSelectedAsync"
                             disabled="@Session.IsGenerating"
                             title="Switch Ideation Session">
-                        @foreach (var s in _workspaceSessions)
+                        @foreach (var s in Session.WorkspaceSessions)
                         {
                             <option value="@s.Id">
                                 @(s.Status == StageExecutionStatus.Running ? "🟢" : "📁") @(string.IsNullOrWhiteSpace(s.Title) ? $"Session #{s.Id}" : s.Title) (@s.StartedAt.ToLocalTime().ToString("MMM d, HH:mm"))
@@ -143,7 +134,8 @@
             </div>
             <textarea class="form-control-dark font-mono system-prompt-textarea" 
                       rows="2" 
-                      @bind="Session.CustomSystemPrompt" 
+                      @bind="Session.CustomSystemPrompt"
+                      @bind:after="HandleConfigChangedAsync"
                       placeholder="e.g. Focus exclusively on performance optimizations in src/NightCodeForge.Core..."></textarea>
             
             <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
@@ -156,12 +148,35 @@
                         Select <strong>Host GPU</strong> to chat concurrently without waiting if a background task is occupying the LAN server. Select <strong>Cloud Overflow</strong> for complex chats with zero local VRAM.
                     </p>
                 </div>
-                <select class="forge-input font-mono" style="width: auto; min-width: 280px; padding: 0.45rem 0.75rem; font-size: 0.88rem;" @bind="Session.SelectedRoutingTarget">
+                <select class="forge-input font-mono"
+                        style="width: auto; min-width: 280px; padding: 0.45rem 0.75rem; font-size: 0.88rem;"
+                        @bind="Session.SelectedRoutingTarget"
+                        @bind:after="HandleConfigChangedAsync">
                     <option value="@OllamaRoutingTarget.Auto">🔀 Auto (Dynamic Routing)</option>
                     <option value="@OllamaRoutingTarget.Local">🖥️ Host GPU (Concurrent Workstation Execution)</option>
                     <option value="@OllamaRoutingTarget.Remote">🌐 LAN GPU Server (Dedicated High-VRAM)</option>
                     <option value="@OllamaRoutingTarget.Cloud">☁️ Cloud Overflow (Zero Local VRAM / No Waiting)</option>
                 </select>
+            </div>
+
+            <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                <div style="flex: 1; min-width: 260px;">
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                        <span style="font-size: 1.1rem;">🧠</span>
+                        <strong style="font-size: 0.92rem; color: var(--text-primary);">Model Override (Optional)</strong>
+                    </div>
+                    <p style="margin: 0; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.4;">
+                        Override the workspace's configured Ideation model for this session (leave blank for workspace profile default).
+                    </p>
+                </div>
+                <input id="ideation-model-override-input"
+                       type="text"
+                       class="forge-input font-mono"
+                       style="width: auto; min-width: 280px; padding: 0.45rem 0.75rem; font-size: 0.88rem;"
+                       @bind="Session.SelectedModelOverride"
+                       @bind:after="HandleConfigChangedAsync"
+                       placeholder="Workspace profile default"
+                       aria-label="Ideation Model Override" />
             </div>
         </div>
     }
@@ -208,7 +223,7 @@
                             class="workspace-attachments-toggle-btn"
                             @onclick="() => _showWorkspaceAttachments = !_showWorkspaceAttachments"
                             aria-expanded="@_showWorkspaceAttachments">
-                        <span>📎 Workspace Attachments (@_workspaceAttachments.Count)</span>
+                        <span>📎 Workspace Attachments (@Session.WorkspaceAttachments.Count)</span>
                         <span class="font-mono">@(_showWorkspaceAttachments ? "▲" : "▼")</span>
                     </button>
                 </div>
@@ -227,14 +242,14 @@
 
                         @{
                             var filteredWorkspaceAttachments = AttachmentPresentationHelper.FilterAttachments(
-                                _workspaceAttachments,
+                                Session.WorkspaceAttachments,
                                 _attachmentSearchQuery);
                         }
 
                         @if (filteredWorkspaceAttachments.Count == 0)
                         {
                             <div class="workspace-attachments-empty text-muted">
-                                @(_workspaceAttachments.Count == 0
+                                @(Session.WorkspaceAttachments.Count == 0
                                     ? "No workspace attachments yet. Drop a file, attach a host path, or cite a path/URL in chat."
                                     : "No attachments match the current filter.")
                             </div>
@@ -369,6 +384,12 @@
                                                                    OnAnswerSubmitted="@(ans => HandleQuestionGroupSingleAnswerSubmittedAsync(qp, ans))" />
                                         </div>
                                     }
+                                    else if (part is OptimizationContentPart optPart)
+                                    {
+                                        <div class="compaction-notice-part text-muted font-mono">
+                                            <span>🗜️ @optPart.Summary</span>
+                                        </div>
+                                    }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
@@ -496,6 +517,12 @@
                                                                    OnAnswerSubmitted="@(ans => HandleQuestionGroupSingleAnswerSubmittedAsync(qp, ans))" />
                                         </div>
                                     }
+                                    else if (part is OptimizationContentPart optPart)
+                                    {
+                                        <div class="compaction-notice-part text-muted font-mono">
+                                            <span>🗜️ @optPart.Summary</span>
+                                        </div>
+                                    }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
@@ -561,10 +588,10 @@
                     </div>
                 </div>
 
-                @if (_pendingComposerChips.Count > 0)
+                @if (Session.PendingComposerChips.Count > 0)
                 {
                     <div class="composer-attachment-chips">
-                        @foreach (var chip in _pendingComposerChips)
+                        @foreach (var chip in Session.PendingComposerChips)
                         {
                             <div class="forge-chip attachment-chip composer-chip">
                                 <button type="button"
@@ -589,7 +616,7 @@
                                 </button>
                                 <button type="button"
                                         class="btn-chip-remove"
-                                        @onclick="() => RemovePendingChip(chip)"
+                                        @onclick="() => Session.RemovePendingChip(chip)"
                                         aria-label="Remove attachment chip">
                                     ✕
                                 </button>
@@ -687,8 +714,8 @@
                     {
                         <IdeationProposalCard @key="proposal.ClientId" 
                                               Proposal="proposal" 
-                                              WorkspaceTasks="_workspaceTasks"
-                                              WorkspaceAttachments="_workspaceAttachments"
+                                              WorkspaceTasks="Session.WorkspaceTasks"
+                                              WorkspaceAttachments="Session.WorkspaceAttachments"
                                               OnPreviewAttachment="OpenAttachmentPreview"
                                               OnAddToBacklog="AddProposalToBacklogAsync" 
                                               OnDismiss="DismissProposalAsync" />
@@ -716,20 +743,15 @@
     public string? DraftId { get; set; }
 
     private int? _handledRefinementTaskId;
-    private string? _lastAppliedDraftId;
     private string _userInput = string.Empty;
     private IdeationMobilePane _mobilePane = IdeationMobilePane.Chat;
     private bool _showCustomPromptConfig;
-    private CancellationTokenSource? _cts;
-    private IReadOnlyList<ForgeTask> _workspaceTasks = Array.Empty<ForgeTask>();
-    private IReadOnlyList<Conversation> _workspaceSessions = Array.Empty<Conversation>();
-    private IReadOnlyList<TaskAttachment> _workspaceAttachments = Array.Empty<TaskAttachment>();
-    private readonly List<ConversationAttachmentChipViewModel> _pendingComposerChips = new();
     private bool _showWorkspaceAttachments = true;
     private string _attachmentSearchQuery = string.Empty;
     private string _hostFilePathInput = string.Empty;
     private int? _previewAttachmentId;
     private bool _previewStartInDelete;
+    private bool _showTranscriptModal;
 
     protected override async Task OnInitializedAsync()
     {
@@ -738,10 +760,18 @@
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
         }
 
+        Session.AttachUiDispatcher(InvokeAsync);
         WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
         Session.OnChange += HandleSessionChanged;
+        Session.OnNotification += HandleSessionNotification;
+        Session.OnScrollRequested += HandleScrollRequested;
 
-        await ReloadWorkspaceContextAsync();
+        var result = await Session.ReloadWorkspaceContextAsync(WorkspaceState.ActiveWorkspace, TaskId, DraftId);
+        _handledRefinementTaskId = result.HandledTaskId;
+        if (!string.IsNullOrEmpty(result.SeedPrompt))
+        {
+            _userInput = result.SeedPrompt;
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -759,7 +789,7 @@
 
         if (string.IsNullOrWhiteSpace(DraftId))
         {
-            _lastAppliedDraftId = null;
+            Session.ClearDraftDeduplication();
         }
 
         if (WorkspaceState.ActiveWorkspaceId != previousWorkspaceId)
@@ -770,102 +800,20 @@
         if (TaskId.HasValue && TaskId != _handledRefinementTaskId && WorkspaceState.ActiveWorkspace != null)
         {
             _handledRefinementTaskId = TaskId;
-            await TryInitializeTaskRefinementAsync(WorkspaceState.ActiveWorkspace.Id, TaskId.Value);
+            var (handled, seedPrompt) = await Session.TryInitializeTaskRefinementAsync(WorkspaceState.ActiveWorkspace.Id, TaskId.Value);
+            if (handled)
+            {
+                _userInput = seedPrompt ?? string.Empty;
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(DraftId) && WorkspaceState.ActiveWorkspace != null)
         {
-            await TryInitializeCompanionDraftAsync(WorkspaceState.ActiveWorkspace.Id);
-        }
-    }
-
-    private async Task<bool> TryInitializeCompanionDraftAsync(int workspaceId)
-    {
-        if (Session.IsGenerating)
-        {
-            return false;
-        }
-
-        if (!IdeationRefinementHelper.TryResolveCompanionDraft(
-                CompanionTriageDraftStore,
-                workspaceId,
-                DraftId,
-                ref _lastAppliedDraftId,
-                out var draft) || draft is null)
-        {
-            return false;
-        }
-
-        var oldConvId = Session.ActiveConversationId;
-        var oldWsId = Session.BoundWorkspaceId ?? workspaceId;
-
-        var created = await TaskRepository.StartIdeationConversationAsync(
-            workspaceId,
-            title: draft.Title);
-
-        await ReleaseConversationAffinityIfChangedAsync(oldWsId, oldConvId, created.Id);
-
-        _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(workspaceId);
-
-        Session.Reset();
-        Session.BoundWorkspaceId = workspaceId;
-        Session.ActiveConversationId = created.Id;
-        Session.ActiveConversationTitle = created.Title;
-        _userInput = IdeationRefinementHelper.BuildCompanionSeedPrompt(draft);
-        return true;
-    }
-
-    private async Task ReleaseConversationAffinityIfChangedAsync(int workspaceId, int? oldConvId, int newConvId)
-    {
-        if (oldConvId.HasValue && oldConvId.Value != newConvId)
-        {
-            try
+            var (handled, seedPrompt) = await Session.TryInitializeCompanionDraftAsync(WorkspaceState.ActiveWorkspace.Id, DraftId);
+            if (handled && !string.IsNullOrEmpty(seedPrompt))
             {
-                await IdeationService.ReleaseConversationSessionAsync(workspaceId, oldConvId.Value);
+                _userInput = seedPrompt;
             }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Failed to release session affinity when switching ideation session #{ConversationId}", oldConvId.Value);
-            }
-        }
-    }
-
-    private async Task<bool> TryInitializeTaskRefinementAsync(int workspaceId, int taskId)
-    {
-        if (Session.IsGenerating)
-        {
-            return false;
-        }
-
-        try
-        {
-            var refinement = await RefinementService.InitializeTaskRefinementAsync(workspaceId, taskId);
-            _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(workspaceId);
-
-            var oldConvId = Session.ActiveConversationId;
-            var oldWsId = Session.BoundWorkspaceId ?? workspaceId;
-            await ReleaseConversationAffinityIfChangedAsync(oldWsId, oldConvId, refinement.Conversation.Id);
-
-            if (refinement.IsNew)
-            {
-                Session.Reset();
-                Session.BoundWorkspaceId = workspaceId;
-                Session.ActiveConversationId = refinement.Conversation.Id;
-                Session.ActiveConversationTitle = refinement.Conversation.Title;
-            }
-            else
-            {
-                LoadConversationIntoSession(refinement.Conversation);
-            }
-
-            _userInput = Session.Messages.Count == 0 ? refinement.SeedPrompt : string.Empty;
-            return true;
-        }
-        catch (Exception ex) when (ex is TaskNotFoundException or TaskCannotBeModifiedException)
-        {
-            _userInput = string.Empty;
-            ToastService.Show("Cannot Refine Task", ex.Message, ToastLevel.Error);
-            return false;
         }
     }
 
@@ -888,351 +836,42 @@
         }
     }
 
-    private async Task ReloadWorkspaceContextAsync()
-    {
-        var active = WorkspaceState.ActiveWorkspace;
-        if (active != null)
-        {
-            try
-            {
-                _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
-                _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
-                _workspaceAttachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id);
-
-                if (TaskId.HasValue && TaskId != _handledRefinementTaskId)
-                {
-                    _handledRefinementTaskId = TaskId;
-                    if (await TryInitializeTaskRefinementAsync(active.Id, TaskId.Value))
-                    {
-                        await InvokeAsync(StateHasChanged);
-                        return;
-                    }
-                }
-
-                if (!string.IsNullOrWhiteSpace(DraftId) && await TryInitializeCompanionDraftAsync(active.Id))
-                {
-                    await InvokeAsync(StateHasChanged);
-                    return;
-                }
-
-                if (Session.BoundWorkspaceId != active.Id)
-                {
-                    var oldWsId = Session.BoundWorkspaceId;
-                    var oldConvId = Session.ActiveConversationId;
-                    if (oldWsId.HasValue && oldConvId.HasValue)
-                    {
-                        try
-                        {
-                            await IdeationService.ReleaseConversationSessionAsync(oldWsId.Value, oldConvId.Value);
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogWarning(ex, "Failed to release session affinity when changing bound workspace for session #{ConversationId}", oldConvId.Value);
-                        }
-                    }
-
-                    var activeConv = await TaskRepository.GetActiveIdeationConversationAsync(active.Id);
-                    if (activeConv != null)
-                    {
-                        LoadConversationIntoSession(activeConv);
-                    }
-                    else
-                    {
-                        var newConv = await TaskRepository.StartIdeationConversationAsync(
-                            active.Id,
-                            title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
-                        Session.Reset();
-                        Session.BoundWorkspaceId = active.Id;
-                        Session.ActiveConversationId = newConv.Id;
-                        Session.ActiveConversationTitle = newConv.Title;
-                        _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
-                    }
-                }
-                else if (!Session.ActiveConversationId.HasValue)
-                {
-                    var activeConv = await TaskRepository.GetActiveIdeationConversationAsync(active.Id);
-                    if (activeConv != null && Session.Messages.Count == 0)
-                    {
-                        LoadConversationIntoSession(activeConv);
-                    }
-                    else if (activeConv != null)
-                    {
-                        Session.BoundWorkspaceId = active.Id;
-                        Session.ActiveConversationId = activeConv.Id;
-                        Session.ActiveConversationTitle = activeConv.Title;
-                    }
-                    else
-                    {
-                        var newConv = await TaskRepository.StartIdeationConversationAsync(
-                            active.Id,
-                            title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
-                        Session.BoundWorkspaceId = active.Id;
-                        Session.ActiveConversationId = newConv.Id;
-                        Session.ActiveConversationTitle = newConv.Title;
-                        _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(active.Id);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _workspaceTasks = Array.Empty<ForgeTask>();
-                _workspaceSessions = Array.Empty<Conversation>();
-                _workspaceAttachments = Array.Empty<TaskAttachment>();
-                ToastService.Show("Workspace Context Error", ex.Message, ToastLevel.Error);
-            }
-        }
-        else
-        {
-            var oldWsId = Session.BoundWorkspaceId;
-            var oldConvId = Session.ActiveConversationId;
-            if (oldWsId.HasValue && oldConvId.HasValue)
-            {
-                try
-                {
-                    await IdeationService.ReleaseConversationSessionAsync(oldWsId.Value, oldConvId.Value);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to release session affinity when clearing active workspace for session #{ConversationId}", oldConvId.Value);
-                }
-            }
-
-            _workspaceTasks = Array.Empty<ForgeTask>();
-            _workspaceSessions = Array.Empty<Conversation>();
-            _workspaceAttachments = Array.Empty<TaskAttachment>();
-            _pendingComposerChips.Clear();
-        }
-
-        await InvokeAsync(StateHasChanged);
-    }
-
-    private void LoadConversationIntoSession(Conversation conv)
-    {
-        Session.Reset();
-        Session.BoundWorkspaceId = conv.WorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
-        Session.ActiveConversationId = conv.Id;
-        Session.ActiveConversationTitle = conv.Title;
-        Session.ActiveSessionCost = TaskCostPresentationHelper.ComputeConversationCost(conv);
-
-        var pendingTools = new List<IdeationToolCallViewModel>();
-        var pendingParts = new List<ChatContentPart>();
-
-        foreach (var turn in conv.Turns.OrderBy(t => t.TurnIndex))
-        {
-            if (turn.Role == StageTurnRole.User)
-            {
-                var restoredChips = AttachmentPresentationHelper.ResolveRestoredMessageChips(
-                    turn.Content,
-                    _workspaceAttachments);
-                Session.Messages.Add(new ChatMessage(
-                    "user",
-                    turn.Content ?? string.Empty,
-                    Timestamp: turn.Timestamp,
-                    Parts: [new TextContentPart(turn.Content ?? string.Empty)],
-                    AttachmentChips: restoredChips.Count > 0 ? restoredChips : null));
-            }
-            else if (turn.Role == StageTurnRole.Tool)
-            {
-                if (string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
-                {
-                    var questions = StageConversationParser.ExtractQuestions(turn);
-                    var qPart = new QuestionContentPart
-                    {
-                        Questions = questions,
-                        Answer = string.IsNullOrWhiteSpace(turn.ToolResult) ? null : turn.ToolResult,
-                        MetadataJson = turn.MetadataJson
-                    };
-                    pendingParts.Add(qPart);
-                }
-                else
-                {
-                    var vm = new IdeationToolCallViewModel
-                    {
-                        ToolCallId = Guid.NewGuid().ToString("N")[..8],
-                        ToolName = turn.ToolName ?? "tool",
-                        Arguments = turn.ToolArguments ?? string.Empty,
-                        Result = turn.ToolResult ?? turn.Content,
-                        IsCompleted = !string.IsNullOrEmpty(turn.ToolResult),
-                        IsError = turn.IsError,
-                        DurationMs = turn.DurationMs ?? 0
-                    };
-                    pendingTools.Add(vm);
-                    pendingParts.Add(new ToolCallContentPart(vm));
-                }
-            }
-            else if (turn.Role == StageTurnRole.ToolResult)
-            {
-                if (string.Equals(turn.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
-                {
-                    var existingQPart = pendingParts.OfType<QuestionContentPart>().LastOrDefault(q => string.IsNullOrWhiteSpace(q.Answer));
-                    if (existingQPart != null)
-                    {
-                        existingQPart.Answer = turn.ToolResult ?? turn.Content;
-                        if (!string.IsNullOrWhiteSpace(turn.MetadataJson))
-                            existingQPart.MetadataJson = turn.MetadataJson;
-                    }
-                    else
-                    {
-                        var questions = StageConversationParser.ExtractQuestions(turn);
-                        var qPart = new QuestionContentPart
-                        {
-                            Questions = questions,
-                            Answer = turn.ToolResult ?? turn.Content,
-                            MetadataJson = turn.MetadataJson
-                        };
-                        pendingParts.Add(qPart);
-                    }
-                }
-                else
-                {
-                    var existingTool = pendingTools.FirstOrDefault(t => !t.IsCompleted && string.Equals(t.ToolName, turn.ToolName, StringComparison.OrdinalIgnoreCase));
-                    if (existingTool != null)
-                    {
-                        existingTool.Result = turn.ToolResult ?? turn.Content;
-                        existingTool.IsCompleted = true;
-                        existingTool.IsError = turn.IsError;
-                        existingTool.DurationMs = turn.DurationMs ?? 0;
-                    }
-                    else
-                    {
-                        var vm = new IdeationToolCallViewModel
-                        {
-                            ToolCallId = Guid.NewGuid().ToString("N")[..8],
-                            ToolName = turn.ToolName ?? "tool",
-                            Arguments = turn.ToolArguments ?? string.Empty,
-                            Result = turn.ToolResult ?? turn.Content,
-                            IsCompleted = true,
-                            IsError = turn.IsError,
-                            DurationMs = turn.DurationMs ?? 0
-                        };
-                        pendingTools.Add(vm);
-                        pendingParts.Add(new ToolCallContentPart(vm));
-                    }
-                }
-            }
-            else if (turn.Role == StageTurnRole.Assistant)
-            {
-                var parts = new List<ChatContentPart>();
-                if (!string.IsNullOrEmpty(turn.ThinkingTrace))
-                {
-                    parts.Add(new ThinkingContentPart(turn.ThinkingTrace));
-                }
-
-                var tools = new List<IdeationToolCallViewModel>(pendingTools);
-                parts.AddRange(pendingParts);
-                pendingTools.Clear();
-                pendingParts.Clear();
-
-                if (!string.IsNullOrEmpty(turn.ToolName) && !tools.Any(t => t.ToolName == turn.ToolName && t.Arguments == turn.ToolArguments))
-                {
-                    var vm = new IdeationToolCallViewModel
-                    {
-                        ToolCallId = Guid.NewGuid().ToString("N")[..8],
-                        ToolName = turn.ToolName,
-                        Arguments = turn.ToolArguments ?? string.Empty,
-                        Result = turn.ToolResult,
-                        IsCompleted = true,
-                        IsError = turn.IsError,
-                        DurationMs = turn.DurationMs ?? 0
-                    };
-                    tools.Add(vm);
-                    parts.Add(new ToolCallContentPart(vm));
-                }
-
-                if (!string.IsNullOrEmpty(turn.Content))
-                {
-                    parts.Add(new TextContentPart(turn.Content));
-                }
-
-                Session.Messages.Add(new ChatMessage(
-                    "assistant",
-                    turn.Content ?? string.Empty,
-                    turn.ThinkingTrace,
-                    turn.Timestamp,
-                    tools.Count > 0 ? tools : null,
-                    parts.Count > 0 ? parts : null));
-
-                if (!string.IsNullOrWhiteSpace(turn.MetadataJson))
-                {
-                    try
-                    {
-                        var proposals = System.Text.Json.JsonSerializer.Deserialize<List<IdeationProposal>>(
-                            turn.MetadataJson,
-                            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                        if (proposals != null)
-                        {
-                            foreach (var p in proposals)
-                            {
-                                Session.TryAddProposal(p, _workspaceTasks, skipMissingPersisted: true);
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogWarning(ex, "Failed to deserialize ideation proposals metadata for turn #{TurnIndex}", turn.TurnIndex);
-                    }
-                }
-            }
-        }
-
-        Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks, removeMissing: true);
-
-        if (pendingParts.Count > 0 || pendingTools.Count > 0)
-        {
-            Session.Messages.Add(new ChatMessage(
-                "assistant",
-                string.Empty,
-                null,
-                DateTime.UtcNow,
-                pendingTools.Count > 0 ? new List<IdeationToolCallViewModel>(pendingTools) : null,
-                pendingParts.Count > 0 ? new List<ChatContentPart>(pendingParts) : null));
-            pendingTools.Clear();
-            pendingParts.Clear();
-        }
-    }
-
     private async Task HandleSessionSelectedAsync(ChangeEventArgs e)
     {
-        if (int.TryParse(e.Value?.ToString(), out var selectedId))
+        if (int.TryParse(e.Value?.ToString(), out var selectedId) && WorkspaceState.ActiveWorkspace != null)
         {
-            var oldConvId = Session.ActiveConversationId;
-            var oldWsId = Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
-            if (oldConvId.HasValue && oldConvId.Value != selectedId && oldWsId.HasValue)
-            {
-                try
-                {
-                    await IdeationService.ReleaseConversationSessionAsync(oldWsId.Value, oldConvId.Value);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to release session affinity when switching ideation session #{ConversationId}", oldConvId.Value);
-                }
-            }
-
-            var conv = await TaskRepository.GetConversationWithTurnsAsync(selectedId);
-            if (conv != null)
-            {
-                LoadConversationIntoSession(conv);
-                ToastService.Show("Session Loaded", conv.Title ?? $"Session #{conv.Id}", ToastLevel.Info);
-                StateHasChanged();
-                _ = ScrollChatToBottomAsync(true);
-            }
+            await Session.SelectSessionAsync(WorkspaceState.ActiveWorkspace.Id, selectedId);
         }
     }
 
     private void HandleWorkspaceChanged()
     {
-        if (Session.IsGenerating)
+        _ = InvokeAsync(async () =>
         {
-            _cts?.Cancel();
-        }
+            var result = await Session.ReloadWorkspaceContextAsync(WorkspaceState.ActiveWorkspace, TaskId, DraftId);
+            _handledRefinementTaskId = result.HandledTaskId;
+            if (!string.IsNullOrEmpty(result.SeedPrompt))
+            {
+                _userInput = result.SeedPrompt;
+            }
 
-        _ = InvokeAsync(ReloadWorkspaceContextAsync);
+            StateHasChanged();
+        });
     }
 
     private void HandleSessionChanged()
     {
         _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleSessionNotification(string title, string message, ToastLevel level)
+    {
+        _ = InvokeAsync(() => ToastService.Show(title, message, level));
+    }
+
+    private void HandleScrollRequested(bool force)
+    {
+        _ = InvokeAsync(() => ScrollChatToBottomAsync(force));
     }
 
     private void ApplyPresetPrompt(string promptText)
@@ -1251,29 +890,11 @@
         }
     }
 
-    private async Task HandleQuestionGroupAnswersSubmittedAsync(QuestionContentPart qp, IReadOnlyDictionary<int, string> answersByIndex)
-    {
-        if (answersByIndex == null || answersByIndex.Count == 0) return;
+    private Task HandleQuestionGroupAnswersSubmittedAsync(QuestionContentPart qp, IReadOnlyDictionary<int, string> answersByIndex) =>
+        Session.SubmitQuestionAnswersAsync(qp, answersByIndex);
 
-        var pending = qp.PendingQuestions ?? Session.PendingQuestions;
-        IdeationPresentationHelper.SubmitAnswersToPendingQuestions(pending, answersByIndex);
-
-        var (formattedAnswer, metadataJson) = IdeationPresentationHelper.FormatSubmission(answersByIndex, qp.EffectiveQuestions);
-        qp.Answer = formattedAnswer;
-        qp.MetadataJson = metadataJson;
-
-        Session.PendingQuestions.Clear();
-        StateHasChanged();
-        await ScrollChatToBottomAsync(true);
-    }
-
-    private Task HandleQuestionGroupSingleAnswerSubmittedAsync(QuestionContentPart qp, string answer)
-    {
-        var dict = new Dictionary<int, string> { [0] = answer };
-        return HandleQuestionGroupAnswersSubmittedAsync(qp, dict);
-    }
-
-    private bool _showTranscriptModal;
+    private Task HandleQuestionGroupSingleAnswerSubmittedAsync(QuestionContentPart qp, string answer) =>
+        Session.SubmitQuestionAnswersAsync(qp, new Dictionary<int, string> { [0] = answer });
 
     private void OpenTranscriptModal()
     {
@@ -1299,600 +920,33 @@
 
     private async Task SendMessageAsync()
     {
-        if (string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null)
+        if (string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null || Session.IsGenerating)
+        {
             return;
+        }
 
-        var prompt = _userInput.Trim();
+        var prompt = _userInput;
         _userInput = string.Empty;
-
-        _cts?.Dispose();
-        _cts = new CancellationTokenSource();
-
-        // Build history from existing completed turns, retaining text & action summaries
-        var history = Session.Messages
-            .Select(m => (m.Role, m.GetEffectiveHistoryContent()))
-            .Where(m => !string.IsNullOrWhiteSpace(m.Item2))
-            .ToList();
-
-        var messageChips = new List<ConversationAttachmentChipViewModel>(_pendingComposerChips);
-        _pendingComposerChips.Clear();
-
-        var userMessage = new ChatMessage(
-            "user",
-            prompt,
-            Timestamp: DateTime.UtcNow,
-            Parts: [new TextContentPart(prompt)],
-            AttachmentChips: messageChips);
-        Session.Messages.Add(userMessage);
-        Session.IsGenerating = true;
-        Session.CurrentThinkingBuffer = string.Empty;
-        Session.CurrentMessageBuffer = string.Empty;
-        Session.CurrentToolCalls.Clear();
-        Session.CurrentParts.Clear();
-
-        await ScrollChatToBottomAsync();
-
-        var discoveredProposalsThisTurn = new List<IdeationProposal>();
-
-        try
+        if (!await Session.SendMessageAsync(WorkspaceState.ActiveWorkspace, prompt))
         {
-            var ws = WorkspaceState.ActiveWorkspace;
-            if (ws != null)
-            {
-                if (AttachmentUiService.ExtractMessageCitations(prompt).HasAny)
-                {
-                    await AttachmentUiService.IngestMessageCitationsAsync(
-                        ws.Id,
-                        prompt,
-                        onChipChanged: chip =>
-                        {
-                            AttachmentPresentationHelper.UpsertChip(messageChips, chip);
-                            _ = InvokeAsync(StateHasChanged);
-                        },
-                        cancellationToken: _cts.Token);
-
-                    _workspaceAttachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(ws.Id);
-                }
-
-                if (!Session.ActiveConversationId.HasValue)
-                {
-                    var newConv = await TaskRepository.StartIdeationConversationAsync(
-                        ws.Id,
-                        title: ChatPresentationHelper.Truncate(prompt, 50),
-                        cancellationToken: CancellationToken.None);
-                    Session.BoundWorkspaceId = ws.Id;
-                    Session.ActiveConversationId = newConv.Id;
-                    Session.ActiveConversationTitle = newConv.Title;
-                    _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id, CancellationToken.None);
-                }
-
-                // Persist User turn
-                await TaskRepository.AddConversationTurnAsync(
-                    Session.ActiveConversationId.Value,
-                    StageTurnRole.User,
-                    content: prompt,
-                    cancellationToken: CancellationToken.None);
-            }
-            var baseProfile = ws != null ? await WorkspaceRepository.GetEffectiveAgentProfileAsync(ws.Id, StandardStageIds.Ideation) : null;
-            if (baseProfile == null && ws != null)
-            {
-                baseProfile = ws.AgentProfiles?.FirstOrDefault(p =>
-                    string.Equals(p.Id, StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase) ||
-                    p.Name.Contains(StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase));
-            }
-            if (baseProfile == null)
-            {
-                throw new AgentProfileNotFoundException(StandardStageIds.Ideation, ws?.Id);
-            }
-            AgentProfile? effectiveProfile = null;
-            if (Session.SelectedRoutingTarget != OllamaRoutingTarget.Auto || !string.IsNullOrEmpty(Session.SelectedModelOverride))
-            {
-                effectiveProfile = new AgentProfile
-                {
-                    Id = baseProfile.Id,
-                    Name = baseProfile.Name,
-                    WorkspaceId = baseProfile.WorkspaceId,
-                    HarnessId = baseProfile.HarnessId,
-                    ModelName = !string.IsNullOrEmpty(Session.SelectedModelOverride) ? Session.SelectedModelOverride : baseProfile.ModelName,
-                    Mode = baseProfile.Mode,
-                    SecurityTier = baseProfile.SecurityTier,
-                    PermittedTools = baseProfile.PermittedTools,
-                    OptimizationFlags = baseProfile.OptimizationFlags,
-                    Temperature = baseProfile.Temperature,
-                    ThinkingEffort = baseProfile.ThinkingEffort,
-                    ThinkingTokenBudget = baseProfile.ThinkingTokenBudget,
-                    MaxTurns = baseProfile.MaxTurns,
-                    ContextWindowTokens = baseProfile.ContextWindowTokens,
-                    MaxOutputTokens = baseProfile.MaxOutputTokens,
-                    SystemPrompt = baseProfile.SystemPrompt,
-                    RoutingTarget = Session.SelectedRoutingTarget
-                };
-            }
-
-            await foreach (var update in IdeationService.ConverseStreamingAsync(
-                WorkspaceState.ActiveWorkspace,
-                prompt,
-                history,
-                agentProfile: effectiveProfile,
-                customSystemPrompt: Session.CustomSystemPrompt,
-                conversationId: Session.ActiveConversationId,
-                cancellationToken: _cts.Token))
-            {
-                switch (update.Kind)
-                {
-                    case IdeationStreamUpdateKind.ThinkingDelta:
-                        if (!string.IsNullOrEmpty(update.TextDelta))
-                        {
-                            Session.CurrentThinkingBuffer += update.TextDelta;
-                            if (Session.CurrentParts.LastOrDefault() is ThinkingContentPart lastThink)
-                            {
-                                var idx = Session.CurrentParts.Count - 1;
-                                Session.CurrentParts[idx] = new ThinkingContentPart(lastThink.Thinking + update.TextDelta);
-                            }
-                            else
-                            {
-                                Session.CurrentParts.Add(new ThinkingContentPart(update.TextDelta));
-                            }
-                            StateHasChanged();
-                        }
-                        break;
-
-                    case IdeationStreamUpdateKind.MessageDelta:
-                        if (!string.IsNullOrEmpty(update.TextDelta))
-                        {
-                            Session.CurrentMessageBuffer += update.TextDelta;
-                            if (Session.CurrentParts.LastOrDefault() is TextContentPart lastText)
-                            {
-                                var idx = Session.CurrentParts.Count - 1;
-                                Session.CurrentParts[idx] = new TextContentPart(lastText.Text + update.TextDelta);
-                            }
-                            else
-                            {
-                                Session.CurrentParts.Add(new TextContentPart(update.TextDelta));
-                            }
-                            StateHasChanged();
-                        }
-                        break;
-
-                    case IdeationStreamUpdateKind.ToolCallStarted when update.ToolCall != null:
-                        var call = update.ToolCall;
-                        var existing = Session.CurrentToolCalls.FirstOrDefault(t => t.ToolCallId == call.ToolCallId);
-                        if (existing == null)
-                        {
-                            var vm = new IdeationToolCallViewModel
-                            {
-                                ToolCallId = call.ToolCallId,
-                                ToolName = call.ToolName,
-                                Arguments = call.Arguments,
-                                IsCompleted = false
-                            };
-                            Session.CurrentToolCalls.Add(vm);
-                            if (!string.Equals(call.ToolName, "ask", StringComparison.OrdinalIgnoreCase))
-                            {
-                                Session.CurrentParts.Add(new ToolCallContentPart(vm));
-                            }
-                        }
-                        StateHasChanged();
-                        break;
-
-                    case IdeationStreamUpdateKind.ToolCallCompleted when update.ToolCall != null:
-                        var comp = update.ToolCall;
-                        var match = Session.CurrentToolCalls.FirstOrDefault(t => t.ToolCallId == comp.ToolCallId);
-                        if (match != null)
-                        {
-                            match.Result = comp.Result;
-                            match.IsCompleted = true;
-                            match.IsError = comp.IsError;
-                            match.DurationMs = comp.DurationMs;
-                        }
-                        var partMatch = Session.CurrentParts.OfType<ToolCallContentPart>().FirstOrDefault(p => p.ToolCall.ToolCallId == comp.ToolCallId);
-                        if (partMatch != null)
-                        {
-                            partMatch.ToolCall.Result = comp.Result;
-                            partMatch.ToolCall.IsCompleted = true;
-                            partMatch.ToolCall.IsError = comp.IsError;
-                            partMatch.ToolCall.DurationMs = comp.DurationMs;
-                        }
-
-                        if (string.Equals(comp.ToolName, "ask", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(comp.Result))
-                        {
-                            var qPart = Session.CurrentParts.OfType<QuestionContentPart>().LastOrDefault(q => !q.IsAnswered);
-                            if (qPart != null)
-                            {
-                                var res = comp.Result;
-                                if (res.StartsWith("User answered: ", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    res = res.Substring("User answered: ".Length).Trim();
-                                }
-                                qPart.Answer = res;
-                            }
-                        }
-
-                        if (!comp.IsError && ws != null && IdeationPresentationHelper.RequiresWorkspaceTaskSync(comp.ToolName))
-                        {
-                            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
-                            Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
-                        }
-                        StateHasChanged();
-                        break;
-
-                    case IdeationStreamUpdateKind.QuestionAsked:
-                        var batch = update.Questions ?? (update.Question != null ? new[] { update.Question } : Array.Empty<IdeationQuestion>());
-                        if (batch.Count > 0)
-                        {
-                            Session.PendingQuestions.Clear();
-                            Session.PendingQuestions.AddRange(batch);
-
-                            var questionItems = IdeationPresentationHelper.MapToQuestionItems(batch);
-                            var existingPart = Session.CurrentParts.OfType<QuestionContentPart>().LastOrDefault(q => !q.IsAnswered);
-                            if (existingPart == null)
-                            {
-                                Session.CurrentParts.Add(new QuestionContentPart
-                                {
-                                    Questions = questionItems,
-                                    PendingQuestions = batch
-                                });
-                            }
-                            else
-                            {
-                                existingPart.Questions = questionItems;
-                                existingPart.PendingQuestions = batch;
-                            }
-                        }
-                        StateHasChanged();
-                        await ScrollChatToBottomAsync();
-                        break;
-
-                    case IdeationStreamUpdateKind.ProposalDiscovered when update.Proposal != null:
-                        discoveredProposalsThisTurn.Add(update.Proposal);
-                        if (update.Proposal.TaskId.HasValue && ws != null)
-                        {
-                            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
-                        }
-                        var newVm = Session.TryAddProposal(update.Proposal, _workspaceTasks);
-                        if (newVm != null)
-                        {
-                            Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
-                            ToastService.Show("New Proposal Discovered", newVm.Title, ToastLevel.Info);
-                            StateHasChanged();
-                        }
-                        break;
-
-                    case IdeationStreamUpdateKind.Completed when update.FinalResult != null:
-                        Session.LatestTranscriptPath = update.FinalResult.TranscriptPath;
-                        Session.LatestFullTranscriptMarkdown = update.FinalResult.FullTranscriptMarkdown;
-                        if (update.FinalResult.UsageDelta != null)
-                        {
-                            Session.ActiveSessionCost = TaskCostPresentationHelper.AccumulateCost(Session.ActiveSessionCost, update.FinalResult.UsageDelta);
-                        }
-
-                        if (ws != null && (update.FinalResult.ProposedTasks is { Count: > 0 } || Session.Proposals.Count > 0))
-                        {
-                            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(ws.Id, CancellationToken.None);
-                        }
-
-                        if (update.FinalResult.ProposedTasks != null)
-                        {
-                            foreach (var p in update.FinalResult.ProposedTasks)
-                            {
-                                if (!discoveredProposalsThisTurn.Any(d =>
-                                    (p.TaskId.HasValue && d.TaskId.HasValue)
-                                        ? d.TaskId == p.TaskId
-                                        : string.Equals(d.Title, p.Title, StringComparison.OrdinalIgnoreCase)))
-                                {
-                                    discoveredProposalsThisTurn.Add(p);
-                                }
-                            }
-                        }
-
-                        Session.ReconcileProposedTasks(update.FinalResult.ProposedTasks, _workspaceTasks, removeMissing: ws != null);
-                        StateHasChanged();
-                        break;
-                }
-            }
-
-            var toolsForMessage = Session.CurrentToolCalls.Count > 0
-                ? Session.CurrentToolCalls.Select(t => new IdeationToolCallViewModel
-                {
-                    ToolCallId = t.ToolCallId,
-                    ToolName = t.ToolName,
-                    Arguments = t.Arguments,
-                    Result = t.Result,
-                    IsCompleted = t.IsCompleted,
-                    IsError = t.IsError,
-                    DurationMs = t.DurationMs
-                }).ToList()
-                : null;
-
-            foreach (var qp in Session.CurrentParts.OfType<QuestionContentPart>().Where(q => !q.IsAnswered))
-            {
-                qp.Answer = "(No answer provided)";
-            }
-
-            var partsForMessage = Session.CurrentParts.Count > 0
-                ? Session.CurrentParts.ToList()
-                : null;
-
-            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || !string.IsNullOrEmpty(Session.CurrentThinkingBuffer) || (toolsForMessage != null && toolsForMessage.Count > 0) || (partsForMessage != null && partsForMessage.Count > 0))
-            {
-                Session.Messages.Add(new ChatMessage(
-                    "assistant",
-                    Session.CurrentMessageBuffer,
-                    string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
-                    DateTime.UtcNow,
-                    toolsForMessage,
-                    partsForMessage));
-
-                if (Session.ActiveConversationId.HasValue)
-                {
-                    if (Session.CurrentToolCalls.Count > 0)
-                    {
-                        var askParts = Session.CurrentParts.OfType<QuestionContentPart>().ToList();
-                        int askIdx = 0;
-                        foreach (var tc in Session.CurrentToolCalls)
-                        {
-                            string? turnMeta = null;
-                            if (string.Equals(tc.ToolName, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase))
-                            {
-                                if (askIdx < askParts.Count)
-                                {
-                                    turnMeta = askParts[askIdx].MetadataJson;
-                                    askIdx++;
-                                }
-                            }
-
-                            await TaskRepository.AddConversationTurnAsync(
-                                Session.ActiveConversationId.Value,
-                                StageTurnRole.ToolResult,
-                                content: tc.Result,
-                                toolName: tc.ToolName,
-                                toolArguments: tc.Arguments,
-                                toolResult: tc.Result,
-                                durationMs: tc.DurationMs,
-                                isError: tc.IsError,
-                                metadataJson: turnMeta,
-                                cancellationToken: CancellationToken.None);
-                        }
-                    }
-
-                    string? metadataJson = null;
-                    if (discoveredProposalsThisTurn.Count > 0)
-                    {
-                        metadataJson = System.Text.Json.JsonSerializer.Serialize(discoveredProposalsThisTurn);
-                    }
-
-                    await TaskRepository.AddConversationTurnAsync(
-                        Session.ActiveConversationId.Value,
-                        StageTurnRole.Assistant,
-                        content: Session.CurrentMessageBuffer,
-                        thinkingTrace: string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
-                        metadataJson: metadataJson,
-                        cancellationToken: CancellationToken.None);
-
-                    var refreshedConv = await TaskRepository.GetConversationWithTurnsAsync(Session.ActiveConversationId.Value);
-                    if (refreshedConv != null)
-                    {
-                        Session.ActiveSessionCost = TaskCostPresentationHelper.ComputeConversationCost(refreshedConv);
-                    }
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            ToastService.Show("Generation Cancelled", "Exploration agent stopped.", ToastLevel.Warning);
-            foreach (var qp in Session.CurrentParts.OfType<QuestionContentPart>().Where(q => !q.IsAnswered))
-            {
-                qp.Answer = "(Cancelled)";
-            }
-
-            var toolsForMessage = Session.CurrentToolCalls.Count > 0
-                ? Session.CurrentToolCalls.Select(t => new IdeationToolCallViewModel
-                {
-                    ToolCallId = t.ToolCallId,
-                    ToolName = t.ToolName,
-                    Arguments = t.Arguments,
-                    Result = t.Result,
-                    IsCompleted = t.IsCompleted,
-                    IsError = t.IsError,
-                    DurationMs = t.DurationMs
-                }).ToList()
-                : null;
-
-            var partsForMessage = Session.CurrentParts.Count > 0
-                ? Session.CurrentParts.ToList()
-                : null;
-
-            if (!string.IsNullOrEmpty(Session.CurrentMessageBuffer) || (toolsForMessage != null && toolsForMessage.Count > 0))
-            {
-                Session.Messages.Add(new ChatMessage(
-                    "assistant",
-                    Session.CurrentMessageBuffer + "\n\n*(Generation stopped by user)*",
-                    string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
-                    DateTime.UtcNow,
-                    toolsForMessage,
-                    partsForMessage));
-
-                if (Session.ActiveConversationId.HasValue)
-                {
-                    await TaskRepository.AddConversationTurnAsync(
-                        Session.ActiveConversationId.Value,
-                        StageTurnRole.Assistant,
-                        content: Session.CurrentMessageBuffer + "\n\n*(Generation stopped by user)*",
-                        thinkingTrace: string.IsNullOrEmpty(Session.CurrentThinkingBuffer) ? null : Session.CurrentThinkingBuffer,
-                        cancellationToken: CancellationToken.None);
-
-                    var cancelledRefreshedConv = await TaskRepository.GetConversationWithTurnsAsync(Session.ActiveConversationId.Value);
-                    if (cancelledRefreshedConv != null)
-                    {
-                        Session.ActiveSessionCost = TaskCostPresentationHelper.ComputeConversationCost(cancelledRefreshedConv);
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            ToastService.Show("Generation Error", ex.Message, ToastLevel.Error);
-        }
-        finally
-        {
-            Session.CancelPendingQuestions();
-            Session.IsGenerating = false;
-            Session.CurrentThinkingBuffer = string.Empty;
-            Session.CurrentMessageBuffer = string.Empty;
-            Session.CurrentToolCalls.Clear();
-            Session.CurrentParts.Clear();
-            StateHasChanged();
-            await ScrollChatToBottomAsync();
+            _userInput = prompt;
         }
     }
 
-    private async Task CancelGenerationAsync()
-    {
-        try
-        {
-            Session.CancelPendingQuestions();
-            _cts?.Cancel();
+    private Task CancelGenerationAsync() => Session.CancelGenerationAsync();
 
-            var wsId = Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
-            var convId = Session.ActiveConversationId;
-            if (wsId.HasValue && convId.HasValue)
-            {
-                await IdeationService.ReleaseConversationSessionAsync(wsId.Value, convId.Value);
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed to release session affinity on ideation cancellation.");
-        }
-    }
+    private Task ResetSession() => Session.ResetSessionAsync(WorkspaceState.ActiveWorkspace);
 
-    private async Task ResetSession()
-    {
-        _cts?.Cancel();
-        var ws = WorkspaceState.ActiveWorkspace;
-        if (ws != null)
-        {
-            if (Session.ActiveConversationId.HasValue)
-            {
-                var convId = Session.ActiveConversationId.Value;
-                var releaseWsId = Session.BoundWorkspaceId ?? ws.Id;
-                try
-                {
-                    await IdeationService.ReleaseConversationSessionAsync(releaseWsId, convId);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to release session affinity when resetting ideation session #{ConversationId}", convId);
-                }
+    private Task HandleConfigChangedAsync() => Session.ApplyConfigChangeAsync();
 
-                await TaskRepository.CompleteConversationAsync(
-                    convId,
-                    StageExecutionStatus.Completed,
-                    summary: "Session archived by user via Clear Chat.");
-            }
+    private Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal) =>
+        Session.AddProposalToBacklogAsync(WorkspaceState.ActiveWorkspace, proposal);
 
-            var newConv = await TaskRepository.StartIdeationConversationAsync(
-                ws.Id,
-                title: $"Discovery Chat #{DateTime.UtcNow:MMdd-HHmm}");
+    private Task AddAllProposalsToBacklogAsync() =>
+        Session.AddAllProposalsToBacklogAsync(WorkspaceState.ActiveWorkspace);
 
-            Session.Reset();
-            Session.BoundWorkspaceId = ws.Id;
-            Session.ActiveConversationId = newConv.Id;
-            Session.ActiveConversationTitle = newConv.Title;
-
-            _workspaceSessions = await TaskRepository.GetIdeationConversationsAsync(ws.Id);
-            ToastService.Show("New Session Started", "Previous session archived and fresh chat initialized.", ToastLevel.Info);
-        }
-        else
-        {
-            Session.Reset();
-        }
-
-        _userInput = string.Empty;
-        _pendingComposerChips.Clear();
-        _ = ScrollChatToBottomAsync(true);
-        StateHasChanged();
-    }
-
-    private async Task AddProposalToBacklogAsync(IdeationProposalViewModel proposal)
-    {
-        var workspace = WorkspaceState.ActiveWorkspace;
-        if (workspace == null) return;
-
-        try
-        {
-            var created = await IdeationPresentationHelper.PromoteOrCreateProposalTaskAsync(
-                workspace,
-                proposal,
-                TaskRepository,
-                WorkflowRepository,
-                AttachmentRepository);
-
-            // Sync markdown task file to docs/tasks/
-            if (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) && Directory.Exists(workspace.RepositoryPath))
-            {
-                try
-                {
-                    await MarkdownSync.SyncTaskToDiskAsync(created, workspace.RepositoryPath, proposal.SelectedDependencyIds);
-                }
-                catch (Exception syncEx)
-                {
-                    ToastService.Show("Markdown Sync Warning", $"Created task #{created.Id} in DB but failed writing markdown: {syncEx.Message}", ToastLevel.Warning);
-                }
-            }
-
-            proposal.IsAdded = true;
-            proposal.CreatedTaskId = created.Id;
-
-            // Refresh existing workspace tasks so subsequent proposals can link to this new task
-            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
-            Session.SyncProposalsWithWorkspaceTasks(_workspaceTasks);
-
-            ToastService.Show("Added to Backlog", $"ForgeTask #{created.Id} created with status Suggested.", ToastLevel.Success);
-            StateHasChanged();
-        }
-        catch (Exception ex)
-        {
-            ToastService.Show("Creation Error", $"Failed to add proposal to backlog: {ex.Message}", ToastLevel.Error);
-        }
-    }
-
-    private async Task AddAllProposalsToBacklogAsync()
-    {
-        var pendingProposals = Session.Proposals.Where(p => !p.IsAdded && !string.IsNullOrWhiteSpace(p.Title)).ToList();
-        if (pendingProposals.Count == 0) return;
-
-        int addedCount = 0;
-        foreach (var proposal in pendingProposals)
-        {
-            await AddProposalToBacklogAsync(proposal);
-            if (proposal.IsAdded)
-            {
-                addedCount++;
-            }
-        }
-
-        ToastService.Show("All Proposals Ingested", $"Successfully added {addedCount} proposal(s) sequentially into the backlog.", ToastLevel.Success);
-    }
-
-    private async Task DismissProposalAsync(IdeationProposalViewModel proposal)
-    {
-        var workspace = WorkspaceState.ActiveWorkspace;
-        await IdeationPresentationHelper.PurgeDraftProposalAsync(
-            workspace,
-            proposal,
-            TaskRepository,
-            MarkdownSync,
-            Logger);
-
-        Session.RemoveProposal(proposal);
-        if (workspace != null && proposal.CreatedTaskId.HasValue)
-        {
-            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(workspace.Id);
-        }
-
-        ToastService.Show("Proposal Dismissed", $"Proposal '{proposal.Title}' removed.", ToastLevel.Info);
-    }
+    private Task DismissProposalAsync(IdeationProposalViewModel proposal) =>
+        Session.DismissProposalAsync(WorkspaceState.ActiveWorkspace, proposal);
 
     private async Task HandleIdeationFileDropAsync(InputFileChangeEventArgs e)
     {
@@ -1901,67 +955,22 @@
 
         foreach (var file in e.GetMultipleFiles(maximumFileCount: AttachmentPresentationHelper.MaxBatchUploadFiles))
         {
-            var chip = ConversationAttachmentChipViewModel.CreatePendingUpload(file.Name);
-            AttachmentPresentationHelper.UpsertChip(_pendingComposerChips, chip);
-            StateHasChanged();
-
-            try
-            {
-                await using var stream = file.OpenReadStream(AttachmentConstants.MaxFileDropBytes);
-                var ingested = await AttachmentUiService.UploadFileAsync(ws.Id, file.Name, stream);
-                chip.ApplyIngested(ingested);
-                AttachmentPresentationHelper.UpsertChip(_pendingComposerChips, chip);
-                _workspaceAttachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(ws.Id);
-                ToastService.Show("Attachment Stored", $"#{ingested.Id} {ingested.Title} added to workspace attachments.", ToastLevel.Success);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogWarning(ex, "Failed uploading attachment file '{FileName}' in Ideation.", file.Name);
-                chip.MarkFailed(ex.Message);
-                ToastService.Show("Attachment Upload Failed", ex.Message, ToastLevel.Error);
-            }
-            StateHasChanged();
+            await using var stream = file.OpenReadStream(AttachmentConstants.MaxFileDropBytes);
+            await Session.UploadAttachmentFileAsync(ws, file.Name, stream);
         }
     }
 
     private async Task HandleAttachHostFileAsync()
     {
-        var ws = WorkspaceState.ActiveWorkspace;
-        if (ws == null || string.IsNullOrWhiteSpace(_hostFilePathInput))
+        if (await Session.AttachHostFileAsync(WorkspaceState.ActiveWorkspace, _hostFilePathInput))
         {
-            return;
-        }
-
-        var hostPath = _hostFilePathInput.Trim();
-        var chip = ConversationAttachmentChipViewModel.CreatePendingHostPath(hostPath);
-        AttachmentPresentationHelper.UpsertChip(_pendingComposerChips, chip);
-        StateHasChanged();
-
-        try
-        {
-            var ingested = await AttachmentUiService.AttachHostFileAsync(ws.Id, hostPath);
-            chip.ApplyIngested(ingested);
-            AttachmentPresentationHelper.UpsertChip(_pendingComposerChips, chip);
             _hostFilePathInput = string.Empty;
-            _workspaceAttachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(ws.Id);
-            ToastService.Show("Host File Attached", $"#{ingested.Id} {ingested.Title} mapped as symlink.", ToastLevel.Success);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogWarning(ex, "Failed attaching host file '{HostPath}' in Ideation.", hostPath);
-            chip.MarkFailed(ex.Message);
-            ToastService.Show("Host File Attach Failed", ex.Message, ToastLevel.Error);
         }
     }
 
     private void CiteAttachmentInChat(TaskAttachment attachment)
     {
         _userInput = AttachmentPresentationHelper.AppendCitationToPrompt(_userInput, attachment);
-    }
-
-    private void RemovePendingChip(ConversationAttachmentChipViewModel chip)
-    {
-        _pendingComposerChips.Remove(chip);
     }
 
     private void HandleChipClick(ConversationAttachmentChipViewModel chip)
@@ -1992,26 +1001,10 @@
 
     private async Task HandleAttachmentDeletedAsync(int deletedAttachmentId)
     {
-        var deletedTitle = _workspaceAttachments.FirstOrDefault(a => a.Id == deletedAttachmentId)?.Title
-            ?? _pendingComposerChips.FirstOrDefault(c => c.AttachmentId == deletedAttachmentId)?.Title;
-
-        _pendingComposerChips.RemoveAll(c => c.AttachmentId == deletedAttachmentId);
-        _userInput = AttachmentPresentationHelper.RemoveAttachmentCitation(_userInput, deletedAttachmentId, deletedTitle);
-        foreach (var proposal in Session.Proposals)
-        {
-            proposal.RemoveAttachment(deletedAttachmentId, deletedTitle);
-        }
-
-        var active = WorkspaceState.ActiveWorkspace;
-        if (active != null)
-        {
-            _workspaceAttachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id);
-            _workspaceTasks = await TaskRepository.GetByWorkspaceIdAsync(active.Id);
-        }
-        else
-        {
-            _workspaceAttachments = Array.Empty<TaskAttachment>();
-        }
+        _userInput = await Session.HandleAttachmentDeletedAsync(
+            WorkspaceState.ActiveWorkspace,
+            deletedAttachmentId,
+            _userInput);
     }
 
     private async Task ScrollChatToBottomAsync(bool force = true)
@@ -2026,31 +1019,14 @@
         }
     }
 
-
-
     public void Dispose()
     {
-        _cts?.Cancel();
-        _cts?.Dispose();
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         Session.OnChange -= HandleSessionChanged;
-
-        var wsId = Session.BoundWorkspaceId ?? WorkspaceState.ActiveWorkspace?.Id;
-        var convId = Session.ActiveConversationId;
-        if (wsId.HasValue && convId.HasValue)
-        {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await IdeationService.ReleaseConversationSessionAsync(wsId.Value, convId.Value);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogWarning(ex, "Failed to release session affinity on disposal for session #{ConversationId}", convId.Value);
-                }
-            });
-        }
+        Session.OnNotification -= HandleSessionNotification;
+        Session.OnScrollRequested -= HandleScrollRequested;
+        Session.DetachUiDispatcher();
+        Session.DetachStreamSubscription();
 
         try
         {

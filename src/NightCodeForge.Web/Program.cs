@@ -68,6 +68,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddScoped<WorkspaceStateService>();
 builder.Services.AddSingleton<WorkerStateService>();
 builder.Services.AddScoped<ToastService>();
+builder.Services.AddScoped<IIdeationProposalService, IdeationProposalService>();
 builder.Services.AddScoped<IdeationSessionState>();
 builder.Services.AddScoped<IdeationRefinementService>();
 builder.Services.AddScoped<IWorkspaceProvisioningService, WorkspaceProvisioningService>();

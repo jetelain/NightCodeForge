@@ -39,6 +39,7 @@ public class TaskMutationService : ITaskMutationService
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly ITaskOrchestrator _taskOrchestrator;
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly IIdeationConversationCoordinator _ideationCoordinator;
     private readonly ILogger<TaskMutationService> _logger;
 
     public TaskMutationService(
@@ -48,6 +49,7 @@ public class TaskMutationService : ITaskMutationService
         ITaskMarkdownSyncService markdownSyncService,
         ITaskOrchestrator taskOrchestrator,
         IOperationsTelemetryService telemetryService,
+        IIdeationConversationCoordinator ideationCoordinator,
         ILogger<TaskMutationService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -56,6 +58,7 @@ public class TaskMutationService : ITaskMutationService
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _taskOrchestrator = taskOrchestrator ?? throw new ArgumentNullException(nameof(taskOrchestrator));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _ideationCoordinator = ideationCoordinator ?? throw new ArgumentNullException(nameof(ideationCoordinator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -70,6 +73,7 @@ public class TaskMutationService : ITaskMutationService
         task.Status = TaskOverallStatus.Rejected;
         task.IsWaitingForHuman = false;
         task.UpdatedAt = DateTime.UtcNow;
+        _ideationCoordinator.MarkWorkspaceContextDirty(task.WorkspaceId);
         await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
     }
 
@@ -408,6 +412,7 @@ public class TaskMutationService : ITaskMutationService
             _logger.LogWarning(ex, "Failed to sync task #{TaskId} markdown to repository disk", task.Id);
         }
 
+        _ideationCoordinator.MarkWorkspaceContextDirty(task.WorkspaceId);
         await TaskBadgeCounter.SynchronizeBadgeCountsAsync(_taskRepository, _telemetryService, cancellationToken);
     }
 }

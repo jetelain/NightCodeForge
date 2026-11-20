@@ -56,6 +56,7 @@ public class BacklogPrioritySortingAndFilteringTests : BunitContext
             _markdownSync,
             _orchestrator,
             telemetryMock.Object,
+            Moq.Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskMutationService>.Instance));
         TestServices.AddDefaultWebUiServices(Services);
     }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Agents.Crucible;
@@ -9,6 +10,7 @@ using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -231,5 +233,54 @@ public class CanonicalToolsetFactoryTests : IDisposable
         // When both Workspace and SandboxScope are null, CreateAsync fails fast with InvalidOperationException
         var invalidRequest = request with { SandboxScope = null };
         await Assert.ThrowsAsync<InvalidOperationException>(() => factory.CreateAsync(invalidRequest, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenScopeFactoryPresent_LeavesScopedToolModuleFieldsNullAndAttachesScopeFactory()
+    {
+        var services = new ServiceCollection();
+        var scopedValidator = new Mock<ITaskMarkdownValidator>().Object;
+        var scopedMutation = new Mock<IBacklogMutationToolService>().Object;
+        var scopedWebSearch = new Mock<IWebSearchService>();
+        scopedWebSearch.SetupGet(s => s.IsConfigured).Returns(true);
+        scopedWebSearch.SetupGet(s => s.IsEnabled).Returns(true);
+        services.AddScoped(_ => scopedValidator);
+        services.AddScoped(_ => scopedMutation);
+        services.AddScoped(_ => scopedWebSearch.Object);
+        await using var sp = services.BuildServiceProvider();
+        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+
+        var env = new Mock<IExecutionEnvironmentProvider>();
+        env.Setup(e => e.GetEnvironmentAsync(It.IsAny<Workspace>(), It.IsAny<SandboxSecurityTier>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Mock<IExecutionEnvironment>().Object);
+
+        var backlog = new Mock<IBacklogPlanningContext>();
+        backlog.SetupGet(c => c.ScopeFactory).Returns(scopeFactory);
+        backlog.SetupGet(c => c.TaskMarkdownValidator).Returns(scopedValidator);
+        backlog.SetupGet(c => c.BacklogMutationService).Returns(scopedMutation);
+        backlog.SetupGet(c => c.CanonicalToolsLogger).Returns(NullLogger<CanonicalTools>.Instance);
+
+        var factory = new CanonicalToolsetFactory(
+            TestPathResolver.Create(),
+            env.Object,
+            new EditorConfigService(),
+            new EditorConfigFileApplier(),
+            scopedWebSearch.Object,
+            new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance),
+            new Mock<IMcpClientManager>().Object,
+            backlog.Object,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default);
+
+        var session = await factory.CreateAsync(ToolsetRequest(attachBacklog: true), CancellationToken.None);
+
+        Assert.Same(scopeFactory, session.Tools.FileModule.ScopeFactory);
+        Assert.Null(session.Tools.FileModule.TaskMarkdownValidator);
+
+        Assert.Same(scopeFactory, session.Tools.BacklogModule.ScopeFactory);
+        Assert.Null(session.Tools.BacklogModule.BacklogMutationService);
+        Assert.True(session.Tools.BacklogModule.IsBacklogMutationAvailable);
+
+        Assert.Same(scopeFactory, session.Tools.ResearchAndSkillsModule.ScopeFactory);
+        Assert.Null(session.Tools.ResearchAndSkillsModule.WebSearchService);
     }
 }

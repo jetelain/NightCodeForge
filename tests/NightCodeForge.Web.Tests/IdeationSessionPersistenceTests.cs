@@ -15,7 +15,7 @@ public class IdeationSessionPersistenceTests : BunitContext
     private readonly WorkspaceStateService _workspaceState;
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly MockTaskMarkdownSyncService _markdownSync;
-    private readonly MockIdeationService _ideationService;
+    private readonly MockIdeationConversationCoordinator _coordinator;
     private readonly ToastService _toastService;
     private readonly IdeationSessionState _sessionState;
     private readonly InMemoryWorkflowRepository _workflowRepository;
@@ -28,9 +28,13 @@ public class IdeationSessionPersistenceTests : BunitContext
         _taskRepository = new InMemoryTaskRepository();
         _workflowRepository = new InMemoryWorkflowRepository();
         _markdownSync = new MockTaskMarkdownSyncService();
-        _ideationService = new MockIdeationService();
+        _coordinator = new MockIdeationConversationCoordinator(_taskRepository);
         _toastService = TestServices.CreateToastService();
-        _sessionState = new IdeationSessionState();
+        _sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: _coordinator,
+            taskRepository: _taskRepository,
+            workflowRepository: _workflowRepository,
+            markdownSync: _markdownSync);
 
         _workspace = new Workspace
         {
@@ -49,7 +53,7 @@ public class IdeationSessionPersistenceTests : BunitContext
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton<IWorkspaceRepository>(workspaceRepo);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
-        Services.AddSingleton<IIdeationService>(_ideationService);
+        Services.AddSingleton<IIdeationConversationCoordinator>(_coordinator);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_sessionState);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
@@ -62,7 +66,7 @@ public class IdeationSessionPersistenceTests : BunitContext
     {
         var proposal = new IdeationProposal("Decouple Order Processing", "Extract order saga orchestrator", 1);
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Analyzing order domain boundaries..."),
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Here is the architectural proposal for decoupling."),

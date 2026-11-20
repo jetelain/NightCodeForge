@@ -154,17 +154,18 @@ public class Step920PromptStabilizerAndTemporalContextTests
     }
 
     [Fact]
-    public async Task IdeationService_ConverseAsync_InjectsCurrentDateIntoInitialUserPrompt()
+    public async Task IdeationConversationCoordinator_SendMessageAsync_InjectsCurrentDateIntoInitialUserPrompt()
     {
         var recordingClient = new RecordingChatClient();
         var fakeTime = new FakeTimeProvider(new DateTimeOffset(2026, 10, 19, 9, 15, 0, TimeSpan.Zero));
 
-        var ideationService = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = recordingClient,
             PathResolver = TestPathResolver.Create(),
             TimeProvider = fakeTime
-        }.Build();
+        };
+        var coordinator = builder.Build();
 
         var workspace = new Workspace
         {
@@ -174,7 +175,8 @@ public class Step920PromptStabilizerAndTemporalContextTests
         };
         workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(1));
 
-        var result = await ideationService.ConverseAsync(
+        var result = await builder.ConverseAsync(
+            coordinator,
             workspace,
             "Please explore the codebase and propose backlog tasks.");
 
@@ -194,17 +196,18 @@ public class Step920PromptStabilizerAndTemporalContextTests
     }
 
     [Fact]
-    public async Task IdeationService_ConverseAsync_DoesNotDuplicateDate_WhenConversationHistoryAlreadyContainsDate()
+    public async Task IdeationConversationCoordinator_SendMessageAsync_DoesNotDuplicateDate_WhenConversationHistoryAlreadyContainsDate()
     {
         var recordingClient = new RecordingChatClient();
         var fakeTime = new FakeTimeProvider(new DateTimeOffset(2026, 10, 19, 9, 15, 0, TimeSpan.Zero));
 
-        var ideationService = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = recordingClient,
             PathResolver = TestPathResolver.Create(),
             TimeProvider = fakeTime
-        }.Build();
+        };
+        var coordinator = builder.Build();
 
         var workspace = new Workspace
         {
@@ -220,7 +223,8 @@ public class Step920PromptStabilizerAndTemporalContextTests
             ("assistant", "Hello! How can I help you plan tasks today?")
         };
 
-        var result = await ideationService.ConverseAsync(
+        var result = await builder.ConverseAsync(
+            coordinator,
             workspace,
             "Now please propose a caching task.",
             conversationHistory: history);
@@ -260,17 +264,18 @@ public class Step920PromptStabilizerAndTemporalContextTests
     }
 
     [Fact]
-    public async Task IdeationService_ConverseAsync_InjectsUnderExistingContextBlock_WhenUserPromptContainsContextBlock()
+    public async Task IdeationConversationCoordinator_SendMessageAsync_InjectsUnderExistingContextBlock_WhenUserPromptContainsContextBlock()
     {
         var recordingClient = new RecordingChatClient();
         var fakeTime = new FakeTimeProvider(new DateTimeOffset(2026, 10, 19, 9, 15, 0, TimeSpan.Zero));
 
-        var ideationService = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = recordingClient,
             PathResolver = TestPathResolver.Create(),
             TimeProvider = fakeTime
-        }.Build();
+        };
+        var coordinator = builder.Build();
 
         var workspace = new Workspace
         {
@@ -281,7 +286,7 @@ public class Step920PromptStabilizerAndTemporalContextTests
         workspace.AgentProfiles.Add(AgentProfile.CreateDefaultIdeationProfile(1));
 
         var promptWithContext = "Investigate auth system.\n\n[Context]:\n- Priority: High\n\n[Requirements]:\nMust support OAuth2.";
-        var result = await ideationService.ConverseAsync(workspace, promptWithContext);
+        var result = await builder.ConverseAsync(coordinator, workspace, promptWithContext);
 
         Assert.NotNull(result);
         Assert.NotEmpty(recordingClient.CapturedTurnMessages);

@@ -17,7 +17,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `CrucibleAgentHarness`, `DefaultBootstrapPromptBuilder`, `IdeationService`.
+- **Inbound (Who uses this):** `CrucibleAgentHarness`, `DefaultBootstrapPromptBuilder`, `IdeationConversationCoordinator`.
 - **Outbound (What this relies on):** `System.IO`, `NightCodeForge.Core.Domain.Workspace`.
 
 ## 4. Invariants & Architectural Rules

@@ -842,8 +842,19 @@ public class EfCoreTaskRepository : ITaskRepository
         await context.SaveChangesAsync(cancellationToken);
     }
 
+    public Task SanitizeTrailingInterruptedTurnsAsync(
+        int conversationId,
+        CancellationToken cancellationToken = default) =>
+        SanitizeTrailingInterruptedTurnsAsync(
+            conversationId,
+            includeUnansweredAsk: false,
+            removeTrailingUserTurnIndex: null,
+            cancellationToken);
+
     public async Task SanitizeTrailingInterruptedTurnsAsync(
         int conversationId,
+        bool includeUnansweredAsk,
+        int? removeTrailingUserTurnIndex = null,
         CancellationToken cancellationToken = default)
     {
         await using var context = await _contextFactory.CreateDbContextAsync(cancellationToken);
@@ -853,7 +864,21 @@ public class EfCoreTaskRepository : ITaskRepository
             .OrderBy(t => t.TurnIndex)
             .ToListAsync(cancellationToken);
 
-        var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(turns);
+        var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(
+            turns,
+            includeUnansweredAsk).ToList();
+
+        if (removeTrailingUserTurnIndex.HasValue)
+        {
+            var remaining = toRemove.Count > 0
+                ? turns.Where(t => !toRemove.Contains(t)).ToList()
+                : turns;
+            var orphanUsers = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingOrphanUserTurn(
+                remaining,
+                removeTrailingUserTurnIndex.Value);
+            toRemove.AddRange(orphanUsers);
+        }
+
         if (toRemove.Count > 0)
         {
             context.ConversationTurns.RemoveRange(toRemove);

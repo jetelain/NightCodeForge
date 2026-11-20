@@ -292,8 +292,14 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
 
-        var sessionState = new IdeationSessionState { BoundWorkspaceId = harness.Workspace.Id };
-        var mockIdeation = new MockIdeationService();
+        var mockIdeation = new MockIdeationConversationCoordinator(harness.TaskRepo);
+        var sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: mockIdeation,
+            taskRepository: harness.TaskRepo,
+            workflowRepository: harness.WorkflowRepo,
+            attachmentRepository: harness.AttachmentRepo,
+            attachmentUiService: harness.UiService);
+        sessionState.BoundWorkspaceId = harness.Workspace.Id;
         mockIdeation.StreamUpdatesToYield =
         [
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Reviewed cited attachments."),
@@ -444,7 +450,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         var proposal = IdeationProposalViewModel.FromProposal(
             new IdeationProposal("Implement Endpoints", $"Follow @attachment:{att.Id} guidelines."));
@@ -478,7 +484,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         var cut = Render<CreateTask>();
 
@@ -547,7 +553,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         // 1. TaskDetail.razor
         var detailCut = Render<TaskDetail>(p => p.Add(t => t.TaskId, task.Id));
@@ -601,7 +607,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         // 1. Image attachment preview renders <img>, dimensions, and MediaType badge
         var imgCut = Render<AttachmentPreviewDrawer>(p => p
@@ -710,7 +716,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         var proposal = IdeationProposalViewModel.FromProposal(
             new IdeationProposal(
@@ -805,8 +811,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        var sessionState = new IdeationSessionState();
-        var mockIdeation = new MockIdeationService
+        var mockIdeation = new MockIdeationConversationCoordinator(harness.TaskRepo)
         {
             StreamUpdatesToYield =
             [
@@ -814,6 +819,12 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
                 new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Done.", []))
             ]
         };
+        var sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: mockIdeation,
+            taskRepository: harness.TaskRepo,
+            workflowRepository: harness.WorkflowRepo,
+            attachmentRepository: harness.AttachmentRepo,
+            attachmentUiService: harness.UiService);
         RegisterHarnessServices(harness, wsState, sessionState, mockIdeation);
 
         var cut = Render<Ideation>();
@@ -826,13 +837,17 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         });
 
         // Attach same host file in composer AND cite both host path & @attachment:{id} in next message
-        cut.Find("#ideation-host-file-input").Input(hostFile);
-        cut.Find("#btn-attach-host-file").Click();
+        await cut.InvokeAsync(() => cut.Find("#ideation-host-file-input").Input(hostFile));
+        await cut.InvokeAsync(() => cut.Find("#btn-attach-host-file").Click());
         cut.WaitForAssertion(() =>
-            Assert.Contains("dedup-host.md", cut.Find(".composer-attachment-chips").TextContent));
+        {
+            var composerChips = cut.Find(".composer-attachment-chips").TextContent;
+            Assert.Contains("dedup-host.md", composerChips);
+            Assert.Contains("symlinked", composerChips);
+        }, TimeSpan.FromSeconds(5));
 
-        cut.Find("textarea.chat-textarea").Input($"Re-check \"{hostFile}\" and @attachment:{existingAtt.Id}");
-        cut.Find("button.send-btn").Click();
+        await cut.InvokeAsync(() => cut.Find("textarea.chat-textarea").Input($"Re-check \"{hostFile}\" and @attachment:{existingAtt.Id}"));
+        await cut.InvokeAsync(() => cut.Find("button.send-btn").Click());
 
         cut.WaitForAssertion(() =>
         {
@@ -840,7 +855,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             var userMessages = sessionState.Messages.Where(m => m.Role == "user").ToList();
             Assert.Equal(2, userMessages.Count);
             Assert.Single(userMessages[1].AttachmentChips!, c => c.AttachmentId == existingAtt.Id);
-        });
+        }, TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -909,7 +924,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
                 TaskId: draftTask.Id,
                 AttachmentIds: [att1.Id, att2.Id]));
 
-        var sessionState = new IdeationSessionState();
+        var sessionState = TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService);
         sessionState.Proposals.Add(proposalVm);
         sessionState.SyncProposalsWithWorkspaceTasks([draftTask]);
 
@@ -927,7 +942,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         var cut = Render<AttachmentPreviewDrawer>(p => p
             .Add(d => d.IsOpen, true)
@@ -978,7 +993,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
 
         var wsState = new WorkspaceStateService();
         wsState.SetActiveWorkspace(harness.Workspace);
-        RegisterHarnessServices(harness, wsState, new IdeationSessionState(), new MockIdeationService());
+        RegisterHarnessServices(harness, wsState, TestServices.CreateIdeationSessionState(taskRepository: harness.TaskRepo, workflowRepository: harness.WorkflowRepo, attachmentRepository: harness.AttachmentRepo, attachmentUiService: harness.UiService), new MockIdeationConversationCoordinator(harness.TaskRepo));
 
         var cut = Render<TaskDetailDrawer>(p => p
             .Add(d => d.IsOpen, true)
@@ -1018,7 +1033,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         AttachmentUiTestHarness harness,
         WorkspaceStateService wsState,
         IdeationSessionState sessionState,
-        MockIdeationService mockIdeation)
+        MockIdeationConversationCoordinator mockCoordinator)
     {
         var depStore = new InMemoryTaskDependencyStore();
         var orchestrator = new MockTaskOrchestrator();
@@ -1030,6 +1045,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             markdownSync,
             orchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            mockCoordinator,
             NullLogger<TaskMutationService>.Instance);
         var reviewService = new TaskReviewService(
             harness.TaskRepo,
@@ -1061,7 +1077,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
         Services.AddSingleton(new ReviewCommentStateService());
         Services.AddSingleton<IDevQueueService>(new MockDevQueueService());
         Services.AddSingleton(TestHubConnectionHelper.Create());
-        Services.AddSingleton<IIdeationService>(mockIdeation);
+        Services.AddSingleton<IIdeationConversationCoordinator>(mockCoordinator);
         Services.AddSingleton(sessionState);
         Services.AddSingleton(new IdeationRefinementService(harness.TaskRepo));
         Services.AddSingleton<ICompanionTriageDraftStore>(new CompanionTriageDraftStore(TimeProvider.System));
@@ -1117,6 +1133,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             taskRepo,
             workspaceRepo,
             pathResolverMock.Object,
+            Mock.Of<IIdeationConversationCoordinator>(),
             NullLogger<AttachmentUiService>.Instance);
 
         return new AttachmentUiTestHarness(

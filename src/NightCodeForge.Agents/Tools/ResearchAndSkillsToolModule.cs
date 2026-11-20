@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
@@ -12,6 +13,8 @@ namespace NightCodeForge.Agents.Tools;
 /// <summary>
 /// Composable tool module encapsulating technical web search (<c>web_search</c>) with <c>/tmp</c> markdown offload
 /// and on-demand skill loading (<c>load_skill</c>).
+/// Resolves <see cref="IWebSearchService"/> per invocation via <see cref="IServiceScopeFactory"/> when configured
+/// so warm sessions never retain a disposed scoped or transient <c>HttpClient</c>.
 /// </summary>
 public sealed partial class ResearchAndSkillsToolModule : IAgentToolModule
 {
@@ -20,12 +23,15 @@ public sealed partial class ResearchAndSkillsToolModule : IAgentToolModule
     [GeneratedRegex(@"\r\n|\r|\n")]
     private static partial Regex NewlineRegex();
 
-    public IWebSearchService WebSearchService { get; }
+    private IWebSearchService? _defaultWebSearchService;
+
+    public IWebSearchService? WebSearchService => _defaultWebSearchService;
     public IWorkspaceSkillsService SkillsService { get; }
     public ISandboxPathResolver SandboxPathResolver { get; set; }
+    public IServiceScopeFactory? ScopeFactory { get; set; }
 
-    public bool IsWebSearchConfigured => WebSearchService.IsConfigured;
-    public bool IsWebSearchEnabled => WebSearchService.IsEnabled;
+    public bool IsWebSearchConfigured => WithWebSearchService(s => s.IsConfigured, fallback: false);
+    public bool IsWebSearchEnabled => WithWebSearchService(s => s.IsEnabled, fallback: false);
 
     public ResearchAndSkillsToolModule(
         ISandboxPathResolver sandboxPathResolver,
@@ -33,8 +39,27 @@ public sealed partial class ResearchAndSkillsToolModule : IAgentToolModule
         IWorkspaceSkillsService skillsService)
     {
         SandboxPathResolver = sandboxPathResolver ?? throw new ArgumentNullException(nameof(sandboxPathResolver));
-        WebSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
+        _defaultWebSearchService = webSearchService ?? throw new ArgumentNullException(nameof(webSearchService));
         SkillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
+    }
+
+    public ResearchAndSkillsToolModule(
+        ISandboxPathResolver sandboxPathResolver,
+        IServiceScopeFactory scopeFactory,
+        IWorkspaceSkillsService skillsService)
+    {
+        SandboxPathResolver = sandboxPathResolver ?? throw new ArgumentNullException(nameof(sandboxPathResolver));
+        ScopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        SkillsService = skillsService ?? throw new ArgumentNullException(nameof(skillsService));
+    }
+
+    public void ConfigureWebSearch(IWebSearchService? defaultWebSearchService, IServiceScopeFactory? scopeFactory)
+    {
+        _defaultWebSearchService = defaultWebSearchService;
+        if (scopeFactory != null)
+        {
+            ScopeFactory = scopeFactory;
+        }
     }
 
     public IReadOnlyList<AIFunction> CreateFunctions() => CreateFunctions(this);
@@ -73,13 +98,73 @@ public sealed partial class ResearchAndSkillsToolModule : IAgentToolModule
 
     public async Task<string> WebSearchAsync(string query, int? maxResults = null, CancellationToken cancellationToken = default)
     {
-        if (!IsWebSearchEnabled &&
-            (IsWebSearchConfigured || WebSearchService.DisabledReason?.Contains("Air-Gapped", StringComparison.OrdinalIgnoreCase) == true))
+        if (_defaultWebSearchService != null)
+        {
+            return await ExecuteWebSearchAsync(_defaultWebSearchService, query, maxResults, cancellationToken);
+        }
+
+        if (ScopeFactory != null)
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            var scopedService = scope.ServiceProvider.GetRequiredService<IWebSearchService>();
+            return await ExecuteWebSearchAsync(scopedService, query, maxResults, cancellationToken);
+        }
+
+        throw new InvalidOperationException("No web search service or scope factory is configured.");
+    }
+
+    private T WithWebSearchService<T>(Func<IWebSearchService, T> selector, T fallback)
+    {
+        if (_defaultWebSearchService != null)
+        {
+            return selector(_defaultWebSearchService);
+        }
+
+        if (ScopeFactory != null)
+        {
+            var scope = ScopeFactory.CreateAsyncScope();
+            try
+            {
+                var scopedService = scope.ServiceProvider.GetService<IWebSearchService>();
+                return scopedService != null ? selector(scopedService) : fallback;
+            }
+            finally
+            {
+                if (SynchronizationContext.Current != null)
+                {
+                    Task.Run(() => scope.DisposeAsync().AsTask()).GetAwaiter().GetResult();
+                }
+                else
+                {
+                    var disposeTask = scope.DisposeAsync();
+                    if (disposeTask.IsCompletedSuccessfully)
+                    {
+                        disposeTask.GetAwaiter().GetResult();
+                    }
+                    else
+                    {
+                        disposeTask.AsTask().GetAwaiter().GetResult();
+                    }
+                }
+            }
+        }
+
+        return fallback;
+    }
+
+    private async Task<string> ExecuteWebSearchAsync(
+        IWebSearchService webSearchService,
+        string query,
+        int? maxResults,
+        CancellationToken cancellationToken)
+    {
+        if (!webSearchService.IsEnabled &&
+            (webSearchService.IsConfigured || webSearchService.DisabledReason?.Contains("Air-Gapped", StringComparison.OrdinalIgnoreCase) == true))
         {
             return WebSearchConstants.AirGappedToolErrorMessage;
         }
 
-        if (!IsWebSearchConfigured)
+        if (!webSearchService.IsConfigured)
         {
             return WebSearchConstants.UnconfiguredToolErrorMessage;
         }
@@ -87,7 +172,7 @@ public sealed partial class ResearchAndSkillsToolModule : IAgentToolModule
         WebSearchResponse response;
         try
         {
-            response = await WebSearchService.SearchAsync(query, maxResults ?? WebSearchSettings.DefaultMaxResultsCount, cancellationToken);
+            response = await webSearchService.SearchAsync(query, maxResults ?? WebSearchSettings.DefaultMaxResultsCount, cancellationToken);
         }
         catch (AirGappedOperationException)
         {

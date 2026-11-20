@@ -190,14 +190,20 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
             _cliFilterRegistry,
             _backlogContext.CanonicalToolsLogger);
 
+        var scopeFactory = _backlogContext.ScopeFactory;
         tools.FileModule.ConfigureDefaultTaskMarkdownValidator(
-            _backlogContext.TaskMarkdownValidator,
-            _backlogContext.ScopeFactory);
+            scopeFactory != null ? null : _backlogContext.TaskMarkdownValidator,
+            scopeFactory);
 
         tools.BacklogModule.ConfigureBacklogMutation(
-            _backlogContext.BacklogMutationService,
-            _backlogContext.ScopeFactory,
+            scopeFactory != null ? null : _backlogContext.BacklogMutationService,
+            scopeFactory,
             request.AttachBacklogMutationService);
+
+        if (scopeFactory != null)
+        {
+            tools.ResearchAndSkillsModule.ConfigureWebSearch(defaultWebSearchService: null, scopeFactory);
+        }
 
         var dispatcher = NightCodeForgeToolDispatcher.Create(
             tools,

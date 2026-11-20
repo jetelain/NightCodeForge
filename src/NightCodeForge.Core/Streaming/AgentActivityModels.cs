@@ -73,4 +73,8 @@ public static class AgentActivityMetadataKeys
     public const string Difficulty = "difficulty";
     public const string HarnessId = "harnessId";
     public const string ModelName = "modelName";
+    public const string WorkspaceId = "workspaceId";
+    public const string ConversationId = "conversationId";
+    public const string AgentProfile = "agentProfile";
+    public const string ModelKey = "model";
 }

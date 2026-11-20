@@ -16,7 +16,7 @@ public class IdeationPageTests : BunitContext
     private readonly WorkspaceStateService _workspaceState;
     private readonly InMemoryTaskRepository _taskRepository;
     private readonly MockTaskMarkdownSyncService _markdownSync;
-    private readonly MockIdeationService _ideationService;
+    private readonly MockIdeationConversationCoordinator _coordinator;
     private readonly ToastService _toastService;
     private readonly IdeationSessionState _sessionState;
     private readonly InMemoryWorkflowRepository _workflowRepository;
@@ -31,16 +31,20 @@ public class IdeationPageTests : BunitContext
         _workspaceRepository = new InMemoryWorkspaceRepository();
         _workspaceRepository.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         _markdownSync = new MockTaskMarkdownSyncService();
-        _ideationService = new MockIdeationService();
+        _coordinator = new MockIdeationConversationCoordinator(_taskRepository);
         _toastService = TestServices.CreateToastService();
-        _sessionState = new IdeationSessionState();
+        _sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: _coordinator,
+            taskRepository: _taskRepository,
+            workflowRepository: _workflowRepository,
+            markdownSync: _markdownSync);
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton<IWorkspaceRepository>(_workspaceRepository);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
-        Services.AddSingleton<IIdeationService>(_ideationService);
+        Services.AddSingleton<IIdeationConversationCoordinator>(_coordinator);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_sessionState);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
@@ -80,7 +84,7 @@ public class IdeationPageTests : BunitContext
         _workspaceState.SetActiveWorkspace(ws);
         _sessionState.BoundWorkspaceId = 1;
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Analyzing dependencies..."),
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "I found 2 architectural areas for improvement."),
@@ -208,7 +212,7 @@ public class IdeationPageTests : BunitContext
             DurationMs = 85
         };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: toolStarted),
             new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: toolCompleted),
@@ -252,7 +256,7 @@ public class IdeationPageTests : BunitContext
 
         var failedTool = new IdeationToolCallInfo("call_fail", "run_command", "{\"command\": \"cat missing.txt\"}", "File not found: missing.txt", IsError: true, DurationMs: 120);
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: failedTool with { Result = null, DurationMs = 0 }),
             new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: failedTool),
@@ -282,7 +286,7 @@ public class IdeationPageTests : BunitContext
         _workspaceState.SetActiveWorkspace(ws);
         _sessionState.BoundWorkspaceId = 1;
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Deep chain-of-thought analysis in progress..."),
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Here is the architectural answer."),
@@ -343,7 +347,7 @@ public class IdeationPageTests : BunitContext
         _sessionState.BoundWorkspaceId = 42;
 
         var proposal = new IdeationProposal("Add telemetry", "Enable opentelemetry exporter", 1);
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ThinkingDelta, TextDelta: "Thinking about metrics..."),
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Telemetry proposal formulated."),
@@ -396,7 +400,7 @@ public class IdeationPageTests : BunitContext
         var cut = Render<Ideation>();
 
         // Send a first message
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Initial reply."),
             new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Initial reply.", Array.Empty<IdeationProposal>()))
@@ -525,7 +529,7 @@ public class IdeationPageTests : BunitContext
         var cut = Render<Ideation>();
 
         // 1. Send initial message so _cts is created
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "First reply."),
             new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("First reply.", Array.Empty<IdeationProposal>()))
@@ -542,7 +546,7 @@ public class IdeationPageTests : BunitContext
         Assert.Empty(_sessionState.Messages);
 
         // 3. Send a new message citing a class in the fresh session
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "CrucibleAgentHarness orchestrates the agent loop."),
             new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("CrucibleAgentHarness orchestrates the agent loop.", Array.Empty<IdeationProposal>()))
@@ -568,7 +572,7 @@ public class IdeationPageTests : BunitContext
 
         // 1. Start a generation that waits on a question so we can cancel it mid-flight
         var pendingQuestion = new IdeationQuestion("Which class?", null, new[] { "ClassA", "ClassB" });
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Checking..."),
             new(IdeationStreamUpdateKind.QuestionAsked, Question: pendingQuestion)
@@ -591,7 +595,7 @@ public class IdeationPageTests : BunitContext
         });
 
         // 3. Send a follow-up message citing a class
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Inspected RoslynSymbolIndexProvider."),
             new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Inspected RoslynSymbolIndexProvider.", Array.Empty<IdeationProposal>()))
@@ -756,39 +760,39 @@ public class IdeationPageTests : BunitContext
         var select = cut.Find("select.session-select");
         await cut.InvokeAsync(() => select.Change(conv1.Id.ToString()));
 
-        Assert.Single(_ideationService.ReleasedSessions);
-        Assert.Equal((ws1.Id, conv2.Id), _ideationService.ReleasedSessions[0]);
+        Assert.Single(_coordinator.ReleasedSessions);
+        Assert.Equal((ws1.Id, conv2.Id), _coordinator.ReleasedSessions[0]);
         Assert.Equal(conv1.Id, _sessionState.ActiveConversationId);
 
         // 2. Click Clear Chat (ResetSession) -> releases (ws1.Id, conv1.Id) and starts a new conversation
-        _ideationService.ReleasedSessions.Clear();
+        _coordinator.ReleasedSessions.Clear();
         var clearBtn = cut.Find("button.reset-session-btn");
         await cut.InvokeAsync(() => clearBtn.Click());
 
-        Assert.Single(_ideationService.ReleasedSessions);
-        Assert.Equal((ws1.Id, conv1.Id), _ideationService.ReleasedSessions[0]);
+        Assert.Single(_coordinator.ReleasedSessions);
+        Assert.Equal((ws1.Id, conv1.Id), _coordinator.ReleasedSessions[0]);
         var conv3Id = _sessionState.ActiveConversationId;
         Assert.NotNull(conv3Id);
         Assert.NotEqual(conv1.Id, conv3Id.Value);
 
         // 3. Switch active workspace from ws1 to ws2 -> must release (ws1.Id, conv3Id), NOT (ws2.Id, conv3Id)!
-        _ideationService.ReleasedSessions.Clear();
+        _coordinator.ReleasedSessions.Clear();
         _workspaceState.SetActiveWorkspace(ws2);
 
         cut.WaitForAssertion(() =>
         {
-            Assert.Contains((ws1.Id, conv3Id.Value), _ideationService.ReleasedSessions);
+            Assert.Contains((ws1.Id, conv3Id.Value), _coordinator.ReleasedSessions);
         });
-        Assert.DoesNotContain(_ideationService.ReleasedSessions, s => s.WorkspaceId == ws2.Id && s.ConversationId == conv3Id.Value);
+        Assert.DoesNotContain(_coordinator.ReleasedSessions, s => s.WorkspaceId == ws2.Id && s.ConversationId == conv3Id.Value);
 
         // 4. Same-workspace metadata update (NotifyWorkspaceUpdated) -> must NOT release the active session on ws2!
         var ws2ConvId = _sessionState.ActiveConversationId;
         Assert.NotNull(ws2ConvId);
-        _ideationService.ReleasedSessions.Clear();
+        _coordinator.ReleasedSessions.Clear();
         _workspaceState.NotifyWorkspaceUpdated(new Workspace { Id = 20, Name = "Workspace Two Renamed", DefaultBaseBranch = "main", Emoji = "🚀" });
 
         cut.WaitForAssertion(() => Assert.Equal(ws2.Id, _sessionState.BoundWorkspaceId));
-        Assert.Empty(_ideationService.ReleasedSessions);
+        Assert.Empty(_coordinator.ReleasedSessions);
     }
 
     [Fact]
@@ -869,7 +873,7 @@ public class IdeationPageTests : BunitContext
         var reworkStarted = new IdeationToolCallInfo("call_rework_1", CanonicalToolNames.ReworkPriorities, "{}");
         var reworkCompleted = reworkStarted with { Result = $"Priorities updated for 2 task(s): #{draftA.Id}: P3 -> P2; #{draftB.Id}: P3 -> P1.", DurationMs = 15 };
 
-        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        _coordinator.OnBeforeYieldUpdateAsync = async update =>
         {
             if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_edit_1")
             {
@@ -891,7 +895,7 @@ public class IdeationPageTests : BunitContext
             }
         };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: editStarted),
             new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: editCompleted),
@@ -972,7 +976,7 @@ public class IdeationPageTests : BunitContext
         var removeStarted = new IdeationToolCallInfo("call_remove_1", CanonicalToolNames.RemoveTask, $"{{\"task_id\":{cancelledDraft.Id}}}");
         var removeCompleted = removeStarted with { Result = $"Task #{cancelledDraft.Id} removed (status Cancelled).", DurationMs = 12 };
 
-        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        _coordinator.OnBeforeYieldUpdateAsync = async update =>
         {
             if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_remove_1")
             {
@@ -981,7 +985,7 @@ public class IdeationPageTests : BunitContext
             }
         };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: keptProposal),
             new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: obsoleteProposal),
@@ -1129,7 +1133,7 @@ public class IdeationPageTests : BunitContext
         var removeStarted = new IdeationToolCallInfo("call_rm_promoted", CanonicalToolNames.RemoveTask, $"{{\"task_id\":{suggestedTask.Id}}}");
         var removeCompleted = removeStarted with { Result = $"Task #{suggestedTask.Id} removed (status Cancelled).", DurationMs = 10 };
 
-        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        _coordinator.OnBeforeYieldUpdateAsync = async update =>
         {
             if (update.Kind == IdeationStreamUpdateKind.ToolCallCompleted && update.ToolCall?.ToolCallId == "call_rm_promoted")
             {
@@ -1138,7 +1142,7 @@ public class IdeationPageTests : BunitContext
             }
         };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ToolCallStarted, ToolCall: removeStarted),
             new(IdeationStreamUpdateKind.ToolCallCompleted, ToolCall: removeCompleted),
@@ -1178,7 +1182,7 @@ public class IdeationPageTests : BunitContext
         var proposal = new IdeationProposal("Draft To Dismiss MidTurn", "Will be dismissed by user during streaming", 3, TaskId: draftTask.Id);
         var readyToComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _ideationService.OnBeforeYieldUpdateAsync = async update =>
+        _coordinator.OnBeforeYieldUpdateAsync = async update =>
         {
             if (update.Kind == IdeationStreamUpdateKind.Completed)
             {
@@ -1186,7 +1190,7 @@ public class IdeationPageTests : BunitContext
             }
         };
 
-        _ideationService.StreamUpdatesToYield = new List<IdeationStreamUpdate>
+        _coordinator.StreamUpdatesToYield = new List<IdeationStreamUpdate>
         {
             new(IdeationStreamUpdateKind.ProposalDiscovered, Proposal: proposal),
             new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Proposed a draft task."),
@@ -1212,126 +1216,6 @@ public class IdeationPageTests : BunitContext
         Assert.Empty(_sessionState.Proposals);
         Assert.Empty(cut.FindComponents<IdeationProposalCard>());
         Assert.DoesNotContain("Draft To Dismiss MidTurn", cut.Find(".proposals-pane").InnerHtml);
-    }
-}
-
-public class MockIdeationService : IIdeationService
-{
-    public List<IdeationStreamUpdate> StreamUpdatesToYield { get; set; } = new();
-    public Func<IdeationStreamUpdate, Task>? OnBeforeYieldUpdateAsync { get; set; }
-    public List<(int WorkspaceId, int ConversationId)> ReleasedSessions { get; } = new();
-    public int? LastConversationId { get; private set; }
-
-    public Task<IdeationResult> ConverseAsync(
-        Workspace workspace,
-        string userPrompt,
-        IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
-        AgentProfile? agentProfile = null,
-        string? customSystemPrompt = null,
-        CancellationToken cancellationToken = default)
-    {
-        return Task.FromResult(new IdeationResult("Response", Array.Empty<IdeationProposal>()));
-    }
-
-    public Task<IdeationResult> ConverseAsync(
-        Workspace workspace,
-        string userPrompt,
-        IReadOnlyList<(string Role, string Content)>? conversationHistory,
-        string? customSystemPrompt,
-        CancellationToken cancellationToken = default)
-    {
-        return ConverseAsync(workspace, userPrompt, conversationHistory, null, customSystemPrompt, cancellationToken);
-    }
-
-    public async IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
-        Workspace workspace,
-        string userPrompt,
-        IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
-        AgentProfile? agentProfile = null,
-        string? customSystemPrompt = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
-    {
-        foreach (var update in StreamUpdatesToYield)
-        {
-            if (cancellationToken.IsCancellationRequested)
-                yield break;
-
-            if (OnBeforeYieldUpdateAsync != null)
-            {
-                await OnBeforeYieldUpdateAsync(update);
-            }
-
-            yield return update;
-            await Task.Yield();
-
-            if (update.Kind == IdeationStreamUpdateKind.QuestionAsked)
-            {
-                var questions = update.Questions ?? (update.Question != null ? new[] { update.Question } : null);
-                if (questions != null && questions.Count > 0)
-                {
-                    using var reg = cancellationToken.Register(() =>
-                    {
-                        foreach (var q in questions)
-                        {
-                            q.Cancel();
-                        }
-                    });
-                    try
-                    {
-                        await Task.WhenAll(questions.Select(q => q.AnswerTask));
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        yield break;
-                    }
-                }
-            }
-        }
-    }
-
-    public IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
-        Workspace workspace,
-        string userPrompt,
-        IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
-        AgentProfile? agentProfile = null,
-        string? customSystemPrompt = null,
-        int? conversationId = null,
-        CancellationToken cancellationToken = default)
-    {
-        LastConversationId = conversationId;
-        return ConverseStreamingAsync(workspace, userPrompt, conversationHistory, agentProfile, customSystemPrompt, cancellationToken);
-    }
-
-    public Task<IdeationResult> ConverseAsync(
-        Workspace workspace,
-        string userPrompt,
-        IReadOnlyList<(string Role, string Content)>? conversationHistory = null,
-        AgentProfile? agentProfile = null,
-        string? customSystemPrompt = null,
-        int? conversationId = null,
-        CancellationToken cancellationToken = default)
-    {
-        LastConversationId = conversationId;
-        return ConverseAsync(workspace, userPrompt, conversationHistory, agentProfile, customSystemPrompt, cancellationToken);
-    }
-
-    public Task<bool> ReleaseConversationSessionAsync(
-        int workspaceId,
-        int conversationId,
-        CancellationToken cancellationToken = default)
-    {
-        ReleasedSessions.Add((workspaceId, conversationId));
-        return Task.FromResult(true);
-    }
-
-    public IAsyncEnumerable<IdeationStreamUpdate> ConverseStreamingAsync(
-        Workspace workspace,
-        string userPrompt,
-        IReadOnlyList<(string Role, string Content)>? conversationHistory,
-        string? customSystemPrompt,
-        CancellationToken cancellationToken = default)
-    {
-        return ConverseStreamingAsync(workspace, userPrompt, conversationHistory, null, customSystemPrompt, cancellationToken);
     }
 }
 

@@ -598,15 +598,8 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             new TranscriptAnalysisService(),
             NullLogger<AgentWorkspaceContextService>.Instance);
 
-        // 1. Verify IdeationService injects <workspace_attachments> and citation rule
+        // 1. Verify IdeationConversationCoordinator injects <workspace_attachments> and citation rule
         var capturedIdeationRequests = new List<HarnessAgentRequest>();
-        var ideationBuilder = new TestIdeationServiceBuilder
-        {
-            PathResolver = pathResolver,
-            WorkspaceRepository = workspaceRepo,
-            TaskRepository = taskRepo,
-            BaseChatClient = new StaticTextChatClient("Explored workspace attachments.")
-        };
         var ideationProfile = new AgentProfile
         {
             Id = "ideation",
@@ -618,28 +611,19 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
         workspaceRepo.SeedGlobalProfiles([ideationProfile]);
 
         var ideationHarnessFactoryMock = CreateCapturingHarnessAgentFactory(req => capturedIdeationRequests.Add(req));
-        var ideationService = new IdeationService(
-            new CanonicalToolsetFactory(
-                pathResolver,
-                ideationBuilder.EnvProvider,
-                ideationBuilder.EditorConfigService,
-                ideationBuilder.EditorConfigFileApplier,
-                ideationBuilder.WebSearchService,
-                ideationBuilder.SkillsServiceFactory,
-                ideationBuilder.McpManager,
-                backlogContext,
-                NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default),
-            workspaceContext,
-            ideationHarnessFactoryMock.Object,
-            ideationBuilder.ActivityStreamer,
-            ideationBuilder.TranscriptService,
-            workspaceRepo,
-            taskRepo,
-            Mock.Of<ILlmGatewayService>(),
-            NullLogger<IdeationService>.Instance,
-            TimeProvider.System);
+        using var ideationBuilder = new TestIdeationCoordinatorBuilder
+        {
+            PathResolver = pathResolver,
+            WorkspaceRepository = workspaceRepo,
+            TaskRepository = taskRepo,
+            BacklogContext = backlogContext,
+            WorkspaceContextService = workspaceContext,
+            HarnessAgentFactory = ideationHarnessFactoryMock.Object,
+            BaseChatClient = new StaticTextChatClient("Explored workspace attachments.")
+        };
+        var ideationCoordinator = ideationBuilder.Build();
 
-        await ideationService.ConverseAsync(workspace, "Review attached specs.", agentProfile: ideationProfile);
+        await ideationBuilder.ConverseAsync(ideationCoordinator, workspace, "Review attached specs.", agentProfile: ideationProfile);
 
         var ideationReq = Assert.Single(capturedIdeationRequests);
         Assert.Contains("<workspace_attachments>", ideationReq.Instructions);
@@ -1015,13 +999,6 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             NullLogger<AgentWorkspaceContextService>.Instance);
 
         var capturedIdeationPrompts = new List<string>();
-        var ideationBuilder = new TestIdeationServiceBuilder
-        {
-            PathResolver = pathResolverMock.Object,
-            WorkspaceRepository = workspaceRepo,
-            TaskRepository = taskRepo,
-            BaseChatClient = new StaticTextChatClient("Proposed task referencing attachment.")
-        };
         var ideationProfile = new AgentProfile
         {
             Id = "ideation",
@@ -1032,28 +1009,19 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
         };
         var ideationFactory = CreateCapturingHarnessAgentFactory(req => capturedIdeationPrompts.Add(req.Instructions));
 
-        var ideationService = new IdeationService(
-            new CanonicalToolsetFactory(
-                pathResolverMock.Object,
-                ideationBuilder.EnvProvider,
-                ideationBuilder.EditorConfigService,
-                ideationBuilder.EditorConfigFileApplier,
-                ideationBuilder.WebSearchService,
-                ideationBuilder.SkillsServiceFactory,
-                ideationBuilder.McpManager,
-                backlogContext,
-                NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default),
-            workspaceContext,
-            ideationFactory.Object,
-            ideationBuilder.ActivityStreamer,
-            ideationBuilder.TranscriptService,
-            workspaceRepo,
-            taskRepo,
-            Mock.Of<ILlmGatewayService>(),
-            NullLogger<IdeationService>.Instance,
-            TimeProvider.System);
+        using var ideationBuilder = new TestIdeationCoordinatorBuilder
+        {
+            PathResolver = pathResolverMock.Object,
+            WorkspaceRepository = workspaceRepo,
+            TaskRepository = taskRepo,
+            BacklogContext = backlogContext,
+            WorkspaceContextService = workspaceContext,
+            HarnessAgentFactory = ideationFactory.Object,
+            BaseChatClient = new StaticTextChatClient("Proposed task referencing attachment.")
+        };
+        var coordinator = ideationBuilder.Build();
 
-        await ideationService.ConverseAsync(workspace, "Plan token refresh task", agentProfile: ideationProfile);
+        await ideationBuilder.ConverseAsync(coordinator, workspace, "Plan token refresh task", agentProfile: ideationProfile);
         Assert.Contains($"\"id\":{ingested.Id}", Assert.Single(capturedIdeationPrompts));
 
         // Agent proposes task citing @attachment:{id}

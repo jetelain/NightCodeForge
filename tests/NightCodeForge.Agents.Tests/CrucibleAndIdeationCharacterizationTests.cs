@@ -16,7 +16,7 @@ namespace NightCodeForge.Agents.Tests;
 /// <summary>
 /// Pre-refactoring characterization tests locking down shared context, skills catalog,
 /// dynamic context window discovery, and read-only tool scoping across
-/// <see cref="Crucible.CrucibleAgentHarness"/> and <see cref="IdeationService"/>.
+/// <see cref="Crucible.CrucibleAgentHarness"/> and <see cref="IdeationConversationCoordinator"/>.
 /// </summary>
 public class CrucibleAndIdeationCharacterizationTests : IDisposable
 {
@@ -140,13 +140,14 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             return [new ChatResponseUpdate(ChatRole.Assistant, "Ideation response.")];
         });
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = client,
             PathResolver = TestPathResolver.Create(),
             SkillsServiceFactory = mockSkillsFactory.Object,
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "ideation-transcripts"))
-        }.Build();
+        };
+        var service = builder.Build();
 
         var permittedTools = includeLoadSkill
             ? new List<string> { CanonicalToolNames.Read, CanonicalToolNames.ProposeTasks, CanonicalToolNames.LoadSkill }
@@ -167,7 +168,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             AgentProfiles = new List<AgentProfile> { profile }
         };
 
-        var result = await service.ConverseAsync(workspace, "Explore features", agentProfile: profile);
+        var result = await builder.ConverseAsync(service, workspace, "Explore features", agentProfile: profile);
 
         Assert.NotNull(result);
         Assert.NotNull(capturedOptions?.Instructions);
@@ -291,7 +292,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
         var client = new CapturingStreamingChatClient((_, _) =>
             [new ChatResponseUpdate(ChatRole.Assistant, "Ideation fallback succeeded.")]);
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = client,
             PathResolver = TestPathResolver.Create(),
@@ -299,7 +300,8 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             LlmOptions = Options.Create(new LlmProviderOptions { ContextWindowTokens = 65536 }),
             HarnessAgentLogger = logger,
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "ideation-transcripts"))
-        }.Build();
+        };
+        var service = builder.Build();
 
         var profile = new AgentProfile
         {
@@ -316,7 +318,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             AgentProfiles = new List<AgentProfile> { profile }
         };
 
-        var result = await service.ConverseAsync(workspace, "Plan next iteration", agentProfile: profile);
+        var result = await builder.ConverseAsync(service, workspace, "Plan next iteration", agentProfile: profile);
 
         Assert.NotNull(result);
         Assert.Contains("Ideation fallback succeeded.", result.AssistantMessage);
@@ -324,7 +326,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
     }
 
     [Fact]
-    public async Task IdeationService_WhenContextWindowNull_PassesDiscoveredWindowToCompactionStrategy()
+    public async Task IdeationConversationCoordinator_WhenContextWindowNull_PassesDiscoveredWindowToCompactionStrategy()
     {
         // Discover a small 4096-token window from the gateway so history exceeding ~3,072 tokens (~12,300 chars)
         // triggers PiStyleCrucibleCompactionStrategy before the model call.
@@ -340,13 +342,14 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             return [new ChatResponseUpdate(ChatRole.Assistant, "Compacted summary response.")];
         });
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = client,
             PathResolver = TestPathResolver.Create(),
             GatewayService = mockGateway.Object,
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "ideation-compact-transcripts"))
-        }.Build();
+        };
+        var service = builder.Build();
 
         var profile = new AgentProfile
         {
@@ -371,7 +374,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             ("assistant", new string('D', 6000))
         };
 
-        var result = await service.ConverseAsync(workspace, "Final question", conversationHistory: longHistory, agentProfile: profile);
+        var result = await builder.ConverseAsync(service, workspace, "Final question", conversationHistory: longHistory, agentProfile: profile);
 
         Assert.NotNull(result);
         mockGateway.Verify(g => g.ResolveContextWindowAsync("compact-model:7b", It.IsAny<CancellationToken>()), Times.Once);
@@ -510,12 +513,13 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             return [new ChatResponseUpdate(ChatRole.Assistant, "Read-only ideation complete.")];
         });
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = client,
             PathResolver = TestPathResolver.Create(),
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "ideation-transcripts"))
-        }.Build();
+        };
+        var service = builder.Build();
 
         var profile = new AgentProfile
         {
@@ -532,7 +536,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             AgentProfiles = new List<AgentProfile> { profile }
         };
 
-        await service.ConverseAsync(workspace, "Explore codebase", agentProfile: profile);
+        await builder.ConverseAsync(service, workspace, "Explore codebase", agentProfile: profile);
 
         Assert.NotNull(capturedOptions?.Tools);
         var toolNames = capturedOptions.Tools.OfType<AIFunction>().Select(t => t.Name).ToList();
@@ -544,7 +548,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
     [Theory]
     [InlineData(AgentMode.ReadOnly, SandboxSecurityTier.Standard)]
     [InlineData(AgentMode.Full, SandboxSecurityTier.RestrictedReadOnly)]
-    public async Task IdeationService_WhenReadOnlyOrRestrictedSecurityTier_RejectsMutatingToolCalls(
+    public async Task IdeationConversationCoordinator_WhenReadOnlyOrRestrictedSecurityTier_RejectsMutatingToolCalls(
         AgentMode mode,
         SandboxSecurityTier securityTier)
     {
@@ -580,12 +584,13 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             return [new ChatResponseUpdate(ChatRole.Assistant, "Write rejected as expected.")];
         });
 
-        var service = new TestIdeationServiceBuilder
+        using var builder = new TestIdeationCoordinatorBuilder
         {
             BaseChatClient = client,
             PathResolver = TestPathResolver.Create(),
             TranscriptService = new SessionTranscriptService(Path.Combine(_tempDir, "ideation-transcripts"))
-        }.Build();
+        };
+        var service = builder.Build();
 
         var profile = new AgentProfile
         {
@@ -603,7 +608,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
             AgentProfiles = new List<AgentProfile> { profile }
         };
 
-        var result = await service.ConverseAsync(workspace, "Attempt write", agentProfile: profile);
+        var result = await builder.ConverseAsync(service, workspace, "Attempt write", agentProfile: profile);
 
         Assert.NotNull(result);
         Assert.NotNull(writeToolResult);

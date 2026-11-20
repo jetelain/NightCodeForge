@@ -64,6 +64,7 @@ public class Step1238TriageWebAndInspectorTests : BunitContext
             new MockTaskMarkdownSyncService(),
             mockOrchestrator,
             Mock.Of<IOperationsTelemetryService>(),
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton(TestHubConnectionHelper.Create());
         Services.AddSingleton<ReviewCommentStateService>();

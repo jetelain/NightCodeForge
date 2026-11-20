@@ -1,7 +1,9 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
@@ -41,7 +43,8 @@ public sealed class ResearchAndSkillsToolModuleTests : IDisposable
         var skills = new Mock<IWorkspaceSkillsService>().Object;
 
         Assert.Throws<ArgumentNullException>(() => new ResearchAndSkillsToolModule(null!, webSearch, skills));
-        Assert.Throws<ArgumentNullException>(() => new ResearchAndSkillsToolModule(_pathResolver, null!, skills));
+        Assert.Throws<ArgumentNullException>(() => new ResearchAndSkillsToolModule(_pathResolver, (IWebSearchService)null!, skills));
+        Assert.Throws<ArgumentNullException>(() => new ResearchAndSkillsToolModule(_pathResolver, (IServiceScopeFactory)null!, skills));
         Assert.Throws<ArgumentNullException>(() => new ResearchAndSkillsToolModule(_pathResolver, webSearch, null!));
     }
 
@@ -203,5 +206,279 @@ public sealed class ResearchAndSkillsToolModuleTests : IDisposable
         Assert.Contains("were truncated inline to fit context budget.", result);
         Assert.DoesNotContain("/tmp/web-search-", result);
         Assert.DoesNotContain("full content:", result);
+    }
+
+    private sealed class TrackingWebSearchService : IWebSearchService, IDisposable
+    {
+        private readonly Action<TrackingWebSearchService> _onDispose;
+
+        public TrackingWebSearchService(Action<TrackingWebSearchService> onDispose, bool isConfigured = true, bool isEnabled = true)
+        {
+            _onDispose = onDispose;
+            IsConfigured = isConfigured;
+            IsEnabled = isEnabled;
+        }
+
+        public int SearchCalls { get; private set; }
+        public bool IsDisposed { get; private set; }
+        public string ProviderName => "TestWebSearch";
+        public bool IsConfigured { get; }
+        public bool IsEnabled { get; }
+        public string? DisabledReason => IsConfigured ? null : "Disabled in test";
+
+        public Task<WebSearchResponse> SearchAsync(string query, int maxResults = 5, CancellationToken cancellationToken = default)
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            SearchCalls++;
+            return Task.FromResult(new WebSearchResponse([
+                new WebSearchResultItem("Result for " + query, "https://example.com/" + SearchCalls, "Short snippet")
+            ]));
+        }
+
+        public void Dispose()
+        {
+            IsDisposed = true;
+            _onDispose(this);
+        }
+    }
+
+    [Fact]
+    public async Task WebSearchAsync_WithScopeFactory_ResolvesFreshScopedServicePerCallAndDisposesScopeWithoutRetainingInstance()
+    {
+        var createdServices = new List<TrackingWebSearchService>();
+        var disposedServices = new List<TrackingWebSearchService>();
+
+        var services = new ServiceCollection();
+        services.AddScoped<IWebSearchService>(_ =>
+        {
+            var svc = new TrackingWebSearchService(s => disposedServices.Add(s));
+            createdServices.Add(svc);
+            return svc;
+        });
+
+        await using var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+
+        var skillsService = new Mock<IWorkspaceSkillsService>().Object;
+        var module = new ResearchAndSkillsToolModule(_pathResolver, scopeFactory, skillsService);
+
+        Assert.Null(module.WebSearchService);
+        Assert.Same(scopeFactory, module.ScopeFactory);
+
+        var res1 = await module.WebSearchAsync("first query", 3);
+        var res2 = await module.WebSearchAsync("second query", 3);
+
+        Assert.Contains("Result for first query", res1);
+        Assert.Contains("Result for second query", res2);
+        Assert.Equal(2, createdServices.Count);
+        Assert.NotSame(createdServices[0], createdServices[1]);
+        Assert.Equal(2, disposedServices.Count);
+        Assert.All(createdServices, svc =>
+        {
+            Assert.True(svc.IsDisposed);
+            Assert.Equal(1, svc.SearchCalls);
+        });
+        Assert.Null(module.WebSearchService);
+    }
+
+    [Fact]
+    public async Task IsWebSearchConfiguredAndEnabled_WithScopeFactory_ProbesFreshScopeWithoutRetainingCaptiveService()
+    {
+        var createdServices = new List<TrackingWebSearchService>();
+        var services = new ServiceCollection();
+        services.AddScoped<IWebSearchService>(_ =>
+        {
+            var svc = new TrackingWebSearchService(_ => { }, isConfigured: true, isEnabled: false);
+            createdServices.Add(svc);
+            return svc;
+        });
+
+        await using var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+        var scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
+
+        var initialDefault = new TrackingWebSearchService(_ => { }, isConfigured: true, isEnabled: true);
+        var module = new ResearchAndSkillsToolModule(
+            _pathResolver,
+            initialDefault,
+            new Mock<IWorkspaceSkillsService>().Object);
+
+        module.ConfigureWebSearch(defaultWebSearchService: null, scopeFactory);
+
+        Assert.Null(module.WebSearchService);
+        Assert.True(module.IsWebSearchConfigured);
+        Assert.False(module.IsWebSearchEnabled);
+        Assert.Equal(2, createdServices.Count);
+        Assert.All(createdServices, s => Assert.True(s.IsDisposed));
+    }
+
+    private sealed class AsyncOnlyDisposableWebSearchService : IWebSearchService, IAsyncDisposable
+    {
+        public bool IsAsyncDisposed { get; private set; }
+        public string ProviderName => "AsyncOnly";
+        public bool IsConfigured => true;
+        public bool IsEnabled => true;
+        public string? DisabledReason => null;
+
+        public Task<WebSearchResponse> SearchAsync(string query, int maxResults = 5, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WebSearchResponse(Array.Empty<WebSearchResultItem>()));
+
+        public ValueTask DisposeAsync()
+        {
+            IsAsyncDisposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task IsWebSearchConfiguredAndEnabled_WhenServiceImplementsOnlyIAsyncDisposable_DisposesScopeCleanlyWithoutThrowing()
+    {
+        var created = new List<AsyncOnlyDisposableWebSearchService>();
+        var services = new ServiceCollection();
+        services.AddScoped<IWebSearchService>(_ =>
+        {
+            var svc = new AsyncOnlyDisposableWebSearchService();
+            created.Add(svc);
+            return svc;
+        });
+
+        await using var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+
+        var module = new ResearchAndSkillsToolModule(
+            _pathResolver,
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            new Mock<IWorkspaceSkillsService>().Object);
+
+        Assert.True(module.IsWebSearchConfigured);
+        Assert.True(module.IsWebSearchEnabled);
+        Assert.Equal(2, created.Count);
+        Assert.All(created, svc => Assert.True(svc.IsAsyncDisposed));
+    }
+
+    private sealed class AsyncYieldingOnlyDisposableWebSearchService : IWebSearchService, IAsyncDisposable
+    {
+        public bool IsAsyncDisposed { get; private set; }
+        public string ProviderName => "AsyncYieldingOnly";
+        public bool IsConfigured => true;
+        public bool IsEnabled => true;
+        public string? DisabledReason => null;
+
+        public Task<WebSearchResponse> SearchAsync(string query, int maxResults = 5, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new WebSearchResponse(Array.Empty<WebSearchResultItem>()));
+
+        public async ValueTask DisposeAsync()
+        {
+            await Task.Delay(15);
+            IsAsyncDisposed = true;
+        }
+    }
+
+    private sealed class SingleThreadSyncContext : SynchronizationContext, IDisposable
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+        public override void Post(SendOrPostCallback d, object? state) => _queue.Add((d, state));
+
+        public override void Send(SendOrPostCallback d, object? state) =>
+            throw new NotSupportedException("Synchronous Send not expected.");
+
+        public void RunOnDedicatedThread(Action action, TimeSpan timeout)
+        {
+            Exception? captured = null;
+            using var done = new ManualResetEventSlim(false);
+            var thread = new Thread(() =>
+            {
+                SetSynchronizationContext(this);
+                Post(_ =>
+                {
+                    try
+                    {
+                        action();
+                    }
+                    catch (Exception ex)
+                    {
+                        captured = ex;
+                    }
+                    finally
+                    {
+                        _queue.CompleteAdding();
+                    }
+                }, null);
+
+                foreach (var (cb, state) in _queue.GetConsumingEnumerable())
+                {
+                    cb(state);
+                }
+
+                done.Set();
+            })
+            {
+                IsBackground = true
+            };
+            thread.Start();
+
+            if (!done.Wait(timeout))
+            {
+                _queue.CompleteAdding();
+                Assert.Fail("Deadlock detected when disposing IAsyncDisposable scoped service under single-threaded SynchronizationContext.");
+            }
+
+            thread.Join(timeout);
+            if (captured != null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(captured).Throw();
+            }
+        }
+
+        public void Dispose() => _queue.Dispose();
+    }
+
+    [Fact]
+    public async Task IsWebSearchConfiguredAndEnabled_FromSingleThreadedSynchronizationContext_DoesNotDeadlock()
+    {
+        var created = new List<AsyncYieldingOnlyDisposableWebSearchService>();
+        var services = new ServiceCollection();
+        services.AddScoped<IWebSearchService>(_ =>
+        {
+            var svc = new AsyncYieldingOnlyDisposableWebSearchService();
+            created.Add(svc);
+            return svc;
+        });
+
+        await using var sp = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+
+        var module = new ResearchAndSkillsToolModule(
+            _pathResolver,
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            new Mock<IWorkspaceSkillsService>().Object);
+
+        using var syncCtx = new SingleThreadSyncContext();
+        bool configured = false;
+        bool enabled = false;
+        syncCtx.RunOnDedicatedThread(() =>
+        {
+            configured = module.IsWebSearchConfigured;
+            enabled = module.IsWebSearchEnabled;
+        }, TimeSpan.FromSeconds(5));
+
+        Assert.True(configured);
+        Assert.True(enabled);
+        Assert.Equal(2, created.Count);
+        Assert.All(created, svc => Assert.True(svc.IsAsyncDisposed));
     }
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Workflow;
 using Xunit;
 
@@ -517,5 +518,252 @@ public class ConversationHistorySerializerTests
         Assert.Equal("call_atomic_2", items[4].FunctionResults![0].CallId);
         Assert.Equal("call_unanswered_3", items[5].FunctionCalls![0].CallId);
         Assert.Equal(ConversationHistorySerializer.InterruptedToolResult, items[6].FunctionResults![0].Result);
+    }
+
+    [Fact]
+    public void Serialize_LegacyToolResultOnlyWithToolName_SynthesizesPairedFunctionCallAndResult()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Inspect README" },
+            new()
+            {
+                TurnIndex = 1,
+                Role = StageTurnRole.ToolResult,
+                ToolName = "read_file",
+                ToolArguments = "{\"path\":\"README.md\"}",
+                ToolResult = "Hello README",
+                MetadataJson = "{\"CallId\":\"legacy_call_1\"}"
+            },
+            new() { TurnIndex = 2, Role = StageTurnRole.Assistant, Content = "Read the README." }
+        };
+
+        var json = ConversationHistorySerializer.Serialize(turns);
+        var items = ConversationHistorySerializer.Deserialize(json);
+
+        // [0] User, [1] Synthesized Assistant FunctionCall, [2] Tool FunctionResult, [3] Assistant text
+        Assert.Equal(4, items.Count);
+        Assert.Equal("user", items[0].Role);
+        Assert.Equal("assistant", items[1].Role);
+        Assert.Single(items[1].FunctionCalls!);
+        Assert.Equal("legacy_call_1", items[1].FunctionCalls![0].CallId);
+        Assert.Equal("read_file", items[1].FunctionCalls![0].Name);
+
+        Assert.Equal("tool", items[2].Role);
+        Assert.Single(items[2].FunctionResults!);
+        Assert.Equal("legacy_call_1", items[2].FunctionResults![0].CallId);
+        Assert.Equal("Hello README", items[2].FunctionResults![0].Result);
+
+        Assert.Equal("assistant", items[3].Role);
+        Assert.Equal("Read the README.", items[3].Text);
+    }
+
+    [Fact]
+    public void Serialize_TrulyOrphanToolResultWithoutToolName_IsSkipped()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Hello" },
+            new()
+            {
+                TurnIndex = 1,
+                Role = StageTurnRole.ToolResult,
+                ToolName = null,
+                ToolResult = "Orphan payload"
+            },
+            new() { TurnIndex = 2, Role = StageTurnRole.Assistant, Content = "Hi there!" }
+        };
+
+        var json = ConversationHistorySerializer.Serialize(turns);
+        var items = ConversationHistorySerializer.Deserialize(json);
+
+        Assert.Equal(2, items.Count);
+        Assert.DoesNotContain(items, i => i.Role == "tool");
+        Assert.Equal("user", items[0].Role);
+        Assert.Equal("assistant", items[1].Role);
+        Assert.Equal("Hi there!", items[1].Text);
+    }
+
+    [Fact]
+    public void Serialize_AssistantThinkingTrace_DoesNotDuplicatePrecedingThinkingTurn_ButPreservesLegacyStandaloneThinkingTrace()
+    {
+        var turnsWithThinkingTurn = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Analyze" },
+            new() { TurnIndex = 1, Role = StageTurnRole.Thinking, ThinkingTrace = "Step-by-step reasoning" },
+            new() { TurnIndex = 2, Role = StageTurnRole.Assistant, Content = "Done.", ThinkingTrace = "Step-by-step reasoning" }
+        };
+
+        var json1 = ConversationHistorySerializer.Serialize(turnsWithThinkingTurn);
+        var items1 = ConversationHistorySerializer.Deserialize(json1);
+
+        var reasoningItems1 = items1.Where(i => i.Contents?.Any(c => c.Type == ConversationHistorySerializer.ContentTypeReasoning) == true).ToList();
+        Assert.Single(reasoningItems1);
+        Assert.Equal("Step-by-step reasoning", reasoningItems1[0].Contents![0].Text);
+
+        var legacyTurnsWithoutThinkingTurn = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Analyze" },
+            new() { TurnIndex = 1, Role = StageTurnRole.Assistant, Content = "Done.", ThinkingTrace = "Legacy embedded trace" }
+        };
+
+        var json2 = ConversationHistorySerializer.Serialize(legacyTurnsWithoutThinkingTurn);
+        var items2 = ConversationHistorySerializer.Deserialize(json2);
+
+        var reasoningItems2 = items2.Where(i => i.Contents?.Any(c => c.Type == ConversationHistorySerializer.ContentTypeReasoning) == true).ToList();
+        Assert.Single(reasoningItems2);
+        Assert.Equal("Legacy embedded trace", reasoningItems2[0].Contents![0].Text);
+        Assert.Contains(items2, i => i.Role == "assistant" && i.Text == "Done.");
+    }
+
+    [Fact]
+    public void Serialize_ThinkingFollowedByToolAndAssistantWithCumulativeThinkingTrace_DoesNotDuplicateReasoning()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Analyze repo" },
+            new() { TurnIndex = 1, Role = StageTurnRole.Thinking, ThinkingTrace = "Inspecting architecture..." },
+            new()
+            {
+                TurnIndex = 2,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Read,
+                ToolArguments = "{\"path\":\"Program.cs\"}",
+                MetadataJson = "{\"CallId\":\"call_1\"}"
+            },
+            new()
+            {
+                TurnIndex = 3,
+                Role = StageTurnRole.ToolResult,
+                ToolName = CanonicalToolNames.Read,
+                ToolResult = "Main();",
+                MetadataJson = "{\"CallId\":\"call_1\"}"
+            },
+            new()
+            {
+                TurnIndex = 4,
+                Role = StageTurnRole.Assistant,
+                Content = "Analysis complete.",
+                ThinkingTrace = "Inspecting architecture..."
+            }
+        };
+
+        var json = ConversationHistorySerializer.Serialize(turns);
+        var items = ConversationHistorySerializer.Deserialize(json);
+
+        var reasoningItems = items
+            .Where(i => i.Contents?.Any(c => c.Type == ConversationHistorySerializer.ContentTypeReasoning) == true)
+            .ToList();
+        Assert.Single(reasoningItems);
+        Assert.Equal("Inspecting architecture...", reasoningItems[0].Contents![0].Text);
+
+        Assert.Equal(5, items.Count);
+        Assert.Equal("assistant", items[4].Role);
+        Assert.Equal("Analysis complete.", items[4].Text);
+        Assert.DoesNotContain(items[4].Contents!, c => c.Type == ConversationHistorySerializer.ContentTypeReasoning);
+    }
+
+    [Fact]
+    public async Task GetTrailingInterruptedTurns_IncludeUnansweredAsk_And_OrphanUserCleanup_BehaveAsConfigured()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Design feature" },
+            new() { TurnIndex = 1, Role = StageTurnRole.Thinking, ThinkingTrace = "Formulating question..." },
+            new()
+            {
+                TurnIndex = 2,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Ask,
+                ToolArguments = "{\"questions\":[{\"prompt\":\"Which mode?\"}]}",
+                MetadataJson = "{\"CallId\":\"ask_1\"}"
+            }
+        };
+
+        // Crucible default: preserve unanswered ask turn
+        Assert.Empty(ConversationHistorySerializer.GetTrailingInterruptedTurns(turns, includeUnansweredAsk: false));
+
+        // Ideation cancellation: strip unanswered ask + preceding thinking
+        var stripped = ConversationHistorySerializer.GetTrailingInterruptedTurns(turns, includeUnansweredAsk: true);
+        Assert.Equal(2, stripped.Count);
+        Assert.Contains(stripped, t => t.TurnIndex == 1 && t.Role == StageTurnRole.Thinking);
+        Assert.Contains(stripped, t => t.TurnIndex == 2 && t.Role == StageTurnRole.Tool);
+
+        // Repository sanitization cleans unanswered ask and orphan User turn when requested
+        var repo = new InMemoryTaskRepository();
+        var conv = await repo.StartIdeationConversationAsync(1, "Rollback Test");
+        var u0 = await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "First prompt");
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Assistant, content: "First answer");
+        var u2 = await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.User, content: "Failing prompt");
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Thinking, thinkingTrace: "Pending thinking");
+        await repo.AddConversationTurnAsync(conv.Id, StageTurnRole.Tool, toolName: CanonicalToolNames.Ask, metadataJson: "{\"CallId\":\"ask_2\"}");
+
+        await repo.SanitizeTrailingInterruptedTurnsAsync(
+            conv.Id,
+            includeUnansweredAsk: true,
+            removeTrailingUserTurnIndex: u2.TurnIndex);
+
+        var loaded = await repo.GetConversationWithTurnsAsync(conv.Id);
+        Assert.NotNull(loaded);
+        Assert.Equal(2, loaded.Turns.Count);
+        Assert.Equal([u0.TurnIndex, 1], loaded.Turns.Select(t => t.TurnIndex));
+    }
+
+    [Fact]
+    public void Serialize_UnmatchedLegacyToolResultFollowingUnclosedTool_FlushesPendingCallBeforeSynthesizingPair()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Start" },
+            new()
+            {
+                TurnIndex = 1,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Read,
+                ToolArguments = "{\"path\":\"A.cs\"}",
+                MetadataJson = "{\"CallId\":\"call_unclosed_1\"}"
+            },
+            new()
+            {
+                TurnIndex = 2,
+                Role = StageTurnRole.ToolResult,
+                ToolName = CanonicalToolNames.Bash,
+                ToolArguments = "{\"command\":\"ls\"}",
+                ToolResult = "found match",
+                MetadataJson = "{\"CallId\":\"legacy_bash_2\"}"
+            },
+            new() { TurnIndex = 3, Role = StageTurnRole.Assistant, Content = "Done." }
+        };
+
+        var json = ConversationHistorySerializer.Serialize(turns);
+        var items = ConversationHistorySerializer.Deserialize(json);
+
+        // Expected strict alternation:
+        // [0] User
+        // [1] Assistant FunctionCall(call_unclosed_1)
+        // [2] Tool FunctionResult(call_unclosed_1 -> InterruptedToolResult)
+        // [3] Assistant FunctionCall(legacy_bash_2)
+        // [4] Tool FunctionResult(legacy_bash_2 -> "found match")
+        // [5] Assistant("Done.")
+        Assert.Equal(6, items.Count);
+        Assert.Equal("user", items[0].Role);
+
+        Assert.Equal("assistant", items[1].Role);
+        Assert.Equal("call_unclosed_1", items[1].FunctionCalls![0].CallId);
+
+        Assert.Equal("tool", items[2].Role);
+        Assert.Equal("call_unclosed_1", items[2].FunctionResults![0].CallId);
+        Assert.Equal(ConversationHistorySerializer.InterruptedToolResult, items[2].FunctionResults![0].Result);
+
+        Assert.Equal("assistant", items[3].Role);
+        Assert.Equal("legacy_bash_2", items[3].FunctionCalls![0].CallId);
+        Assert.Equal(CanonicalToolNames.Bash, items[3].FunctionCalls![0].Name);
+
+        Assert.Equal("tool", items[4].Role);
+        Assert.Equal("legacy_bash_2", items[4].FunctionResults![0].CallId);
+        Assert.Equal("found match", items[4].FunctionResults![0].Result);
+
+        Assert.Equal("assistant", items[5].Role);
+        Assert.Equal("Done.", items[5].Text);
     }
 }

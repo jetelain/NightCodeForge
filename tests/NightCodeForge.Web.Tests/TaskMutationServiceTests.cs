@@ -35,6 +35,7 @@ public class TaskMutationServiceTests
             _markdownSync,
             _taskOrchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance);
 
         _workspace = new Workspace
@@ -430,6 +431,7 @@ public class TaskMutationServiceTests
             _markdownSync,
             orchestrator,
             telemetry,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance);
 
         var unclosedBlocker1 = await taskRepo.CreateWithBaselineAsync(

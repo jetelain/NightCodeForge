@@ -28,4 +28,8 @@
     <NoWarn>$(NoWarn);MAAI001;MEAI001</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="NightCodeForge.Agents.Tests" />
+  </ItemGroup>
+
 </Project>

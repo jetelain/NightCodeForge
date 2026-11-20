@@ -10,7 +10,7 @@ public class ReadOnlyCommandValidatorTests
     [InlineData("find . -name \"*.cs\"")]
     [InlineData("find . -maxdepth 3 -name \"*.cs\"")]
     [InlineData("fd -e cs")]
-    [InlineData("rg -n \"IIdeationService\" src/")]
+    [InlineData("rg -n \"IIdeationConversationCoordinator\" src/")]
     [InlineData("rg -n -- 'pattern' src")]
     [InlineData("grep -rn \"class\" src/")]
     [InlineData("ls -la")]
@@ -50,7 +50,7 @@ public class ReadOnlyCommandValidatorTests
     [InlineData("rg -n \"class > IFoo\" src/")] // Redirect symbol inside double quotes
     [InlineData("echo 'data > output'")]        // Redirect symbol inside single quotes
     [InlineData("csnav definition -t CrucibleAgentHarness")]
-    [InlineData("csnav explore -t IdeationService")]
+    [InlineData("csnav explore -t IdeationConversationCoordinator")]
     [InlineData("csnav references -t IWorkspaceSymbolService")]
     [InlineData("csnav refs --symbol Foo")]
     [InlineData("csnav search \"*Symbol*\"")]

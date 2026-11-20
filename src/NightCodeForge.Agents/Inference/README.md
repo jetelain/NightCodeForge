@@ -22,7 +22,7 @@
 
 ## 3. Dependencies & Interaction Graph
 
-- **Inbound (Who uses this):** `CrucibleAgentHarness`, `IdeationService`, `TriageService`.
+- **Inbound (Who uses this):** `CrucibleAgentHarness`, `IdeationConversationCoordinator`, `TriageService`.
 - **Outbound (What this relies on):** `Microsoft.Extensions.AI`, `NightCodeForge.Core.Interfaces.ILlmGatewayService`.
 
 ## 4. Invariants & Architectural Rules

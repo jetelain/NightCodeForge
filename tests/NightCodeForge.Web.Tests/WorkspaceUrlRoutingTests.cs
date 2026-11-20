@@ -276,6 +276,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
             markdownSync,
             orchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton<ITaskReviewService>(reviewService);
         Services.AddSingleton<ITaskDiffService>(new TaskDiffService(reviewService));

@@ -112,6 +112,12 @@ public interface ITaskRepository
         int conversationId,
         CancellationToken cancellationToken = default);
 
+    Task SanitizeTrailingInterruptedTurnsAsync(
+        int conversationId,
+        bool includeUnansweredAsk,
+        int? removeTrailingUserTurnIndex = null,
+        CancellationToken cancellationToken = default);
+
     Task<Conversation> StartIdeationConversationAsync(
         int workspaceId,
         string? title = null,
@@ -883,17 +889,42 @@ public class InMemoryTaskRepository : ITaskRepository
 
     public Task SanitizeTrailingInterruptedTurnsAsync(
         int conversationId,
+        CancellationToken cancellationToken = default) =>
+        SanitizeTrailingInterruptedTurnsAsync(
+            conversationId,
+            includeUnansweredAsk: false,
+            removeTrailingUserTurnIndex: null,
+            cancellationToken);
+
+    public Task SanitizeTrailingInterruptedTurnsAsync(
+        int conversationId,
+        bool includeUnansweredAsk,
+        int? removeTrailingUserTurnIndex = null,
         CancellationToken cancellationToken = default)
     {
         lock (_lock)
         {
             if (_conversations.TryGetValue(conversationId, out var conversation) && conversation.Turns.Count > 0)
             {
-                var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(conversation.Turns);
+                var toRemove = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingInterruptedTurns(
+                    conversation.Turns,
+                    includeUnansweredAsk);
                 foreach (var turn in toRemove)
                 {
                     conversation.Turns.Remove(turn);
                     _turns.Remove(turn);
+                }
+
+                if (removeTrailingUserTurnIndex.HasValue && conversation.Turns.Count > 0)
+                {
+                    var orphanUsers = NightCodeForge.Core.Workflow.ConversationHistorySerializer.GetTrailingOrphanUserTurn(
+                        conversation.Turns,
+                        removeTrailingUserTurnIndex.Value);
+                    foreach (var turn in orphanUsers)
+                    {
+                        conversation.Turns.Remove(turn);
+                        _turns.Remove(turn);
+                    }
                 }
             }
             return Task.CompletedTask;

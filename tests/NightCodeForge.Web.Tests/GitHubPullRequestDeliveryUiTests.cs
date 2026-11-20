@@ -76,6 +76,7 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
             _markdownSync,
             _orchestrator,
             new Mock<IOperationsTelemetryService>().Object,
+            Mock.Of<NightCodeForge.Core.Interfaces.IIdeationConversationCoordinator>(),
             NullLogger<TaskMutationService>.Instance));
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton(_toastService);

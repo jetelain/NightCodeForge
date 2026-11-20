@@ -18,7 +18,7 @@ public class IdeationCostDisplayTests : BunitContext
     private readonly InMemoryWorkflowRepository _workflowRepository;
     private readonly InMemoryWorkspaceRepository _workspaceRepository;
     private readonly MockTaskMarkdownSyncService _markdownSync;
-    private readonly MockIdeationService _ideationService;
+    private readonly MockIdeationConversationCoordinator _coordinator;
     private readonly ToastService _toastService;
     private readonly IdeationSessionState _sessionState;
 
@@ -31,16 +31,20 @@ public class IdeationCostDisplayTests : BunitContext
         _workspaceRepository = new InMemoryWorkspaceRepository();
         _workspaceRepository.SeedGlobalProfiles(AgentProfile.CreateStandardGlobalProfiles("test-model"));
         _markdownSync = new MockTaskMarkdownSyncService();
-        _ideationService = new MockIdeationService();
+        _coordinator = new MockIdeationConversationCoordinator(_taskRepository);
         _toastService = TestServices.CreateToastService();
-        _sessionState = new IdeationSessionState();
+        _sessionState = TestServices.CreateIdeationSessionState(
+            coordinator: _coordinator,
+            taskRepository: _taskRepository,
+            workflowRepository: _workflowRepository,
+            markdownSync: _markdownSync);
 
         Services.AddSingleton(_workspaceState);
         Services.AddSingleton<ITaskRepository>(_taskRepository);
         Services.AddSingleton<IWorkflowRepository>(_workflowRepository);
         Services.AddSingleton<IWorkspaceRepository>(_workspaceRepository);
         Services.AddSingleton<ITaskMarkdownSyncService>(_markdownSync);
-        Services.AddSingleton<IIdeationService>(_ideationService);
+        Services.AddSingleton<IIdeationConversationCoordinator>(_coordinator);
         Services.AddSingleton(_toastService);
         Services.AddSingleton(_sessionState);
         Services.AddSingleton(new IdeationRefinementService(_taskRepository));
