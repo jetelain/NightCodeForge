@@ -15,6 +15,7 @@ public interface IWebNotificationService
     Task SavePreferencesAsync(NotificationPreferences preferences);
     Task<bool> SendTestNotificationAsync();
     Task<bool> DispatchNotificationAsync(NotificationSubject subject, ForgeTask task);
+    Task<bool> DispatchNotificationAsync(NotificationSubject subject, string title, string body, string tag, string clickUrl);
     Task RunCatchUpAsync(CancellationToken cancellationToken = default);
     Task HandleTabForegroundedAsync(CancellationToken cancellationToken = default);
     Task<bool> IsSupportedAsync();

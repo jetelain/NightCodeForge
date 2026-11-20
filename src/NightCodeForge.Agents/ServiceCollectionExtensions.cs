@@ -8,6 +8,7 @@ using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Mcp;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
@@ -16,6 +17,7 @@ using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
@@ -50,6 +52,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IBundledSkillsProvider, BundledSkillsProvider>();
         services.TryAddSingleton<IWorkspaceSkillsServiceFactory, WorkspaceSkillsServiceFactory>();
         services.TryAddSingleton<AgentsMdService>();
+        services.TryAddSingleton<IAgentMemoryMonitorService, AgentMemoryMonitorService>();
+        services.TryAddSingleton<IAgentMemoryWriteNotifier, AgentMemoryWriteNotifier>();
+        services.TryAddSingleton<IAgentMemoryTurnTracker, AgentMemoryTurnTracker>();
         services.TryAddSingleton<IMcpClientManager, McpClientManager>();
         services.TryAddSingleton<NightCodeForge.Core.Workflow.Filtering.ICliOutputFilterRegistry, NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry>();
 

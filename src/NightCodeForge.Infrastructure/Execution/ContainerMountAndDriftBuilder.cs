@@ -3,6 +3,7 @@ using System.Globalization;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 
 namespace NightCodeForge.Infrastructure.Execution;
 
@@ -63,6 +64,15 @@ public class ContainerMountAndDriftBuilder
     }
 
     /// <summary>
+    /// Computes <c>entry.IsReadOnly || (isRestrictedReadOnly &amp;&amp; !entry.AllowWriteInReadOnlyScope)</c>.
+    /// </summary>
+    public static bool ResolveEffectiveReadOnly(VirtualMountEntry entry, bool isRestrictedReadOnly)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return entry.IsReadOnly || (isRestrictedReadOnly && !entry.AllowWriteInReadOnlyScope);
+    }
+
+    /// <summary>
     /// Builds the list of Docker volume bind mounts according to <see cref="ContainerExecutorOptions"/> and any attached <see cref="SandboxMountTable"/>.
     /// </summary>
     public static IReadOnlyList<ContainerVolumeMount> BuildVolumeMounts(ContainerExecutorOptions options)
@@ -110,7 +120,7 @@ public class ContainerMountAndDriftBuilder
                 AddMount(
                     ResolveHostPath(sourcePath, options),
                     entry.VirtualMountPath,
-                    isReadOnly: options.IsRestrictedReadOnly || entry.IsReadOnly || isAttachmentsEntry);
+                    isReadOnly: ResolveEffectiveReadOnly(entry, options.IsRestrictedReadOnly) || isAttachmentsEntry);
             }
         }
 
@@ -179,7 +189,11 @@ public class ContainerMountAndDriftBuilder
                         continue;
                     }
 
-                    var effectiveReadOnly = options.IsRestrictedReadOnly || entry.IsReadOnly || isAttachmentsMount;
+                    var isMemoryMount = string.Equals(
+                        NormalizeContainerPath(entry.VirtualMountPath),
+                        NormalizeContainerPath(AgentMemoryConstants.VirtualLocalMemoryPath),
+                        StringComparison.OrdinalIgnoreCase);
+                    var effectiveReadOnly = ResolveEffectiveReadOnly(entry, options.IsRestrictedReadOnly) || isAttachmentsMount;
 
                     var isInsideHostWorkspace =
                         normSource.Equals(normHost, StringComparison.OrdinalIgnoreCase) ||
@@ -191,7 +205,10 @@ public class ContainerMountAndDriftBuilder
 
                     // Skip subpaths already exposed identically through the parent /workspace bind mount
                     // (but always keep explicit read-only /workspace/attachments mount even in RestrictedReadOnly mode).
-                    if (!isAttachmentsMount && (isInsideHostWorkspace || isCanonicalClone) && effectiveReadOnly == options.IsRestrictedReadOnly)
+                    if (!isAttachmentsMount &&
+                        !(isMemoryMount && options.IsRestrictedReadOnly) &&
+                        (isInsideHostWorkspace || isCanonicalClone) &&
+                        effectiveReadOnly == options.IsRestrictedReadOnly)
                     {
                         continue;
                     }

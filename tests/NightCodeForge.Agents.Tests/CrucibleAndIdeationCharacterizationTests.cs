@@ -504,7 +504,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
     }
 
     [Fact]
-    public async Task IdeationService_WhenReadOnlyMode_ExcludesWriteAndEditToolsFromDefaultToolset()
+    public async Task IdeationService_WhenReadOnlyMode_GrantsWriteAndEditForLocalMemoryInDefaultToolset()
     {
         ChatOptions? capturedOptions = null;
         var client = new CapturingStreamingChatClient((_, opts) =>
@@ -541,8 +541,9 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
         Assert.NotNull(capturedOptions?.Tools);
         var toolNames = capturedOptions.Tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         Assert.Contains(CanonicalToolNames.Read, toolNames);
-        Assert.DoesNotContain(CanonicalToolNames.Write, toolNames);
-        Assert.DoesNotContain(CanonicalToolNames.Edit, toolNames);
+        // Ideation write/edit exist to maintain /workspace/memory/*.md; every other path stays read-only (see AgentMemoryWriteGuardTests).
+        Assert.Contains(CanonicalToolNames.Write, toolNames);
+        Assert.Contains(CanonicalToolNames.Edit, toolNames);
     }
 
     [Theory]
@@ -612,7 +613,7 @@ public class CrucibleAndIdeationCharacterizationTests : IDisposable
 
         Assert.NotNull(result);
         Assert.NotNull(writeToolResult);
-        Assert.Contains("not permitted in read-only mode", writeToolResult, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("read-only mode", writeToolResult, StringComparison.OrdinalIgnoreCase);
         Assert.False(File.Exists(Path.Combine(_tempDir, "ideation-blocked.txt")));
     }
 

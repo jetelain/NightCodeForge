@@ -30,6 +30,7 @@ public class ContainerEnvironmentFactoryTests
             WslExecutable = "wsl.exe"
         });
 
+        _pathResolverMock.Setup(m => m.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         _pathResolverMock.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         _pathResolverMock.Setup(p => p.GetWslUserName()).Returns("testuser");
         _sdkDiscoveryMock.Setup(s => s.DiscoverSdkMountPaths(It.IsAny<string?>())).Returns(["/host/dotnet"]);
@@ -165,11 +166,13 @@ public class ContainerEnvironmentFactoryTests
         await sut.RemoveTaskContainerAsync(containerWorkspace, 42);
         await sut.RemoveBaseContainerAsync(containerWorkspace);
 
-        Assert.Equal(4, executedSpecs.Count);
+        Assert.Equal(5, executedSpecs.Count);
         Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-task-42"));
         Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-task-42-ro"));
         Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3"));
         Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-ro"));
+        // Stage 0 Triage runs in its own isolated read-only container and is torn down with the base container.
+        Assert.Contains(executedSpecs, s => string.Join(" ", s.ArgumentList ?? []).EndsWith("ncf-wks-3-triage-ro"));
     }
 
     [Fact]

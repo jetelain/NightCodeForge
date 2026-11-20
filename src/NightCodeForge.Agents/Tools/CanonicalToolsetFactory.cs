@@ -30,6 +30,13 @@ public sealed record CanonicalToolScope(
     IMultimodalAttachmentQueue? MultimodalAttachmentQueue = null)
 {
     public Action<NightCodeForge.Core.Workflow.Filtering.BashExecutionAuditEntry>? OnBashExecutionAudited { get; init; }
+
+    /// <summary>
+    /// Explicit opt-in (Ideation) allowing a read-only scope to write Markdown files in the local workspace memory
+    /// (<c>/workspace/memory</c>). Never granted implicitly to other read-only callers.
+    /// </summary>
+    public bool AllowLocalMemoryWriteInReadOnlyScope { get; init; }
+
     internal string ResolveNormalizedWorkspaceRoot()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(WorkspaceRoot);

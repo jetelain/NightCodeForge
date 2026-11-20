@@ -1,5 +1,7 @@
 @namespace NightCodeForge.Web.Components.Monitoring
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Memory
+@using NightCodeForge.Web.Components.Memory
 @using NightCodeForge.Core.Repositories
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Transcripts
@@ -272,6 +274,9 @@
                                 var primingBadge = StageConversationParser.GetPrimingBadge(turn) ?? (pairedResult != null ? StageConversationParser.GetPrimingBadge(pairedResult) : null);
                                 var primingTooltip = StageConversationParser.GetPrimingTooltip(turn) ?? (pairedResult != null ? StageConversationParser.GetPrimingTooltip(pairedResult) : null);
 
+                                var isToolError = isAskError || turn.IsError || (pairedResult?.IsError ?? false);
+                                var memoryTarget = MemoryPresentationHelper.TryGetToolTarget(turn.ToolName, turn.ToolArguments, liveResult, isToolError);
+
                                 <div class="chat-bubble assistant turn-tool">
                                     <div class="chat-avatar">⚙️</div>
                                     <div class="chat-bubble-body" style="width: 100%;">
@@ -279,10 +284,13 @@
                                                       Arguments="@turn.ToolArguments"
                                                       Result="@liveResult"
                                                       IsRunning="@isRunning"
-                                                      IsError="@(isAskError || turn.IsError || (pairedResult?.IsError ?? false))"
+                                                      IsError="@isToolError"
                                                       Offset="@(effectiveDuration.HasValue ? $"{effectiveDuration.Value}ms" : null)"
                                                       BadgeText="@primingBadge"
-                                                      BadgeTooltip="@primingTooltip" />
+                                                      BadgeTooltip="@primingTooltip"
+                                                      MemoryBadgeText="@memoryTarget?.BadgeText"
+                                                      MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
+                                                      OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
                                     </div>
                                 </div>
                             }
@@ -404,7 +412,33 @@
     </button>
 </div>
 
+@if (_memoryDrawerOpen && Task != null)
+{
+    <WorkspaceMemoryDrawer WorkspaceId="@Task.WorkspaceId"
+                           InitialScope="@_memoryScope"
+                           InitialRelativePath="@_memoryPath"
+                           OnClosed="CloseMemoryDrawer" />
+}
+
 @code {
+    private bool _memoryDrawerOpen;
+    private AgentMemoryScope _memoryScope = AgentMemoryScope.LocalWorkspace;
+    private string? _memoryPath;
+
+    private void OpenMemoryDrawerForTarget(MemoryToolTarget? target)
+    {
+        if (target == null)
+        {
+            return;
+        }
+
+        _memoryScope = target.Scope;
+        _memoryPath = target.RelativePath;
+        _memoryDrawerOpen = true;
+    }
+
+    private void CloseMemoryDrawer() => _memoryDrawerOpen = false;
+
     [Parameter] public Conversation? Conversation { get; set; }
     [Parameter] public ForgeTask? Task { get; set; }
     [Parameter] public bool IsActiveStage { get; set; }

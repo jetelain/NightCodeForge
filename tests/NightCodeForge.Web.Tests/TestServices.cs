@@ -124,6 +124,15 @@ public static class TestServices
             return mock.Object;
         });
         services.TryAddSingleton<WorkspaceStateService>();
+        services.TryAddSingleton(TestHubConnectionHelper.Create());
+        services.TryAddSingleton<MemoryUpdateTracker>();
+        services.TryAddSingleton<IWorkspaceMemoryUiService>(_ =>
+        {
+            var memoryService = new Mock<IWorkspaceMemoryUiService>();
+            memoryService.Setup(m => m.ListAsync(It.IsAny<int>(), It.IsAny<NightCodeForge.Core.Memory.AgentMemoryScope>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync([]);
+            return memoryService.Object;
+        });
         services.TryAddSingleton(_ => WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
         services.TryAddSingleton<ITaskReviewService>(sp => new TaskReviewService(
             sp.GetRequiredService<ITaskRepository>(),

@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
@@ -84,8 +85,9 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
         AgentsMdService agentsMdService,
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
+        IAgentMemoryTurnTracker memoryTracker,
         ILogger<AcpAgentHarness> logger)
-        : base(recorder, agentsMdService, pathResolver, processRunner, logger)
+        : base(recorder, agentsMdService, pathResolver, processRunner, memoryTracker, logger)
     {
         ArgumentNullException.ThrowIfNull(options);
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
@@ -182,7 +184,7 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
             }
 
             // 3. Prepare Enriched Prompt (and record User turn)
-            var promptText = BuildEnrichedPrompt(context, localWorkspaceRoot);
+            var promptText = await BuildEnrichedPromptAsync(context, localWorkspaceRoot, cancellationToken);
             await Recorder.RecordUserTurnAsync(sessionId, HarnessId, context, promptText, cancellationToken);
 
             // 4. Wait for session/new or session/load response (capturing server-assigned sessionId & applying config options),

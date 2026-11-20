@@ -27,6 +27,7 @@ public class TestTriageServiceBuilder
         var mock = new Mock<IWorkspacePathResolver>();
         mock.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         mock.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/clone");
+        mock.Setup(r => r.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         return mock.Object;
     }
 
@@ -39,7 +40,7 @@ public class TestTriageServiceBuilder
             MarkdownSyncService,
             TestBacklogContext.CreateDefault(),
             new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         return new TriageService(
             TaskRepository,
@@ -49,6 +50,7 @@ public class TestTriageServiceBuilder
             MarkdownSyncService,
             GlobalOptimizationSettings,
             TelemetryService,
+            PathResolver,
             Logger);
     }
 

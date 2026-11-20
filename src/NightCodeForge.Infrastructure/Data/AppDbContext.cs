@@ -976,6 +976,10 @@ VALUES ('" + AddTaskAttachmentsAndLinksMigrationId + @"', '10.0.12');";
     /// Grants the host-level backlog mutation tools to stored ideation profiles (global and workspace-scoped)
     /// and refreshes the base persona when it still matches the unmodified legacy default.
     /// </summary>
+    private static bool IsStandardLegacyIdeationToolSet(IReadOnlyCollection<string> tools) =>
+        tools.Count == DefaultAgentTools.LegacyIdeation.Count &&
+        DefaultAgentTools.LegacyIdeation.All(t => tools.Contains(t, StringComparer.OrdinalIgnoreCase));
+
     private async Task ReconcileIdeationProfilesAsync(CancellationToken cancellationToken)
     {
         var scopedSuffix = ":" + StandardStageIds.Ideation;
@@ -994,7 +998,17 @@ VALUES ('" + AddTaskAttachmentsAndLinksMigrationId + @"', '10.0.12');";
                 {
                     profile.PermittedTools = profile.PermittedTools.Concat(missingTools).ToList();
                 }
+
+                // Standard Ideation tools gain write/edit (restricted to /workspace/memory/*.md by the sandbox).
+                if (IsStandardLegacyIdeationToolSet(profile.PermittedTools))
+                {
+                    profile.PermittedTools = profile.PermittedTools
+                        .Concat([CanonicalToolNames.Write, CanonicalToolNames.Edit])
+                        .ToList();
+                }
             }
+
+            profile.SecurityTier = SandboxSecurityTier.RestrictedReadOnly;
 
             if (profile.SystemPrompt != null &&
                 NormalizeLineEndings(profile.SystemPrompt).Trim() == NormalizeLineEndings(AgentProfile.LegacyIdeationSystemPrompt).Trim())

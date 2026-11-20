@@ -26,6 +26,7 @@ public static class NotificationConstants
         public const string QuestionInbox = "question_inbox";
         public const string ReviewRoom = "review_room";
         public const string TaskMerged = "task_merged";
+        public const string AgentMemory = "agent_memory";
     }
 
     public static class Tags
@@ -33,6 +34,8 @@ public static class NotificationConstants
         public static string Question(int taskId) => $"ncf-question-{taskId}";
         public static string Review(int taskId) => $"ncf-review-{taskId}";
         public static string Merged(int taskId) => $"ncf-merged-{taskId}";
+        public static string AgentMemory(int workspaceId, string relativePath) =>
+            $"{MemoryUiConstants.MemoryNotificationTag}-{workspaceId}-{(relativePath ?? string.Empty).Trim().ToLowerInvariant()}";
         public const string Test = "ncf-test-notification";
     }
 

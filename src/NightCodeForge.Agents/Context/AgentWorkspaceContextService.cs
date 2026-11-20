@@ -4,7 +4,9 @@ using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Agents.Context;
@@ -13,7 +15,20 @@ namespace NightCodeForge.Agents.Context;
 public sealed record AgentWorkspaceLocations(string RepoPath, string? CloneDir, string AgentWorkingDir);
 
 /// <summary>Project rules and skills sections injected into an agent's system prompt.</summary>
-public sealed record AgentPromptContext(string ProjectContext, string SkillsCatalog, IReadOnlyList<string> ActiveSkills);
+public sealed record AgentPromptContext(string ProjectContext, string SkillsCatalog, IReadOnlyList<string> ActiveSkills)
+{
+    /// <summary>Bounded workspace_memory section (pinned local MEMORY.md), empty when none.</summary>
+    public string WorkspaceMemory { get; init; } = string.Empty;
+
+    /// <summary>Progressive-disclosure memory_catalog section, empty when no topic file exists.</summary>
+    public string MemoryCatalog { get; init; } = string.Empty;
+
+    /// <summary>True when the session can write memory files (write/edit permitted), so role guidelines apply.</summary>
+    public bool CanWriteMemory { get; init; }
+}
+
+/// <summary>Dynamic memory sections of a prompt (Layer 3 content).</summary>
+public readonly record struct AgentMemoryPrompt(string? WorkspaceMemory, string? MemoryCatalog);
 
 /// <summary>
 /// Shared workspace context discovery of the agent sessions (Crucible, Ideation): locations, backlog pre-sync,
@@ -55,6 +70,33 @@ public interface IAgentWorkspaceContextService
 
     /// <summary>Builds a bounded recent transcript friction hotspot digest (empty when no friction exists).</summary>
     Task<string> BuildFrictionHotspotsDigestAsync(string repoPath, CancellationToken cancellationToken = default);
+
+    /// <summary>Builds the bounded workspace_memory (pinned MEMORY.md) and memory_catalog sections.</summary>
+    Task<AgentMemoryPrompt> BuildMemoryPromptAsync(int workspaceId, string repoPath, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Captures a symlink-safe snapshot of the local workspace memory and, when given, of the repository memory
+    /// (<c>AGENTS.md</c>, <c>.agents/memory/*.md</c>) of <paramref name="repositoryWorkingDirectory"/>.
+    /// </summary>
+    Task<AgentMemorySnapshot> CaptureMemorySnapshotAsync(int workspaceId, string? repositoryWorkingDirectory, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Immediate notification of a host-side memory write (wired to <c>WorkspaceFileToolModule.MemoryWriteObserver</c>);
+    /// records the write in the attribution ledger so the post-turn diff never notifies it twice.
+    /// </summary>
+    Task NotifyMemoryWriteAsync(int workspaceId, int taskId, string stageId, string sessionId, AgentMemoryWriteEvent write, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Diffs <paramref name="before"/> against a fresh snapshot, excludes writes already attributed in the workspace
+    /// ledger, then broadcasts a <c>MemoryUpdated</c> notice for each remaining change. Returns the notified changes.
+    /// </summary>
+    Task<IReadOnlyList<AgentMemoryChangeEvent>> PublishMemoryChangesAsync(
+        AgentMemorySnapshot before,
+        string? repositoryWorkingDirectory,
+        int taskId,
+        string stageId,
+        string sessionId,
+        CancellationToken cancellationToken);
 }
 
 /// <inheritdoc />
@@ -71,6 +113,7 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IBacklogPlanningContext _backlogContext;
     private readonly ITranscriptAnalysisService _transcriptAnalysisService;
+    private readonly IAgentMemoryTurnTracker _memoryTracker;
     private readonly ILogger<AgentWorkspaceContextService> _logger;
 
     public AgentWorkspaceContextService(
@@ -80,6 +123,7 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
         ITaskMarkdownSyncService markdownSyncService,
         IBacklogPlanningContext backlogContext,
         ITranscriptAnalysisService transcriptAnalysisService,
+        IAgentMemoryTurnTracker memoryTracker,
         ILogger<AgentWorkspaceContextService> logger)
     {
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
@@ -88,6 +132,7 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _backlogContext = backlogContext ?? throw new ArgumentNullException(nameof(backlogContext));
         _transcriptAnalysisService = transcriptAnalysisService ?? throw new ArgumentNullException(nameof(transcriptAnalysisService));
+        _memoryTracker = memoryTracker ?? throw new ArgumentNullException(nameof(memoryTracker));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -206,7 +251,51 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
             skillsCatalog = await skillsService.GetSkillsCatalogPromptAsync(cancellationToken);
         }
 
-        return new AgentPromptContext(projectContext, skillsCatalog, skills.Select(s => s.Name).ToList());
+        var memory = await BuildMemoryPromptAsync(workspace.Id, repoPath, cancellationToken);
+        var canWriteMemory = workspace.Id > 0 &&
+            (permittedTools.Contains(CanonicalToolNames.Write, StringComparer.OrdinalIgnoreCase) ||
+             permittedTools.Contains(CanonicalToolNames.Edit, StringComparer.OrdinalIgnoreCase));
+
+        return new AgentPromptContext(projectContext, skillsCatalog, skills.Select(s => s.Name).ToList())
+        {
+            WorkspaceMemory = memory.WorkspaceMemory ?? string.Empty,
+            MemoryCatalog = memory.MemoryCatalog ?? string.Empty,
+            CanWriteMemory = canWriteMemory
+        };
+    }
+
+    public async Task<AgentMemoryPrompt> BuildMemoryPromptAsync(int workspaceId, string repoPath, CancellationToken cancellationToken)
+    {
+        var localMemoryDir = ResolveLocalMemoryDirectory(workspaceId);
+        var workspaceMemory = await _agentsMdService.BuildWorkspaceMemorySectionAsync(localMemoryDir, cancellationToken);
+        var catalog = await _agentsMdService.BuildMemoryCatalogAsync(repoPath, localMemoryDir, cancellationToken);
+        return new AgentMemoryPrompt(workspaceMemory, catalog);
+    }
+
+    public Task<AgentMemorySnapshot> CaptureMemorySnapshotAsync(int workspaceId, string? repositoryWorkingDirectory, CancellationToken cancellationToken) =>
+        _memoryTracker.CaptureAsync(workspaceId, repositoryWorkingDirectory, cancellationToken);
+
+    public Task NotifyMemoryWriteAsync(int workspaceId, int taskId, string stageId, string sessionId, AgentMemoryWriteEvent write, CancellationToken cancellationToken) =>
+        _memoryTracker.NotifyWriteAsync(workspaceId, taskId, stageId, sessionId, write, cancellationToken);
+
+    public Task<IReadOnlyList<AgentMemoryChangeEvent>> PublishMemoryChangesAsync(
+        AgentMemorySnapshot before,
+        string? repositoryWorkingDirectory,
+        int taskId,
+        string stageId,
+        string sessionId,
+        CancellationToken cancellationToken) =>
+        _memoryTracker.PublishChangesAsync(before, repositoryWorkingDirectory, taskId, stageId, sessionId, cancellationToken);
+
+    private string? ResolveLocalMemoryDirectory(int workspaceId)
+    {
+        if (workspaceId <= 0)
+        {
+            return null;
+        }
+
+        var memoryPath = _pathResolver.GetWorkspaceMemoryPath(workspaceId);
+        return string.IsNullOrWhiteSpace(memoryPath) ? null : _pathResolver.ToHostPath(memoryPath);
     }
 
     public Task<string> GetSymbolMapPromptAsync(string workspacePath, string taskText, LocalOptimizationFlags flags, CancellationToken cancellationToken) =>

@@ -7,7 +7,8 @@ public enum NotificationSubject
 {
     QuestionInbox,
     ReviewRoom,
-    TaskMerged
+    TaskMerged,
+    AgentMemory
 }
 
 /// <summary>
@@ -19,6 +20,7 @@ public class NotificationPreferences
     public bool NotifyOnQuestionInbox { get; set; } = true;
     public bool NotifyOnReviewRoom { get; set; } = true;
     public bool NotifyOnTaskMerged { get; set; } = true;
+    public bool NotifyOnAgentMemory { get; set; } = false;
 
     /// <summary>
     /// Determines whether a notification for the specified subject should be dispatched.
@@ -35,8 +37,8 @@ public class NotificationPreferences
             NotificationSubject.QuestionInbox => NotifyOnQuestionInbox,
             NotificationSubject.ReviewRoom => NotifyOnReviewRoom,
             NotificationSubject.TaskMerged => NotifyOnTaskMerged,
+            NotificationSubject.AgentMemory => NotifyOnAgentMemory,
             _ => false
         };
     }
 }
-

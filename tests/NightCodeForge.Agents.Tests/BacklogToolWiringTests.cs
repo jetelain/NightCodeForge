@@ -60,8 +60,11 @@ public class BacklogToolWiringTests
 
         Assert.DoesNotContain(CanonicalToolNames.EditTask, readOnly);
         Assert.Contains(CanonicalToolNames.EditTask, ideation);
-        Assert.DoesNotContain(CanonicalToolNames.Edit, ideation);
-        Assert.DoesNotContain(CanonicalToolNames.Write, ideation);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, readOnly);
+        Assert.DoesNotContain(CanonicalToolNames.Write, readOnly);
+        // Ideation maintains /workspace/memory/*.md through write/edit (the RestrictedReadOnly sandbox confines them).
+        Assert.Contains(CanonicalToolNames.Edit, ideation);
+        Assert.Contains(CanonicalToolNames.Write, ideation);
     }
 
     [Fact]

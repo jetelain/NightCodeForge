@@ -9,7 +9,8 @@
         masterEnabled: true,
         notifyOnQuestionInbox: true,
         notifyOnReviewRoom: true,
-        notifyOnTaskMerged: true
+        notifyOnTaskMerged: true,
+        notifyOnAgentMemory: false
     };
 
     function isSupported() {
@@ -59,7 +60,8 @@
                 masterEnabled: parsed.masterEnabled ?? parsed.MasterEnabled ?? true,
                 notifyOnQuestionInbox: parsed.notifyOnQuestionInbox ?? parsed.NotifyOnQuestionInbox ?? true,
                 notifyOnReviewRoom: parsed.notifyOnReviewRoom ?? parsed.NotifyOnReviewRoom ?? true,
-                notifyOnTaskMerged: parsed.notifyOnTaskMerged ?? parsed.NotifyOnTaskMerged ?? true
+                notifyOnTaskMerged: parsed.notifyOnTaskMerged ?? parsed.NotifyOnTaskMerged ?? true,
+                notifyOnAgentMemory: parsed.notifyOnAgentMemory ?? parsed.NotifyOnAgentMemory ?? false
             };
         } catch (err) {
             console.warn('NightCodeForge: getPreferences failed', err);
@@ -74,7 +76,8 @@
                 masterEnabled: prefs.masterEnabled ?? prefs.MasterEnabled ?? true,
                 notifyOnQuestionInbox: prefs.notifyOnQuestionInbox ?? prefs.NotifyOnQuestionInbox ?? true,
                 notifyOnReviewRoom: prefs.notifyOnReviewRoom ?? prefs.NotifyOnReviewRoom ?? true,
-                notifyOnTaskMerged: prefs.notifyOnTaskMerged ?? prefs.NotifyOnTaskMerged ?? true
+                notifyOnTaskMerged: prefs.notifyOnTaskMerged ?? prefs.NotifyOnTaskMerged ?? true,
+                notifyOnAgentMemory: prefs.notifyOnAgentMemory ?? prefs.NotifyOnAgentMemory ?? false
             };
             localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(normalized));
             return true;

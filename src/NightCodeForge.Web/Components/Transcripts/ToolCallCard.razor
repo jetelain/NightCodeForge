@@ -29,6 +29,16 @@
                     @(IsError ? "Failed" : "TOOL_CALL")
                 </span>
             }
+            @if (!string.IsNullOrWhiteSpace(MemoryBadgeText))
+            {
+                <button type="button"
+                        class="forge-badge badge-indigo tool-trace-badge memory-badge"
+                        data-testid="memory-badge"
+                        title="@MemoryBadgeTooltip"
+                        aria-label="@MemoryBadgeTooltip"
+                        @onclick:stopPropagation="true"
+                        @onclick="OnMemoryBadgeClick">@MemoryBadgeText</button>
+            }
             @if (!string.IsNullOrWhiteSpace(Offset))
             {
                 <span class="badge-tag font-mono" style="margin: 0; font-size: 0.72rem;">@Offset</span>
@@ -87,6 +97,9 @@
     [Parameter] public bool InitiallyExpanded { get; set; }
     [Parameter] public string? BadgeText { get; set; }
     [Parameter] public string? BadgeTooltip { get; set; }
+    [Parameter] public string? MemoryBadgeText { get; set; }
+    [Parameter] public string? MemoryBadgeTooltip { get; set; }
+    [Parameter] public EventCallback OnMemoryBadgeClick { get; set; }
 
     private bool _copiedArgs;
     private bool _copiedResult;

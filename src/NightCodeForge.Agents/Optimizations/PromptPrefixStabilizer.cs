@@ -21,7 +21,7 @@ public class PromptPrefixStabilizer
 - When changing multiple separate locations in one file, use a single edit call with multiple entries in edits[].
 - Prefer incremental, targeted edit tool calls over dumping entire multi-thousand-line files in a single turn.
 - Use write only for brand new files or complete rewrites.
-- Always execute within your assigned working directory; do not modify files in sibling directories or the canonical clone.
+- Always execute within your assigned working directory; do not modify files in sibling directories or the canonical clone, except markdown notes under /workspace/memory/ when that directory is available.
 - Be concise and focused in your responses.
 - CRITICAL: You are an autonomous coding agent operating in a multi-step pipeline. Do NOT write monologues about what you plan to do next and stop; execute your planned actions immediately via tools until your task is 100% implemented and verified.
 </rules>";
@@ -51,12 +51,20 @@ public class PromptPrefixStabilizer
         return sb.ToString().TrimEnd();
     }
 
-    public string BuildLayer2StagePersona(string stagePersonaDirective)
+    /// <summary>
+    /// Layer 2: stage directives plus the role-specific <c>memory_guidelines</c> (kept out of Layer 1 so that
+    /// Stages 1-3 continue to share a byte-identical Layer 1 prefix).
+    /// </summary>
+    public string BuildLayer2StagePersona(string stagePersonaDirective, string? memoryGuidelines = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<stage_directives>");
         sb.AppendLine(stagePersonaDirective.Trim());
         sb.AppendLine("</stage_directives>");
+        if (!string.IsNullOrWhiteSpace(memoryGuidelines))
+        {
+            sb.AppendLine(memoryGuidelines.Trim());
+        }
         return sb.ToString().TrimEnd();
     }
 
@@ -66,7 +74,9 @@ public class PromptPrefixStabilizer
         string? discoveredSymbols = null,
         string? backlogDigest = null,
         string? taskAttachmentsDigest = null,
-        bool? supportsVision = null)
+        bool? supportsVision = null,
+        string? workspaceMemory = null,
+        string? memoryCatalog = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<task_scope>");
@@ -78,6 +88,20 @@ public class PromptPrefixStabilizer
         {
             sb.AppendLine();
             sb.AppendLine(backlogDigest.Trim());
+        }
+
+        // Local memory files evolve during ideation and pipeline runs: keeping them in Layer 3 never invalidates
+        // the Layer 1 and Layer 2 KV cache prefixes.
+        if (!string.IsNullOrWhiteSpace(workspaceMemory))
+        {
+            sb.AppendLine();
+            sb.AppendLine(workspaceMemory.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(memoryCatalog))
+        {
+            sb.AppendLine();
+            sb.AppendLine(memoryCatalog.Trim());
         }
 
         if (!string.IsNullOrWhiteSpace(taskAttachmentsDigest))
@@ -94,7 +118,7 @@ public class PromptPrefixStabilizer
             {
                 sb.AppendLine($"- Current Working Directory (PWD): {workingDirectory}");
                 sb.AppendLine("- All relative paths, file operations (read, edit, write), bash commands, builds, and test runs execute in this working directory.");
-                sb.AppendLine("- The canonical clone on 'main' is read-only. Do not attempt to modify files in other directories.");
+                sb.AppendLine("- The canonical clone on 'main' is read-only. Do not attempt to modify files in other directories (the only exception is /workspace/memory/*.md agent memory notes).");
             }
             if (supportsVision == true)
             {
@@ -127,11 +151,14 @@ public class PromptPrefixStabilizer
         string? workingDirectory = null,
         string? backlogDigest = null,
         string? taskAttachmentsDigest = null,
-        bool? supportsVision = null)
+        bool? supportsVision = null,
+        string? workspaceMemory = null,
+        string? memoryCatalog = null,
+        string? memoryGuidelines = null)
     {
         var layer1 = BuildLayer1GlobalRules(projectGuidelines, skillsCatalog, customRulesPrompt, customRolePersona);
-        var layer2 = BuildLayer2StagePersona(stagePersonaDirective);
-        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest, taskAttachmentsDigest, supportsVision);
+        var layer2 = BuildLayer2StagePersona(stagePersonaDirective, memoryGuidelines);
+        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest, taskAttachmentsDigest, supportsVision, workspaceMemory, memoryCatalog);
         return new PromptLayers(layer1, layer2, layer3);
     }
 
@@ -147,7 +174,10 @@ public class PromptPrefixStabilizer
         string? workingDirectory = null,
         string? backlogDigest = null,
         string? taskAttachmentsDigest = null,
-        bool? supportsVision = null)
+        bool? supportsVision = null,
+        string? workspaceMemory = null,
+        string? memoryCatalog = null,
+        string? memoryGuidelines = null)
     {
         var layers = BuildLayers(
             stagePersonaDirective,
@@ -161,7 +191,10 @@ public class PromptPrefixStabilizer
             workingDirectory,
             backlogDigest,
             taskAttachmentsDigest,
-            supportsVision);
+            supportsVision,
+            workspaceMemory,
+            memoryCatalog,
+            memoryGuidelines);
 
         var sb = new StringBuilder();
         sb.AppendLine(layers.Layer1GlobalRules);

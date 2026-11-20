@@ -78,6 +78,24 @@ public class IdeationPageTests : BunitContext
     }
 
     [Fact]
+    public void MemoryHeaderButton_ShowsIndicatorOnUpdate_AndOpensDrawer()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+        var cut = Render<Ideation>();
+        Assert.Empty(cut.FindAll("[data-testid=memory-indicator]"));
+
+        Services.GetRequiredService<OrchestratorHubClientConnection>()
+            .TriggerMemoryUpdated(1, null, "", "Local", "/workspace/memory/a.md", "Updated", "s");
+
+        cut.WaitForAssertion(() => Assert.Equal("1", cut.Find("[data-testid=memory-indicator]").TextContent.Trim()));
+        cut.Find("#ideation-memory-btn").Click();
+        Assert.NotEmpty(cut.FindAll("#workspace-memory-drawer"));
+        Assert.Empty(cut.FindAll("[data-testid=memory-indicator]"));
+    }
+
+    [Fact]
     public async Task SendMessage_StreamsThinkingAndMessageDeltas()
     {
         var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };

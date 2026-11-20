@@ -5,8 +5,11 @@
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
 @inject ILogger<Ideation> Logger
+@inject MemoryUpdateTracker MemoryTracker
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Core.Memory
+@using NightCodeForge.Web.Components.Memory
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @implements IDisposable
@@ -24,6 +27,13 @@
             </div>
         </div>
         <div class="ideation-header-status">
+            <button type="button" id="ideation-memory-btn" class="forge-btn-ghost" title="Inspect and manage agent memory" @onclick="OpenMemoryDrawer">
+                @MemoryUiConstants.BadgeLabel
+                @if (MemoryUpdateCount > 0)
+                {
+                    <span class="forge-badge badge-indigo" id="ideation-memory-indicator" data-testid="memory-indicator">@MemoryUpdateCount</span>
+                }
+            </button>
             @if (Session.WorkspaceSessions.Count > 0)
             {
                 <div class="session-dropdown-container">
@@ -365,11 +375,15 @@
                                     else if (part is ToolCallContentPart tcp)
                                     {
                                         var tool = tcp.ToolCall;
+                                        var memoryTarget = MemoryPresentationHelper.TryGetToolTarget(tool.ToolName, tool.Arguments, tool.Result, tool.IsError);
                                         <IdeationToolCall ToolName="@tool.ToolName"
                                                       Arguments="@tool.Arguments"
                                                       Result="@tool.Result"
                                                       IsError="@tool.IsError"
-                                                      Offset="@($"{tool.DurationMs}ms")" />
+                                                      Offset="@($"{tool.DurationMs}ms")"
+                                                      MemoryBadgeText="@memoryTarget?.BadgeText"
+                                                      MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
+                                                      OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
@@ -437,11 +451,15 @@
                                     <div class="tool-calls-list">
                                         @foreach (var tool in msg.ToolCalls)
                                         {
+                                            var memoryTarget = MemoryPresentationHelper.TryGetToolTarget(tool.ToolName, tool.Arguments, tool.Result, tool.IsError);
                                             <IdeationToolCall ToolName="@tool.ToolName"
                                                           Arguments="@tool.Arguments"
                                                           Result="@tool.Result"
                                                           IsError="@tool.IsError"
-                                                          Offset="@($"{tool.DurationMs}ms")" />
+                                                          Offset="@($"{tool.DurationMs}ms")"
+                                                          MemoryBadgeText="@memoryTarget?.BadgeText"
+                                                          MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
+                                                          OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
                                         }
                                     </div>
                                 }
@@ -521,12 +539,16 @@
                                     else if (part is ToolCallContentPart toolPart)
                                     {
                                         var tool = toolPart.ToolCall;
+                                        var memoryTarget = MemoryPresentationHelper.TryGetToolTarget(tool.ToolName, tool.Arguments, tool.Result, tool.IsError);
                                         <IdeationToolCall ToolName="@tool.ToolName"
                                                       Arguments="@tool.Arguments"
                                                       Result="@tool.Result"
                                                       IsError="@tool.IsError"
                                                       IsRunning="@(!tool.IsCompleted)"
-                                                      Offset="@($"{tool.DurationMs}ms")" />
+                                                      Offset="@($"{tool.DurationMs}ms")"
+                                                      MemoryBadgeText="@memoryTarget?.BadgeText"
+                                                      MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
+                                                      OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
@@ -803,7 +825,63 @@
                              OnCiteInChat="CiteAttachmentInChat" />
 </div>
 
+@if (_memoryDrawerOpen && ActiveMemoryWorkspaceId.HasValue)
+{
+    <WorkspaceMemoryDrawer WorkspaceId="@ActiveMemoryWorkspaceId.Value"
+                           InitialScope="@_memoryScope"
+                           InitialRelativePath="@_memoryPath"
+                           OnClosed="CloseMemoryDrawer" />
+}
+
 @code {
+    private bool _memoryDrawerOpen;
+    private bool _disposed;
+    private AgentMemoryScope _memoryScope = AgentMemoryScope.LocalWorkspace;
+    private string? _memoryPath;
+
+    private int? ActiveMemoryWorkspaceId => WorkspaceState.ActiveWorkspaceId;
+
+    private int MemoryUpdateCount => ActiveMemoryWorkspaceId.HasValue ? MemoryTracker.GetCount(ActiveMemoryWorkspaceId.Value) : 0;
+
+    private void OpenMemoryDrawer()
+    {
+        _memoryScope = AgentMemoryScope.LocalWorkspace;
+        _memoryPath = null;
+        _memoryDrawerOpen = true;
+        if (ActiveMemoryWorkspaceId.HasValue)
+        {
+            MemoryTracker.Reset(ActiveMemoryWorkspaceId.Value);
+        }
+    }
+
+    private void OpenMemoryDrawerForTarget(MemoryToolTarget? target)
+    {
+        if (target == null)
+        {
+            return;
+        }
+
+        _memoryScope = target.Scope;
+        _memoryPath = target.RelativePath;
+        _memoryDrawerOpen = true;
+        if (ActiveMemoryWorkspaceId.HasValue)
+        {
+            MemoryTracker.Reset(ActiveMemoryWorkspaceId.Value);
+        }
+    }
+
+    private void CloseMemoryDrawer() => _memoryDrawerOpen = false;
+
+    private void HandleMemoryUpdated(MemoryUpdateNotice notice)
+    {
+        if (_disposed || notice.WorkspaceId != ActiveMemoryWorkspaceId)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     [Parameter] public int? WorkspaceId { get; set; }
 
     [SupplyParameterFromQuery(Name = IdeationRefinementHelper.TaskIdQueryParameter)]
@@ -827,6 +905,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        MemoryTracker.OnMemoryUpdated += HandleMemoryUpdated;
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
@@ -1118,6 +1197,8 @@
 
     public void Dispose()
     {
+        _disposed = true;
+        MemoryTracker.OnMemoryUpdated -= HandleMemoryUpdated;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         Session.OnChange -= HandleSessionChanged;
         Session.OnNotification -= HandleSessionNotification;

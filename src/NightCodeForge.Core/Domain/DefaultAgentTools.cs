@@ -16,7 +16,19 @@ public static class DefaultAgentTools
     ];
 
     // Read-only workspace plus scoped host-level backlog tools (ideation additionally grants priority-reordering tools).
-    private static readonly string[] _ideation = [.. _readOnly, .. CanonicalToolNames.BacklogMutationTools];
+    // Write/Edit are granted so Ideation can maintain /workspace/memory/*.md; the RestrictedReadOnly sandbox keeps
+    // every other mount (e.g. /workspace/clone) read-only and WorkspaceFileToolModule enforces the Markdown-only guard.
+    private static readonly string[] _ideation =
+    [
+        .. _readOnly,
+        CanonicalToolNames.Write,
+        CanonicalToolNames.Edit,
+        .. CanonicalToolNames.BacklogMutationTools
+    ];
+
+    /// <summary>The standard Ideation tool set before memory write access was introduced (used for profile reconciliation).</summary>
+    private static readonly string[] _legacyIdeation = [.. _readOnly, .. CanonicalToolNames.BacklogMutationTools];
+    public static IReadOnlyList<string> LegacyIdeation => _legacyIdeation;
 
     // Untrusted intake triage: read-only workspace inspection, skills, and scoped triage backlog tools
     // (excludes filesystem edit/write, web_search, ask, request_changes, and team priority reordering).

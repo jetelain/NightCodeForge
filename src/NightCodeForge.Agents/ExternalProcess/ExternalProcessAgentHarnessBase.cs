@@ -2,10 +2,13 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
 
@@ -30,14 +33,17 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     private readonly IProcessRunner _processRunner;
     private readonly AgentsMdService _agentsMdService;
     private readonly IHarnessActivityRecorder _recorder;
+    private readonly IAgentMemoryTurnTracker _memoryTracker;
 
     protected ExternalProcessAgentHarnessBase(
         IHarnessActivityRecorder recorder,
         AgentsMdService agentsMdService,
         IWorkspacePathResolver pathResolver,
         IProcessRunner processRunner,
+        IAgentMemoryTurnTracker memoryTracker,
         ILogger logger)
     {
+        _memoryTracker = memoryTracker ?? throw new ArgumentNullException(nameof(memoryTracker));
         _recorder = recorder ?? throw new ArgumentNullException(nameof(recorder));
         _agentsMdService = agentsMdService ?? throw new ArgumentNullException(nameof(agentsMdService));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
@@ -75,6 +81,50 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         CancellationToken cancellationToken = default);
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
+    {
+        var tracking = await BeginMemoryTrackingAsync(context, cancellationToken);
+        var stageSessionId = LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId);
+        try
+        {
+            return await RunStageCoreAsync(context, cancellationToken);
+        }
+        finally
+        {
+            if (tracking != null)
+            {
+                try
+                {
+                    // Not tied to the stage token: a cancelled stage may still have written memory files.
+                    await _memoryTracker.PublishChangesAsync(
+                        tracking.Value.Before,
+                        tracking.Value.RepositoryWorkingDirectory,
+                        context.ForgeTask.Id,
+                        context.StageId,
+                        stageSessionId,
+                        CancellationToken.None);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Logger.LogWarning(ex, "Could not publish agent memory changes after stage {StageId} of task #{TaskId}.", context.StageId, context.ForgeTask.Id);
+                }
+            }
+        }
+    }
+
+    private async Task<(AgentMemorySnapshot Before, string RepositoryWorkingDirectory)?> BeginMemoryTrackingAsync(AgentSessionContext context, CancellationToken cancellationToken)
+    {
+        var workspace = context.Workspace;
+        if (workspace == null || workspace.Id <= 0 || IsTriageSession(context))
+        {
+            return null;
+        }
+
+        var repoDir = ResolveWorkspacePaths(context).LocalWorkspaceRoot;
+        var before = await _memoryTracker.CaptureAsync(workspace.Id, repoDir, cancellationToken);
+        return before == null ? null : (before, repoDir);
+    }
+
+    private async Task<AgentRunResult> RunStageCoreAsync(AgentSessionContext context, CancellationToken cancellationToken)
     {
         var sw = Stopwatch.StartNew();
         var sessionId = Guid.NewGuid().ToString("N");
@@ -421,7 +471,7 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     /// Assembles the prompt sent to the agent: stage directive, resumed history, execution guidelines,
     /// environment block and pending human answer.
     /// </summary>
-    protected string BuildEnrichedPrompt(AgentSessionContext context, string localWorkspaceRoot)
+    protected async Task<string> BuildEnrichedPromptAsync(AgentSessionContext context, string localWorkspaceRoot, CancellationToken cancellationToken)
     {
         var projectConfig = CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
         var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
@@ -446,6 +496,8 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
             basePromptText = $"{basePromptText}\n\n{guidelines}";
         }
 
+        basePromptText = await AppendMemorySectionsAsync(basePromptText, context, localWorkspaceRoot, cancellationToken);
+
         if ((context.RequiredMode == AgentMode.Review ||
              context.Profile.Mode == AgentMode.Review ||
              string.Equals(context.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase)) &&
@@ -461,13 +513,77 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
             ExecutionMode.WslDirect => ResolveWslDirectSessionWorkingDirectory(context),
             _ => localWorkspaceRoot
         };
-        var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.\n</environment>";
+        var memoryExceptionNote = CanWriteLocalMemory(context)
+            ? " The only exception is /workspace/memory/*.md agent memory notes."
+            : string.Empty;
+        var envInfo = $"<environment>\n- Current Working Directory (PWD): {agentWorkingDir}\n- Perform all edits, builds, and tests within this directory; the canonical clone on 'main' is read-only.{memoryExceptionNote}\n</environment>";
         basePromptText = $"{basePromptText}\n\n{envInfo}";
 
         return !string.IsNullOrWhiteSpace(context.PendingHumanAnswer)
             ? $"[Human Answer]: {context.PendingHumanAnswer}\n\n{basePromptText}"
             : basePromptText;
     }
+
+    private async Task<string> AppendMemorySectionsAsync(
+        string promptText,
+        AgentSessionContext context,
+        string localWorkspaceRoot,
+        CancellationToken cancellationToken)
+    {
+        var workspace = context.Workspace;
+        if (workspace == null || workspace.Id <= 0 || IsTriageSession(context))
+        {
+            return promptText;
+        }
+
+        var memoryPath = _pathResolver.GetWorkspaceMemoryPath(workspace.Id);
+        var localMemoryDir = string.IsNullOrWhiteSpace(memoryPath) ? null : _pathResolver.ToHostPath(memoryPath);
+        var workspaceMemory = await _agentsMdService.BuildWorkspaceMemorySectionAsync(localMemoryDir, cancellationToken);
+        var catalog = await _agentsMdService.BuildMemoryCatalogAsync(localWorkspaceRoot, localMemoryDir, cancellationToken);
+
+        var isReadOnly = IsReadOnlySession(context);
+        var guidelines = !CanWriteLocalMemory(context)
+            ? null
+            : AgentMemoryGuidelines.ForRole(isReadOnly ? AgentMemoryGuidelines.IdeationRole : AgentMemoryGuidelines.PipelineRole);
+
+        foreach (var section in new[] { guidelines, workspaceMemory, catalog })
+        {
+            if (!string.IsNullOrWhiteSpace(section))
+            {
+                promptText = $"{promptText}\n\n{section}";
+            }
+        }
+
+        return promptText;
+    }
+
+    private static bool CanWriteLocalMemory(AgentSessionContext context)
+    {
+        if (IsTriageSession(context))
+        {
+            return false;
+        }
+
+        if (!IsReadOnlySession(context))
+        {
+            return true;
+        }
+
+        return context.SandboxScope == null ||
+            context.SandboxScope.MountTable.Entries.Any(e =>
+                !e.IsReadOnly &&
+                e.AllowWriteInReadOnlyScope &&
+                string.Equals(e.VirtualMountPath, AgentMemoryConstants.VirtualLocalMemoryPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsReadOnlySession(AgentSessionContext context) =>
+        context.RequiredMode == AgentMode.ReadOnly ||
+        context.Profile.Mode == AgentMode.ReadOnly ||
+        context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly;
+
+    private static bool IsTriageSession(AgentSessionContext context) =>
+        string.Equals(context.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase) ||
+        context.ForgeTask.Status == TaskOverallStatus.Triage;
 
     protected Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken cancellationToken)
         => _recorder.BroadcastAsync(sessionId, taskId, stageId, kind, content, cancellationToken);

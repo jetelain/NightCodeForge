@@ -29,6 +29,12 @@ public interface IWorkspacePathResolver
         $"{GetAgentWorkspaceRootPath(workspaceId)}/attachments";
 
     /// <summary>
+    /// Gets the canonical path to the workspace's local agent memory directory (~/.nightcodeforge/wks/{workspaceId}/memory).
+    /// </summary>
+    string GetWorkspaceMemoryPath(int workspaceId) =>
+        $"{GetAgentWorkspaceRootPath(workspaceId)}/memory";
+
+    /// <summary>
     /// Gets the Git remote URL for host-origin (converts Windows path to /mnt/... mount path on Windows, raw path on Unix).
     /// </summary>
     string GetHostRemoteUrl(string repositoryPath);

@@ -155,10 +155,12 @@ public class WebNotificationsSettingsTabTests : BunitContext
         var qToggle = cut.Find("[data-testid='toggle-question-inbox']");
         var rToggle = cut.Find("[data-testid='toggle-review-room']");
         var mToggle = cut.Find("[data-testid='toggle-task-merged']");
+        var aToggle = cut.Find("[data-testid='toggle-agent-memory']");
 
         Assert.True(qToggle.HasAttribute("disabled"));
         Assert.True(rToggle.HasAttribute("disabled"));
         Assert.True(mToggle.HasAttribute("disabled"));
+        Assert.True(aToggle.HasAttribute("disabled"));
     }
 
     [Fact]
@@ -170,6 +172,19 @@ public class WebNotificationsSettingsTabTests : BunitContext
         qToggle.Change(false);
 
         _serviceMock.Verify(s => s.SavePreferencesAsync(It.Is<NotificationPreferences>(p => !p.NotifyOnQuestionInbox)), Times.Once);
+    }
+
+    [Fact]
+    public void AgentMemorySwitch_UncheckedByDefault_AndPersistsWhenToggled()
+    {
+        var cut = Render<WebNotificationsSettingsTab>();
+
+        var aToggle = cut.Find("[data-testid='toggle-agent-memory']");
+        Assert.False(aToggle.HasAttribute("checked") || (aToggle as AngleSharp.Html.Dom.IHtmlInputElement)?.IsChecked == true);
+
+        aToggle.Change(true);
+
+        _serviceMock.Verify(s => s.SavePreferencesAsync(It.Is<NotificationPreferences>(p => p.NotifyOnAgentMemory)), Times.Once);
     }
 }
 

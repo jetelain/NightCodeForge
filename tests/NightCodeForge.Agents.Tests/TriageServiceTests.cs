@@ -4,6 +4,7 @@ using NightCodeForge.Agents.Triage;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -360,7 +361,8 @@ public class TriageServiceTests : IDisposable
         Directory.CreateDirectory(cloneDir);
 
         var mockPathResolver = new Mock<IWorkspacePathResolver>();
-        mockPathResolver.Setup(r => r.ToHostPath(cloneDir)).Returns(cloneDir);
+        mockPathResolver.Setup(r => r.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
+        mockPathResolver.Setup(r => r.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         mockPathResolver.Setup(r => r.GetAgentWorkingClonePath(It.IsAny<int>()))
             .Throws(new InvalidOperationException("WSL provider metadata failed"));
 
@@ -494,6 +496,43 @@ public class TriageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task TriageExternalReportAsync_MountsMemoryReadOnly_InIsolatedTriageContainer_WithoutWriteTools()
+    {
+        AgentSessionContext? capturedContext = null;
+        _fakeHarness.OnRunStage = ctx =>
+        {
+            capturedContext = ctx;
+            return AgentRunResult.Completed(new AgentRunMetrics(10, 5, 5, 10), summary: "ok");
+        };
+
+        var triageService = new NightCodeForge.Agents.Tests.Fixtures.TestTriageServiceBuilder
+        {
+            TaskRepository = _taskRepo,
+            WorkspaceRepository = _workspaceRepo,
+            HarnessRegistry = _harnessRegistry,
+            MarkdownSyncService = _markdownSyncService
+        }.Build();
+
+        await triageService.TriageExternalReportAsync(_workspace, new TriageReportRequest("Memory isolation", "Triage must never write memory."));
+
+        Assert.NotNull(capturedContext);
+        var scope = capturedContext.SandboxScope;
+        Assert.NotNull(scope);
+
+        var memory = Assert.Single(scope.MountTable.Entries, e => e.VirtualMountPath == AgentMemoryConstants.VirtualLocalMemoryPath);
+        Assert.True(memory.IsReadOnly);
+        Assert.False(memory.AllowWriteInReadOnlyScope);
+        Assert.EndsWith($".nightcodeforge/wks/{_workspace.Id}/memory", memory.HostDirectoryPath.Replace('\\', '/'));
+        Assert.DoesNotContain(scope.MountTable.Entries, e => e.VirtualMountPath == AttachmentConstants.VirtualAttachmentsMountPath);
+
+        Assert.Equal($"ncf-sandbox-{_workspace.Id}-triage-ro", ContainerNameFor(scope));
+        Assert.DoesNotContain(CanonicalToolNames.Write, DefaultAgentTools.Triage);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, DefaultAgentTools.Triage);
+    }
+
+    private static string ContainerNameFor(SandboxScopeDescriptor scope) =>
+        scope.ContainerName + SandboxScopeDescriptor.ReadOnlyContainerSuffix;
+    [Fact]
     public async Task TriageExternalReportAsync_WhenStoredProfileIsPermissive_EnforcesReadOnlyAndRestrictedTierAndSandboxScope()
     {
         var permissiveWorkspace = new Workspace
@@ -562,6 +601,8 @@ public class TriageServiceTests : IDisposable
             DefaultAgentTools.Ideation,
             new[]
             {
+                CanonicalToolNames.Edit,
+                CanonicalToolNames.Write,
                 CanonicalToolNames.SetTaskPriority,
                 CanonicalToolNames.ReworkPriorities,
                 CanonicalToolNames.WebSearch,

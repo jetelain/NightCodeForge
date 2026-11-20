@@ -77,4 +77,8 @@ public static class AgentActivityMetadataKeys
     public const string ConversationId = "conversationId";
     public const string AgentProfile = "agentProfile";
     public const string ModelKey = "model";
+    public const string ActionTypeMemoryUpdated = "MemoryUpdated";
+    public const string MemoryScope = "memoryScope";
+    public const string MemoryRelativePath = "memoryRelativePath";
+    public const string MemoryChangeKind = "memoryChangeKind";
 }

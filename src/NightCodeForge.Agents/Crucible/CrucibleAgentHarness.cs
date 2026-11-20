@@ -21,6 +21,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow;
@@ -81,6 +82,63 @@ public partial class CrucibleAgentHarness : IAgentHarness
     }
 
     public async Task<AgentRunResult> RunStageAsync(AgentSessionContext context, CancellationToken cancellationToken = default)
+    {
+        var memoryTracking = await BeginMemoryTrackingAsync(context, cancellationToken);
+        try
+        {
+            return await RunStageCoreAsync(context, cancellationToken);
+        }
+        finally
+        {
+            await PublishMemoryChangesAsync(context, memoryTracking);
+        }
+    }
+
+    private sealed record MemoryTracking(AgentMemorySnapshot Before, string? RepositoryWorkingDirectory, string SessionId);
+
+    /// <summary>Snapshots agent memory before the stage; Stage 0 triage is untrusted and can never write memory.</summary>
+    private async Task<MemoryTracking?> BeginMemoryTrackingAsync(AgentSessionContext context, CancellationToken cancellationToken)
+    {
+        var workspace = context.Workspace;
+        var isTriage = string.Equals(context.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase)
+            || context.ForgeTask.Status == TaskOverallStatus.Triage;
+        if (workspace == null || workspace.Id <= 0 || isTriage)
+        {
+            return null;
+        }
+
+        var taskId = context.ForgeTask.Id > 0 ? context.ForgeTask.Id : (int?)null;
+        var repoDir = _workspaceContext.ResolveLocations(workspace, taskId, context.WorkspacePath).RepoPath;
+        var before = await _workspaceContext.CaptureMemorySnapshotAsync(workspace.Id, repoDir, cancellationToken);
+        return before == null ? null : new MemoryTracking(before, repoDir, LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId));
+    }
+
+    /// <summary>Post-stage snapshot diff: notifies bash/native-tool memory writes that no host hook has attributed yet.</summary>
+    private async Task PublishMemoryChangesAsync(AgentSessionContext context, MemoryTracking? tracking)
+    {
+        if (tracking == null)
+        {
+            return;
+        }
+
+        try
+        {
+            // Not tied to the stage token: the stage may have been cancelled yet its memory writes still happened.
+            await _workspaceContext.PublishMemoryChangesAsync(
+                tracking.Before,
+                tracking.RepositoryWorkingDirectory,
+                context.ForgeTask.Id,
+                context.StageId,
+                tracking.SessionId,
+                CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not publish agent memory changes after stage {StageId} of task #{TaskId}.", context.StageId, context.ForgeTask.Id);
+        }
+    }
+
+    private async Task<AgentRunResult> RunStageCoreAsync(AgentSessionContext context, CancellationToken cancellationToken)
     {
         context.OptimizationFlags = _agentFactory.ResolveOptimizationFlags(context.Profile, context.OptimizationFlags);
         var stopwatch = Stopwatch.StartNew();
@@ -144,6 +202,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     sessionTaskId: persistedTaskId)
                 : null);
 
+        var canonicalScopeIsReadOnly = isTriageSession || context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly || context.SandboxScope?.IsReadOnly == true;
         var toolset = await _toolsetFactory.CreateAsync(
             new CanonicalToolsetRequest(
                 workspace,
@@ -154,7 +213,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     TaskId: worktreeTaskId,
                     BuildTimeoutSeconds: buildTimeout,
                     TestTimeoutSeconds: testTimeout,
-                    IsReadOnly: isTriageSession || context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly || context.SandboxScope?.IsReadOnly == true,
+                    IsReadOnly: canonicalScopeIsReadOnly,
                     SandboxScope: context.SandboxScope,
                     OptimizationFlags: context.OptimizationFlags,
                     BacklogMutationPolicy: effectiveBacklogPolicy,
@@ -169,6 +228,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
             cancellationToken);
         var canonicalTools = toolset.Tools;
         var dispatcher = toolset.Dispatcher;
+
+        if (workspace.Id > 0 && !isTriageSession)
+        {
+            var memorySessionId = LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId);
+            canonicalTools.FileModule.MemoryWriteObserver = (write, ct) =>
+                _workspaceContext.NotifyMemoryWriteAsync(workspace.Id, context.ForgeTask.Id, context.StageId, memorySessionId, write, ct);
+        }
 
         await RehydrateDeferredImageRefsAsync(chatHistory, toolset.Tools.FileModule, _logger, cancellationToken);
 
@@ -250,7 +316,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
             workingDirectory: locations.AgentWorkingDir,
             backlogDigest: backlogDigest,
             taskAttachmentsDigest: taskAttachmentsDigest,
-            supportsVision: supportsVision);
+            supportsVision: supportsVision,
+            workspaceMemory: promptContext.WorkspaceMemory,
+            memoryCatalog: promptContext.MemoryCatalog,
+            memoryGuidelines: ResolveMemoryGuidelines(promptContext, isTriageSession, canonicalScopeIsReadOnly));
 
         // 6. Assemble the agent and its middlewares.
         string latestSerializedState = SerializeSession(chatHistory);
@@ -1549,6 +1618,17 @@ public partial class CrucibleAgentHarness : IAgentHarness
             [AgentActivityMetadataKeys.CloudSavings] = metrics.CloudSavings,
             [AgentActivityMetadataKeys.CachedInputTokens] = metrics.CachedInputTokens
         };
+    }
+
+    /// <summary>Role-specific memory guidelines: none for triage or sessions that cannot write memory.</summary>
+    internal static string? ResolveMemoryGuidelines(AgentPromptContext promptContext, bool isTriageSession, bool isReadOnlyScope)
+    {
+        if (isTriageSession || !promptContext.CanWriteMemory)
+        {
+            return null;
+        }
+
+        return AgentMemoryGuidelines.ForRole(isReadOnlyScope ? AgentMemoryGuidelines.IdeationRole : AgentMemoryGuidelines.PipelineRole);
     }
 
     private async Task BroadcastAsync(string sessionId, int taskId, string stageId, AgentActivityKind kind, string content, CancellationToken ct, Dictionary<string, object?>? metadata = null)

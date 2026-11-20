@@ -117,6 +117,8 @@ internal sealed class WarmIdeationSession
     public string? LastBacklogDigest { get; set; }
     public string? LastAttachmentsDigest { get; set; }
     public string? LastFrictionHotspotsDigest { get; set; }
+    public string? LastWorkspaceMemory { get; set; }
+    public string? LastMemoryCatalog { get; set; }
     public bool HistoryHydrated { get; set; }
     public int? HydratedMaxTurnIndex { get; set; }
     public bool SupportsVision { get; set; }

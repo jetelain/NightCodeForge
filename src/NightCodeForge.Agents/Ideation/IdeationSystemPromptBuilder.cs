@@ -88,6 +88,7 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         string? customSystemPrompt,
         bool? supportsVision = null)
     {
+        var memorySection = BuildMemorySections(promptContext);
         var environmentSection = new StringBuilder();
         environmentSection.AppendLine("<environment>");
         environmentSection.AppendLine($"- Current Working Directory (PWD): {locations.AgentWorkingDir}");
@@ -125,9 +126,31 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
 
         return $@"{basePersona}
 {environmentSection.ToString().TrimEnd()}
-{promptContext.ProjectContext}{skillsSection}
+{promptContext.ProjectContext}{skillsSection}{memorySection}
 
 {backlogSection}{attachmentsSection}{hotspotsSection}{TaskGuidanceText}";
+    }
+
+    /// <summary>Role guidelines (when memory is writable), pinned local memory and memory catalog sections.</summary>
+    private static string BuildMemorySections(AgentPromptContext promptContext)
+    {
+        var sb = new StringBuilder();
+        if (promptContext.CanWriteMemory)
+        {
+            sb.Append("\n\n").Append(AgentMemoryGuidelines.Ideation);
+        }
+
+        if (!string.IsNullOrWhiteSpace(promptContext.WorkspaceMemory))
+        {
+            sb.Append("\n\n").Append(promptContext.WorkspaceMemory.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(promptContext.MemoryCatalog))
+        {
+            sb.Append("\n\n").Append(promptContext.MemoryCatalog.Trim());
+        }
+
+        return sb.ToString();
     }
 
     public static string? BuildWorkspaceContextUpdateDelta(
@@ -136,7 +159,11 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         string? previousAttachmentsDigest,
         string currentAttachmentsDigest,
         string? previousHotspotsDigest,
-        string currentHotspotsDigest)
+        string currentHotspotsDigest,
+        string? previousWorkspaceMemory = null,
+        string? currentWorkspaceMemory = null,
+        string? previousMemoryCatalog = null,
+        string? currentMemoryCatalog = null)
     {
         var changedSections = new List<string>();
 
@@ -159,6 +186,20 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
             changedSections.Add(string.IsNullOrWhiteSpace(currentHotspotsDigest)
                 ? "<workspace_friction_hotspots>(none)</workspace_friction_hotspots>"
                 : currentHotspotsDigest);
+        }
+
+        if (!string.Equals(previousWorkspaceMemory ?? string.Empty, currentWorkspaceMemory ?? string.Empty, StringComparison.Ordinal))
+        {
+            changedSections.Add(string.IsNullOrWhiteSpace(currentWorkspaceMemory)
+                ? "<workspace_memory>(empty)</workspace_memory>"
+                : currentWorkspaceMemory);
+        }
+
+        if (!string.Equals(previousMemoryCatalog ?? string.Empty, currentMemoryCatalog ?? string.Empty, StringComparison.Ordinal))
+        {
+            changedSections.Add(string.IsNullOrWhiteSpace(currentMemoryCatalog)
+                ? "<memory_catalog>(none)</memory_catalog>"
+                : currentMemoryCatalog);
         }
 
         if (changedSections.Count == 0)

@@ -40,7 +40,7 @@ public class AgentWorkspaceContextServiceTests : IDisposable
             sync ?? new Mock<ITaskMarkdownSyncService>().Object,
             TestBacklogContext.CreateDefault(),
             transcriptAnalysis ?? new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public class AgentWorkspaceContextServiceTests : IDisposable
         backlog.Setup(b => b.BuildBacklogDigestAsync(5, 9, It.IsAny<CancellationToken>())).ReturnsAsync("<digest/>");
         var service = new AgentWorkspaceContextService(
             new Mock<IWorkspacePathResolver>().Object, new AgentsMdService(), new Mock<IWorkspaceSymbolService>().Object,
-            new Mock<ITaskMarkdownSyncService>().Object, backlog.Object, new TranscriptAnalysisService(), NullLogger<AgentWorkspaceContextService>.Instance);
+            new Mock<ITaskMarkdownSyncService>().Object, backlog.Object, new TranscriptAnalysisService(), new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         Assert.Equal("<digest/>", await service.BuildBacklogDigestAsync(5, 9, CancellationToken.None));
     }
@@ -201,7 +201,7 @@ public class AgentWorkspaceContextServiceTests : IDisposable
     {
         Assert.Throws<ArgumentNullException>(() => new AgentWorkspaceContextService(
             null!, new AgentsMdService(), new Mock<IWorkspaceSymbolService>().Object,
-            new Mock<ITaskMarkdownSyncService>().Object, TestBacklogContext.CreateDefault(), new TranscriptAnalysisService(), NullLogger<AgentWorkspaceContextService>.Instance));
+            new Mock<ITaskMarkdownSyncService>().Object, TestBacklogContext.CreateDefault(), new TranscriptAnalysisService(), new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance));
     }
 
     [Fact]

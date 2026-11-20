@@ -40,6 +40,9 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
     public event Action<int, string>? OnHostDirtyAlertReceived;
     public event Action<int, string, string, string, DateTime>? OnExecutionLogReceived;
     public event Action<int, string, string>? OnBacklogMutationReceived;
+
+    /// <summary>Agent memory file changed: (workspaceId, taskId, stageId, memoryScope, relativePath, changeKind, summary).</summary>
+    public event Action<int, int?, string, string, string, string, string>? OnMemoryUpdatedReceived;
     public event Action<int, string, string, string, int, DateTime>? OnOptimizationActionReceived;
     public event Action<NightCodeForge.Core.Workflow.LlmCallRecord>? OnLlmCallStarted;
     public event Action<string, int, double, double, int>? OnLlmCallProgress;
@@ -236,6 +239,7 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
         hub.On<int, string>("ReceiveHostDirtyAlert", TriggerHostDirtyAlert);
         hub.On<int, string, string, string, DateTime>("ReceiveExecutionLog", TriggerExecutionLog);
         hub.On<int, string, string>("ReceiveBacklogMutation", TriggerBacklogMutation);
+        hub.On<int, int?, string, string, string, string, string>("ReceiveMemoryUpdated", TriggerMemoryUpdated);
         hub.On<int, string, string, string, int, DateTime>("ReceiveOptimizationAction", TriggerOptimizationAction);
         hub.On<NightCodeForge.Core.Workflow.LlmCallRecord>("ReceiveLlmCallStarted", TriggerLlmCallStarted);
         hub.On<string, int, double, double, int>("ReceiveLlmCallProgress", TriggerLlmCallProgress);
@@ -299,6 +303,9 @@ public class OrchestratorHubClientConnection : IAsyncDisposable
 
     public void TriggerBacklogMutation(int taskId, string toolName, string message) =>
         OnBacklogMutationReceived?.Invoke(taskId, toolName, message);
+
+    public void TriggerMemoryUpdated(int workspaceId, int? taskId, string stageId, string memoryScope, string relativePath, string changeKind, string summary) =>
+        OnMemoryUpdatedReceived?.Invoke(workspaceId, taskId, stageId, memoryScope, relativePath, changeKind, summary);
 
     public void TriggerOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensOrBytesSaved, DateTime timestamp) =>
         OnOptimizationActionReceived?.Invoke(taskId, stageId, actionType, description, tokensOrBytesSaved, timestamp);

@@ -64,6 +64,7 @@ public sealed class TestIdeationCoordinatorBuilder : IDisposable
     public ILogger<IdeationConversationCoordinator> Logger { get; set; } = NullLogger<IdeationConversationCoordinator>.Instance;
     public ILogger<HarnessAgentFactory> HarnessAgentLogger { get; set; } = NullLogger<HarnessAgentFactory>.Instance;
     public TimeProvider TimeProvider { get; set; } = TimeProvider.System;
+    public NoopAgentMemoryTurnTracker MemoryTracker { get; set; } = new();
     public bool ValidateScopesOnBuild { get; set; } = true;
 
     public ServiceProvider? BuiltServiceProvider => _serviceProvider;
@@ -146,6 +147,7 @@ public sealed class TestIdeationCoordinatorBuilder : IDisposable
         services.AddSingleton(BackgroundTaskRunner);
         services.AddSingleton(PreloadService);
         services.AddSingleton(TimeProvider);
+        services.AddSingleton<NightCodeForge.Agents.Memory.IAgentMemoryTurnTracker>(MemoryTracker);
         services.AddSingleton<ICliOutputFilterRegistry>(CliOutputFilterRegistry.Default);
         services.AddSingleton(Logger);
         services.AddSingleton(HarnessAgentLogger);
@@ -244,6 +246,7 @@ public sealed class TestIdeationCoordinatorBuilder : IDisposable
                 sp.GetRequiredService<ITaskMarkdownSyncService>(),
                 sp.GetRequiredService<IBacklogPlanningContext>(),
                 sp.GetRequiredService<ITranscriptAnalysisService>(),
+                sp.GetRequiredService<NightCodeForge.Agents.Memory.IAgentMemoryTurnTracker>(),
                 sp.GetRequiredService<ILogger<AgentWorkspaceContextService>>()));
         }
 

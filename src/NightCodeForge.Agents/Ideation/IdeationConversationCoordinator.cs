@@ -13,6 +13,7 @@ using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Crucible.ChatClients;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools;
@@ -23,6 +24,7 @@ using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Resilience;
 using NightCodeForge.Core.Services;
@@ -56,6 +58,7 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
     private readonly IBackgroundTaskRunner _backgroundTaskRunner;
     private readonly ILogger<IdeationConversationCoordinator> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAgentMemoryTurnTracker _memoryTracker;
 
     private readonly object _registryGate = new();
     private readonly ConcurrentDictionary<int, WarmIdeationSession> _sessions = new();
@@ -79,8 +82,10 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         IOperationsControlService operationsControlService,
         IBackgroundTaskRunner backgroundTaskRunner,
         ILogger<IdeationConversationCoordinator> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAgentMemoryTurnTracker memoryTracker)
     {
+        _memoryTracker = memoryTracker ?? throw new ArgumentNullException(nameof(memoryTracker));
         _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
         _activityStreamer = activityStreamer ?? throw new ArgumentNullException(nameof(activityStreamer));
         _transcriptService = transcriptService ?? throw new ArgumentNullException(nameof(transcriptService));
@@ -1046,7 +1051,13 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                             OptimizationFlags: effectiveFlags,
                             SupportsVision: supportsVision,
                             ActiveModelId: activeModelId,
-                            MultimodalAttachmentQueue: multimodalQueue),
+                            MultimodalAttachmentQueue: multimodalQueue)
+                        {
+                            // Ideation is read-only except for markdown notes in the local workspace memory when write/edit is permitted.
+                            AllowLocalMemoryWriteInReadOnlyScope =
+                                permittedTools.Contains(CanonicalToolNames.Write, StringComparer.OrdinalIgnoreCase) ||
+                                permittedTools.Contains(CanonicalToolNames.Edit, StringComparer.OrdinalIgnoreCase)
+                        },
                         permittedTools,
                         Array.Empty<CustomToolConfig>(),
                         new Dictionary<string, string>(),
@@ -1060,6 +1071,9 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 permittedTools,
                 toolsetSession!.SkillsService,
                 cancellationToken).ConfigureAwait(false);
+
+            toolsetSession.Tools.FileModule.MemoryWriteObserver = (write, ct) =>
+                _memoryTracker.NotifyWriteAsync(workspace.Id, 0, StandardStageIds.Ideation, session.RouterSessionId, write, ct);
 
             var topLevelSummary = workspaceContext.DescribeTopLevelEntries(workspace, locations.RepoPath);
             var backlogDigest = await workspaceContext.BuildBacklogDigestAsync(workspace.Id, null, cancellationToken).ConfigureAwait(false);
@@ -1155,6 +1169,8 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 session.LastBacklogDigest = backlogDigest;
                 session.LastAttachmentsDigest = attachmentsDigest;
                 session.LastFrictionHotspotsDigest = hotspotsDigest;
+                session.LastWorkspaceMemory = promptContext.WorkspaceMemory;
+                session.LastMemoryCatalog = promptContext.MemoryCatalog;
                 session.OptionsDirty = false;
                 session.ContextDirty = false;
             }
@@ -1817,6 +1833,8 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                     durationMs: durationMs);
             }
         }
+
+        var memoryBefore = await CaptureMemorySnapshotAsync(session).ConfigureAwait(false);
 
         try
         {
@@ -2609,7 +2627,46 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 }
             }
 
+            await PublishMemoryChangesAsync(session, memoryBefore).ConfigureAwait(false);
             NotifyTurnActivityCompleted();
+        }
+    }
+
+    /// <summary>Snapshots the local workspace memory before a turn (Ideation never writes repository memory).</summary>
+    private async Task<AgentMemorySnapshot?> CaptureMemorySnapshotAsync(WarmIdeationSession session)
+    {
+        try
+        {
+            return await _memoryTracker.CaptureAsync(session.WorkspaceId, repositoryWorkingDirectory: null, _disposeCts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not snapshot agent memory before ideation turn of conversation #{ConversationId}.", session.ConversationId);
+            return null;
+        }
+    }
+
+    /// <summary>Post-turn diff: notifies memory writes made outside the host write hooks (e.g. native or shell writes).</summary>
+    private async Task PublishMemoryChangesAsync(WarmIdeationSession session, AgentMemorySnapshot? before)
+    {
+        if (before == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _memoryTracker.PublishChangesAsync(
+                before,
+                repositoryWorkingDirectory: null,
+                taskId: 0,
+                StandardStageIds.Ideation,
+                session.RouterSessionId,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not publish agent memory changes after ideation turn of conversation #{ConversationId}.", session.ConversationId);
         }
     }
 
@@ -2692,12 +2749,14 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         string currentBacklog;
         string currentAttachments;
         string currentHotspots;
+        AgentMemoryPrompt currentMemory;
         await using (var scope = _scopeFactory.CreateAsyncScope())
         {
             var workspaceContext = scope.ServiceProvider.GetRequiredService<IAgentWorkspaceContextService>();
             currentBacklog = await workspaceContext.BuildBacklogDigestAsync(session.WorkspaceId, null, cancellationToken).ConfigureAwait(false);
             currentAttachments = await workspaceContext.BuildWorkspaceAttachmentsDigestAsync(session.WorkspaceId, cancellationToken).ConfigureAwait(false);
             currentHotspots = await workspaceContext.BuildFrictionHotspotsDigestAsync(session.Locations.RepoPath, cancellationToken).ConfigureAwait(false);
+            currentMemory = await workspaceContext.BuildMemoryPromptAsync(session.WorkspaceId, session.Locations.RepoPath, cancellationToken).ConfigureAwait(false);
         }
 
         bool hasHistory;
@@ -2710,7 +2769,9 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         {
             bool changed = !string.Equals(session.LastBacklogDigest ?? string.Empty, currentBacklog, StringComparison.Ordinal)
                 || !string.Equals(session.LastAttachmentsDigest ?? string.Empty, currentAttachments, StringComparison.Ordinal)
-                || !string.Equals(session.LastFrictionHotspotsDigest ?? string.Empty, currentHotspots, StringComparison.Ordinal);
+                || !string.Equals(session.LastFrictionHotspotsDigest ?? string.Empty, currentHotspots, StringComparison.Ordinal)
+                || !string.Equals(session.LastWorkspaceMemory ?? string.Empty, currentMemory.WorkspaceMemory ?? string.Empty, StringComparison.Ordinal)
+                || !string.Equals(session.LastMemoryCatalog ?? string.Empty, currentMemory.MemoryCatalog ?? string.Empty, StringComparison.Ordinal);
 
             if (changed)
             {
@@ -2738,11 +2799,15 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         string? previousBacklog;
         string? previousAttachments;
         string? previousHotspots;
+        string? previousMemory;
+        string? previousCatalog;
         lock (session.StateGate)
         {
             previousBacklog = session.LastBacklogDigest;
             previousAttachments = session.LastAttachmentsDigest;
             previousHotspots = session.LastFrictionHotspotsDigest;
+            previousMemory = session.LastWorkspaceMemory;
+            previousCatalog = session.LastMemoryCatalog;
         }
 
         string? delta = IdeationSystemPromptBuilder.BuildWorkspaceContextUpdateDelta(
@@ -2751,13 +2816,19 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
             previousAttachments,
             currentAttachments,
             previousHotspots,
-            currentHotspots);
+            currentHotspots,
+            previousMemory,
+            currentMemory.WorkspaceMemory,
+            previousCatalog,
+            currentMemory.MemoryCatalog);
 
         lock (session.StateGate)
         {
             session.LastBacklogDigest = currentBacklog;
             session.LastAttachmentsDigest = currentAttachments;
             session.LastFrictionHotspotsDigest = currentHotspots;
+            session.LastWorkspaceMemory = currentMemory.WorkspaceMemory;
+            session.LastMemoryCatalog = currentMemory.MemoryCatalog;
             session.ContextDirty = false;
         }
 
@@ -3511,6 +3582,17 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         }
     }
 
+    /// <summary>
+    /// Local workspace memory changed outside the Ideation stage (concurrent tasks, UI drawer): warm sessions must
+    /// refresh workspace_memory / memory_catalog before the next turn. Ideation's own writes are already in its history.
+    /// </summary>
+    private static bool IsExternalLocalMemoryNotice(AgentActivityEvent evt) =>
+        evt.Metadata!.TryGetValue(AgentActivityMetadataKeys.ActionType, out var action) &&
+        string.Equals(action?.ToString(), AgentActivityMetadataKeys.ActionTypeMemoryUpdated, StringComparison.Ordinal) &&
+        evt.Metadata.TryGetValue(AgentActivityMetadataKeys.MemoryScope, out var scope) &&
+        string.Equals(scope?.ToString(), AgentMemoryConstants.ScopeLocalMetadataValue, StringComparison.Ordinal) &&
+        !string.Equals(evt.StageId, StandardStageIds.Ideation, StringComparison.OrdinalIgnoreCase);
+
     internal static bool IsWorkspaceMutatingActivity(AgentActivityEvent evt)
     {
         if (evt.Kind is AgentActivityKind.StageCompleted or AgentActivityKind.Error or AgentActivityKind.Interrupted)
@@ -3521,6 +3603,11 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
 
         if (evt.Kind == AgentActivityKind.Notice && evt.Metadata != null)
         {
+            if (IsExternalLocalMemoryNotice(evt))
+            {
+                return true;
+            }
+
             if (evt.Metadata.TryGetValue(AgentActivityMetadataKeys.ActionType, out var actionObj) &&
                 string.Equals(actionObj?.ToString(), AgentActivityConstants.ActionTypeTaskSuspended, StringComparison.OrdinalIgnoreCase))
             {
@@ -3553,10 +3640,10 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 int? workspaceId = null;
                 if (evt.Metadata != null &&
                     evt.Metadata.TryGetValue(AgentActivityMetadataKeys.WorkspaceId, out var rawWsId) &&
-                    rawWsId is int wsId &&
-                    wsId > 0)
+                    ((rawWsId is int intWsId && intWsId > 0) ||
+                     (int.TryParse(rawWsId?.ToString(), out intWsId) && intWsId > 0)))
                 {
-                    workspaceId = wsId;
+                    workspaceId = intWsId;
                 }
                 else if (evt.TaskId > 0)
                 {

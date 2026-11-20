@@ -93,6 +93,7 @@ public class Step1236ASandboxMountAndLifecycleTests
     {
         var runnerMock = new Mock<IProcessRunner>();
         var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(m => m.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         pathResolverMock.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         pathResolverMock.Setup(p => p.GetWslUserName()).Returns("testuser");
 
@@ -416,6 +417,7 @@ public class Step1236ASandboxMountAndLifecycleTests
     {
         var runnerMock = new Mock<IProcessRunner>();
         var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        pathResolverMock.Setup(m => m.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         pathResolverMock.Setup(p => p.ToHostPath(It.IsAny<string>()))
             .Returns<string>(p => p.StartsWith("/home/", StringComparison.Ordinal)
                 ? $@"\\wsl.localhost\Ubuntu\{p.TrimStart('/').Replace('/', '\\')}"

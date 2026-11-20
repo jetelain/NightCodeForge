@@ -8,6 +8,7 @@ using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Execution;
@@ -32,6 +33,8 @@ public class TestAcpHarnessBuilder
     public IAcpProcessLauncher? ProcessLauncher { get; set; }
     public IHarnessActivityRecorder? ActivityRecorder { get; set; }
     public ILogger<AcpAgentHarness> Logger { get; set; } = NullLogger<AcpAgentHarness>.Instance;
+    public NoopAgentMemoryTurnTracker MemoryTracker { get; set; } = new();
+    public IAgentMemoryWriteNotifier MemoryNotifier { get; set; } = new Moq.Mock<IAgentMemoryWriteNotifier>().Object;
 
     public AcpAgentHarness Build()
     {
@@ -40,6 +43,7 @@ public class TestAcpHarnessBuilder
             EditorConfigService,
             EditorConfigFileApplier,
             PathResolver,
+            MemoryNotifier,
             NullLogger<AcpHostRpcHandler>.Instance);
         var launcher = ProcessLauncher ?? new AcpProcessLauncher(
             EnvProvider,
@@ -59,6 +63,7 @@ public class TestAcpHarnessBuilder
             AgentsMdService,
             PathResolver,
             ProcessRunner,
+            MemoryTracker,
             Logger);
     }
 }

@@ -17,6 +17,7 @@ public class AcpHostRpcHandlerTests
             new EditorConfigService(),
             new EditorConfigFileApplier(),
             new Mock<IWorkspacePathResolver>().Object,
+            new Mock<NightCodeForge.Agents.Memory.IAgentMemoryWriteNotifier>().Object,
             NullLogger<AcpHostRpcHandler>.Instance);
 
     private static AcpHostRpcContext Ctx(string sessionId, Workspace? workspace, string root)
@@ -359,6 +360,7 @@ public class AcpHostRpcHandlerTests
                 new EditorConfigService(),
                 new EditorConfigFileApplier(),
                 pathResolverMock.Object,
+                new Mock<NightCodeForge.Agents.Memory.IAgentMemoryWriteNotifier>().Object,
                 NullLogger<AcpHostRpcHandler>.Instance);
 
             var ctx = Ctx("s-barehost", new Workspace { Id = 7, RepositoryPath = dir, ExecutionMode = ExecutionMode.BareHost }, dir);

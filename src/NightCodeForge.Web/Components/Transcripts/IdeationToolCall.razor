@@ -9,7 +9,10 @@
                   Result="@Result"
                   IsError="@IsError"
                   IsRunning="@IsRunning"
-                  Offset="@Offset" />
+                  Offset="@Offset"
+                  MemoryBadgeText="@MemoryBadgeText"
+                  MemoryBadgeTooltip="@MemoryBadgeTooltip"
+                  OnMemoryBadgeClick="@OnMemoryBadgeClick" />
 }
 else
 {
@@ -81,6 +84,9 @@ else
     [Parameter] public string? Offset { get; set; }
     [Parameter] public bool IsError { get; set; }
     [Parameter] public bool IsRunning { get; set; }
+    [Parameter] public string? MemoryBadgeText { get; set; }
+    [Parameter] public string? MemoryBadgeTooltip { get; set; }
+    [Parameter] public EventCallback OnMemoryBadgeClick { get; set; }
 
     private BacklogMutationCard? _card;
 

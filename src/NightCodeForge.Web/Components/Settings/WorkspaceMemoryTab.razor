@@ -1,0 +1,25 @@
+@namespace NightCodeForge.Web.Components.Settings
+@using NightCodeForge.Web.Components.Memory
+
+<div class="forge-card" id="workspace-memory-settings-tab" style="padding: 1.5rem;">
+    <h3 class="mb-2">🧠 Agent Memory</h3>
+    <p class="text-secondary">
+        Inspect and manage what agents remember for <strong>@WorkspaceName</strong>: local workspace memory (out of Git)
+        and committed repository memory (<code>AGENTS.md</code>, <code>.agents/memory/*.md</code>).
+    </p>
+    <button type="button" id="open-memory-drawer-btn" class="forge-btn forge-btn-primary" @onclick="() => _isOpen = true">
+        Open Workspace Memory
+    </button>
+</div>
+
+@if (_isOpen)
+{
+    <WorkspaceMemoryDrawer WorkspaceId="@WorkspaceId" OnClosed="() => _isOpen = false" />
+}
+
+@code {
+    [Parameter, EditorRequired] public int WorkspaceId { get; set; }
+    [Parameter] public string? WorkspaceName { get; set; }
+
+    private bool _isOpen;
+}

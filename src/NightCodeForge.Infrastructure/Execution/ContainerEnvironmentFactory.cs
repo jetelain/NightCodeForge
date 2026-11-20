@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Security;
 
 namespace NightCodeForge.Infrastructure.Execution;
@@ -18,6 +19,9 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
     private const string WslAgyBinaryPath = "~/.local/bin/agy";
     private const string WslGeminiConfigDir = "~/.gemini";
     private const int AcpHostProbeTimeoutSeconds = 5;
+    private const UnixFileMode SharedMemoryDirectoryUnixMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+        UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+        UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
 
     private readonly IProcessRunner _processRunner;
     private readonly ExecutionEnvironmentProviderOptions _options;
@@ -102,6 +106,20 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
                 isReadOnly: true));
         }
 
+        var rawMemoryDir = EnsureHostMemoryDirectory(workspace.Id);
+        if (!string.IsNullOrWhiteSpace(rawMemoryDir))
+        {
+            // Local workspace memory is writable even in RestrictedReadOnly (Ideation) scopes; Stage 0 Triage and
+            // Nightwatch re-declare it (or omit it) as strictly read-only.
+            additionalEntries.Add(new VirtualMountEntry(
+                virtualSubPath: AgentMemoryConstants.LocalMemoryDirectoryName,
+                virtualMountPath: AgentMemoryConstants.VirtualLocalMemoryPath,
+                hostDirectoryPath: ResolveHostAccessiblePath(rawMemoryDir),
+                wslTargetDirectoryPath: Git.WslPathConverter.ToWslPath(rawMemoryDir),
+                isReadOnly: false,
+                allowWriteInReadOnlyScope: true));
+        }
+
         var mountTable = SandboxMountTable.ForWorkspace(
             hostWorkingDirectory: ResolveHostAccessiblePath(rawWorkingDir),
             wslWorkingDirectory: Git.WslPathConverter.ToWslPath(rawWorkingDir),
@@ -142,6 +160,15 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         var useWsl = ShouldUseWslForScope(scope);
         var targetDistro = scope.WslDistribution ?? _options.DefaultWslDistribution;
         var containerName = ContainerMountAndDriftBuilder.ResolveContainerName(scope);
+
+        // Docker would auto-create a missing bind source as root:root; pre-create the memory directory for any
+        // scope that mounts it (including the read-only Stage 0 Triage scope).
+        if (scope.WorkspaceId is > 0 &&
+            scope.MountTable.Entries.Any(e => string.Equals(
+                e.VirtualMountPath, AgentMemoryConstants.VirtualLocalMemoryPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            EnsureHostMemoryDirectory(scope.WorkspaceId.Value);
+        }
         var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
 
         var rawPath = !string.IsNullOrWhiteSpace(scope.Ext4MirrorPath)
@@ -310,6 +337,11 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         var roBaseContainerName = ContainerMountAndDriftBuilder.ApplySecurityTierSuffix(baseContainerName, SandboxSecurityTier.RestrictedReadOnly);
         await RemoveContainerAsync(workspace, baseContainerName, cancellationToken);
         await RemoveContainerAsync(workspace, roBaseContainerName, cancellationToken);
+
+        var triageContainerName = ContainerMountAndDriftBuilder.ApplySecurityTierSuffix(
+            SandboxScopeDescriptor.BuildTriageContainerBaseName(baseContainerName),
+            SandboxSecurityTier.RestrictedReadOnly);
+        await RemoveContainerAsync(workspace, triageContainerName, cancellationToken);
     }
 
     public async Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default)
@@ -595,6 +627,50 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         }
 
         return hostTmpDir;
+    }
+
+    /// <summary>
+    /// Always pre-creates <c>~/.nightcodeforge/wks/{workspaceId}/memory/</c> (never inside the repository path),
+    /// so Docker never auto-creates a root-owned directory. Returns the raw (resolver) path, or null when the workspace is not persisted.
+    /// </summary>
+    private string? EnsureHostMemoryDirectory(int workspaceId)
+    {
+        if (workspaceId <= 0)
+        {
+            return null;
+        }
+
+        var rawMemoryDir = _pathResolver.GetWorkspaceMemoryPath(workspaceId).TrimEnd('/', '\\').Replace('\\', '/');
+        var hostAccessibleMemoryDir = _pathResolver.ToHostPath(rawMemoryDir);
+        if (string.IsNullOrWhiteSpace(hostAccessibleMemoryDir))
+        {
+            hostAccessibleMemoryDir = rawMemoryDir;
+        }
+
+        try
+        {
+            if (AgentMemoryReparseGuard.IsReparsePoint(hostAccessibleMemoryDir))
+            {
+                _containerLogger.LogWarning(
+                    "Skipped creating or updating permissions on host memory directory '{HostMemoryDir}' because it is a symbolic link or reparse point.",
+                    hostAccessibleMemoryDir);
+                return rawMemoryDir;
+            }
+
+            Directory.CreateDirectory(hostAccessibleMemoryDir);
+            if (!OperatingSystem.IsWindows())
+            {
+                // The -ro container runs as 1000:1000, which may differ from the host user: the directory
+                // must stay writable for that UID/GID while the mount mode (:rw / :ro) remains the access control.
+                File.SetUnixFileMode(hostAccessibleMemoryDir, SharedMemoryDirectoryUnixMode);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            _containerLogger.LogWarning(ex, "Failed to create host memory directory at {HostMemoryDir}", hostAccessibleMemoryDir);
+        }
+
+        return rawMemoryDir;
     }
 
     private string? ResolveContainerAttachmentsPath(SandboxScopeDescriptor scope)

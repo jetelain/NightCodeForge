@@ -1,15 +1,18 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -36,6 +39,7 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
 
     private readonly int? _workspaceId;
     private readonly int? _taskId;
+    private readonly string _workspaceRoot;
     private readonly bool _isReadOnly;
     private readonly int _maxReadFileBytes;
     private readonly bool _supportsVision;
@@ -49,6 +53,13 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
     private bool _hasExplicitTaskMarkdownValidator;
 
     public ISandboxPathResolver SandboxPathResolver { get; set; }
+
+    /// <summary>
+    /// Single seam invoked after every successful write/edit of an agent memory file
+    /// (<c>/workspace/memory/*.md</c>, <c>.agents/memory/*.md</c>, <c>AGENTS.md</c>). Assigned by the composition root
+    /// to record the write in the attribution ledger and emit the memory-updated notification.
+    /// </summary>
+    public Func<AgentMemoryWriteEvent, CancellationToken, Task>? MemoryWriteObserver { get; set; }
 
     public IServiceScopeFactory? ScopeFactory { get; set; }
 
@@ -85,6 +96,7 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
 
         _workspaceId = scope.WorkspaceId;
         _taskId = (scope.TaskId.HasValue && scope.TaskId.Value > 0) ? scope.TaskId.Value : null;
+        _workspaceRoot = string.IsNullOrWhiteSpace(scope.WorkspaceRoot) ? string.Empty : scope.ResolveNormalizedWorkspaceRoot();
         _isReadOnly = scope.IsReadOnly;
         _supportsVision = scope.SupportsVision;
         _activeModelId = scope.ActiveModelId ?? string.Empty;
@@ -775,7 +787,7 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
 
     public async Task<string> WriteAsync(string path, string content, CancellationToken cancellationToken = default)
     {
-        if (IsEffectiveReadOnly)
+        if (IsEffectiveReadOnly && !HasSelectiveWritableMount())
         {
             throw new InvalidOperationException("Write operations are not permitted in read-only mode.");
         }
@@ -793,10 +805,36 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
             return $"Error: {ex.Message}";
         }
 
+        var readOnlyRejection = ValidateReadOnlyModeWriteTarget(fullPath);
+        if (readOnlyRejection != null)
+        {
+            return readOnlyRejection;
+        }
+
         var rejection = await ValidateTaskSpecificationAsync(path, content, cancellationToken);
         if (rejection != null)
         {
             return rejection;
+        }
+
+        var memoryScope = ClassifyMemoryTarget(path, fullPath);
+        if (memoryScope != AgentMemoryScope.None)
+        {
+            using var memoryLock = await AgentMemoryFileWriter.AcquireLockAsync(_workspaceId ?? 0, cancellationToken);
+            if (AgentMemoryReparseGuard.IsReparsePoint(fullPath))
+            {
+                return $"Error: Access denied: Path '{path}' traverses a symbolic link or reparse point inside agent memory.";
+            }
+
+            var memoryEditorConfig = await _editorConfigService.GetSettingsForPathAsync(fullPath, cancellationToken);
+            string? memoryExisting = File.Exists(fullPath)
+                ? await AgentMemoryFileSystem.ReadAllTextSharedAsync(fullPath, cancellationToken)
+                : null;
+            var memoryBytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, memoryEditorConfig, memoryExisting, fullPath);
+            var created = await AgentMemoryFileWriter.WriteAtomicAsync(fullPath, memoryBytes, cancellationToken);
+            var contentSha256 = Convert.ToHexStringLower(SHA256.HashData(memoryBytes));
+            await NotifyMemoryWrittenAsync(path, fullPath, memoryScope, created, contentSha256, cancellationToken);
+            return $"Successfully wrote {memoryBytes.Length} bytes to '{path}'.";
         }
 
         var dir = Path.GetDirectoryName(fullPath);
@@ -815,7 +853,7 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
 
     public async Task<string> EditAsync(string path, IReadOnlyList<EditChunk> edits, CancellationToken cancellationToken = default)
     {
-        if (IsEffectiveReadOnly)
+        if (IsEffectiveReadOnly && !HasSelectiveWritableMount())
         {
             throw new InvalidOperationException("Edit operations are not permitted in read-only mode.");
         }
@@ -838,13 +876,44 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
             return $"Error: {ex.Message}";
         }
 
+        var readOnlyRejection = ValidateReadOnlyModeWriteTarget(fullPath);
+        if (readOnlyRejection != null)
+        {
+            return readOnlyRejection;
+        }
+
+        var memoryScope = ClassifyMemoryTarget(path, fullPath);
+        if (memoryScope != AgentMemoryScope.None)
+        {
+            // Read-modify-write must be serialized per workspace so concurrent agents / the UI never lose edits.
+            using var memoryLock = await AgentMemoryFileWriter.AcquireLockAsync(_workspaceId ?? 0, cancellationToken);
+            return await ApplyEditAsync(path, fullPath, edits, memoryScope, cancellationToken);
+        }
+
+        return await ApplyEditAsync(path, fullPath, edits, AgentMemoryScope.None, cancellationToken);
+    }
+
+    private async Task<string> ApplyEditAsync(
+        string path,
+        string fullPath,
+        IReadOnlyList<EditChunk> edits,
+        AgentMemoryScope memoryScope,
+        CancellationToken cancellationToken)
+    {
+        if (memoryScope != AgentMemoryScope.None && AgentMemoryReparseGuard.IsReparsePoint(fullPath))
+        {
+            return $"Error: Access denied: Path '{path}' traverses a symbolic link or reparse point inside agent memory.";
+        }
+
         if (!File.Exists(fullPath))
         {
             _logger.LogWarning("CanonicalTools.edit: File not found '{Path}' (resolved: '{FullPath}')", path, fullPath);
             return $"Error: File not found for edit: '{path}'";
         }
 
-        var originalContent = await File.ReadAllTextAsync(fullPath, cancellationToken);
+        var originalContent = memoryScope != AgentMemoryScope.None
+            ? await AgentMemoryFileSystem.ReadAllTextSharedAsync(fullPath, cancellationToken)
+            : await File.ReadAllTextAsync(fullPath, cancellationToken);
         var currentContent = originalContent;
         var ext = Path.GetExtension(fullPath).ToLowerInvariant();
         bool isStrictWhitespace = IsIndentationSignificant(ext);
@@ -874,13 +943,85 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         var editorConfig = await _editorConfigService.GetSettingsForPathAsync(fullPath, cancellationToken);
         var formattedBytes = _editorConfigFileApplier.ApplyFormattingAndEncode(currentContent, editorConfig, originalContent, fullPath);
 
-        await File.WriteAllBytesAsync(fullPath, formattedBytes, cancellationToken);
+        if (memoryScope != AgentMemoryScope.None)
+        {
+            await AgentMemoryFileWriter.WriteAtomicAsync(fullPath, formattedBytes, cancellationToken);
+            var contentSha256 = Convert.ToHexStringLower(SHA256.HashData(formattedBytes));
+            await NotifyMemoryWrittenAsync(path, fullPath, memoryScope, created: false, contentSha256, cancellationToken);
+        }
+        else
+        {
+            await File.WriteAllBytesAsync(fullPath, formattedBytes, cancellationToken);
+        }
+
         return $"Successfully applied {edits.Count} edit(s) ({totalOccurrencesReplaced} occurrence(s) replaced) to '{path}'.";
     }
 
     public Task<string> EditAsync(string path, string oldText, string newText, bool replaceAll = false, CancellationToken cancellationToken = default) =>
         EditAsync(path, [new EditChunk(oldText, newText, replaceAll)], cancellationToken);
 
+    private bool HasSelectiveWritableMount() =>
+        SandboxPathResolver.MountTable.Entries.Any(e => !e.IsReadOnly && e.AllowWriteInReadOnlyScope);
+
+    /// <summary>
+    /// In read-only mode (Ideation) the only writable target is a flat, non-hidden Markdown file directly inside
+    /// a selective writable mount (<c>/workspace/memory</c>). Returns a tool error when the target violates this.
+    /// </summary>
+    private string? ValidateReadOnlyModeWriteTarget(string fullPath)
+    {
+        if (!IsEffectiveReadOnly)
+        {
+            return null;
+        }
+
+        var fileName = Path.GetFileName(fullPath);
+        var parent = NormalizePathForComparison(Path.GetDirectoryName(fullPath) ?? string.Empty);
+        var isFlatMarkdownInWritableMount =
+            !fileName.StartsWith('.') &&
+            fileName.EndsWith(AgentMemoryConstants.MarkdownExtension, StringComparison.OrdinalIgnoreCase) &&
+            SandboxPathResolver.MountTable.Entries.Any(e =>
+                !e.IsReadOnly &&
+                e.AllowWriteInReadOnlyScope &&
+                string.Equals(NormalizePathForComparison(e.HostDirectoryPath), parent, StringComparison.OrdinalIgnoreCase));
+
+        return isFlatMarkdownInWritableMount
+            ? null
+            : $"Error: Access denied: In read-only mode, only non-hidden Markdown files ('{AgentMemoryConstants.VirtualLocalMemoryPath}/*{AgentMemoryConstants.MarkdownExtension}') are writable.";
+    }
+
+    private AgentMemoryScope ClassifyMemoryTarget(string requestedPath, string hostFullPath)
+    {
+        var repositoryRoot = !string.IsNullOrWhiteSpace(SandboxPathResolver?.Scope?.RepositoryPath)
+            ? SandboxPathResolver.Scope.RepositoryPath
+            : _workspaceRoot;
+        var scope = AgentMemoryPathClassifier.Classify(requestedPath, repositoryRoot);
+        return scope != AgentMemoryScope.None ? scope : AgentMemoryPathClassifier.Classify(hostFullPath, repositoryRoot);
+    }
+
+    /// <summary>Single seam after a successful memory write; delegates to <see cref="MemoryWriteObserver"/> when configured.</summary>
+    private Task NotifyMemoryWrittenAsync(
+        string requestedPath,
+        string hostFullPath,
+        AgentMemoryScope scope,
+        bool created,
+        string contentSha256,
+        CancellationToken cancellationToken)
+    {
+        var observer = MemoryWriteObserver;
+        if (observer == null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return observer(
+            new AgentMemoryWriteEvent(
+                requestedPath,
+                hostFullPath,
+                scope,
+                created ? AgentMemoryChangeKind.Created : AgentMemoryChangeKind.Updated,
+                contentSha256),
+            cancellationToken);
+    }
     private async Task<string?> ValidateTaskSpecificationAsync(string path, string prospectiveContent, CancellationToken cancellationToken)
     {
         if (!_workspaceId.HasValue)

@@ -59,6 +59,7 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
         _hubConnection.OnStageTransitionReceived += HandleStageTransitionReceived;
+        _hubConnection.OnMemoryUpdatedReceived += HandleMemoryUpdatedReceived;
         _hubConnection.OnWorkerStatusReceived += HandleWorkerStatusReceived;
         _hubConnection.OnConnectionStateChanged += HandleConnectionStateChanged;
     }
@@ -508,6 +509,70 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Task-less dispatch of a desktop push notification (e.g. Ideation memory updates, where taskId is null).
+    /// Honors the master toggle and the per-subject preference.
+    /// </summary>
+    public async Task<bool> DispatchNotificationAsync(NotificationSubject subject, string title, string body, string tag, string clickUrl)
+    {
+        var prefs = await GetPreferencesAsync();
+        if (!prefs.ShouldNotify(subject))
+        {
+            return false;
+        }
+
+        try
+        {
+            var options = new
+            {
+                body,
+                tag,
+                data = new { url = clickUrl },
+                icon = NotificationConstants.DefaultIconPath,
+                badge = NotificationConstants.DefaultIconPath
+            };
+
+            return await _jsRuntime.InvokeAsync<bool>(NotificationConstants.JsFunctions.ShowNotification, title, options);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to invoke showNotification in browser for subject {Subject}.", subject);
+            return false;
+        }
+    }
+
+    private void HandleMemoryUpdatedReceived(int workspaceId, int? taskId, string stageId, string memoryScope, string relativePath, string changeKind, string summary)
+    {
+        if (_disposed) return;
+
+        var message = MemoryPresentationHelper.FormatToastMessage(taskId, stageId, changeKind, relativePath, summary);
+        _toastService.Show(MemoryUiConstants.ToastTitle, message, ToastLevel.Info);
+        _ = DispatchMemoryPushAsync(workspaceId, relativePath, message);
+    }
+
+    private async Task DispatchMemoryPushAsync(int workspaceId, string relativePath, string message)
+    {
+        try
+        {
+            var isVisible = await _jsRuntime.InvokeAsync<bool>(NotificationConstants.JsFunctions.IsDocumentVisible);
+            if (isVisible)
+            {
+                return;
+            }
+
+            await DispatchNotificationAsync(
+                NotificationSubject.AgentMemory,
+                MemoryUiConstants.ToastTitle,
+                message,
+                NotificationConstants.Tags.AgentMemory(workspaceId, relativePath),
+                $"/{WorkspaceUrlHelper.WorkspacePrefixSegment}/{workspaceId}/{MemoryUiConstants.WorkspaceMemoryUrlSuffix}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not dispatch background memory push notification.");
+        }
+    }
+
     private void HandleStageTransitionReceived(int taskId, string stageId, string stageKind, string status)
     {
         if (_disposed || taskId <= 0) return;
@@ -698,6 +763,7 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
         _disposed = true;
 
         _hubConnection.OnStageTransitionReceived -= HandleStageTransitionReceived;
+        _hubConnection.OnMemoryUpdatedReceived -= HandleMemoryUpdatedReceived;
         _hubConnection.OnWorkerStatusReceived -= HandleWorkerStatusReceived;
         _hubConnection.OnConnectionStateChanged -= HandleConnectionStateChanged;
 

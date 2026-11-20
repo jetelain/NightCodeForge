@@ -56,6 +56,70 @@ public class SignalRActivityBridgeServiceTests
         Assert.Equal(CanonicalToolNames.EditTask, mutation.ToolName);
     }
 
+    private static AgentActivityEvent MemoryNotice(int taskId, string stageId, Dictionary<string, object?>? metadata = null) =>
+        new(
+            "sess",
+            taskId,
+            stageId,
+            AgentActivityKind.Notice,
+            "Ideation updated /workspace/memory/vision.md",
+            DateTime.UtcNow,
+            metadata ?? new Dictionary<string, object?>
+            {
+                [AgentActivityMetadataKeys.ActionType] = AgentActivityMetadataKeys.ActionTypeMemoryUpdated,
+                [AgentActivityMetadataKeys.WorkspaceId] = 3,
+                [AgentActivityMetadataKeys.MemoryScope] = "Local",
+                [AgentActivityMetadataKeys.MemoryRelativePath] = "/workspace/memory/vision.md",
+                [AgentActivityMetadataKeys.MemoryChangeKind] = "Updated"
+            });
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_MemoryUpdatedNotice_BroadcastsToAllAndLogsAtInfoLevel()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var bridge = CreateBridge(fakeHubContext);
+
+        await bridge.DispatchActivityEventAsync(MemoryNotice(0, StandardStageIds.Ideation));
+
+        var update = Assert.Single(fakeHubContext.AllClient.MemoryUpdates);
+        Assert.Equal(3, update.WorkspaceId);
+        Assert.Null(update.TaskId);
+        Assert.Equal("Local", update.Scope);
+        Assert.Equal("/workspace/memory/vision.md", update.RelativePath);
+        Assert.Equal("Updated", update.ChangeKind);
+
+        var log = Assert.Single(fakeHubContext.GetGroupClient("task-0")!.ExecutionLogs);
+        Assert.Equal("Info", log.Level);
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_MemoryUpdatedNoticeForTask_CarriesTaskId()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var bridge = CreateBridge(fakeHubContext);
+
+        await bridge.DispatchActivityEventAsync(MemoryNotice(42, "stage-2"));
+
+        var update = Assert.Single(fakeHubContext.AllClient.MemoryUpdates);
+        Assert.Equal(42, update.TaskId);
+        Assert.Equal("stage-2", update.StageId);
+        Assert.DoesNotContain(fakeHubContext.GetGroupClient("task-42")!.ExecutionLogs, l => l.Level == "Warning");
+    }
+
+    [Fact]
+    public async Task DispatchActivityEventAsync_MemoryUpdatedNoticeWithoutMetadata_IsNotBroadcast()
+    {
+        var fakeHubContext = new FakeHubContext();
+        var bridge = CreateBridge(fakeHubContext);
+
+        await bridge.DispatchActivityEventAsync(MemoryNotice(0, StandardStageIds.Ideation, new Dictionary<string, object?>
+        {
+            [AgentActivityMetadataKeys.ActionType] = AgentActivityMetadataKeys.ActionTypeMemoryUpdated
+        }));
+
+        Assert.Empty(fakeHubContext.AllClient.MemoryUpdates);
+    }
+
     [Fact]
     public async Task DispatchActivityEventAsync_TaskSuspendedNotice_ClearsActiveTaskAndBroadcastsTransitionAndBacklogMutation()
     {
@@ -879,6 +943,14 @@ public class SignalRActivityBridgeServiceTests
         }
 
         public List<(int TaskId, string ToolName, string Message)> BacklogMutations { get; } = new();
+
+        public List<(int WorkspaceId, int? TaskId, string StageId, string Scope, string RelativePath, string ChangeKind, string Summary)> MemoryUpdates { get; } = new();
+
+        public Task ReceiveMemoryUpdated(int workspaceId, int? taskId, string stageId, string memoryScope, string relativePath, string changeKind, string summary)
+        {
+            MemoryUpdates.Add((workspaceId, taskId, stageId, memoryScope, relativePath, changeKind, summary));
+            return Task.CompletedTask;
+        }
 
         public Task ReceiveBacklogMutation(int taskId, string toolName, string message)
         {

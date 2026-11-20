@@ -274,6 +274,15 @@ public class SignalRActivityBridgeService : BackgroundService
                     break;
 
                 case AgentActivityKind.Notice:
+                    if (IsMemoryUpdatedNotice(evt))
+                    {
+                        // Memory notices are informational: Info level (never Warning) to avoid warning-log spam.
+                        await _hubContext.Clients.Group(groupName)
+                            .ReceiveExecutionLog(evt.TaskId, evt.StageId, ResilienceConstants.LogLevelInfo, evt.Content, evt.Timestamp);
+                        await BroadcastMemoryUpdatedAsync(evt);
+                        break;
+                    }
+
                     await _hubContext.Clients.Group(groupName)
                         .ReceiveExecutionLog(evt.TaskId, evt.StageId, ResilienceConstants.LogLevelWarning, evt.Content, evt.Timestamp);
 
@@ -308,6 +317,39 @@ public class SignalRActivityBridgeService : BackgroundService
         {
             _logger.LogDebug(ex, "Failed to dispatch SignalR activity event {Kind} for task #{TaskId}; client may have disconnected.", evt.Kind, evt.TaskId);
         }
+    }
+
+    private static bool IsMemoryUpdatedNotice(AgentActivityEvent evt) =>
+        evt.Metadata?.TryGetValue(AgentActivityMetadataKeys.ActionType, out var action) == true &&
+        string.Equals(action?.ToString(), AgentActivityMetadataKeys.ActionTypeMemoryUpdated, StringComparison.Ordinal);
+
+    private async Task BroadcastMemoryUpdatedAsync(AgentActivityEvent evt)
+    {
+        var metadata = evt.Metadata!;
+        if (!TryGetMemoryMetadata(metadata, AgentActivityMetadataKeys.MemoryScope, out var scope) ||
+            !TryGetMemoryMetadata(metadata, AgentActivityMetadataKeys.MemoryRelativePath, out var relativePath) ||
+            !TryGetMemoryMetadata(metadata, AgentActivityMetadataKeys.MemoryChangeKind, out var changeKind) ||
+            !metadata.TryGetValue(AgentActivityMetadataKeys.WorkspaceId, out var rawWorkspaceId) ||
+            !int.TryParse(rawWorkspaceId?.ToString(), out var workspaceId))
+        {
+            _logger.LogWarning("Dropped MemoryUpdated activity notice lacking required memory metadata: {Content}", evt.Content);
+            return;
+        }
+
+        await _hubContext.Clients.All.ReceiveMemoryUpdated(
+            workspaceId,
+            evt.TaskId > 0 ? evt.TaskId : null,
+            evt.StageId,
+            scope,
+            relativePath,
+            changeKind,
+            evt.Content);
+    }
+
+    private static bool TryGetMemoryMetadata(IReadOnlyDictionary<string, object?> metadata, string key, out string value)
+    {
+        value = metadata.TryGetValue(key, out var raw) ? raw?.ToString() ?? string.Empty : string.Empty;
+        return value.Length > 0;
     }
 
     private async Task ClearActiveTaskAndBroadcastWorkerStatusAsync(int taskId)

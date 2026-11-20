@@ -262,6 +262,49 @@ public class AppDbContextTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureDefaultGlobalAgentProfilesAsync_ReconcilesIdeationToRestrictedReadOnlyWithMemoryWriteTools()
+    {
+        using var context = new AppDbContext(_options);
+        await context.Database.EnsureCreatedAsync();
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+
+        // Legacy persisted global Ideation profile: standard legacy tools, Standard (:rw) tier.
+        var global = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Ideation);
+        global.PermittedTools = DefaultAgentTools.LegacyIdeation.ToList();
+        global.SecurityTier = SandboxSecurityTier.Standard;
+
+        // Customized profile: tool list is preserved, but the tier is still hardened.
+        var customTools = new List<string> { CanonicalToolNames.Read, CanonicalToolNames.Bash };
+        var scoped = AgentProfile.CreateDefaultIdeationProfile(null);
+        scoped.Id = "7:" + StandardStageIds.Ideation;
+        scoped.PermittedTools = customTools;
+        scoped.SecurityTier = SandboxSecurityTier.Standard;
+        context.AgentProfiles.Add(scoped);
+        await context.SaveChangesAsync();
+
+        await context.EnsureDefaultGlobalAgentProfilesAsync("Qwen3.8-27B:latest");
+        context.ChangeTracker.Clear();
+
+        var reconciledGlobal = await context.AgentProfiles.FirstAsync(p => p.Id == StandardStageIds.Ideation);
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, reconciledGlobal.SecurityTier);
+        Assert.Contains(CanonicalToolNames.Write, reconciledGlobal.PermittedTools!);
+        Assert.Contains(CanonicalToolNames.Edit, reconciledGlobal.PermittedTools!);
+
+        var reconciledScoped = await context.AgentProfiles.FirstAsync(p => p.Id == "7:" + StandardStageIds.Ideation);
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, reconciledScoped.SecurityTier);
+        Assert.DoesNotContain(CanonicalToolNames.Write, reconciledScoped.PermittedTools!);
+
+        // Triage and generic read-only tool sets stay strictly without write/edit.
+        Assert.DoesNotContain(CanonicalToolNames.Write, DefaultAgentTools.ReadOnly);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, DefaultAgentTools.ReadOnly);
+        Assert.DoesNotContain(CanonicalToolNames.Write, DefaultAgentTools.Triage);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, DefaultAgentTools.Triage);
+        Assert.Contains(CanonicalToolNames.Write, DefaultAgentTools.Ideation);
+        Assert.Contains(CanonicalToolNames.Edit, DefaultAgentTools.Ideation);
+        Assert.Equal(SandboxSecurityTier.RestrictedReadOnly, AgentProfile.CreateDefaultIdeationProfile().SecurityTier);
+    }
+
+    [Fact]
     public async Task EnsureDefaultGlobalAgentProfilesAsync_KeepsCustomizedIdeationPersona()
     {
         using var context = new AppDbContext(_options);

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Memory;
 
 namespace NightCodeForge.Core.Interfaces;
 
@@ -62,12 +63,6 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
 
     public string ResolveHostPath(string path, bool forWrite = false)
     {
-        if (forWrite && Scope.IsReadOnly)
-        {
-            throw new UnauthorizedAccessException(
-                $"Access denied: Write operations are not permitted in read-only scope '{Scope.ScopeCacheKey}'.");
-        }
-
         var raw = (path ?? string.Empty).Trim();
         var normalized = raw.Replace('\\', '/');
 
@@ -409,10 +404,10 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                 $"Access denied: Path '{originalPath}' is not mapped in the sandbox mount table and resolves outside the allowed workspace sandbox.");
         }
 
-        if (forWrite && (Scope.IsReadOnly || matchedMount.IsReadOnly))
+        if (forWrite && IsEffectivelyReadOnly(matchedMount))
         {
             throw new UnauthorizedAccessException(
-                $"Access denied: Mount '{matchedMount.VirtualMountPath}' is read-only.");
+                ReadOnlyMountMessage(matchedMount.VirtualMountPath));
         }
 
         if (!TryNormalizeRelativeSegments(remainder, out var cleanRemainder))
@@ -421,7 +416,7 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                 $"Access denied: Path '{originalPath}' resolves outside the allowed workspace sandbox.");
         }
 
-        return CombineAndValidateHostPath(matchedMount.HostDirectoryPath, cleanRemainder, originalPath);
+        return CombineAndValidateMountHostPath(matchedMount, cleanRemainder, originalPath);
     }
 
     private string CanonicalizeExplicitVirtualPath(string normalized, string originalPath)
@@ -482,9 +477,9 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                 $"Access denied: '/tmp' is not mounted in scope '{Scope.ScopeCacheKey}'.");
         }
 
-        if (forWrite && (Scope.IsReadOnly || tmpMount.IsReadOnly))
+        if (forWrite && IsEffectivelyReadOnly(tmpMount))
         {
-            throw new UnauthorizedAccessException("Access denied: Mount '/tmp' is read-only.");
+            throw new UnauthorizedAccessException(ReadOnlyMountMessage("/tmp"));
         }
 
         return CombineAndValidateHostPath(tmpMount.HostDirectoryPath, tmpSubPath, rawPath);
@@ -519,7 +514,9 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                 }
 
                 if (normalizedAfterMarker.Equals(AttachmentConstants.AttachmentsDirectoryName, StringComparison.OrdinalIgnoreCase) ||
-                    normalizedAfterMarker.StartsWith(AttachmentConstants.AttachmentsDirectoryName + "/", StringComparison.OrdinalIgnoreCase))
+                    normalizedAfterMarker.StartsWith(AttachmentConstants.AttachmentsDirectoryName + "/", StringComparison.OrdinalIgnoreCase) ||
+                    normalizedAfterMarker.Equals(AgentMemoryConstants.LocalMemoryDirectoryName, StringComparison.OrdinalIgnoreCase) ||
+                    normalizedAfterMarker.StartsWith(AgentMemoryConstants.LocalMemoryDirectoryName + "/", StringComparison.OrdinalIgnoreCase))
                 {
                     var canonicalVirtual = CanonicalizeExplicitVirtualPath(
                         $"{SandboxMountTable.WorkspaceVirtualRoot}/{normalizedAfterMarker}",
@@ -556,12 +553,12 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                     }
                 }
 
-                if (forWrite && (Scope.IsReadOnly || entry.IsReadOnly))
+                if (forWrite && IsEffectivelyReadOnly(entry))
                 {
                     throw new UnauthorizedAccessException(
-                        $"Access denied: Mount '{entry.VirtualMountPath}' is read-only.");
+                        ReadOnlyMountMessage(entry.VirtualMountPath));
                 }
-                resolvedHostPath = CombineAndValidateHostPath(entry.HostDirectoryPath, relFromHost, raw);
+                resolvedHostPath = CombineAndValidateMountHostPath(entry, relFromHost, raw);
                 return true;
             }
 
@@ -585,12 +582,12 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                     }
                 }
 
-                if (forWrite && (Scope.IsReadOnly || entry.IsReadOnly))
+                if (forWrite && IsEffectivelyReadOnly(entry))
                 {
                     throw new UnauthorizedAccessException(
-                        $"Access denied: Mount '{entry.VirtualMountPath}' is read-only.");
+                        ReadOnlyMountMessage(entry.VirtualMountPath));
                 }
-                resolvedHostPath = CombineAndValidateHostPath(entry.HostDirectoryPath, relFromWsl, raw);
+                resolvedHostPath = CombineAndValidateMountHostPath(entry, relFromWsl, raw);
                 return true;
             }
         }
@@ -736,6 +733,69 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
         return hostFallback;
     }
 
+    private bool IsEffectivelyReadOnly(VirtualMountEntry mount) =>
+        mount.IsReadOnly || (Scope.IsReadOnly && !mount.AllowWriteInReadOnlyScope);
+
+    private string ReadOnlyMountMessage(string virtualMountPath)
+    {
+        var message = $"Access denied: Mount '{virtualMountPath}' is read-only.";
+        if (Scope.IsReadOnly && MountTable.Entries.Any(e => !e.IsReadOnly && e.AllowWriteInReadOnlyScope))
+        {
+            message += $" In read-only mode, only '{AgentMemoryConstants.VirtualLocalMemoryPath}/*{AgentMemoryConstants.MarkdownExtension}' is writable.";
+        }
+
+        return message;
+    }
+
+    private static string CombineAndValidateMountHostPath(VirtualMountEntry mount, string cleanRelativeSubPath, string originalPath)
+    {
+        var host = CombineAndValidateHostPath(mount.HostDirectoryPath, cleanRelativeSubPath, originalPath);
+        RejectMemoryReparsePoints(mount, cleanRelativeSubPath, originalPath);
+        return host;
+    }
+
+    /// <summary>
+    /// Rejects symlinks / reparse points on every existing segment of a memory path
+    /// (<c>/workspace/memory</c> mount, <c>.agents/memory</c>, <c>AGENTS.md</c>, or <c>.agents/AGENTS.md</c>).
+    /// </summary>
+    private static void RejectMemoryReparsePoints(VirtualMountEntry mount, string cleanRelativeSubPath, string originalPath)
+    {
+        var segments = cleanRelativeSubPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var isLocalMemoryMount = string.Equals(
+            mount.VirtualMountPath, AgentMemoryConstants.VirtualLocalMemoryPath, StringComparison.OrdinalIgnoreCase);
+
+        var sharedSegments = AgentMemoryConstants.SharedMemoryDirectory.Split('/');
+        var agentsRulesSegments = AgentMemoryConstants.AgentsRulesFilePath.Split('/');
+        var isSharedMemory =
+            (segments.Length == 1 && string.Equals(segments[0], AgentMemoryConstants.RootRulesFileName, StringComparison.OrdinalIgnoreCase)) ||
+            (segments.Length == agentsRulesSegments.Length &&
+             agentsRulesSegments.Select((s, i) => string.Equals(s, segments[i], StringComparison.OrdinalIgnoreCase)).All(x => x)) ||
+            (segments.Length >= sharedSegments.Length &&
+             sharedSegments.Select((s, i) => string.Equals(s, segments[i], StringComparison.OrdinalIgnoreCase)).All(x => x));
+
+        if (!isLocalMemoryMount && !isSharedMemory)
+        {
+            return;
+        }
+
+        var current = mount.HostDirectoryPath;
+        if (isLocalMemoryMount && AgentMemoryReparseGuard.IsReparsePoint(current))
+        {
+            throw MemoryReparsePointException(originalPath);
+        }
+
+        foreach (var segment in segments)
+        {
+            current = FormatHostPath(current, segment);
+            if (AgentMemoryReparseGuard.IsReparsePoint(current))
+            {
+                throw MemoryReparsePointException(originalPath);
+            }
+        }
+    }
+
+    private static UnauthorizedAccessException MemoryReparsePointException(string originalPath) =>
+        new($"Access denied: Path '{originalPath}' traverses a symbolic link or reparse point inside agent memory.");
     private static string CombineAndValidateHostPath(string baseHostDir, string cleanRelativeSubPath, string originalPath)
     {
         if (string.IsNullOrWhiteSpace(baseHostDir))

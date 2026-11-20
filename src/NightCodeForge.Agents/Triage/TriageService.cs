@@ -6,6 +6,7 @@ using NightCodeForge.Agents.Context;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -20,6 +21,7 @@ public partial class TriageService : ITriageService
 {
     private const int MaxTriageTaskTitleLength = 200;
     private const string AllowedToolsConfigProperty = "AllowedTools";
+    private const string TriageContainerBasePrefix = "ncf-sandbox-";
 
     private static readonly IReadOnlyList<string> UntrustedTriagePermittedTools = DefaultAgentTools.Triage;
 
@@ -33,6 +35,7 @@ public partial class TriageService : ITriageService
     private readonly ITaskMarkdownSyncService _markdownSyncService;
     private readonly IGlobalOptimizationSettingsService _globalOptimizationSettings;
     private readonly IOperationsTelemetryService _telemetryService;
+    private readonly IWorkspacePathResolver _pathResolver;
     private readonly ILogger<TriageService> _logger;
 
     public TriageService(
@@ -43,6 +46,7 @@ public partial class TriageService : ITriageService
         ITaskMarkdownSyncService markdownSyncService,
         IGlobalOptimizationSettingsService globalOptimizationSettings,
         IOperationsTelemetryService telemetryService,
+        IWorkspacePathResolver pathResolver,
         ILogger<TriageService> logger)
     {
         _taskRepository = taskRepository ?? throw new ArgumentNullException(nameof(taskRepository));
@@ -52,6 +56,7 @@ public partial class TriageService : ITriageService
         _markdownSyncService = markdownSyncService ?? throw new ArgumentNullException(nameof(markdownSyncService));
         _globalOptimizationSettings = globalOptimizationSettings ?? throw new ArgumentNullException(nameof(globalOptimizationSettings));
         _telemetryService = telemetryService ?? throw new ArgumentNullException(nameof(telemetryService));
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -649,27 +654,50 @@ Please inspect the codebase and review <existing_workspace_tasks> (plus get_task
         return deps.Count > 0 ? deps.Distinct().OrderBy(id => id).ToList() : null;
     }
 
-    private static SandboxScopeDescriptor BuildTriageSandboxScope(Workspace workspace, string repoPath)
+    private SandboxScopeDescriptor BuildTriageSandboxScope(Workspace workspace, string repoPath)
     {
         var rawRoot = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath)
             ? workspace.Ext4MirrorPath
             : (!string.IsNullOrWhiteSpace(workspace.RepositoryPath) ? workspace.RepositoryPath : repoPath);
 
         // Stage 0 Untrusted Intake Triage explicitly omits /workspace/attachments from MountTable
+        // and mounts local workspace memory strictly read-only (it can read it, never write it).
+        var memoryEntries = new List<VirtualMountEntry>();
+        if (workspace.Id > 0)
+        {
+            var rawMemoryPath = _pathResolver.GetWorkspaceMemoryPath(workspace.Id).TrimEnd('/', '\\').Replace('\\', '/');
+            var hostMemoryPath = _pathResolver.ToHostPath(rawMemoryPath);
+            memoryEntries.Add(new VirtualMountEntry(
+                virtualSubPath: AgentMemoryConstants.LocalMemoryDirectoryName,
+                virtualMountPath: AgentMemoryConstants.VirtualLocalMemoryPath,
+                hostDirectoryPath: string.IsNullOrWhiteSpace(hostMemoryPath) ? rawMemoryPath : hostMemoryPath,
+                wslTargetDirectoryPath: VirtualMountEntry.ToDefaultWslPath(rawMemoryPath),
+                isReadOnly: true,
+                allowWriteInReadOnlyScope: false));
+        }
+
         var mountTable = SandboxMountTable.ForWorkspace(
             hostWorkingDirectory: rawRoot,
             wslWorkingDirectory: VirtualMountEntry.ToDefaultWslPath(rawRoot),
             isReadOnly: true,
             taskId: null,
+            additionalEntries: memoryEntries,
             hostAttachmentsDirectory: null,
             wslAttachmentsDirectory: null);
 
-        return SandboxScopeDescriptor.ForWorkspace(
+        var baseContainerName = !string.IsNullOrWhiteSpace(workspace.ContainerName)
+            ? workspace.ContainerName
+            : $"{TriageContainerBasePrefix}{workspace.Id}";
+
+        var scope = SandboxScopeDescriptor.ForWorkspace(
             workspace,
             SandboxSecurityTier.RestrictedReadOnly,
             taskId: null,
             mountTable: mountTable,
             scopeCacheKey: $"ws:{workspace.Id}:triage:tier:{SandboxSecurityTier.RestrictedReadOnly}");
+
+        // Distinct container (ncf-sandbox-{id}-triage-ro): never share the Ideation -ro container (writable memory, attachments).
+        return scope with { ContainerName = SandboxScopeDescriptor.BuildTriageContainerBaseName(baseContainerName) };
     }
 
     private static string EscapeUntrustedReportTags(string content) =>

@@ -305,7 +305,7 @@ public sealed class SandboxMountTable
         ArgumentNullException.ThrowIfNull(entries);
         return new SandboxMountTable(
             virtualRootPath: NightwatchVirtualRoot,
-            entries: entries.Select(e => e with { IsReadOnly = true }),
+            entries: entries.Select(e => e with { IsReadOnly = true, AllowWriteInReadOnlyScope = false }),
             sandboxTmpMount: sandboxTmpMount,
             nonContainerFallbackWorkingDirectory: nonContainerFallbackWorkingDirectory ?? DefaultNightwatchFallbackWorkingDirectory);
     }
@@ -329,7 +329,7 @@ public sealed class SandboxMountTable
                 virtualMountPath: $"{NightwatchVirtualRoot}/ncf-logs",
                 hostDirectoryPath: hostNcfLogsPath ?? wslNcfLogsPath!,
                 wslTargetDirectoryPath: wslNcfLogsPath ?? VirtualMountEntry.ToDefaultWslPath(hostNcfLogsPath),
-                isReadOnly: true));
+                isReadOnly: true, allowWriteInReadOnlyScope: false));
         }
 
         if (!string.IsNullOrWhiteSpace(hostSkillsPath) || !string.IsNullOrWhiteSpace(wslSkillsPath))
@@ -339,7 +339,7 @@ public sealed class SandboxMountTable
                 virtualMountPath: $"{NightwatchVirtualRoot}/skills",
                 hostDirectoryPath: hostSkillsPath ?? wslSkillsPath!,
                 wslTargetDirectoryPath: wslSkillsPath ?? VirtualMountEntry.ToDefaultWslPath(hostSkillsPath),
-                isReadOnly: true));
+                isReadOnly: true, allowWriteInReadOnlyScope: false));
         }
 
         if (!string.IsNullOrWhiteSpace(hostWorkspacesRootPath) || !string.IsNullOrWhiteSpace(wslWorkspacesRootPath))
@@ -349,12 +349,12 @@ public sealed class SandboxMountTable
                 virtualMountPath: $"{NightwatchVirtualRoot}/wks",
                 hostDirectoryPath: hostWorkspacesRootPath ?? wslWorkspacesRootPath!,
                 wslTargetDirectoryPath: wslWorkspacesRootPath ?? VirtualMountEntry.ToDefaultWslPath(hostWorkspacesRootPath),
-                isReadOnly: true));
+                isReadOnly: true, allowWriteInReadOnlyScope: false));
         }
 
         if (additionalMounts != null)
         {
-            entries.AddRange(additionalMounts.Select(e => e with { IsReadOnly = true }));
+            entries.AddRange(additionalMounts.Select(e => e with { IsReadOnly = true, AllowWriteInReadOnlyScope = false }));
         }
 
         return ForNightwatch(entries, nonContainerFallbackWorkingDirectory);
@@ -369,6 +369,20 @@ public sealed record SandboxScopeDescriptor
 {
     public const string NightwatchContainerBaseName = "ncf-nightwatch";
     public const string ReadOnlyContainerSuffix = "-ro";
+    public const string TriageContainerSuffix = "-triage";
+
+    /// <summary>
+    /// Builds the dedicated Stage 0 Triage container base name (<c>{base}-triage</c>, which becomes <c>{base}-triage-ro</c>),
+    /// isolating untrusted triage from the Ideation <c>-ro</c> container and its writable memory mount.
+    /// </summary>
+    public static string BuildTriageContainerBaseName(string baseContainerName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseContainerName);
+        var trimmed = baseContainerName.Trim();
+        return trimmed.EndsWith(TriageContainerSuffix, StringComparison.OrdinalIgnoreCase)
+            ? trimmed
+            : trimmed + TriageContainerSuffix;
+    }
 
     public SandboxScopeKind ScopeKind { get; init; }
     public string ScopeCacheKey { get; init; }

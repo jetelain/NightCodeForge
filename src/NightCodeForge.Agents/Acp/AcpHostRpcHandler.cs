@@ -1,10 +1,13 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Memory;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Execution;
 
@@ -64,6 +67,7 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IAgentMemoryWriteNotifier _memoryNotifier;
     private readonly ILogger<AcpHostRpcHandler> _logger;
 
     // Scoped per ACP session so concurrent sessions never share or leak terminal IDs.
@@ -74,8 +78,10 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         IEditorConfigService editorConfigService,
         IEditorConfigFileApplier editorConfigFileApplier,
         IWorkspacePathResolver pathResolver,
+        IAgentMemoryWriteNotifier memoryNotifier,
         ILogger<AcpHostRpcHandler> logger)
     {
+        _memoryNotifier = memoryNotifier ?? throw new ArgumentNullException(nameof(memoryNotifier));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _editorConfigService = editorConfigService ?? throw new ArgumentNullException(nameof(editorConfigService));
         _editorConfigFileApplier = editorConfigFileApplier ?? throw new ArgumentNullException(nameof(editorConfigFileApplier));
@@ -211,6 +217,58 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
         context.Session.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly ||
         context.Session.RequiredMode == AgentMode.ReadOnly;
 
+    /// <summary>
+    /// A read-only session may only write <c>/workspace/memory/*.md</c>, and only when its scope mounts it with
+    /// <see cref="VirtualMountEntry.AllowWriteInReadOnlyScope"/> (never for untrusted triage).
+    /// </summary>
+    private static bool IsReadOnlyMemoryWriteAllowed(string filePath, AcpHostRpcContext context)
+    {
+        if (context.SandboxPathResolver == null ||
+            AgentMemoryPathClassifier.Classify(filePath) != AgentMemoryScope.LocalWorkspace)
+        {
+            return false;
+        }
+
+        return context.SandboxPathResolver.Scope.MountTable.Entries.Any(e =>
+            !e.IsReadOnly &&
+            e.AllowWriteInReadOnlyScope &&
+            string.Equals(e.VirtualMountPath, AgentMemoryConstants.VirtualLocalMemoryPath, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string ReadOnlyWriteDeniedMessage(string filePath, AcpHostRpcContext context) =>
+        context.SandboxPathResolver?.Scope.MountTable.Entries.Any(e => !e.IsReadOnly && e.AllowWriteInReadOnlyScope) == true
+            ? $"Access denied: Mount '{filePath}' is read-only. In read-only mode, only '{AgentMemoryConstants.VirtualLocalMemoryPath}/*.md' is writable."
+            : "Access denied: Write operations are not permitted in a read-only agent session.";
+
+    private async Task NotifyMemoryWriteAsync(
+        AcpHostRpcContext context,
+        string requestedPath,
+        string resolvedPath,
+        bool created,
+        AgentMemoryScope scope,
+        string? contentSha256,
+        CancellationToken cancellationToken)
+    {
+        var workspaceId = context.Session.Workspace?.Id ?? 0;
+        if (workspaceId <= 0 || scope == AgentMemoryScope.None)
+        {
+            return;
+        }
+
+        await _memoryNotifier.NotifyWriteAsync(
+            workspaceId,
+            context.Session.ForgeTask.Id,
+            context.Session.StageId,
+            context.SessionId,
+            new AgentMemoryWriteEvent(
+                requestedPath,
+                resolvedPath,
+                scope,
+                created ? AgentMemoryChangeKind.Created : AgentMemoryChangeKind.Updated,
+                contentSha256),
+            cancellationToken);
+    }
+
     private static (string SessionId, string TerminalId) TerminalKey(string sessionId, JsonNode? parameters)
         => (sessionId, (parameters?["terminalId"]?.ToString() ?? "").ToUpperInvariant());
 
@@ -241,16 +299,16 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
 
     private async Task<AcpHostRpcResult> WriteFileAsync(JsonNode? parameters, AcpHostRpcContext context, CancellationToken cancellationToken)
     {
-        if (IsReadOnlySession(context))
+        var filePath = parameters?["path"]?.ToString() ?? "";
+        if (IsReadOnlySession(context) && !IsReadOnlyMemoryWriteAllowed(filePath, context))
         {
-            return AcpHostRpcResult.Error("Access denied: Write operations are not permitted in a read-only agent session.");
+            return AcpHostRpcResult.Error(ReadOnlyWriteDeniedMessage(filePath, context));
         }
 
-        var filePath = parameters?["path"]?.ToString() ?? "";
         var content = parameters?["content"]?.ToString() ?? "";
         try
         {
-            await WriteWorkspaceFileAsync(
+            var (resolvedPath, created, memoryScope, contentSha256) = await WriteWorkspaceFileAsync(
                 context.LocalWorkspaceRoot,
                 filePath,
                 content,
@@ -259,6 +317,7 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
                 context.Session.Workspace?.ExecutionMode,
                 context.SandboxPathResolver,
                 cancellationToken);
+            await NotifyMemoryWriteAsync(context, filePath, resolvedPath, created, memoryScope, contentSha256, cancellationToken);
             return AcpHostRpcResult.Success(new { });
         }
         catch (Exception ex)
@@ -279,7 +338,16 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
     {
         if (sandboxPathResolver != null)
         {
-            return sandboxPathResolver.ResolveHostPath(filePath, forWrite);
+            var sandboxResolved = sandboxPathResolver.ResolveHostPath(filePath, forWrite);
+            RejectSharedMemorySymlink(workspacePath, filePath, sandboxResolved);
+            return sandboxResolved;
+        }
+
+        if (AgentMemoryPathResolution.IsLocalMemoryPath(filePath, out _))
+        {
+            var memoryDir = ResolveLocalMemoryDirectory(workspaceId);
+            var memoryFile = AgentMemoryPathResolution.ResolveLocalMemoryFile(filePath, workspaceId ?? 0, memoryDir);
+            return memoryFile!;
         }
 
         var trimmed = (filePath ?? string.Empty).Trim();
@@ -303,7 +371,36 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
 
         var resolvedPath = ResolveRawHostFilePath(workspacePath, filePath ?? string.Empty, workspaceId, taskId, executionMode);
         ValidateWithinWorkspace(resolvedPath, filePath ?? string.Empty, workspacePath, workspaceId, taskId, executionMode);
+        RejectSharedMemorySymlink(workspacePath, filePath ?? string.Empty, resolvedPath);
         return resolvedPath;
+    }
+
+    private string ResolveLocalMemoryDirectory(int? workspaceId)
+    {
+        if (!workspaceId.HasValue || workspaceId.Value <= 0)
+        {
+            throw new UnauthorizedAccessException("Access denied: Local memory requires a workspace.");
+        }
+
+        return _pathResolver.ToHostPath(_pathResolver.GetWorkspaceMemoryPath(workspaceId.Value));
+    }
+
+    /// <summary>A malicious repository symlink under <c>AGENTS.md</c> or <c>.agents/memory</c> must never exfiltrate host files.</summary>
+    private static void RejectSharedMemorySymlink(string workspacePath, string requestedPath, string resolvedPath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath) ||
+            !SandboxPathResolver.IsPathInsideDirectory(resolvedPath, workspacePath))
+        {
+            return;
+        }
+
+        var isShared =
+            AgentMemoryPathClassifier.Classify(requestedPath, workspacePath) == AgentMemoryScope.SharedRepository ||
+            AgentMemoryPathClassifier.Classify(resolvedPath, workspacePath) == AgentMemoryScope.SharedRepository;
+        if (isShared && AgentMemoryFileSystem.HasReparsePointInChain(workspacePath, resolvedPath))
+        {
+            throw new UnauthorizedAccessException($"Access denied: Path '{requestedPath}' traverses a symbolic link or reparse point inside agent memory.");
+        }
     }
 
     private string ResolveRawHostFilePath(
@@ -532,29 +629,72 @@ public class AcpHostRpcHandler : IAcpHostRpcHandler
             throw new FileNotFoundException($"File not found: {filePath}", filePath);
         }
 
+        using var stream = new FileStream(resolvedPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
         if (!offset.HasValue && !limit.HasValue)
         {
-            return File.ReadAllText(resolvedPath);
+            return reader.ReadToEnd();
         }
 
-        var lines = File.ReadAllLines(resolvedPath);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Add(line);
+        }
+
         int skip = offset.HasValue && offset.Value > 0 ? offset.Value - 1 : 0;
-        int take = limit.HasValue && limit.Value > 0 ? limit.Value : lines.Length - skip;
+        int take = limit.HasValue && limit.Value > 0 ? limit.Value : Math.Max(0, lines.Count - skip);
         return string.Join(Environment.NewLine, lines.Skip(skip).Take(take));
     }
 
-    private async Task WriteWorkspaceFileAsync(string workspacePath, string filePath, string content, int? workspaceId, int? taskId, ExecutionMode? executionMode, ISandboxPathResolver? sandboxPathResolver, CancellationToken ct)
+    private async Task<(string ResolvedPath, bool Created, AgentMemoryScope MemoryScope, string? ContentSha256)> WriteWorkspaceFileAsync(
+        string workspacePath,
+        string filePath,
+        string content,
+        int? workspaceId,
+        int? taskId,
+        ExecutionMode? executionMode,
+        ISandboxPathResolver? sandboxPathResolver,
+        CancellationToken ct)
     {
         var resolvedPath = ResolveFilePath(workspacePath, filePath, workspaceId, taskId, executionMode, sandboxPathResolver, forWrite: true);
+        var memoryScope = AgentMemoryPathClassifier.Classify(filePath, workspacePath);
+        if (memoryScope == AgentMemoryScope.None)
+        {
+            memoryScope = AgentMemoryPathClassifier.Classify(resolvedPath, workspacePath);
+        }
+
+        var isMemoryWrite = memoryScope != AgentMemoryScope.None && workspaceId is > 0;
         var dir = Path.GetDirectoryName(resolvedPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
             Directory.CreateDirectory(dir);
         }
 
+        using var memoryLock = isMemoryWrite
+            ? await AgentMemoryFileWriter.AcquireLockAsync(workspaceId!.Value, ct)
+            : null;
+
+        if (isMemoryWrite && AgentMemoryReparseGuard.IsReparsePoint(resolvedPath))
+        {
+            throw new UnauthorizedAccessException($"Access denied: Path '{filePath}' traverses a symbolic link or reparse point inside agent memory.");
+        }
+
         var editorConfig = await _editorConfigService.GetSettingsForPathAsync(resolvedPath, ct);
-        string? existing = File.Exists(resolvedPath) ? await File.ReadAllTextAsync(resolvedPath, ct) : null;
+        string? existing = File.Exists(resolvedPath)
+            ? (isMemoryWrite
+                ? await AgentMemoryFileSystem.ReadAllTextSharedAsync(resolvedPath, ct)
+                : await File.ReadAllTextAsync(resolvedPath, ct))
+            : null;
         var bytes = _editorConfigFileApplier.ApplyFormattingAndEncode(content, editorConfig, existing, resolvedPath);
+        if (isMemoryWrite)
+        {
+            var created = await AgentMemoryFileWriter.WriteAtomicAsync(resolvedPath, bytes, ct);
+            var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            return (resolvedPath, created, memoryScope, sha);
+        }
+
         await File.WriteAllBytesAsync(resolvedPath, bytes, ct);
+        return (resolvedPath, existing == null, memoryScope, null);
     }
 }

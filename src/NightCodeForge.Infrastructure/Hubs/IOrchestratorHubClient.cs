@@ -51,6 +51,12 @@ public interface IOrchestratorHubClient
     Task ReceiveBacklogMutation(int taskId, string toolName, string message);
 
     /// <summary>
+    /// An agent memory file (local workspace memory or shared repository memory) was created, updated or deleted.
+    /// <paramref name="taskId"/> is null for Ideation and UI edits.
+    /// </summary>
+    Task ReceiveMemoryUpdated(int workspaceId, int? taskId, string stageId, string memoryScope, string relativePath, string changeKind, string summary);
+
+    /// <summary>
     /// Context or memory optimization telemetry (e.g. tool compaction, thinking pruning, token eviction).
     /// </summary>
     Task ReceiveOptimizationAction(int taskId, string stageId, string actionType, string description, int tokensSaved, DateTime timestamp);

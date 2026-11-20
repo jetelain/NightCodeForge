@@ -190,6 +190,28 @@
                        @bind:after="SavePreferencesAsync"
                        data-testid="toggle-task-merged" />
             </div>
+
+            <!-- Agent Memory Updated -->
+            <div style="padding: 1rem 1.25rem; border-radius: var(--radius-md); background: var(--bg-card); border: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center; gap: 1rem; opacity: @(_preferences.MasterEnabled ? "1" : "0.55"); transition: opacity 0.2s ease;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem;">
+                        <label for="toggle-agent-memory" style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary); margin: 0; cursor: pointer;">
+                            🧠 Agent Memory Updated
+                        </label>
+                        <span class="forge-badge badge-gray font-mono" style="font-size: 0.72rem; padding: 0.15rem 0.45rem;">@NotificationConstants.Subjects.AgentMemory</span>
+                    </div>
+                    <span style="font-size: 0.82rem; color: var(--text-secondary); display: block;">
+                        Dispatches alerts when Ideation or pipeline tasks create, update, or delete local or shared agent memory files.
+                    </span>
+                </div>
+                <input id="toggle-agent-memory"
+                       type="checkbox"
+                       style="width: 1.25rem; height: 1.25rem; cursor: pointer;"
+                       disabled="@(!_preferences.MasterEnabled)"
+                       @bind="_preferences.NotifyOnAgentMemory"
+                       @bind:after="SavePreferencesAsync"
+                       data-testid="toggle-agent-memory" />
+            </div>
         </div>
     </div>
 </div>

@@ -311,6 +311,7 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
         var pathResolver = new Mock<IWorkspacePathResolver>();
         pathResolver.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         pathResolver.Setup(p => p.GetAgentWorkingClonePath(It.IsAny<int>())).Returns(_tempDir);
+        pathResolver.Setup(p => p.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         pathResolver.Setup(p => p.ResolveCruciblePath(It.IsAny<int>(), It.IsAny<string>())).Returns(_tempDir);
 
         var harness = new TestCrucibleHarnessBuilder
@@ -332,7 +333,7 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
             new Mock<ITaskMarkdownSyncService>().Object,
             backlogContextMock.Object,
             new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         var triageService = new TriageService(
             taskRepo,
@@ -342,6 +343,7 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
             new Mock<ITaskMarkdownSyncService>().Object,
             new Mock<IGlobalOptimizationSettingsService>().Object,
             telemetryMock.Object,
+            pathResolver.Object,
             NullLogger<TriageService>.Instance);
 
         int? callbackTaskId = null;
@@ -765,6 +767,7 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
         var pathResolver = new Mock<IWorkspacePathResolver>();
         pathResolver.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         pathResolver.Setup(p => p.GetAgentWorkingClonePath(It.IsAny<int>())).Returns(_tempDir);
+        pathResolver.Setup(p => p.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         pathResolver.Setup(p => p.ResolveCruciblePath(It.IsAny<int>(), It.IsAny<string>())).Returns(_tempDir);
 
         var harness = new TestCrucibleHarnessBuilder

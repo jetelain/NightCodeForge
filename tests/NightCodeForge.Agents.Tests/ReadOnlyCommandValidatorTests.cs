@@ -167,6 +167,86 @@ public class ReadOnlyCommandValidatorTests
     }
 
     [Theory]
+    [InlineData("awk -F: '{print $1}' /etc/hosts")]
+    [InlineData("awk '$3 > 100 {print $1}' data.txt")]
+    [InlineData("awk 'length($0) > 80' file.md")]
+    [InlineData("awk '$1 == \"a\" || $2 == \"b\" {print $0}' data.txt")]
+    [InlineData("awk '{print $1} $3 > 100 {print $2}' data.txt")]
+    [InlineData("awk '/>>/{print $0}' file.txt")]
+    [InlineData("cat /workspace/memory/MEMORY.md")]
+    [InlineData("sed -n '/foo/p' file.md")]
+    [InlineData("sed -n '/foo/p' /foo/workspace/bar.md")]
+    [InlineData("sed -n '1,10p' /workspace/memory/MEMORY.md")]
+    [InlineData("sed -n '1,10p' /foo/workspace/bar.md")]
+    [InlineData("sed -n '1,10p' workspace/README.md")]
+    [InlineData("sed -n '1,5p' memory/MEMORY.md")]
+    [InlineData("sed 's/we/you/' file.md")]
+    [InlineData("sed 's/a/b/g' src/series/sew.cs")]
+    [InlineData("sed -e 's/a/b/g' -e 's/c/d/' file.md")]
+    [InlineData("sort -u file.txt")]
+    public void ValidateCommand_SafeAwkAndSedPrograms_Passes(string command)
+    {
+        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
+
+        Assert.True(isAllowed, $"Expected '{command}' to be allowed, but failed with: {errorMsg}");
+    }
+
+    [Theory]
+    [InlineData("awk '{print > \"/workspace/memory/x.md\"}' file.txt")]
+    [InlineData("awk '{print >> \"/workspace/memory/x.md\"}' file.txt")]
+    [InlineData("awk '{printf \"%s\", $1 > \"out.md\"}' file.txt")]
+    [InlineData("awk '{print \"a;b\" > \"/workspace/memory/x.sh\"}' file.txt")]
+    [InlineData("awk '{print \"a}b\" > \"/workspace/memory/x.sh\"}' file.txt")]
+    [InlineData("awk '{print \"a;b\" >> \"/workspace/memory/x.sh\"}' file.txt")]
+    [InlineData("awk '{print 10 / 2 > \"/workspace/memory/x.sh\"}' file.txt")]
+    [InlineData("awk '{print ($0 ~ /;/) > \"/workspace/memory/x.sh\"}' file.txt")]
+    [InlineData("awk '{print \"x\" \\\n > \"/workspace/memory/x.sh\"}' file.txt")]
+    [InlineData("awk '@load \"filefuncs\"' file.txt")]
+    [InlineData("awk '@include \"/etc/passwd\"' file.txt")]
+    [InlineData("awk -l filefuncs '{print $1}' file.txt")]
+    [InlineData("awk -i lib.awk '{print $1}' file.txt")]
+    [InlineData("awk 'BEGIN{system(\"touch x\")}'")]
+    [InlineData("awk 'BEGIN{\"date\" | getline d; print d}'")]
+    [InlineData("awk '{print $1 | \"sh\"}' file.txt")]
+    [InlineData("awk -f script.awk file.txt")]
+    [InlineData("awk --file script.awk file.txt")]
+    [InlineData("sed -n 'w /workspace/memory/x.md' file.txt")]
+    [InlineData("sed -n '/foo/w out.md' file.txt")]
+    [InlineData("sed -n 'W /workspace/memory/x.sh' file.txt")]
+    [InlineData("sed '1W /workspace/memory/x.sh' file.txt")]
+    [InlineData("sed -n 'w/workspace/memory/x.sh' file.txt")]
+    [InlineData("sed '1w/workspace/memory/x.sh' file.txt")]
+    [InlineData("sed '/foo/w/workspace/memory/x.sh' file.txt")]
+    [InlineData("sed '/foo/wout.sh' file.txt")]
+    [InlineData("sed -n '/foo/wout.sh' file.txt")]
+    [InlineData("sed '1,/foo/wout.sh' file.txt")]
+    [InlineData("sed '1e/bin/sh' file.txt")]
+    [InlineData("sed 's/a/b/p;w/workspace/memory/x.sh' file.txt")]
+    [InlineData("sed -e'w /workspace/memory/x.sh' file.txt")]
+    [InlineData("sed --expression='w /workspace/memory/x.sh' file.txt")]
+    [InlineData("sed --expression='e id' file.txt")]
+    [InlineData("sed -e '/foo/wout.sh' file.txt")]
+    [InlineData("sed 'wout.sh' file.txt")]
+    [InlineData("sed -n 'wout.sh' file.txt")]
+    [InlineData("sed 's_a_b_w /workspace/memory/x.sh' file.txt")]
+    [InlineData("sed 's_a_b_e' file.txt")]
+    [InlineData("sed 's/a/b/w out.md' file.txt")]
+    [InlineData("sed 's/a/b/e' file.txt")]
+    [InlineData("sed '1e echo hi' file.txt")]
+    [InlineData("sed -f script.sed file.txt")]
+    [InlineData("sed --file=script.sed file.txt")]
+    [InlineData("sed -i 's/a/b/' /workspace/memory/x.md")]
+    [InlineData("sort -o /workspace/memory/out.sh file.txt")]
+    [InlineData("sort --output=/workspace/memory/out.sh file.txt")]
+    [InlineData("sort --output /workspace/memory/out.sh file.txt")]
+    public void ValidateCommand_AwkAndSedWritesAndExec_Rejects(string command)
+    {
+        var (isAllowed, errorMsg) = ReadOnlyCommandValidator.ValidateCommand(command);
+
+        Assert.False(isAllowed, $"Expected '{command}' to be blocked, but it was allowed.");
+        Assert.False(string.IsNullOrWhiteSpace(errorMsg));
+    }
+    [Theory]
     [InlineData("echo \"hello\" > file.txt")]
     [InlineData("ls >> out.txt")]
     [InlineData("cat < /etc/passwd")]

@@ -221,6 +221,7 @@ public class AttachmentPersistenceAndSandboxMountTests : IDisposable
 
         var pathResolverMock = new Mock<IWorkspacePathResolver>();
         pathResolverMock.Setup(p => p.GetAttachmentsPath(55)).Returns(Path.Combine(wksDir, "attachments"));
+        pathResolverMock.Setup(m => m.GetWorkspaceMemoryPath(It.IsAny<int>())).Returns<int>(id => $"~/.nightcodeforge/wks/{id}/memory");
         pathResolverMock.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         pathResolverMock.Setup(p => p.GetWslUserName()).Returns("devuser");
 

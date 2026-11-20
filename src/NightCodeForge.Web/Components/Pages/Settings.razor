@@ -164,6 +164,13 @@ else
                     @onclick='() => _activeWorkspaceTab = "github"'>
                 🐙 GitHub Integration
             </button>
+            <button type="button" 
+                    id="settings-workspace-memory-tab-btn"
+                    class="forge-btn @(_activeWorkspaceTab == "memory" ? "forge-btn-primary" : "forge-btn-outline")" 
+                    style="padding: 0.65rem 1.25rem; font-size: 0.92rem; font-weight: 500;"
+                    @onclick='() => _activeWorkspaceTab = "memory"'>
+                🧠 Memory
+            </button>
         </div>
 
         <div class="settings-tab-content">
@@ -183,6 +190,10 @@ else
                     break;
                 case "github":
                     <GitHubSettingsTab WorkspaceId="@WorkspaceState.ActiveWorkspace.Id" />
+                    break;
+                case "memory":
+                    <WorkspaceMemoryTab WorkspaceId="@WorkspaceState.ActiveWorkspace.Id"
+                                        WorkspaceName="@WorkspaceState.ActiveWorkspace.Name" />
                     break;
             }
         </div>

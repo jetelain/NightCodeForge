@@ -26,6 +26,7 @@ public class ExternalProcessAgentHarnessBaseTests
                 new AgentsMdService(),
                 new Mock<IWorkspacePathResolver>().Object,
                 new Mock<IProcessRunner>().Object,
+                new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(),
                 NullLogger.Instance)
         {
         }
@@ -40,7 +41,7 @@ public class ExternalProcessAgentHarnessBaseTests
             => throw new NotSupportedException();
 
         public (string, string) Resolve(AgentSessionContext ctx) => ResolveLaunchCommand(ctx);
-        public string Prompt(AgentSessionContext ctx, string root) => BuildEnrichedPrompt(ctx, root);
+        public string Prompt(AgentSessionContext ctx, string root) => BuildEnrichedPromptAsync(ctx, root, CancellationToken.None).GetAwaiter().GetResult();
     }
 
     private static AgentSessionContext Context(string? json = null, string? humanAnswer = null, string? directive = null) => new()

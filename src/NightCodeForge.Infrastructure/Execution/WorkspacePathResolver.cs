@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Infrastructure.Execution;
@@ -126,6 +127,11 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         return $"{GetAgentWorkspaceRootPath(workspaceId)}/attachments";
     }
 
+    public string GetWorkspaceMemoryPath(int workspaceId)
+    {
+        return $"{GetAgentWorkspaceRootPath(workspaceId)}/{AgentMemoryConstants.LocalMemoryDirectoryName}";
+    }
+
     public string GetHostRemoteUrl(string repositoryPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
@@ -168,6 +174,16 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             {
                 raw = "/workspace/" + afterPrefix;
             }
+        }
+
+        if (workspaceId > 0 && TryGetLocalMemoryRelativePath(raw, out var memoryRel))
+        {
+            return IsWindows
+                ? JoinMemoryPath(
+                    $@"\\wsl.localhost\{GetWslDistributionName()}\home\{GetWslUserName()}\.nightcodeforge\wks\{workspaceId}\{AgentMemoryConstants.LocalMemoryDirectoryName}",
+                    memoryRel,
+                    '\\')
+                : JoinMemoryPath(GetWorkspaceMemoryPath(workspaceId), memoryRel, '/');
         }
 
         string baseWorkingRoot;
@@ -263,24 +279,41 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             (normalized.Equals(normParent, StringComparison.OrdinalIgnoreCase) ||
              normalized.StartsWith(normParent + "/", StringComparison.OrdinalIgnoreCase));
 
+        if (!isAlreadyUnderParent)
+        {
+            var embeddedWksMatch = Regex.Match(
+                normalized,
+                @"\.nightcodeforge/wks/(\d+)/((?:attachments|memory)(?:/.*)?)$",
+                RegexOptions.IgnoreCase);
+            if (embeddedWksMatch.Success &&
+                normParent.EndsWith($".nightcodeforge/wks/{embeddedWksMatch.Groups[1].Value}", StringComparison.OrdinalIgnoreCase))
+            {
+                raw = "/workspace/" + embeddedWksMatch.Groups[2].Value;
+                normalized = raw;
+            }
+        }
+
         if (!isAlreadyUnderParent && TryResolveTmpSubPath(raw, out var tmpSubPath))
         {
             var tmpRel = string.IsNullOrEmpty(tmpSubPath) ? "tmp" : $"tmp/{tmpSubPath}";
             return FormatPath(parentDir, tmpRel);
         }
 
-        if (!isAlreadyUnderParent)
+        if (!isAlreadyUnderParent && TryGetLocalMemoryRelativePath(raw, out var siblingMemoryRel))
         {
-            var embeddedAttachMatch = Regex.Match(
-                normalized,
-                @"\.nightcodeforge/wks/(\d+)/(attachments(?:/.*)?)$",
-                RegexOptions.IgnoreCase);
-            if (embeddedAttachMatch.Success &&
-                normParent.EndsWith($".nightcodeforge/wks/{embeddedAttachMatch.Groups[1].Value}", StringComparison.OrdinalIgnoreCase))
+            // Memory is a sibling of clone/ and task-{id}/. Never resolve it inside a repository path (BareHost):
+            // without a wks/{id} layout the caller must use the workspace-id overload.
+            if (string.Equals(parentDir, normRoot, StringComparison.Ordinal) &&
+                !Regex.IsMatch(normRoot, @"\.nightcodeforge/wks/\d+$", RegexOptions.IgnoreCase))
             {
-                raw = "/workspace/" + embeddedAttachMatch.Groups[2].Value;
-                normalized = raw;
+                throw new UnauthorizedAccessException(
+                    $"Access denied: '{AgentMemoryConstants.VirtualLocalMemoryPath}' cannot be resolved from workspace root '{workspaceRoot}'; use the workspace-id based resolution.");
             }
+
+            var siblingMemoryDir = FormatPath(parentDir, AgentMemoryConstants.LocalMemoryDirectoryName);
+            return string.IsNullOrEmpty(siblingMemoryRel)
+                ? siblingMemoryDir
+                : FormatPath(siblingMemoryDir, siblingMemoryRel);
         }
 
         if (Path.IsPathRooted(raw) &&
@@ -410,6 +443,60 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
         }
 
         return Path.GetFullPath(Path.Combine(workspaceRoot, raw));
+    }
+
+    private static string JoinMemoryPath(string baseDir, string relative, char separator)
+    {
+        var cleanBase = baseDir.TrimEnd('/', '\\');
+        return string.IsNullOrEmpty(relative)
+            ? cleanBase
+            : $"{cleanBase}{separator}{relative.Replace('/', separator)}";
+    }
+
+    /// <summary>
+    /// Detects <c>/workspace/memory[/...]</c> and returns the traversal-checked relative remainder.
+    /// </summary>
+    private static bool TryGetLocalMemoryRelativePath(string? path, out string relative)
+    {
+        relative = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var normalized = path.Trim().Replace('\\', '/').TrimStart('/');
+        var memoryPrefix = $"workspace/{AgentMemoryConstants.LocalMemoryDirectoryName}";
+        if (!normalized.Equals(memoryPrefix, StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith(memoryPrefix + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var stack = new List<string>();
+        foreach (var segment in normalized[memoryPrefix.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".")
+            {
+                continue;
+            }
+
+            if (segment == "..")
+            {
+                if (stack.Count == 0)
+                {
+                    throw new UnauthorizedAccessException(
+                        $"Access denied: Path '{path}' resolves outside the allowed workspace sandbox.");
+                }
+
+                stack.RemoveAt(stack.Count - 1);
+                continue;
+            }
+
+            stack.Add(segment);
+        }
+
+        relative = string.Join('/', stack);
+        return true;
     }
 
     /// <summary>

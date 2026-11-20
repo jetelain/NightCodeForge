@@ -157,6 +157,8 @@ builder.Services.AddSignalR();
 builder.Services.AddNightCodeForgeSignalRBridge();
 builder.Services.AddScoped<OrchestratorHubClientConnection>();
 builder.Services.AddScoped<IWebNotificationService, WebNotificationService>();
+builder.Services.AddScoped<IWorkspaceMemoryUiService, WorkspaceMemoryUiService>();
+builder.Services.AddScoped<MemoryUpdateTracker>();
 builder.Services.AddScoped<WebNotificationService>(sp => (WebNotificationService)sp.GetRequiredService<IWebNotificationService>());
 
 var app = builder.Build();

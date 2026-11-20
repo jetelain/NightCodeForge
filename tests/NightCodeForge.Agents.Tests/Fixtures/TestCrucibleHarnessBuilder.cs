@@ -109,7 +109,7 @@ public class TestCrucibleHarnessBuilder
             new Mock<ITaskMarkdownSyncService>().Object,
             BacklogContext,
             new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         var agentFactory = new HarnessAgentFactory(
             factory,

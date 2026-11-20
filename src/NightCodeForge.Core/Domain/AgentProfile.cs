@@ -301,6 +301,7 @@ Avoid over-decomposing into micro-tasks; structure cohesive PR-sized tasks with 
         HarnessId = StandardHarnessIds.Crucible,
         ModelName = defaultModelName,
         Mode = AgentMode.ReadOnly,
+        SecurityTier = SandboxSecurityTier.RestrictedReadOnly,
         PermittedTools = DefaultAgentTools.Ideation,
         OptimizationFlags = null,
         RoutingTarget = OllamaRoutingTarget.Auto,

@@ -466,7 +466,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             sp.GetRequiredService<ITaskMarkdownSyncService>(),
             backlogContext,
             new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         var triageService = new TriageService(
             taskRepo,
@@ -476,6 +476,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             sp.GetRequiredService<ITaskMarkdownSyncService>(),
             Mock.Of<IGlobalOptimizationSettingsService>(),
             Mock.Of<IOperationsTelemetryService>(),
+            pathResolver,
             NullLogger<TriageService>.Instance);
 
         await triageService.TriageExternalReportAsync(
@@ -596,7 +597,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             new TaskMarkdownSyncService(serviceProvider.GetRequiredService<IServiceScopeFactory>(), pathResolver, NullLogger<TaskMarkdownSyncService>.Instance),
             backlogContext,
             new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         // 1. Verify IdeationConversationCoordinator injects <workspace_attachments> and citation rule
         var capturedIdeationRequests = new List<HarnessAgentRequest>();
@@ -996,7 +997,7 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
             serviceProvider.GetRequiredService<ITaskMarkdownSyncService>(),
             backlogContext,
             new TranscriptAnalysisService(),
-            NullLogger<AgentWorkspaceContextService>.Instance);
+            new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance);
 
         var capturedIdeationPrompts = new List<string>();
         var ideationProfile = new AgentProfile

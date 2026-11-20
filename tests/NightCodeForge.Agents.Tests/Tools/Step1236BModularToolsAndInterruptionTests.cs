@@ -707,7 +707,7 @@ public class Step1236BModularToolsAndInterruptionTests : IDisposable
                 new Mock<ITaskMarkdownSyncService>().Object,
                 backlogContext,
                 new TranscriptAnalysisService(),
-                NullLogger<AgentWorkspaceContextService>.Instance),
+                new NightCodeForge.Agents.Tests.Fixtures.NoopAgentMemoryTurnTracker(), NullLogger<AgentWorkspaceContextService>.Instance),
             new HarnessAgentFactory(
                 new TestCrucibleHarnessBuilder.TestSingleChatClientFactory(mockClient.Object),
                 gateway.Object,
