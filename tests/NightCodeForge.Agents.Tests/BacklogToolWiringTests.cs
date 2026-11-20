@@ -376,4 +376,43 @@ public class BacklogToolWiringTests
         Assert.Equal(202, tools.PendingProposals[1].TaskId);
         Assert.Equal(new[] { 201 }, tools.PendingProposals[1].DependsOnIds);
     }
+
+    [Fact]
+    public async Task Dispatcher_ProposeTasks_IgnoresHallucinatedMergeMode_InSingleAndBatchPayloads()
+    {
+        var (tools, service) = CreateTools();
+        service.Setup(s => s.ProposeTasksAsync(It.IsAny<BacklogToolScope>(), It.IsAny<IReadOnlyList<TaskProposal>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("[{\"id\":301,\"title\":\"T1\"},{\"id\":302,\"title\":\"T2\"}]");
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        // 1. Single-task call with hallucinated top-level merge_mode
+        var singleResult = await dispatcher.ExecuteAsync(
+            CanonicalToolNames.ProposeTasks,
+            "{\"title\": \"Single With MergeMode\", \"description\": \"Ignore merge_mode\", \"priority\": 2, \"difficulty\": \"difficult\", \"merge_mode\": \"Automatic\"}");
+
+        Assert.NotNull(singleResult);
+        service.Verify(s => s.ProposeTasksAsync(
+            It.Is<BacklogToolScope>(sc => sc.WorkspaceId == WorkspaceId),
+            It.Is<IReadOnlyList<TaskProposal>>(list =>
+                list.Count == 1 &&
+                list[0].Title == "Single With MergeMode" &&
+                list[0].Priority == 2 &&
+                list[0].Difficulty == "difficult"),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        // 2. Batch call with hallucinated merge_mode / mergeMode inside items
+        var batchResult = await dispatcher.ExecuteAsync(
+            CanonicalToolNames.ProposeTasks,
+            "{\"tasks\": [{\"title\": \"T1\", \"description\": \"D1\", \"merge_mode\": \"Automatic\"}, {\"title\": \"T2\", \"description\": \"D2\", \"mergeMode\": \"ExternalPullRequest\", \"difficulty\": \"expert\"}]}");
+
+        Assert.NotNull(batchResult);
+        service.Verify(s => s.ProposeTasksAsync(
+            It.Is<BacklogToolScope>(sc => sc.WorkspaceId == WorkspaceId),
+            It.Is<IReadOnlyList<TaskProposal>>(list =>
+                list.Count == 2 &&
+                list[0].Title == "T1" &&
+                list[1].Title == "T2" &&
+                list[1].Difficulty == "expert"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

@@ -423,4 +423,58 @@ public class IdeationTurnRehydrationMapperTests
         Assert.Equal(CanonicalToolNames.Bash, toolParts[1].ToolCall.ToolName);
         Assert.False(toolParts[1].ToolCall.IsCompleted);
     }
+
+    [Fact]
+    public void ProjectConversation_DeserializesLegacyProposalMetadataContainingMergeMode_WithoutDroppingFields()
+    {
+        var legacyMetadataJson = """
+        [
+          {
+            "Title": "Legacy Proposal With MergeMode",
+            "Description": "Implement feature per @attachment:7",
+            "Priority": 2,
+            "DependsOnTitles": ["Base Migration"],
+            "TaskId": 42,
+            "DependsOnIds": [10, 11],
+            "MergeMode": "Automatic",
+            "Difficulty": "difficult",
+            "AttachmentIds": [7]
+          }
+        ]
+        """;
+
+        var conv = new Conversation
+        {
+            Id = 14,
+            WorkspaceId = 1,
+            Turns =
+            [
+                new ConversationTurn { TurnIndex = 0, Role = StageTurnRole.User, Content = "Propose work" },
+                new ConversationTurn
+                {
+                    TurnIndex = 1,
+                    Role = StageTurnRole.Assistant,
+                    Content = "Proposed one task.",
+                    MetadataJson = legacyMetadataJson
+                }
+            ]
+        };
+
+        var projected = IdeationTurnRehydrationMapper.ProjectConversation(
+            conv,
+            Array.Empty<TaskAttachment>(),
+            Array.Empty<ForgeTask>(),
+            maxTurnIndexInclusive: null,
+            NullLogger.Instance);
+
+        var prop = Assert.Single(projected.Proposals);
+        Assert.Equal("Legacy Proposal With MergeMode", prop.Title);
+        Assert.Equal("Implement feature per @attachment:7", prop.Description);
+        Assert.Equal(2, prop.Priority);
+        Assert.Equal(["Base Migration"], prop.DependsOnTitles);
+        Assert.Equal(42, prop.TaskId);
+        Assert.Equal([10, 11], prop.DependsOnIds);
+        Assert.Equal("difficult", prop.Difficulty);
+        Assert.Equal([7], prop.AttachmentIds);
+    }
 }

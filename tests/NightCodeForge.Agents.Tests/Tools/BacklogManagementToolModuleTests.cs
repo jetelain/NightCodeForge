@@ -374,4 +374,16 @@ public sealed class BacklogManagementToolModuleTests
         Assert.Empty(module.PendingProposals[0].DependsOnTitles!);
         Assert.Equal(["Schema"], module.PendingProposals[1].DependsOnTitles);
     }
+
+    [Fact]
+    public void ProposeTasksFunctionSchema_DoesNotExposeMergeMode_WhileEditTaskRetainsIt()
+    {
+        var functions = BacklogManagementToolModule.CreateFunctions(null).ToDictionary(f => f.Name);
+
+        var proposeSchema = functions[CanonicalToolNames.ProposeTasks].JsonSchema.GetRawText();
+        Assert.DoesNotContain("merge_mode", proposeSchema, StringComparison.OrdinalIgnoreCase);
+
+        var editSchema = functions[CanonicalToolNames.EditTask].JsonSchema.GetRawText();
+        Assert.Contains("merge_mode", editSchema, StringComparison.OrdinalIgnoreCase);
+    }
 }

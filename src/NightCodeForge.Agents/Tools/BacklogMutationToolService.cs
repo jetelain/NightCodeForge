@@ -493,11 +493,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
             ValidatePriority(proposal.Priority);
 
-            if (!string.IsNullOrWhiteSpace(proposal.MergeMode))
-            {
-                await ParseAndValidateMergeModeAsync(scope, proposal.MergeMode, nameof(proposals), cancellationToken);
-            }
-
             if (!string.IsNullOrWhiteSpace(proposal.Difficulty))
             {
                 ParseDifficulty(proposal.Difficulty, nameof(proposals));
@@ -540,7 +535,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 single.Description,
                 single.Priority,
                 singleDeps,
-                single.MergeMode,
                 single.Difficulty,
                 single.AttachmentIds,
                 cancellationToken);
@@ -560,7 +554,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
                 p.Description,
                 p.Priority,
                 deps,
-                p.MergeMode,
                 p.Difficulty,
                 p.AttachmentIds,
                 cancellationToken);
@@ -630,7 +623,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
         string description,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
-        string? mergeMode = null,
         string? difficulty = null,
         IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default)
@@ -645,10 +637,6 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
 
         var effPriority = priority.HasValue ? priority.Value : TaskPriority.Normal;
         ValidatePriority(effPriority);
-
-        var effMergeMode = !string.IsNullOrWhiteSpace(mergeMode)
-            ? await ParseAndValidateMergeModeAsync(scope, mergeMode, nameof(mergeMode), cancellationToken)
-            : MergeMode.ManualReviewRequired;
 
         var effDifficulty = !string.IsNullOrWhiteSpace(difficulty)
             ? ParseDifficulty(difficulty, nameof(difficulty))
@@ -689,7 +677,7 @@ public sealed class BacklogMutationToolService : IBacklogMutationToolService
             Status = scope.IsTriage ? TaskOverallStatus.Suggested : TaskOverallStatus.Draft,
             Priority = effPriority,
             Difficulty = effDifficulty,
-            MergeMode = effMergeMode,
+            MergeMode = MergeMode.ManualReviewRequired,
             BaseBranch = !string.IsNullOrWhiteSpace(scope.DefaultBaseBranch)
                 ? scope.DefaultBaseBranch
                 : WorkflowDefaults.DefaultBaseBranch,

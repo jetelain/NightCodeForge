@@ -302,7 +302,6 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
             proposal.DependsOnTitles,
             proposal.TaskId,
             proposal.DependsOnIds,
-            proposal.MergeMode,
             proposal.Difficulty,
             attachmentIds.Count > 0 ? attachmentIds : null);
     }

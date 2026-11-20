@@ -497,7 +497,6 @@ public class IdeationSessionStateTests
             Description = "Updated Desc",
             Priority = 1,
             Difficulty = TaskDifficulty.Difficult,
-            MergeMode = MergeMode.Automatic,
             Status = TaskOverallStatus.Draft
         };
 
@@ -509,7 +508,6 @@ public class IdeationSessionStateTests
         Assert.Equal("Updated Desc", vm.Description);
         Assert.Equal(1, vm.Priority);
         Assert.Equal(TaskDifficulty.Difficult, vm.Difficulty);
-        Assert.Equal(MergeMode.Automatic, vm.MergeMode);
         Assert.False(vm.IsAdded);
     }
 

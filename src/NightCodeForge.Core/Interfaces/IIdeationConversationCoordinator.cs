@@ -9,7 +9,6 @@ public record IdeationProposal(
     IReadOnlyList<string>? DependsOnTitles = null,
     int? TaskId = null,
     IReadOnlyList<int>? DependsOnIds = null,
-    string? MergeMode = null,
     string? Difficulty = null,
     IReadOnlyList<int>? AttachmentIds = null);
 

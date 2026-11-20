@@ -299,4 +299,69 @@ public class Step125BBacklogDifficultyToolTests : IDisposable
             It.Is<IReadOnlyList<TaskProposal>>(list => list.Count == 1 && list[0].Difficulty == "difficult"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public void LegacyProposalJsonWithMergeMode_DeserializesAndParsesWithoutShiftingFields()
+    {
+        var fallbackMarkdown = """
+        ```json
+        [
+          {
+            "title": "Fallback Task With Legacy MergeMode",
+            "description": "Includes @attachment:4 spec",
+            "priority": 2,
+            "dependsOnTitles": ["Schema Prep"],
+            "dependsOnIds": [2],
+            "merge_mode": "Automatic",
+            "mergeMode": "ExternalPullRequest",
+            "difficulty": "difficult",
+            "attachmentIds": [4]
+          }
+        ]
+        ```
+        """;
+
+        var parsed = IdeationSystemPromptBuilder.ParseFallbackProposals(fallbackMarkdown, NullLogger.Instance);
+        var fallbackProposal = Assert.Single(parsed);
+        Assert.Equal("Fallback Task With Legacy MergeMode", fallbackProposal.Title);
+        Assert.Equal("Includes @attachment:4 spec", fallbackProposal.Description);
+        Assert.Equal(2, fallbackProposal.Priority);
+        Assert.Equal(["Schema Prep"], fallbackProposal.DependsOnTitles);
+        Assert.Equal([2], fallbackProposal.DependsOnIds);
+        Assert.Equal("difficult", fallbackProposal.Difficulty);
+        Assert.Equal([4], fallbackProposal.AttachmentIds);
+
+        var legacyTaskProposalJson = """
+        {
+          "Title": "Legacy TaskProposal",
+          "Description": "Details",
+          "Type": "feature",
+          "Priority": 1,
+          "DependsOnTitles": ["Foundation"],
+          "DependsOnIds": [11],
+          "TaskId": 17,
+          "MergeMode": "Automatic",
+          "Difficulty": "expert",
+          "AttachmentIds": [3]
+        }
+        """;
+
+        var deserialized = JsonSerializer.Deserialize<TaskProposal>(
+            legacyTaskProposalJson,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(deserialized);
+        Assert.Equal("Legacy TaskProposal", deserialized!.Title);
+        Assert.Equal(1, deserialized.Priority);
+        Assert.Equal(["Foundation"], deserialized.DependsOnTitles);
+        Assert.Equal([11], deserialized.DependsOnIds);
+        Assert.Equal(17, deserialized.TaskId);
+        Assert.Equal("expert", deserialized.Difficulty);
+        Assert.Equal([3], deserialized.AttachmentIds);
+
+        var mapped = IdeationSystemPromptBuilder.ToIdeationProposal(deserialized);
+        Assert.Equal(17, mapped.TaskId);
+        Assert.Equal([11], mapped.DependsOnIds);
+        Assert.Equal("expert", mapped.Difficulty);
+        Assert.Equal([3], mapped.AttachmentIds);
+    }
 }

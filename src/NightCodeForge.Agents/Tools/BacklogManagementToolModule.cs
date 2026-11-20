@@ -91,12 +91,11 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
              [Description("Task description with functional scope, acceptance criteria, and testing plan if single proposal")] string? description = null,
              [Description("Task priority (1 Highest - 5 Lowest) if single proposal")] int? priority = null,
              [Description("Prerequisite task IDs")] IReadOnlyList<int>? depends_on_ids = null,
-             [Description("Merge mode if single proposal: Automatic, ManualReviewRequired, or ExternalPullRequest")] string? merge_mode = null,
              [Description("Task difficulty if single proposal: standard, difficult, or expert")] string? difficulty = null,
              [Description("Linked workspace attachment IDs")] IReadOnlyList<int>? attachment_ids = null,
              CancellationToken ct = default) =>
                 module != null
-                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, merge_mode, difficulty, attachment_ids, ct)
+                    ? module.ProposeTasksAsync(tasks, title, description, priority, depends_on_ids, difficulty, attachment_ids, ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.ProposeTasks,
             "Proposes structured backlog tasks for ideation (Draft) or triage (Suggested). Returns the created task(s) with assigned numeric ID(s). Each task represents a full Pull Request / Merge Request unit of work with build, test, and code review gates. Subsequent calls to edit_task, remove_task, or propose_tasks (depends_on_ids) can reference the returned numeric IDs."),
@@ -362,34 +361,12 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         CancellationToken cancellationToken) =>
         ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, null, null, cancellationToken);
 
-    public Task<string> ProposeTasksAsync(
-        object? tasks,
-        string? title,
-        string? description,
-        int? priority,
-        IReadOnlyList<int>? dependsOnIds,
-        string? mergeMode,
-        CancellationToken cancellationToken) =>
-        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, null, cancellationToken);
-
-    public Task<string> ProposeTasksAsync(
-        object? tasks,
-        string? title,
-        string? description,
-        int? priority,
-        IReadOnlyList<int>? dependsOnIds,
-        string? mergeMode,
-        string? difficulty,
-        CancellationToken cancellationToken) =>
-        ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, null, cancellationToken);
-
     public async Task<string> ProposeTasksAsync(
         object? tasks = null,
         string? title = null,
         string? description = null,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
-        string? mergeMode = null,
         string? difficulty = null,
         IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default)
@@ -401,7 +378,6 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             description,
             priority,
             dependsOnIds,
-            mergeMode,
             difficulty,
             attachmentIds,
             extractDescriptionCitations: !isTriageMode);
@@ -523,7 +499,6 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
         string? description,
         int? priority,
         IReadOnlyList<int>? dependsOnIds,
-        string? mergeMode,
         string? difficulty,
         IReadOnlyList<int>? attachmentIds,
         bool extractDescriptionCitations)
@@ -541,7 +516,6 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 description ?? string.Empty,
                 priority: priority ?? TaskPriority.Normal,
                 dependsOnIds: dependsOnIds,
-                mergeMode: mergeMode,
                 difficulty: difficulty,
                 attachmentIds: resolvedAttachments));
         }
@@ -586,14 +560,12 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(mergeMode) || !string.IsNullOrWhiteSpace(difficulty) || attachmentIds is { Count: > 0 })
+            if (!string.IsNullOrWhiteSpace(difficulty) || attachmentIds is { Count: > 0 })
             {
-                var fallbackMergeMode = string.IsNullOrWhiteSpace(mergeMode) ? null : mergeMode;
                 var fallbackDifficulty = string.IsNullOrWhiteSpace(difficulty) ? null : difficulty;
                 for (int i = 0; i < batchProposals.Count; i++)
                 {
                     var proposal = batchProposals[i];
-                    var effectiveMergeMode = proposal.MergeMode ?? fallbackMergeMode;
                     var effectiveDifficulty = proposal.Difficulty ?? fallbackDifficulty;
                     IReadOnlyList<int>? effectiveAttachmentIds = proposal.AttachmentIds;
                     if (attachmentIds is { Count: > 0 })
@@ -604,13 +576,11 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
                         effectiveAttachmentIds = ResolveProposalAttachmentIds(combinedExplicit, proposal.Description, extractDescriptionCitations);
                     }
 
-                    if (!string.Equals(effectiveMergeMode, proposal.MergeMode, StringComparison.Ordinal) ||
-                        !string.Equals(effectiveDifficulty, proposal.Difficulty, StringComparison.Ordinal) ||
+                    if (!string.Equals(effectiveDifficulty, proposal.Difficulty, StringComparison.Ordinal) ||
                         !ReferenceEquals(effectiveAttachmentIds, proposal.AttachmentIds))
                     {
                         batchProposals[i] = proposal with
                         {
-                            MergeMode = effectiveMergeMode,
                             Difficulty = effectiveDifficulty,
                             AttachmentIds = effectiveAttachmentIds
                         };
@@ -750,12 +720,6 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             type = ty.GetString() ?? "feature";
         }
 
-        string? mergeMode = null;
-        if ((item.TryGetProperty("merge_mode", out var mm) || item.TryGetProperty("mergeMode", out mm)) && mm.ValueKind == JsonValueKind.String)
-        {
-            mergeMode = mm.GetString();
-        }
-
         string? difficulty = null;
         if ((item.TryGetProperty("difficulty", out var diffProp) ||
              item.TryGetProperty("task_difficulty", out diffProp) ||
@@ -812,7 +776,6 @@ public sealed class BacklogManagementToolModule : IAgentToolModule
             deps,
             depIds,
             null,
-            mergeMode,
             difficulty,
             resolvedAttachmentIds);
     }

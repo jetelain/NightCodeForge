@@ -317,7 +317,108 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
     }
 
     [Fact]
-    public async Task IdeationProposalCard_And_Promotion_SupportMergeModeExternalPullRequest()
+    public async Task IdeationProposalCard_DoesNotRenderMergeModeSelector_AndPromotionDefaultsToManualReviewRequired()
+    {
+        var ws = await _workspaceRepository.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "GitHub Workspace",
+            RepositoryPath = "/repo/gh",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                PullRequestDeliveryEnabled = true
+            }
+        });
+        _workspaceState.SetKnownWorkspaces(new[] { ws });
+        _workspaceState.SetActiveWorkspace(ws);
+        _prDeliveryMock.Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var proposalVm = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Add PR Mode Support", "Scope details", TaskPriority.High));
+
+        var cut = Render<IdeationProposalCard>(p => p.Add(c => c.Proposal, proposalVm));
+        Assert.Empty(cut.FindAll(".proposal-mergemode-select"));
+        Assert.Empty(cut.FindAll("select[aria-label='Merge Mode']"));
+        Assert.DoesNotContain("Merge:", cut.Markup);
+        _prDeliveryMock.Verify(
+            s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        var workflowRepo = Services.GetRequiredService<IWorkflowRepository>();
+        var createdTask = await IdeationPresentationHelper.PromoteOrCreateProposalTaskAsync(
+            ws,
+            proposalVm,
+            _taskRepository,
+            workflowRepo);
+
+        Assert.Equal(TaskOverallStatus.Suggested, createdTask.Status);
+        Assert.Equal(MergeMode.ManualReviewRequired, createdTask.MergeMode);
+    }
+
+    [Fact]
+    public async Task PromoteOrCreateProposalTaskAsync_ExistingDraft_KeepsDefaultOrEditedMergeMode()
+    {
+        var ws = await _workspaceRepository.CreateAsync(new Workspace
+        {
+            Id = 1,
+            Name = "GitHub Workspace",
+            RepositoryPath = "/repo/gh"
+        });
+        var workflowRepo = Services.GetRequiredService<IWorkflowRepository>();
+
+        var defaultDraft = await _taskRepository.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Default Draft",
+            Description = "Initial draft",
+            Status = TaskOverallStatus.Draft,
+            Priority = TaskPriority.Normal,
+            MergeMode = MergeMode.ManualReviewRequired,
+            BaseBranch = "main"
+        });
+        var defaultVm = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Default Draft", "Initial draft", TaskPriority.Normal, TaskId: defaultDraft.Id),
+            [defaultDraft]);
+
+        var promotedDefault = await IdeationPresentationHelper.PromoteOrCreateProposalTaskAsync(
+            ws,
+            defaultVm,
+            _taskRepository,
+            workflowRepo);
+
+        Assert.Equal(defaultDraft.Id, promotedDefault.Id);
+        Assert.Equal(TaskOverallStatus.Suggested, promotedDefault.Status);
+        Assert.Equal(MergeMode.ManualReviewRequired, promotedDefault.MergeMode);
+
+        var editedDraft = await _taskRepository.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Edited Draft",
+            Description = "Edited via edit_task",
+            Status = TaskOverallStatus.Draft,
+            Priority = TaskPriority.High,
+            MergeMode = MergeMode.ExternalPullRequest,
+            BaseBranch = "main"
+        });
+        var editedVm = IdeationProposalViewModel.FromProposal(
+            new IdeationProposal("Edited Draft", "Edited via edit_task", TaskPriority.High, TaskId: editedDraft.Id),
+            [editedDraft]);
+
+        var promotedEdited = await IdeationPresentationHelper.PromoteOrCreateProposalTaskAsync(
+            ws,
+            editedVm,
+            _taskRepository,
+            workflowRepo);
+
+        Assert.Equal(editedDraft.Id, promotedEdited.Id);
+        Assert.Equal(TaskOverallStatus.Suggested, promotedEdited.Status);
+        Assert.Equal(MergeMode.ExternalPullRequest, promotedEdited.MergeMode);
+    }
+
+    [Fact]
+    public async Task MaintainerPromotionModal_SupportsExternalPullRequestMode_OnlyWhenPrDeliveryAvailable()
     {
         var ws = await _workspaceRepository.CreateAsync(new Workspace
         {
@@ -330,41 +431,59 @@ public class GitHubPullRequestDeliveryUiTests : BunitContext
                 PullRequestDeliveryEnabled = false
             }
         });
-        _workspaceState.SetKnownWorkspaces(new[] { ws });
-        _workspaceState.SetActiveWorkspace(ws);
+        var task = await _taskRepository.CreateAsync(new ForgeTask
+        {
+            WorkspaceId = ws.Id,
+            Title = "Promote With PR Mode",
+            Description = "Verify promotion modal controls MergeMode",
+            Status = TaskOverallStatus.Suggested,
+            Priority = TaskPriority.High,
+            MergeMode = MergeMode.ManualReviewRequired,
+            BaseBranch = "main"
+        });
+
         _prDeliveryMock.Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
-        var proposalVm = IdeationProposalViewModel.FromProposal(
-            new IdeationProposal("Add PR Mode Support", "Scope details", TaskPriority.High));
+        // 1. GitHub settings disabled -> ExternalPullRequest hidden
+        var settingsDisabledCut = Render<MaintainerPromotionModal>(p => p
+            .Add(m => m.IsOpen, true)
+            .Add(m => m.TargetTask, task));
+        var settingsDisabledSelect = settingsDisabledCut.Find("#merge-mode-select");
+        Assert.DoesNotContain("ExternalPullRequest", settingsDisabledSelect.InnerHtml);
 
-        // 1. When PR delivery is disabled, ExternalPullRequest option is hidden
-        var disabledCut = Render<IdeationProposalCard>(p => p.Add(c => c.Proposal, proposalVm));
-        var disabledSelect = disabledCut.Find(".proposal-mergemode-select");
-        Assert.DoesNotContain("ExternalPullRequest", disabledSelect.InnerHtml);
-
-        // 2. When PR delivery is enabled, ExternalPullRequest option is rendered and selectable
+        // 2. GitHub settings enabled, but PR delivery service reports unavailable (e.g., missing auth/repo) -> still hidden
         ws.GitHubSettings.Enabled = true;
         ws.GitHubSettings.PullRequestDeliveryEnabled = true;
+        await _workspaceRepository.UpdateAsync(ws);
+
+        var unauthCut = Render<MaintainerPromotionModal>(p => p
+            .Add(m => m.IsOpen, true)
+            .Add(m => m.TargetTask, task));
+        var unauthSelect = unauthCut.Find("#merge-mode-select");
+        Assert.DoesNotContain("ExternalPullRequest", unauthSelect.InnerHtml);
+        _prDeliveryMock.Verify(
+            s => s.IsPullRequestDeliveryAvailableAsync(It.Is<Workspace?>(w => w != null && w.Id == ws.Id), It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce);
+
+        // 3. GitHub settings enabled and PR delivery available -> ExternalPullRequest shown and selectable
         _prDeliveryMock.Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        var enabledCut = Render<IdeationProposalCard>(p => p.Add(c => c.Proposal, proposalVm));
-        var enabledSelect = enabledCut.Find(".proposal-mergemode-select");
+        var enabledCut = Render<MaintainerPromotionModal>(p => p
+            .Add(m => m.IsOpen, true)
+            .Add(m => m.TargetTask, task));
+        var enabledSelect = enabledCut.Find("#merge-mode-select");
         Assert.Contains("External Pull Request (GitHub)", enabledSelect.InnerHtml);
 
         enabledSelect.Change(MergeMode.ExternalPullRequest.ToString());
-        Assert.Equal(MergeMode.ExternalPullRequest, proposalVm.MergeMode);
+        var promoteBtn = enabledCut.FindAll("button").First(b => b.TextContent.Contains("Promote to Open"));
+        promoteBtn.Click();
 
-        // 3. Promoting the proposal preserves MergeMode.ExternalPullRequest
-        var workflowRepo = Services.GetRequiredService<IWorkflowRepository>();
-        var createdTask = await IdeationPresentationHelper.PromoteOrCreateProposalTaskAsync(
-            ws,
-            proposalVm,
-            _taskRepository,
-            workflowRepo);
-
-        Assert.Equal(MergeMode.ExternalPullRequest, createdTask.MergeMode);
+        Assert.NotNull(_orchestrator.LastPromotedCall);
+        Assert.Equal(task.Id, _orchestrator.LastPromotedCall.Value.TaskId);
+        Assert.Equal(TaskOverallStatus.Open, _orchestrator.LastPromotedCall.Value.TargetStatus);
+        Assert.Equal(MergeMode.ExternalPullRequest, _orchestrator.LastPromotedCall.Value.MergeMode);
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Moq;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible;
+using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Tests.Fixtures;
 using NightCodeForge.Agents.Tools;
@@ -615,9 +616,7 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
 
         Assert.Equal($"{BacklogMutationToolService.TriageActivitySessionPrefix}-{workspace.Id}-{protectedSessionTask.Id}", scope.EffectiveActivitySessionId);
 
-        // 1. MergeMode.Automatic is blocked on propose_tasks and edit_task, while ManualReviewRequired is allowed.
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            service.ProposeTasksAsync(scope, [new TaskProposal("Auto escalation", "Desc", mergeMode: "Automatic")], CancellationToken.None));
+        // 1. MergeMode.Automatic is blocked on edit_task during triage.
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.EditTaskAsync(scope, new TaskEditRequest(existingTriageOwned.Id, MergeMode: "Automatic"), CancellationToken.None));
 
@@ -627,14 +626,17 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.EditTaskAsync(scope, new TaskEditRequest(existingTriageOwned.Id, AttachmentIds: [realAttachment.Id]), CancellationToken.None));
 
-        // 3. Untrusted @attachment:999 and @attachment:{realAttachment.Id} in descriptions are ignored (no crash, no links).
+        // 3. Untrusted @attachment:999 and @attachment:{realAttachment.Id} in descriptions are ignored (no crash, no links), and merge mode defaults to ManualReviewRequired.
         var createdJson = await service.ProposeTasksAsync(
             scope,
-            [new TaskProposal("Safe @attachment text", $"See @attachment:999 and @attachment:{realAttachment.Id}", mergeMode: "ManualReviewRequired")],
+            [new TaskProposal("Safe @attachment text", $"See @attachment:999 and @attachment:{realAttachment.Id}")],
             CancellationToken.None);
         using var createdDoc = System.Text.Json.JsonDocument.Parse(createdJson);
         var createdId = createdDoc.RootElement.GetProperty("id").GetInt32();
         Assert.Empty(await attachmentRepo.GetByTaskIdAsync(createdId));
+        var createdTask = await taskRepo.GetByIdAsync(createdId);
+        Assert.NotNull(createdTask);
+        Assert.Equal(MergeMode.ManualReviewRequired, createdTask.MergeMode);
 
         await service.EditTaskAsync(
             scope,
@@ -974,5 +976,100 @@ public class Step1238TriageBacklogMutationAndHarnessTests : IDisposable
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
         public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task TriageProposeTasks_ViaDispatcher_IgnoresInjectedMergeMode_AndPersistsManualReviewRequired()
+    {
+        var taskRepo = new InMemoryTaskRepository();
+        var workspaceRepo = new InMemoryWorkspaceRepository();
+        var workspace = await workspaceRepo.CreateAsync(new Workspace
+        {
+            Name = "Triage Dispatcher Repo",
+            RepositoryPath = _tempDir,
+            DefaultBaseBranch = "main",
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                PullRequestDeliveryEnabled = true,
+                RepositoryOwner = "acme",
+                RepositoryName = "demo"
+            }
+        });
+
+        var service = CreateBacklogService(taskRepo, workspaceRepo);
+        var scope = new CanonicalToolScope(
+            _tempDir,
+            WorkspaceId: workspace.Id,
+            IsReadOnly: true,
+            BacklogMutationPolicy: BacklogMutationSessionPolicy.ForTriage(
+                TaskOrigin.UntrustedIntake,
+                "main",
+                hostRepositoryPath: _tempDir));
+
+        var skillsService = new NightCodeForge.Agents.Skills.WorkspaceSkillsService(
+            workspace,
+            _tempDir,
+            taskId: null,
+            new NightCodeForge.Agents.Skills.SkillsService(),
+            new NightCodeForge.Agents.Skills.BundledSkillsProvider(),
+            NullLogger<NightCodeForge.Agents.Skills.WorkspaceSkillsService>.Instance);
+
+        var tools = new CanonicalTools(
+            scope,
+            TestPathResolver.Create(),
+            new Mock<IExecutionEnvironment>().Object,
+            new NightCodeForge.Agents.Tools.EditorConfig.EditorConfigService(),
+            new NightCodeForge.Agents.Tools.EditorConfig.EditorConfigFileApplier(),
+            new Mock<IWebSearchService>().Object,
+            skillsService,
+            NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
+            NullLogger<CanonicalTools>.Instance)
+        {
+            BacklogMutationService = service
+        };
+
+        var dispatcher = NightCodeForgeToolDispatcher.Create(tools);
+
+        // 1. Single proposal with injected merge_mode: Automatic -> succeeds and persists ManualReviewRequired
+        var singleResult = (await dispatcher.ExecuteAsync(
+            CanonicalToolNames.ProposeTasks,
+            "{\"title\": \"Injected Auto Single\", \"description\": \"Crash details\", \"merge_mode\": \"Automatic\"}"))?.ToString();
+        Assert.NotNull(singleResult);
+        using (var singleDoc = System.Text.Json.JsonDocument.Parse(singleResult))
+        {
+            Assert.Equal("ManualReviewRequired", singleDoc.RootElement.GetProperty("mergeMode").GetString());
+            var singleId = singleDoc.RootElement.GetProperty("id").GetInt32();
+            var storedSingle = await taskRepo.GetByIdAsync(singleId);
+            Assert.NotNull(storedSingle);
+            Assert.Equal(TaskOverallStatus.Suggested, storedSingle!.Status);
+            Assert.Equal(MergeMode.ManualReviewRequired, storedSingle.MergeMode);
+        }
+
+        // 2. Batch proposal with injected mergeMode / merge_mode -> ignores both and persists ManualReviewRequired
+        var batchResult = (await dispatcher.ExecuteAsync(
+            CanonicalToolNames.ProposeTasks,
+            "{\"tasks\": [{\"title\": \"Injected Auto Batch\", \"description\": \"D1\", \"mergeMode\": \"Automatic\"}, {\"title\": \"Injected PR Batch\", \"description\": \"D2\", \"merge_mode\": \"ExternalPullRequest\"}]}"))?.ToString();
+        Assert.NotNull(batchResult);
+        using var batchDoc = System.Text.Json.JsonDocument.Parse(batchResult);
+        Assert.Equal(2, batchDoc.RootElement.GetArrayLength());
+        var firstBatchId = batchDoc.RootElement[0].GetProperty("id").GetInt32();
+        foreach (var item in batchDoc.RootElement.EnumerateArray())
+        {
+            Assert.Equal("ManualReviewRequired", item.GetProperty("mergeMode").GetString());
+            var stored = await taskRepo.GetByIdAsync(item.GetProperty("id").GetInt32());
+            Assert.NotNull(stored);
+            Assert.Equal(TaskOverallStatus.Suggested, stored!.Status);
+            Assert.Equal(MergeMode.ManualReviewRequired, stored.MergeMode);
+        }
+
+        // 3. edit_task in triage still blocks MergeMode.Automatic
+        var blockedEdit = (await dispatcher.ExecuteAsync(
+            CanonicalToolNames.EditTask,
+            $"{{\"task_id\": {firstBatchId}, \"merge_mode\": \"Automatic\"}}"))?.ToString();
+        Assert.NotNull(blockedEdit);
+        Assert.StartsWith("Error:", blockedEdit);
+        Assert.Contains("Automatic", blockedEdit);
+        Assert.Equal(MergeMode.ManualReviewRequired, (await taskRepo.GetByIdAsync(firstBatchId))!.MergeMode);
     }
 }

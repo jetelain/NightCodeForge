@@ -72,7 +72,6 @@ public record TaskProposal
         IReadOnlyList<string>? dependsOnTitles = null,
         IReadOnlyList<int>? dependsOnIds = null,
         int? taskId = null,
-        string? mergeMode = null,
         string? difficulty = null,
         IReadOnlyList<int>? attachmentIds = null)
     {
@@ -85,13 +84,12 @@ public record TaskProposal
         DependsOnTitles = dependsOnTitles;
         DependsOnIds = dependsOnIds;
         TaskId = taskId;
-        MergeMode = mergeMode;
         Difficulty = difficulty;
         AttachmentIds = attachmentIds;
     }
 
     public TaskProposal(string title, string description, int priority, IReadOnlyList<string>? dependsOnTitles = null)
-        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null, null, null, null)
+        : this(title, description, "feature", null, null, priority, dependsOnTitles, null, null, null, null)
     {
     }
 
@@ -104,7 +102,6 @@ public record TaskProposal
     public IReadOnlyList<string>? DependsOnTitles { get; init; }
     public IReadOnlyList<int>? DependsOnIds { get; init; }
     public int? TaskId { get; init; }
-    public string? MergeMode { get; init; }
     public string? Difficulty { get; init; }
     public IReadOnlyList<int>? AttachmentIds { get; init; }
 }

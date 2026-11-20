@@ -44,27 +44,15 @@ public partial class CanonicalTools
         BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, cancellationToken);
 
     public Task<string> ProposeTasksAsync(
-        object? tasks,
-        string? title,
-        string? description,
-        int? priority,
-        IReadOnlyList<int>? dependsOnIds,
-        string? mergeMode,
-        string? difficulty,
-        CancellationToken cancellationToken) =>
-        BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, null, cancellationToken);
-
-    public Task<string> ProposeTasksAsync(
         object? tasks = null,
         string? title = null,
         string? description = null,
         int? priority = null,
         IReadOnlyList<int>? dependsOnIds = null,
-        string? mergeMode = null,
         string? difficulty = null,
         IReadOnlyList<int>? attachmentIds = null,
         CancellationToken cancellationToken = default) =>
-        BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, mergeMode, difficulty, attachmentIds, cancellationToken);
+        BacklogModule.ProposeTasksAsync(tasks, title, description, priority, dependsOnIds, difficulty, attachmentIds, cancellationToken);
 
     public Task<string> GetTaskAsync(int taskId, CancellationToken cancellationToken = default) =>
         BacklogModule.GetTaskAsync(taskId, cancellationToken);

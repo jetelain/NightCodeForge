@@ -4,7 +4,7 @@
 @inject IServiceProvider ServiceProvider
 
 <div class="proposal-card ideation-proposal-card @(Proposal.IsAdded ? "proposal-card-added" : "")">
-    <!-- Proposal Header: Title, Priority, and Merge Mode -->
+    <!-- Proposal Header: Title, Priority, and Difficulty -->
     <div class="proposal-card-header">
         <div class="proposal-title-wrapper">
             <span class="proposal-badge">Proposal</span>
@@ -40,20 +40,6 @@
                     @foreach (var difficulty in TaskDifficultyPresentationHelper.AllDifficulties)
                     {
                         <option value="@difficulty">@TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)</option>
-                    }
-                </select>
-            </div>
-            <div style="display: flex; align-items: center; gap: 0.35rem;">
-                <label class="form-label-sm">Merge:</label>
-                <select class="form-control-dark proposal-mergemode-select font-mono"
-                        @bind="Proposal.MergeMode"
-                        disabled="@Proposal.IsAdded"
-                        aria-label="Merge Mode">
-                    <option value="@MergeMode.Automatic">@MergeModeHelper.GetLabel(MergeMode.Automatic)</option>
-                    <option value="@MergeMode.ManualReviewRequired">@MergeModeHelper.GetLabel(MergeMode.ManualReviewRequired)</option>
-                    @if (_isPrDeliveryAvailable || Proposal.MergeMode == MergeMode.ExternalPullRequest)
-                    {
-                        <option value="@MergeMode.ExternalPullRequest">@MergeModeHelper.GetLabel(MergeMode.ExternalPullRequest)</option>
                     }
                 </select>
             </div>
@@ -259,17 +245,11 @@
     private bool _showDependencies;
     private bool _isPreviewDescription = true;
     private bool _isExpanded;
-    private bool _isPrDeliveryAvailable;
     private int? _standalonePreviewAttachmentId;
     private Dictionary<int, TaskAttachment> _resolvedAttachmentMap = new();
 
     protected override async Task OnParametersSetAsync()
     {
-        var workspaceState = ServiceProvider.GetService(typeof(WorkspaceStateService)) as WorkspaceStateService;
-        _isPrDeliveryAvailable = await GitHubPullRequestUiHelper.IsPullRequestDeliveryAvailableAsync(
-            ServiceProvider,
-            workspaceState?.ActiveWorkspace);
-
         await ResolveLinkedAttachmentsAsync();
     }
 

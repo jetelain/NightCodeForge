@@ -493,12 +493,14 @@ public class BacklogMutationToolServiceTests
         Assert.Equal("Draft Migration Task", root.GetProperty("title").GetString());
         Assert.Equal("Initial migration details", root.GetProperty("description").GetString());
         Assert.Equal("Draft", root.GetProperty("status").GetString());
+        Assert.Equal("ManualReviewRequired", root.GetProperty("mergeMode").GetString());
         Assert.Equal(2, root.GetProperty("priority").GetInt32());
         Assert.Equal([prereq.Id], root.GetProperty("prerequisites").EnumerateArray().Select(e => e.GetInt32()));
 
         var stored = await _repository.GetByIdAsync(createdId);
         Assert.NotNull(stored);
         Assert.Equal(TaskOverallStatus.Draft, stored.Status);
+        Assert.Equal(MergeMode.ManualReviewRequired, stored.MergeMode);
         VerifyMarkdownSynced(createdId, Times.Once());
 
         // 1. get_task can see draft task
@@ -560,11 +562,15 @@ public class BacklogMutationToolServiceTests
         var id2 = doc.RootElement[1].GetProperty("id").GetInt32();
         Assert.Equal("Draft", doc.RootElement[0].GetProperty("status").GetString());
         Assert.Equal("Draft", doc.RootElement[1].GetProperty("status").GetString());
+        Assert.Equal("ManualReviewRequired", doc.RootElement[0].GetProperty("mergeMode").GetString());
+        Assert.Equal("ManualReviewRequired", doc.RootElement[1].GetProperty("mergeMode").GetString());
         Assert.Empty(doc.RootElement[0].GetProperty("prerequisites").EnumerateArray());
         Assert.Empty(doc.RootElement[1].GetProperty("prerequisites").EnumerateArray());
 
         Assert.Empty(await _repository.GetDependenciesAsync(id1));
         Assert.Empty(await _repository.GetDependenciesAsync(id2));
+        Assert.Equal(MergeMode.ManualReviewRequired, (await _repository.GetByIdAsync(id1))!.MergeMode);
+        Assert.Equal(MergeMode.ManualReviewRequired, (await _repository.GetByIdAsync(id2))!.MergeMode);
     }
 
     [Fact]
@@ -637,7 +643,7 @@ public class BacklogMutationToolServiceTests
     }
 
     [Fact]
-    public async Task EditTask_And_ProposeTasks_AcceptExternalPullRequest_WhenEnabledAndNotAirGapped()
+    public async Task EditTask_AcceptsExternalPullRequest_WhenEnabledAndNotAirGapped()
     {
         var task = await AddTaskAsync("PR Delivery Task");
 
@@ -648,19 +654,10 @@ public class BacklogMutationToolServiceTests
 
         var updated = await _repository.GetByIdAsync(task.Id);
         Assert.Equal(MergeMode.ExternalPullRequest, updated!.MergeMode);
-
-        var json = await _service.ProposeTasksAsync(
-            _scope,
-            [new TaskProposal("Proposed PR Task", "Deliver via PR", priority: 2, mergeMode: "ExternalPullRequest")],
-            CancellationToken.None);
-        using var doc = JsonDocument.Parse(json);
-        var createdId = doc.RootElement.GetProperty("id").GetInt32();
-        var created = await _repository.GetByIdAsync(createdId);
-        Assert.Equal(MergeMode.ExternalPullRequest, created!.MergeMode);
     }
 
     [Fact]
-    public async Task EditTask_And_ProposeTasks_RejectExternalPullRequest_WhenPullRequestDeliveryDisabled()
+    public async Task EditTask_RejectsExternalPullRequest_WhenPullRequestDeliveryDisabled()
     {
         _workspaceRepository
             .Setup(r => r.GetByIdAsync(WorkspaceId, It.IsAny<CancellationToken>()))
@@ -681,14 +678,10 @@ public class BacklogMutationToolServiceTests
         var editEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, MergeMode: "external_pull_request"), CancellationToken.None));
         Assert.Contains("Pull Request Delivery is disabled", editEx.Message);
-
-        var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _service.ProposeTasksAsync(_scope, [new TaskProposal("New PR Task", "Desc", mergeMode: "ExternalPullRequest")], CancellationToken.None));
-        Assert.Contains("Pull Request Delivery is disabled", proposeEx.Message);
     }
 
     [Fact]
-    public async Task EditTask_And_ProposeTasks_RejectExternalPullRequest_WhenAirGappedModeEnabled()
+    public async Task EditTask_RejectsExternalPullRequest_WhenAirGappedModeEnabled()
     {
         _securityOptions.AirGappedMode = true;
         var task = await AddTaskAsync("AirGapped Task");
@@ -696,14 +689,10 @@ public class BacklogMutationToolServiceTests
         var editEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, MergeMode: "ExternalPullRequest"), CancellationToken.None));
         Assert.Contains("Air-Gapped Mode", editEx.Message);
-
-        var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _service.ProposeTasksAsync(_scope, [new TaskProposal("AirGapped PR Task", "Desc", mergeMode: "external_pull_request")], CancellationToken.None));
-        Assert.Contains("Air-Gapped Mode", proposeEx.Message);
     }
 
     [Fact]
-    public async Task EditTask_And_ProposeTasks_RejectExternalPullRequest_WhenGitHubAuthOrRepositoryUnavailable()
+    public async Task EditTask_RejectsExternalPullRequest_WhenGitHubAuthOrRepositoryUnavailable()
     {
         _pullRequestDeliveryService
             .Setup(s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
@@ -714,10 +703,57 @@ public class BacklogMutationToolServiceTests
         var editEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.EditTaskAsync(_scope, new TaskEditRequest(task.Id, MergeMode: "ExternalPullRequest"), CancellationToken.None));
         Assert.Contains("GitHub OAuth authentication", editEx.Message);
+    }
 
-        var proposeEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            _service.ProposeTasksAsync(_scope, [new TaskProposal("Unauth PR Task", "Desc", mergeMode: "external_pull_request")], CancellationToken.None));
-        Assert.Contains("GitHub OAuth authentication", proposeEx.Message);
+    [Fact]
+    public async Task ProposeTasks_AlwaysDefaultsMergeModeToManualReviewRequired_EvenWhenAirGappedAndPrDeliveryDisabled()
+    {
+        _securityOptions.AirGappedMode = true;
+        _workspaceRepository
+            .Setup(r => r.GetByIdAsync(WorkspaceId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Workspace
+            {
+                Id = WorkspaceId,
+                Name = "AirGapped Disabled PR Workspace",
+                RepositoryPath = RepoPath,
+                GitHubSettings = new GitHubIntegrationSettings
+                {
+                    Enabled = false,
+                    PullRequestDeliveryEnabled = false
+                }
+            });
+        _pullRequestDeliveryService.Invocations.Clear();
+
+        var singleJson = await _service.ProposeTasksAsync(
+            _scope,
+            [new TaskProposal("Single AirGapped Proposal", "Desc", 2)],
+            CancellationToken.None);
+
+        using var singleDoc = JsonDocument.Parse(singleJson);
+        Assert.Equal("ManualReviewRequired", singleDoc.RootElement.GetProperty("mergeMode").GetString());
+        var singleId = singleDoc.RootElement.GetProperty("id").GetInt32();
+        Assert.Equal(MergeMode.ManualReviewRequired, (await _repository.GetByIdAsync(singleId))!.MergeMode);
+
+        var batchJson = await _service.ProposeTasksAsync(
+            _scope,
+            [
+                new TaskProposal("Batch AirGapped 1", "Desc 1", 1),
+                new TaskProposal("Batch AirGapped 2", "Desc 2", 3)
+            ],
+            CancellationToken.None);
+
+        using var batchDoc = JsonDocument.Parse(batchJson);
+        Assert.Equal(2, batchDoc.RootElement.GetArrayLength());
+        foreach (var element in batchDoc.RootElement.EnumerateArray())
+        {
+            Assert.Equal("ManualReviewRequired", element.GetProperty("mergeMode").GetString());
+            var taskId = element.GetProperty("id").GetInt32();
+            Assert.Equal(MergeMode.ManualReviewRequired, (await _repository.GetByIdAsync(taskId))!.MergeMode);
+        }
+
+        _pullRequestDeliveryService.Verify(
+            s => s.IsPullRequestDeliveryAvailableAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

@@ -176,7 +176,6 @@ public class IdeationProposalViewModel
     public string Description { get; set; } = string.Empty;
     public int Priority { get; set; } = TaskPriority.Normal;
     public TaskDifficulty Difficulty { get; set; } = TaskDifficulty.Standard;
-    public MergeMode MergeMode { get; set; } = MergeMode.ManualReviewRequired;
     public List<int> SelectedDependencyIds { get; set; } = new();
     public List<string> DependsOnTitles { get; set; } = new();
     public List<int> SelectedAttachmentIds { get; set; } = new();
@@ -205,7 +204,6 @@ public class IdeationProposalViewModel
             Description = proposal.Description ?? string.Empty,
             Priority = proposal.Priority > 0 ? proposal.Priority : TaskPriority.Normal,
             Difficulty = TaskMarkdownSyncService.ParseDifficultyOrDefault(proposal.Difficulty),
-            MergeMode = ParseProposalMergeMode(proposal.MergeMode),
             CreatedTaskId = proposal.TaskId
         };
 
@@ -262,7 +260,6 @@ public class IdeationProposalViewModel
         Description = task.Description ?? string.Empty;
         Priority = task.Priority > 0 ? task.Priority : TaskPriority.Normal;
         Difficulty = task.Difficulty;
-        MergeMode = task.MergeMode;
         IsAdded = task.Status != TaskOverallStatus.Draft &&
                   task.Status is not (TaskOverallStatus.Cancelled or TaskOverallStatus.Rejected);
 
@@ -344,22 +341,6 @@ public class IdeationProposalViewModel
     {
         var trimmed = reference.Trim().TrimStart('#');
         return int.TryParse(trimmed, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out taskId);
-    }
-
-    private static MergeMode ParseProposalMergeMode(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return MergeMode.ManualReviewRequired;
-        }
-
-        return raw.Trim().ToLowerInvariant() switch
-        {
-            "automatic" or "auto" => MergeMode.Automatic,
-            "externalpullrequest" or "external_pull_request" or "pull_request" or "pr" => MergeMode.ExternalPullRequest,
-            "manualreviewrequired" or "manual_review" or "manual" => MergeMode.ManualReviewRequired,
-            _ => MergeMode.ManualReviewRequired
-        };
     }
 }
 
