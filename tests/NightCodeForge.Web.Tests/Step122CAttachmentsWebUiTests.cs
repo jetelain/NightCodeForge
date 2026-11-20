@@ -1127,6 +1127,14 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             Options.Create(new AttachmentIntakeOptions()),
             NullLogger<AttachmentIntakeService>.Instance);
 
+        var visionMock = new Mock<IVisionCapabilityUiService>();
+        visionMock.Setup(v => v.EvaluateModelVisionAsync(It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new VisionCapabilityStatus(true, "test-vision", false, null));
+        visionMock.Setup(v => v.EvaluateWorkspaceStageVisionAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<TaskDifficulty?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new VisionCapabilityStatus(true, "test-vision", false, null));
+        visionMock.Setup(v => v.EvaluateWorkspaceTaskVisionAsync(It.IsAny<int>(), It.IsAny<TaskDifficulty>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new VisionCapabilityStatus(true, "test-vision", false, null));
+
         var uiService = new AttachmentUiService(
             intakeService,
             attachmentRepo,
@@ -1134,6 +1142,7 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             workspaceRepo,
             pathResolverMock.Object,
             Mock.Of<IIdeationConversationCoordinator>(),
+            visionMock.Object,
             NullLogger<AttachmentUiService>.Instance);
 
         return new AttachmentUiTestHarness(

@@ -190,7 +190,7 @@
                                 }
                                 @foreach (var m in _availableModels)
                                 {
-                                    <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
+                                    <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
                                 }
                             </select>
                         }
@@ -204,7 +204,7 @@
                                 }
                                 @foreach (var m in _allowedModels)
                                 {
-                                    <option value="@m.ModelId">@(string.IsNullOrWhiteSpace(m.DisplayName) ? m.ModelId : m.DisplayName) (@m.ContextWindowTokens.ToString("N0") tokens)</option>
+                                    <option value="@m.ModelId">@AttachmentPresentationHelper.FormatAllowedModelOptionLabel(m)</option>
                                 }
                             </select>
                         }
@@ -243,7 +243,7 @@
                                     }
                                     @foreach (var m in _availableModels)
                                     {
-                                        <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
+                                        <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
                                     }
                                 </select>
                             }
@@ -257,7 +257,7 @@
                                     }
                                     @foreach (var m in _allowedModels)
                                     {
-                                        <option value="@m.ModelId">@(string.IsNullOrWhiteSpace(m.DisplayName) ? m.ModelId : m.DisplayName) (@m.ContextWindowTokens.ToString("N0") tokens)</option>
+                                        <option value="@m.ModelId">@AttachmentPresentationHelper.FormatAllowedModelOptionLabel(m)</option>
                                     }
                                 </select>
                             }
@@ -278,7 +278,7 @@
                                     }
                                     @foreach (var m in _availableModels)
                                     {
-                                        <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
+                                        <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
                                     }
                                 </select>
                             }
@@ -292,7 +292,7 @@
                                     }
                                     @foreach (var m in _allowedModels)
                                     {
-                                        <option value="@m.ModelId">@(string.IsNullOrWhiteSpace(m.DisplayName) ? m.ModelId : m.DisplayName) (@m.ContextWindowTokens.ToString("N0") tokens)</option>
+                                        <option value="@m.ModelId">@AttachmentPresentationHelper.FormatAllowedModelOptionLabel(m)</option>
                                     }
                                 </select>
                             }
@@ -461,7 +461,7 @@
                             }
                             @foreach (var m in _availableModels)
                             {
-                                <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
+                                <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
                             }
                         </select>
                     }
@@ -528,6 +528,7 @@
                 ContextWindowTokens = m.ContextWindowTokens,
                 MaxOutputTokens = m.MaxOutputTokens,
                 SupportsReasoning = m.SupportsReasoning,
+                SupportsVision = m.SupportsVision,
                 DefaultThinkingEffort = m.DefaultThinkingEffort,
                 PromptCostPerMillion = m.PromptCostPerMillion,
                 CompletionCostPerMillion = m.CompletionCostPerMillion

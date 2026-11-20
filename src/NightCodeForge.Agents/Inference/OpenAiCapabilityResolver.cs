@@ -13,10 +13,17 @@ namespace NightCodeForge.Agents.Inference;
 public sealed class OpenAiCapabilityResolver : ILlmCapabilityResolver
 {
     private readonly IOptions<LlmProviderOptions> _options;
+    private readonly IOpenAiModelAllowlistCache _allowlistCache;
+    private readonly ILlmContextWindowCache _capabilityCache;
 
-    public OpenAiCapabilityResolver(IOptions<LlmProviderOptions> options)
+    public OpenAiCapabilityResolver(
+        IOptions<LlmProviderOptions> options,
+        IOpenAiModelAllowlistCache allowlistCache,
+        ILlmContextWindowCache capabilityCache)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
+        _allowlistCache = allowlistCache ?? throw new ArgumentNullException(nameof(allowlistCache));
+        _capabilityCache = capabilityCache ?? throw new ArgumentNullException(nameof(capabilityCache));
     }
 
     public string ResolveReasoningEffort(string? modelId, string? requestedEffort = null)
@@ -83,6 +90,43 @@ public sealed class OpenAiCapabilityResolver : ILlmCapabilityResolver
 
         chatOptions.AdditionalProperties = BuildReasoningProperties(effectiveModel, requestedEffort);
         return chatOptions;
+    }
+
+    public bool SupportsVision(string? modelId)
+    {
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelId)
+            ? modelId.Trim()
+            : _options.Value.DefaultModelId?.Trim();
+
+        if (string.IsNullOrWhiteSpace(effectiveModel))
+        {
+            return false;
+        }
+
+        var profile = ModelCapabilityResolver.FindProfile(_options.Value, effectiveModel);
+        if (profile?.SupportsVision is { } profileOverride)
+        {
+            return profileOverride;
+        }
+
+        var allowedModel = _options.Value.OpenAiCompatible?.AllowedModels?
+            .FirstOrDefault(m => string.Equals(m?.ModelId?.Trim(), effectiveModel, StringComparison.OrdinalIgnoreCase));
+        if (allowedModel?.SupportsVision is { } allowedOverride)
+        {
+            return allowedOverride;
+        }
+
+        if (_capabilityCache.TryGetVisionCapability(effectiveModel, out var cached))
+        {
+            return cached;
+        }
+
+        if (_allowlistCache.TryGetModel(effectiveModel, out var discovered) && discovered != null)
+        {
+            return discovered.SupportsVision;
+        }
+
+        return false;
     }
 
     private static string? MapThinkingEffort(ThinkingEffort effort) => effort switch

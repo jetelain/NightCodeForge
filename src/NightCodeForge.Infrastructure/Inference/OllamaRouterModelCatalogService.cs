@@ -93,6 +93,7 @@ public sealed class OllamaRouterModelCatalogService : LlmModelCatalogServiceBase
         int? context = model.EffectiveContextWindow;
         ModelThinkingCapability? thinking = null;
         var supportsReasoning = true;
+        var supportsVision = false;
 
         try
         {
@@ -106,9 +107,11 @@ public sealed class OllamaRouterModelCatalogService : LlmModelCatalogServiceBase
                 var showContext = OllamaShowParser.ParseContextWindow(doc.RootElement);
                 thinking = OllamaShowParser.ParseThinkingCapability(doc.RootElement);
                 supportsReasoning = thinking.SupportsThinking;
+                supportsVision = OllamaShowParser.SupportsVision(doc.RootElement);
                 context ??= showContext;
 
                 _contextWindowCache.SetThinkingCapability(model.Name, thinking);
+                _contextWindowCache.SetVisionCapability(model.Name, supportsVision);
             }
             else
             {
@@ -132,6 +135,7 @@ public sealed class OllamaRouterModelCatalogService : LlmModelCatalogServiceBase
             SizeBytes: null,
             ProviderType: ProviderType,
             SupportsReasoning: supportsReasoning,
-            ThinkingCapability: thinking);
+            ThinkingCapability: thinking,
+            SupportsVision: supportsVision);
     }
 }

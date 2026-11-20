@@ -1128,6 +1128,23 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
     #endregion
 
+    [Fact]
+    public void AgentProfilesTab_DisplaysVisionCapabilityBadgeForVisionModels()
+    {
+        _catalogService.Models =
+        [
+            new AvailableModelInfo("qwen3-vl:8b", "qwen3-vl:8b", ContextWindowTokens: 131072, SupportsVision: true),
+            new AvailableModelInfo("qwen2.5-coder:32b", "qwen2.5-coder:32b", ContextWindowTokens: 65536, SupportsVision: false)
+        ];
+
+        var cut = Render<AgentProfilesTab>(p => p.Add(x => x.Scope, AgentProfilesTab.ProfileScope.Global));
+
+        Assert.Contains(VisionConstants.VisionBadgeLabel, cut.Markup);
+        var modelSelect = cut.Find("[data-profile-id='ideation'] select");
+        modelSelect.Change("qwen3-vl:8b");
+        Assert.NotEmpty(cut.FindAll(".vision-capability-badge"));
+    }
+
     #region Test Mocks
 
     private class MockGlobalOptimizationSettingsService : IGlobalOptimizationSettingsService
@@ -1232,6 +1249,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         public Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default) =>
             Task.FromResult<ModelThinkingCapability?>(null);
+
+        public Task<bool> ResolveVisionCapabilityAsync(string modelName, CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
 
         public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default) =>
             ReclaimVramAsync(null, cancellationToken);

@@ -244,6 +244,7 @@ public interface ILlmGatewayService
     Task<IReadOnlyList<ResidentModelInfo>> GetResidentModelsAsync(CancellationToken cancellationToken = default);
     Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default);
     Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default);
+    Task<bool> ResolveVisionCapabilityAsync(string modelName, CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default);
     Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
     Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default);

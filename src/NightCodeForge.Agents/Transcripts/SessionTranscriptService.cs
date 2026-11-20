@@ -11,7 +11,8 @@ public record TranscriptEntry(
     string? ToolName = null,
     string? ToolArguments = null,
     string? ToolResult = null,
-    string? CallId = null);
+    string? CallId = null,
+    string? MetadataJson = null);
 
 public record TranscriptCompactionMetadata(
     string Strategy,

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Tools;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
@@ -118,6 +119,9 @@ internal sealed class WarmIdeationSession
     public string? LastFrictionHotspotsDigest { get; set; }
     public bool HistoryHydrated { get; set; }
     public int? HydratedMaxTurnIndex { get; set; }
+    public bool SupportsVision { get; set; }
+    public IMultimodalAttachmentQueue? MultimodalAttachmentQueue { get; set; }
+    public Dictionary<int, IReadOnlyList<DataContent>> PendingUserTurnImages { get; } = new();
     public List<ChatMessage> ChatHistory { get; } = new();
 
     public bool IsGenerating { get; private set; }

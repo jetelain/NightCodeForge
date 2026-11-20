@@ -24,5 +24,11 @@ public interface ILlmCapabilityResolver
     /// Creates provider-tailored ChatOptions initialized with reasoning effort, temperature, and thinking parameters.
     /// </summary>
     ChatOptions CreateChatOptions(AgentProfile? profile, string? modelId = null);
+
+    /// <summary>
+    /// Determines whether the target model supports multimodal image inputs, giving precedence to static overrides
+    /// over dynamic capability caches (fail-closed <see langword="false"/> when unknown).
+    /// </summary>
+    bool SupportsVision(string? modelId);
 }
 

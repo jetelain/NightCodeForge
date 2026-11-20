@@ -171,4 +171,33 @@ public class LlmProviderOptions : ILlmProviderOptions
             ["Qwen3.8-27B:latest"] = Qwen38()
         };
     }
+
+    /// <summary>
+    /// Finds the profile whose key is the longest case-insensitive substring of <paramref name="modelId"/>.
+    /// </summary>
+    public ModelCapabilityProfile? FindModelProfile(string? modelId)
+    {
+        if (ModelProfiles == null || string.IsNullOrWhiteSpace(modelId))
+        {
+            return null;
+        }
+
+        ModelCapabilityProfile? best = null;
+        int bestLength = -1;
+        foreach (var (key, profile) in ModelProfiles)
+        {
+            if (string.IsNullOrWhiteSpace(key) || key.Length <= bestLength)
+            {
+                continue;
+            }
+
+            if (modelId.Contains(key, StringComparison.OrdinalIgnoreCase))
+            {
+                best = profile;
+                bestLength = key.Length;
+            }
+        }
+
+        return best;
+    }
 }

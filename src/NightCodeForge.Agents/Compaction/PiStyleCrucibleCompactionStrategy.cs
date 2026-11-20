@@ -1,6 +1,8 @@
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Vision;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
 using Pmad.AI.Tokens;
 
@@ -145,6 +147,7 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         public int MessageCount;
         public int ResponseMessageCount;
         public bool ColdResumeArmed;
+        public IMultimodalAttachmentQueue? MultimodalQueue;
     }
 
     private readonly CrucibleCompactionOptions _options;
@@ -345,6 +348,18 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     }
 
     /// <summary>
+    /// Associates a session-scoped <see cref="IMultimodalAttachmentQueue"/> so unmaterialized visual tokens
+    /// staged during the active tool loop are included in compaction threshold projections.
+    /// </summary>
+    public void AttachMultimodalAttachmentQueue(IMultimodalAttachmentQueue? queue)
+    {
+        lock (_measurementState.Lock)
+        {
+            _measurementState.MultimodalQueue = queue;
+        }
+    }
+
+    /// <summary>
     /// Resolves the model-calibrated <see cref="HeuristicTokenEstimator"/> for this strategy's model.
     /// </summary>
     public HeuristicTokenEstimator ResolveTokenEstimator() =>
@@ -383,13 +398,18 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         int measuredOutput;
         int measuredMsgCount;
         int measuredRespMsgCount;
+        IMultimodalAttachmentQueue? multimodalQueue;
         lock (measurementState.Lock)
         {
             measuredInput = measurementState.InputTokens;
             measuredOutput = measurementState.OutputTokens;
             measuredMsgCount = measurementState.MessageCount;
             measuredRespMsgCount = measurementState.ResponseMessageCount;
+            multimodalQueue = measurementState.MultimodalQueue;
         }
+
+        int unmaterializedAll = multimodalQueue?.EstimateUnmaterializedVisualTokens(includedMessages, startMessageIndex: 0) ?? 0;
+        int totalEstimatedWithStaged = fullEstimatedTokens + unmaterializedAll;
 
         if (measuredInput > 0 && includedMessages.Count >= measuredMsgCount)
         {
@@ -414,10 +434,12 @@ Keep each section concise. Preserve exact file paths, function names, and error 
                 projected += ModelCalibratedTokenEstimator.EstimateMessageTokens(includedMessages[i], estimator);
             }
 
-            return Math.Max(projected, fullEstimatedTokens);
+            projected += multimodalQueue?.EstimateUnmaterializedVisualTokens(includedMessages, accountedMessageCount) ?? 0;
+
+            return Math.Max(projected, totalEstimatedWithStaged);
         }
 
-        return fullEstimatedTokens;
+        return totalEstimatedWithStaged;
     }
 
     /// <summary>
@@ -825,8 +847,9 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
         index.InsertGroup(anchorEndIndex + 1, CompactionGroupKind.Summary, new[] { summaryMessage }, null);
 
-        // 9. Enforce Post-Compaction 96k Token Ceiling on active included context
+        // 9. Enforce Post-Compaction 96k Token Ceiling and MaxImagesInActiveWindow on active included context
         EnforcePostCompactionTokenCeiling(groups, anchorEndIndex + 1, estimator, effectiveLogger);
+        var evictedImages = EnforceActiveImageWindowOnGroups(groups, VisionConstants.MaxImagesInActiveWindow, effectiveLogger);
 
         int postCompactionTokens = groups
             .Where(g => !g.IsExcluded)
@@ -834,6 +857,10 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
         if (isEmergencyPass && (postCompactionTokens >= includedEstimatedTokens || postCompactionTokens >= projectedPromptTokens))
         {
+            foreach (var (gIdx, mIdx, cIdx, original) in evictedImages)
+            {
+                groups[gIdx].Messages[mIdx].Contents[cIdx] = original;
+            }
             index.Groups.RemoveAt(anchorEndIndex + 1);
             foreach (var g in groupsToSummarize)
             {
@@ -881,6 +908,16 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             .Select(fc => fc.CallId)
             .FirstOrDefault(cid => !string.IsNullOrWhiteSpace(cid));
         var includedMessagesSnapshot = index.GetIncludedMessages().ToList();
+
+        IMultimodalAttachmentQueue? attachedQueue;
+        lock (_measurementState.Lock)
+        {
+            attachedQueue = _measurementState.MultimodalQueue;
+        }
+        if (attachedQueue != null)
+        {
+            MultimodalAttachmentQueue.PruneToIncludedMessages(attachedQueue, includedMessagesSnapshot);
+        }
 
         if (OnCompacted != null)
         {
@@ -1354,6 +1391,59 @@ Keep each section concise. Preserve exact file paths, function names, and error 
         }
 
         return false;
+    }
+
+    private static List<(int GroupIndex, int MessageIndex, int ContentIndex, DataContent Original)> EnforceActiveImageWindowOnGroups(
+        IList<CompactionMessageGroup> groups,
+        int maxImages,
+        ILogger logger)
+    {
+        var evicted = new List<(int GroupIndex, int MessageIndex, int ContentIndex, DataContent Original)>();
+        if (maxImages <= 0)
+        {
+            return evicted;
+        }
+
+        var activeImageLocations = new List<(int GroupIndex, int MessageIndex, int ContentIndex, DataContent Content)>();
+        for (int gIdx = 0; gIdx < groups.Count; gIdx++)
+        {
+            var group = groups[gIdx];
+            if (group.IsExcluded) continue;
+
+            for (int mIdx = 0; mIdx < group.Messages.Count; mIdx++)
+            {
+                var contents = group.Messages[mIdx].Contents;
+                if (contents == null) continue;
+
+                for (int cIdx = 0; cIdx < contents.Count; cIdx++)
+                {
+                    if (contents[cIdx] is DataContent dc && dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType))
+                    {
+                        activeImageLocations.Add((gIdx, mIdx, cIdx, dc));
+                    }
+                }
+            }
+        }
+
+        int excess = activeImageLocations.Count - maxImages;
+        if (excess <= 0)
+        {
+            return evicted;
+        }
+
+        for (int k = 0; k < excess; k++)
+        {
+            var (gIdx, mIdx, cIdx, dc) = activeImageLocations[k];
+            var sourcePath = MultimodalToolInjectionChatClient.ResolveDataContentSourcePath(dc);
+            groups[gIdx].Messages[mIdx].Contents[cIdx] = new TextContent(VisionConstants.FormatEvictedImageMarker(sourcePath));
+            evicted.Add((gIdx, mIdx, cIdx, dc));
+        }
+
+        logger.LogInformation(
+            "Evicted {EvictedCount} oldest image attachment(s) during context compaction to maintain the active window limit of {MaxImages}.",
+            excess,
+            maxImages);
+        return evicted;
     }
 
     /// <summary>True only for orphan tool results: a group holding results but not the originating call (call+result groups are atomic and safe to cut at).</summary>

@@ -47,6 +47,12 @@ public class OpenAiAllowedModel
     /// Optional completion pricing per million tokens, used for cost evaluation.
     /// </summary>
     public decimal? CompletionCostPerMillion { get; set; }
+
+    /// <summary>
+    /// Optional static override specifying whether this allowed model accepts multimodal image inputs.
+    /// When <see langword="null"/>, dynamic discovery metadata (<c>input_modalities</c>, <c>supports_vision</c>, <c>architecture.modality</c>) is used.
+    /// </summary>
+    public bool? SupportsVision { get; set; }
 }
 
 /// <summary>

@@ -24,4 +24,14 @@ public interface ILlmContextWindowCache
     /// Stores the thinking capability for the specified model.
     /// </summary>
     void SetThinkingCapability(string modelName, ModelThinkingCapability capability);
+
+    /// <summary>
+    /// Attempts to retrieve the cached multimodal vision capability for the specified model.
+    /// </summary>
+    bool TryGetVisionCapability(string modelName, out bool supportsVision);
+
+    /// <summary>
+    /// Stores the multimodal vision capability for the specified model.
+    /// </summary>
+    void SetVisionCapability(string modelName, bool supportsVision);
 }

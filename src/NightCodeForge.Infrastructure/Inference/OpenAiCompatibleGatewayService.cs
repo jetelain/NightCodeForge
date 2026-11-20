@@ -137,6 +137,39 @@ public sealed class OpenAiCompatibleGatewayService : ILlmGatewayService
     public Task<ModelThinkingCapability?> ResolveThinkingCapabilityAsync(string modelName, CancellationToken cancellationToken = default) =>
         Task.FromResult<ModelThinkingCapability?>(null);
 
+    public Task<bool> ResolveVisionCapabilityAsync(string modelName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return Task.FromResult(false);
+        }
+
+        var effectiveModel = modelName.Trim();
+
+        // 1. ModelProfiles explicit SupportsVision override (longest match)
+        var profile = _options.Value.FindModelProfile(effectiveModel);
+        if (profile?.SupportsVision is { } profileSupportsVision)
+        {
+            return Task.FromResult(profileSupportsVision);
+        }
+
+        // 2. Manual AllowedModels explicit SupportsVision override
+        var manual = _options.Value.OpenAiCompatible?.AllowedModels?
+            .FirstOrDefault(m => string.Equals(m?.ModelId?.Trim(), effectiveModel, StringComparison.OrdinalIgnoreCase));
+        if (manual?.SupportsVision is { } allowedSupportsVision)
+        {
+            return Task.FromResult(allowedSupportsVision);
+        }
+
+        // 3. Discovered allowlist cache
+        if (_allowlistCache.TryGetModel(effectiveModel, out var discoveredModel) && discoveredModel != null)
+        {
+            return Task.FromResult(discoveredModel.SupportsVision);
+        }
+
+        return Task.FromResult(false);
+    }
+
     public Task<bool> ReclaimVramAsync(CancellationToken cancellationToken = default) =>
         ReclaimVramAsync(null, cancellationToken);
 

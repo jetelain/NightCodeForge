@@ -5,6 +5,7 @@ using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Mcp;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools.EditorConfig;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using Pmad.AI.Tools;
@@ -23,7 +24,10 @@ public sealed record CanonicalToolScope(
     SandboxScopeDescriptor? SandboxScope = null,
     ISandboxPathResolver? SandboxPathResolver = null,
     NightCodeForge.Core.Domain.LocalOptimizationFlags? OptimizationFlags = null,
-    NightCodeForge.Core.Domain.BacklogMutationSessionPolicy? BacklogMutationPolicy = null)
+    NightCodeForge.Core.Domain.BacklogMutationSessionPolicy? BacklogMutationPolicy = null,
+    bool SupportsVision = false,
+    string? ActiveModelId = null,
+    IMultimodalAttachmentQueue? MultimodalAttachmentQueue = null)
 {
     public Action<NightCodeForge.Core.Workflow.Filtering.BashExecutionAuditEntry>? OnBashExecutionAudited { get; init; }
     internal string ResolveNormalizedWorkspaceRoot()
@@ -59,6 +63,8 @@ public sealed record CanonicalToolsetSession(
     IReadOnlyList<IAgentToolModule>? Modules = null)
 {
     public List<TaskProposal> PendingProposals => Tools.PendingProposals;
+    public bool SupportsVision => Tools.FileModule.SupportsVision;
+    public IMultimodalAttachmentQueue? MultimodalAttachmentQueue => Tools.FileModule.MultimodalAttachmentQueue;
 
     public IToolTurnInterruptionController? InterruptionController
     {

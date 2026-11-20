@@ -6,7 +6,9 @@ using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.ExternalProcess;
 using NightCodeForge.Agents.Mcp;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Streaming;
@@ -37,6 +39,11 @@ public class AcpAuthenticationException : InvalidOperationException
     {
     }
 }
+
+/// <summary>
+/// Handshake capability result returned by <see cref="AcpAgentHarness.NegotiateProtocolWithCapabilitiesAsync"/>.
+/// </summary>
+public readonly record struct AcpNegotiationResult(int ProtocolVersion, bool SupportsImagePrompt);
 
 /// <summary>
 /// Open Agent Client Protocol (ACP) adapter supporting <c>agy acp</c> wire negotiation,
@@ -138,9 +145,10 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
 
         try
         {
-            // 1. Handshake & Protocol Negotiation (protocolVersion 1, terminal = true)
-            int negotiatedVersion = await NegotiateProtocolAsync(stdin, stdout, cancellationToken, _logger);
-            _logger.LogInformation("Successfully negotiated ACP protocol version {Version}", negotiatedVersion);
+            // 1. Handshake & Protocol Negotiation (protocolVersion 1, terminal = true, promptCapabilities)
+            var negotiation = await NegotiateProtocolWithCapabilitiesAsync(stdin, stdout, cancellationToken, _logger);
+            int negotiatedVersion = negotiation.ProtocolVersion;
+            _logger.LogInformation("Successfully negotiated ACP protocol version {Version} (supportsImagePrompt={SupportsImage})", negotiatedVersion, negotiation.SupportsImagePrompt);
 
             // 2. Initialize or Resume Session
             bool isReconstructedHistory = ConversationHistorySerializer.IsSerializedHistory(context.SerializedStateJson);
@@ -191,6 +199,13 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                     return;
                 }
 
+                var promptBlocks = await BuildPromptContentBlocksAsync(
+                    context,
+                    promptText,
+                    negotiation.SupportsImagePrompt,
+                    sandboxPathResolver,
+                    cancellationToken);
+
                 var promptReq = JsonSerializer.Serialize(new
                 {
                     jsonrpc = "2.0",
@@ -199,10 +214,7 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                     @params = new
                     {
                         sessionId = activeSessionId,
-                        prompt = new[]
-                        {
-                            new { type = "text", text = promptText }
-                        }
+                        prompt = promptBlocks
                     }
                 });
                 await stdin.WriteLineAsync(promptReq.AsMemory(), cancellationToken);
@@ -646,6 +658,16 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
 
     public static async Task<int> NegotiateProtocolAsync(StreamWriter stdin, StreamReader stdout, CancellationToken cancellationToken, ILogger? logger = null)
     {
+        var negotiation = await NegotiateProtocolWithCapabilitiesAsync(stdin, stdout, cancellationToken, logger);
+        return negotiation.ProtocolVersion;
+    }
+
+    public static async Task<AcpNegotiationResult> NegotiateProtocolWithCapabilitiesAsync(
+        StreamWriter stdin,
+        StreamReader stdout,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
+    {
         var initReq = JsonSerializer.Serialize(new
         {
             jsonrpc = "2.0",
@@ -703,18 +725,171 @@ public class AcpAgentHarness : ExternalProcessAgentHarnessBase
                 throw new InvalidOperationException($"ACP initialize handshake failed: {errMessage}");
             }
 
+            bool supportsImage = node["result"]?["agentCapabilities"]?["promptCapabilities"]?["image"] is JsonValue imgVal
+                && imgVal.TryGetValue<bool>(out var imgBool)
+                && imgBool;
+
             if (int.TryParse(node["result"]?["protocolVersion"]?.ToString(), out var version))
             {
-                return version;
+                return new AcpNegotiationResult(version, supportsImage);
             }
 
             if (string.Equals(node["id"]?.ToString(), InitRequestId, StringComparison.Ordinal))
             {
-                return 1;
+                return new AcpNegotiationResult(1, supportsImage);
             }
         }
 
-        return 1;
+        return new AcpNegotiationResult(1, SupportsImagePrompt: false);
+    }
+
+    internal async Task<List<object>> BuildPromptContentBlocksAsync(
+        AgentSessionContext context,
+        string promptText,
+        bool supportsImagePrompt,
+        SandboxPathResolver? sandboxPathResolver,
+        CancellationToken cancellationToken)
+    {
+        var blocks = new List<object>
+        {
+            new { type = "text", text = promptText }
+        };
+
+        var imageAttachments = CollectLinkedImageAttachments(context);
+        if (imageAttachments.Count == 0)
+        {
+            return blocks;
+        }
+
+        if (!supportsImagePrompt)
+        {
+            throw new ModelVisionNotSupportedException(
+                !string.IsNullOrWhiteSpace(context.Profile.ModelName) ? context.Profile.ModelName : HarnessId,
+                imageAttachments[0].Title,
+                $"ACP agent '{(!string.IsNullOrWhiteSpace(context.Profile.Name) ? context.Profile.Name : HarnessId)}' does not advertise agentCapabilities.promptCapabilities.image and cannot inspect image attachment '{imageAttachments[0].Title}'.");
+        }
+
+        foreach (var attachment in imageAttachments)
+        {
+            var relPath = (attachment.RelativePath ?? string.Empty).Replace('\\', '/').TrimStart('/');
+            var virtualPath = string.IsNullOrEmpty(relPath)
+                ? AttachmentConstants.VirtualAttachmentsMountPath
+                : $"{AttachmentConstants.VirtualAttachmentsMountPath}/{relPath}";
+
+            var hostPath = ResolveAcpAttachmentHostPath(attachment, virtualPath, context, sandboxPathResolver);
+            if (string.IsNullOrWhiteSpace(hostPath) || !File.Exists(hostPath))
+            {
+                throw new AttachmentTargetNotFoundException(
+                    attachment.Id,
+                    !string.IsNullOrWhiteSpace(attachment.SourceRef) ? attachment.SourceRef : virtualPath,
+                    $"Attachment #{attachment.Id} ('{attachment.Title}') target does not exist or is unreadable.");
+            }
+
+            var normalized = await VisionImageNormalizer.LoadAndNormalizeAsync(hostPath, virtualPath, cancellationToken);
+            blocks.Add(new
+            {
+                type = "image",
+                data = Convert.ToBase64String(normalized.Bytes),
+                mimeType = normalized.MediaType
+            });
+        }
+
+        return blocks;
+    }
+
+    private static List<TaskAttachment> CollectLinkedImageAttachments(AgentSessionContext context)
+    {
+        if (string.Equals(context.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase) ||
+            context.ForgeTask.Status == TaskOverallStatus.Triage)
+        {
+            return new List<TaskAttachment>();
+        }
+
+        var byId = new Dictionary<int, TaskAttachment>();
+        if (context.TaskAttachments != null)
+        {
+            foreach (var att in context.TaskAttachments)
+            {
+                if (att != null && att.ContentKind == TaskAttachmentContentKind.Image)
+                {
+                    byId[att.Id] = att;
+                }
+            }
+        }
+
+        if (context.ForgeTask.AttachmentLinks != null)
+        {
+            foreach (var link in context.ForgeTask.AttachmentLinks)
+            {
+                if (link.TaskAttachment != null &&
+                    link.TaskAttachment.ContentKind == TaskAttachmentContentKind.Image &&
+                    !byId.ContainsKey(link.TaskAttachment.Id))
+                {
+                    byId[link.TaskAttachment.Id] = link.TaskAttachment;
+                }
+            }
+        }
+
+        return byId.Values.OrderBy(a => a.Id).ToList();
+    }
+
+    private string? ResolveAcpAttachmentHostPath(
+        TaskAttachment attachment,
+        string virtualPath,
+        AgentSessionContext context,
+        SandboxPathResolver? sandboxPathResolver)
+    {
+        if (sandboxPathResolver != null)
+        {
+            try
+            {
+                var resolved = sandboxPathResolver.ResolveHostPath(virtualPath, forWrite: false);
+                if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+                {
+                    return resolved;
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        int workspaceId = attachment.WorkspaceId > 0 ? attachment.WorkspaceId : (context.Workspace?.Id ?? 0);
+        if (workspaceId > 0)
+        {
+            var rawAttachDir = PathResolver.GetAttachmentsPath(workspaceId);
+            var hostAttachDir = !string.IsNullOrWhiteSpace(rawAttachDir) ? PathResolver.ToHostPath(rawAttachDir) : null;
+            var effectiveDir = !string.IsNullOrWhiteSpace(hostAttachDir) ? hostAttachDir : rawAttachDir;
+            if (!string.IsNullOrWhiteSpace(effectiveDir) && !string.IsNullOrWhiteSpace(attachment.RelativePath))
+            {
+                var rel = attachment.RelativePath.Trim();
+                if (!Path.IsPathRooted(rel) && !rel.StartsWith('/') && !rel.StartsWith('\\'))
+                {
+                    var candidate = Path.GetFullPath(Path.Combine(effectiveDir, rel.Replace('/', Path.DirectorySeparatorChar)));
+                    if (SandboxPathResolver.IsPathInsideDirectory(candidate, effectiveDir) && File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+            }
+        }
+
+        if (attachment.IsSymlink && !string.IsNullOrWhiteSpace(attachment.SourceRef))
+        {
+            if (File.Exists(attachment.SourceRef))
+            {
+                return attachment.SourceRef;
+            }
+
+            var mapped = PathResolver.ToHostPath(attachment.SourceRef);
+            if (!string.IsNullOrWhiteSpace(mapped) && File.Exists(mapped))
+            {
+                return mapped;
+            }
+        }
+
+        return null;
     }
 
     private static async Task ApplySessionConfigurationAsync(

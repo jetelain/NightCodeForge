@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Agents.Dispatcher;
 using NightCodeForge.Agents.Optimizations;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using Pmad.AI.Tools;
@@ -17,6 +18,7 @@ namespace NightCodeForge.Agents.Inference;
 /// <param name="GrammarFlags">When <see cref="LocalOptimizationFlags.GuidedGrammarDecoding"/> is set, grammar constraints are applied to the chat options.</param>
 /// <param name="DefaultTemperature">Temperature applied when neither the profile nor the resolver set one (reasoning models excluded).</param>
 /// <param name="Dispatcher">Optional session <see cref="LenientToolDispatcher"/>; when null, a default NightCodeForge-configured dispatcher is created.</param>
+/// <param name="MultimodalAttachmentQueue">Optional session visual queue; when set, injects staged images after contiguous tool runs.</param>
 public sealed record HarnessAgentRequest(
     AgentProfile Profile,
     string SessionId,
@@ -29,7 +31,8 @@ public sealed record HarnessAgentRequest(
     Func<ThinkingAndActivityTracingChatClient, IChatClient>? DecorateTracingClient = null,
     LocalOptimizationFlags? GrammarFlags = null,
     float? DefaultTemperature = null,
-    LenientToolDispatcher? Dispatcher = null);
+    LenientToolDispatcher? Dispatcher = null,
+    IMultimodalAttachmentQueue? MultimodalAttachmentQueue = null);
 
 /// <summary>The assembled agent of a session with its middlewares and options.</summary>
 public sealed record HarnessAgentSetup(
@@ -45,6 +48,12 @@ public interface IHarnessAgentFactory
 {
     /// <summary>Resolves the effective optimization flags: explicit, then profile, then global settings.</summary>
     LocalOptimizationFlags ResolveOptimizationFlags(AgentProfile profile, LocalOptimizationFlags? explicitFlags);
+
+    /// <summary>
+    /// Resolves whether the target profile's effective model supports multimodal vision inputs,
+    /// honoring static overrides before probing the gateway/cache.
+    /// </summary>
+    Task<bool> ResolveVisionCapabilityAsync(AgentProfile profile, CancellationToken cancellationToken = default);
 
     Task<HarnessAgentSetup> CreateAsync(HarnessAgentRequest request, CancellationToken cancellationToken);
 }
@@ -85,6 +94,50 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
         return explicitFlags ?? profile.OptimizationFlags ?? _globalOptimizationSettings.GetFlags() ?? new LocalOptimizationFlags();
     }
 
+    public async Task<bool> ResolveVisionCapabilityAsync(AgentProfile profile, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var effectiveModel = !string.IsNullOrWhiteSpace(profile.ModelName)
+            ? profile.ModelName.Trim()
+            : _llmOptions.ModelId?.Trim();
+
+        if (string.IsNullOrWhiteSpace(effectiveModel))
+        {
+            return false;
+        }
+
+        // Static overrides take strict precedence over gateway probing.
+        var staticProfile = ModelCapabilityResolver.FindProfile(_llmOptions, effectiveModel);
+        if (staticProfile?.SupportsVision is { } profileOverride)
+        {
+            return profileOverride;
+        }
+
+        if (_llmOptions.ProviderType == LlmProviderType.OpenAiCompatible)
+        {
+            var allowedOverride = _llmOptions.OpenAiCompatible?.AllowedModels?
+                .FirstOrDefault(m => string.Equals(m?.ModelId?.Trim(), effectiveModel, StringComparison.OrdinalIgnoreCase))?
+                .SupportsVision;
+            if (allowedOverride.HasValue)
+            {
+                return allowedOverride.Value;
+            }
+        }
+
+        bool discoveredVision = false;
+        try
+        {
+            discoveredVision = await _gatewayService.ResolveVisionCapabilityAsync(effectiveModel, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to resolve vision capability for '{Model}'", effectiveModel);
+        }
+
+        return discoveredVision || _capabilityResolver.SupportsVision(effectiveModel);
+    }
+
     public async Task<HarnessAgentSetup> CreateAsync(HarnessAgentRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -101,6 +154,10 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
         var dispatchClient = new LenientToolDispatchChatClient(baseClient, effectiveDispatcher, _logger);
         var tracingClient = request.CreateTracingClient(dispatchClient);
         var activeClient = request.DecorateTracingClient?.Invoke(tracingClient) ?? tracingClient;
+        if (request.MultimodalAttachmentQueue != null)
+        {
+            activeClient = new MultimodalToolInjectionChatClient(activeClient, request.MultimodalAttachmentQueue);
+        }
 
         if (!string.IsNullOrWhiteSpace(effectiveModel))
         {
@@ -111,6 +168,15 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex, "Failed to resolve thinking capability for '{Model}' during cold-start probe", effectiveModel);
+            }
+
+            try
+            {
+                await _gatewayService.ResolveVisionCapabilityAsync(effectiveModel, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to resolve vision capability for '{Model}' during cold-start probe", effectiveModel);
             }
         }
 
@@ -148,6 +214,11 @@ public sealed class HarnessAgentFactory : IHarnessAgentFactory
 
         if (compactionStrategy is PiStyleCrucibleCompactionStrategy piStrategy)
         {
+            if (request.MultimodalAttachmentQueue != null)
+            {
+                piStrategy.AttachMultimodalAttachmentQueue(request.MultimodalAttachmentQueue);
+            }
+
             tracingClient.SetMeasuredUsageCallback(usage =>
                 piStrategy.RecordMeasuredCallTokens(
                     usage.InputTokens,

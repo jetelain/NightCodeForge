@@ -32,4 +32,10 @@ public class ModelCapabilityProfile
     /// Optional output token budget overriding <see cref="LlmProviderOptions.MaxOutputTokens"/>.
     /// </summary>
     public int? MaxOutputTokens { get; set; }
+
+    /// <summary>
+    /// Optional static override declaring whether this model supports multimodal image inputs.
+    /// When <see langword="null"/>, vision capability is determined dynamically from model discovery.
+    /// </summary>
+    public bool? SupportsVision { get; set; }
 }

@@ -26,5 +26,15 @@ public sealed class EmptyLlmContextWindowCache : ILlmContextWindowCache
     public void SetThinkingCapability(string modelName, ModelThinkingCapability capability)
     {
     }
+
+    public bool TryGetVisionCapability(string modelName, out bool supportsVision)
+    {
+        supportsVision = false;
+        return false;
+    }
+
+    public void SetVisionCapability(string modelName, bool supportsVision)
+    {
+    }
 }
 

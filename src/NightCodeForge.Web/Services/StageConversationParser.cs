@@ -6,12 +6,33 @@ using NightCodeForge.Core.Workflow;
 namespace NightCodeForge.Web.Services;
 
 /// <summary>
+/// Parsed multimodal visual inspection metadata extracted from a persisted <see cref="ConversationTurn"/>.
+/// </summary>
+public sealed record VisualTurnMetadata(
+    bool IsInjectedVisual,
+    IReadOnlyList<ConversationHistorySerializer.SerializedImageRef> ImageRefs);
+
+/// <summary>
 /// Helper class for parsing, pairing, and formatting conversation turns and workflow stages.
 /// Isolates conversation turn extraction, tool call/result pairing, and optimization payload parsing
 /// from the Blazor rendering layer to facilitate reuse and automated testing.
 /// </summary>
 public static class StageConversationParser
 {
+    /// <summary>
+    /// Extracts injected-visual flags and referenced image metadata from a conversation turn.
+    /// </summary>
+    public static VisualTurnMetadata ParseVisualTurnMetadata(ConversationTurn? turn)
+    {
+        if (turn == null || string.IsNullOrWhiteSpace(turn.MetadataJson))
+        {
+            return new VisualTurnMetadata(false, Array.Empty<ConversationHistorySerializer.SerializedImageRef>());
+        }
+
+        return new VisualTurnMetadata(
+            ConversationHistorySerializer.IsInjectedVisualTurn(turn.MetadataJson),
+            ConversationHistorySerializer.ExtractImageRefs(turn.MetadataJson));
+    }
     /// <summary>
     /// Extracts the CallId from a conversation turn's MetadataJson, if present.
     /// </summary>

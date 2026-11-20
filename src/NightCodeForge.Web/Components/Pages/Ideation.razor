@@ -5,6 +5,7 @@
 @inject IdeationSessionState Session
 @inject IJSRuntime JS
 @inject ILogger<Ideation> Logger
+@using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
@@ -390,6 +391,26 @@
                                             <span>🗜️ @optPart.Summary</span>
                                         </div>
                                     }
+                                    else if (part is VisualInspectionContentPart visualPart)
+                                    {
+                                        <div class="visual-inspection-part">
+                                            <span class="forge-badge badge-teal visual-inspection-badge">@VisionConstants.VisionBadgeLabel Inspection</span>
+                                            @foreach (var imgRef in visualPart.Images)
+                                            {
+                                                <span class="forge-chip font-mono visual-image-ref-chip">
+                                                    <span>🖼️ @(string.IsNullOrWhiteSpace(imgRef.SourcePath) ? imgRef.MediaType : imgRef.SourcePath)</span>
+                                                    @if (imgRef.WidthPx is > 0 && imgRef.HeightPx is > 0)
+                                                    {
+                                                        <span class="text-muted">(@(imgRef.WidthPx)x@(imgRef.HeightPx), @imgRef.MediaType)</span>
+                                                    }
+                                                </span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(visualPart.Summary))
+                                            {
+                                                <span class="text-secondary">@visualPart.Summary</span>
+                                            }
+                                        </div>
+                                    }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
@@ -443,6 +464,10 @@
                                                 @onclick="() => HandleChipClick(chip)"
                                                 disabled="@(!chip.AttachmentId.HasValue)"
                                                 title="@(chip.ErrorMessage ?? chip.SourceRef)">
+                                            @if (!string.IsNullOrWhiteSpace(chip.ThumbnailDataUri))
+                                            {
+                                                <img src="@chip.ThumbnailDataUri" alt="@chip.Title" class="attachment-chip-thumb" style="width: 24px; height: 24px; object-fit: cover; border-radius: 3px;" />
+                                            }
                                             @if (chip.AttachmentId.HasValue)
                                             {
                                                 <span class="font-mono">#@chip.AttachmentId</span>
@@ -523,6 +548,26 @@
                                             <span>🗜️ @optPart.Summary</span>
                                         </div>
                                     }
+                                    else if (part is VisualInspectionContentPart visualPart)
+                                    {
+                                        <div class="visual-inspection-part">
+                                            <span class="forge-badge badge-teal visual-inspection-badge">@VisionConstants.VisionBadgeLabel Inspection</span>
+                                            @foreach (var imgRef in visualPart.Images)
+                                            {
+                                                <span class="forge-chip font-mono visual-image-ref-chip">
+                                                    <span>🖼️ @(string.IsNullOrWhiteSpace(imgRef.SourcePath) ? imgRef.MediaType : imgRef.SourcePath)</span>
+                                                    @if (imgRef.WidthPx is > 0 && imgRef.HeightPx is > 0)
+                                                    {
+                                                        <span class="text-muted">(@(imgRef.WidthPx)x@(imgRef.HeightPx), @imgRef.MediaType)</span>
+                                                    }
+                                                </span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(visualPart.Summary))
+                                            {
+                                                <span class="text-secondary">@visualPart.Summary</span>
+                                            }
+                                        </div>
+                                    }
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
@@ -586,7 +631,27 @@
                             🔗 Attach Host File
                         </button>
                     </div>
+                    @if (Session.ActiveVisionStatus?.SupportsVision == true)
+                    {
+                        <span class="forge-badge badge-teal vision-capability-badge" title="Active model supports image inspection">@VisionConstants.VisionBadgeLabel</span>
+                    }
                 </div>
+
+                @{
+                    var hasPendingOrCitedImages = AttachmentPresentationHelper.HasPendingOrCitedImageAttachments(
+                        Session.PendingComposerChips,
+                        Session.WorkspaceAttachments,
+                        _userInput);
+                    var ideationVisionWarning = AttachmentPresentationHelper.BuildTextOnlyImageWarning(
+                        Session.ActiveVisionStatus,
+                        hasPendingOrCitedImages);
+                }
+                @if (!string.IsNullOrWhiteSpace(ideationVisionWarning))
+                {
+                    <div id="ideation-vision-warning" class="forge-alert forge-alert-amber vision-gating-warning" style="margin: 0.45rem 0; padding: 0.5rem 0.75rem; font-size: 0.82rem;">
+                        ⚠️ @ideationVisionWarning
+                    </div>
+                }
 
                 @if (Session.PendingComposerChips.Count > 0)
                 {
@@ -599,6 +664,10 @@
                                         @onclick="() => HandleChipClick(chip)"
                                         disabled="@(!chip.AttachmentId.HasValue)"
                                         title="@(chip.ErrorMessage ?? chip.SourceRef)">
+                                    @if (!string.IsNullOrWhiteSpace(chip.ThumbnailDataUri))
+                                    {
+                                        <img src="@chip.ThumbnailDataUri" alt="@chip.Title" class="attachment-chip-thumb" style="width: 24px; height: 24px; object-fit: cover; border-radius: 3px;" />
+                                    }
                                     @if (chip.AttachmentId.HasValue)
                                     {
                                         <span class="font-mono">#@chip.AttachmentId</span>
@@ -625,7 +694,8 @@
                     </div>
                 }
 
-                <textarea class="form-control-dark chat-textarea" 
+                <textarea id="@ComposerTextareaElementId"
+                          class="form-control-dark chat-textarea" 
                           rows="3" 
                           @bind="_userInput" 
                           @bind:event="oninput" 
@@ -660,7 +730,7 @@
                             <button type="button" 
                                     class="forge-btn forge-btn-primary send-btn" 
                                     @onclick="SendMessageAsync" 
-                                    disabled="@(string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null)">
+                                    disabled="@(!AttachmentPresentationHelper.CanSubmitIdeationComposer(_userInput, Session.PendingComposerChips, WorkspaceState.ActiveWorkspace != null, Session.IsGenerating))">
                                 🚀 Send
                             </button>
                         }
@@ -752,6 +822,8 @@
     private int? _previewAttachmentId;
     private bool _previewStartInDelete;
     private bool _showTranscriptModal;
+    private const string ComposerTextareaElementId = "ideation-chat-textarea";
+    private DotNetObjectReference<Ideation>? _dotNetRef;
 
     protected override async Task OnInitializedAsync()
     {
@@ -828,6 +900,12 @@
                     ChatPresentationHelper.ChatMessagesContainerId,
                     ChatPresentationHelper.ChatScrollToBottomBtnId,
                     new { autoScrollOnByDefault = true });
+                _dotNetRef ??= DotNetObjectReference.Create(this);
+                await JS.InvokeVoidAsync(
+                    "NightCodeForge.initClipboardImagePaste",
+                    ComposerTextareaElementId,
+                    _dotNetRef,
+                    VisionConstants.MaxVisionImageBytes);
             }
             catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
             {
@@ -883,11 +961,26 @@
     {
         if (e.Key == "Enter" && !e.ShiftKey)
         {
-            if (!Session.IsGenerating && !string.IsNullOrWhiteSpace(_userInput) && WorkspaceState.ActiveWorkspace != null)
+            if (AttachmentPresentationHelper.CanSubmitIdeationComposer(
+                    _userInput,
+                    Session.PendingComposerChips,
+                    WorkspaceState.ActiveWorkspace != null,
+                    Session.IsGenerating))
             {
                 await SendMessageAsync();
             }
         }
+    }
+
+    [JSInvokable]
+    public Task OnClipboardImagePastedAsync(string fileName, string contentType, string base64Data) =>
+        Session.PasteImageFromClipboardAsync(WorkspaceState.ActiveWorkspace, fileName, contentType, base64Data);
+
+    [JSInvokable]
+    public Task OnClipboardImageRejectedAsync(string fileName, string errorMessage)
+    {
+        Session.ReportClipboardImageError(fileName, errorMessage);
+        return Task.CompletedTask;
     }
 
     private Task HandleQuestionGroupAnswersSubmittedAsync(QuestionContentPart qp, IReadOnlyDictionary<int, string> answersByIndex) =>
@@ -920,7 +1013,11 @@
 
     private async Task SendMessageAsync()
     {
-        if (string.IsNullOrWhiteSpace(_userInput) || WorkspaceState.ActiveWorkspace == null || Session.IsGenerating)
+        if (!AttachmentPresentationHelper.CanSubmitIdeationComposer(
+                _userInput,
+                Session.PendingComposerChips,
+                WorkspaceState.ActiveWorkspace != null,
+                Session.IsGenerating))
         {
             return;
         }
@@ -1031,10 +1128,16 @@
         try
         {
             _ = JS.InvokeVoidAsync("NightCodeForge.disposeAutoScroll", ChatPresentationHelper.ChatMessagesContainerId);
+            _ = JS.InvokeVoidAsync("NightCodeForge.disposeClipboardImagePaste", ComposerTextareaElementId);
         }
         catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
         {
             // Circuit may already be disconnected
+        }
+        finally
+        {
+            _dotNetRef?.Dispose();
+            _dotNetRef = null;
         }
     }
 }

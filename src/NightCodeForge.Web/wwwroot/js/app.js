@@ -363,6 +363,75 @@ window.NightCodeForge = window.NightCodeForge || {};
         }
     };
 
+    const activePasteHandlers = new Map();
+
+    /**
+     * Attaches a clipboard paste listener on a composer textarea that intercepts image items
+     * and dispatches decoded base64 bytes to Blazor without interfering with normal text paste.
+     * @param {string} elementId - The DOM id of the composer textarea.
+     * @param {object} dotNetRef - DotNetObjectReference exposing OnClipboardImagePastedAsync(fileName, contentType, base64) and OnClipboardImageRejectedAsync(fileName, errorMessage).
+     * @param {number} [maxBytes] - Maximum allowed clipboard image byte length before reading into base64.
+     */
+    window.NightCodeForge.initClipboardImagePaste = function (elementId, dotNetRef, maxBytes) {
+        window.NightCodeForge.disposeClipboardImagePaste(elementId);
+        const el = document.getElementById(elementId);
+        if (!el || !dotNetRef) return;
+
+        const effectiveMaxBytes = (typeof maxBytes === 'number' && maxBytes > 0) ? maxBytes : (10 * 1024 * 1024);
+
+        const handler = function (e) {
+            const items = e.clipboardData && e.clipboardData.items;
+            if (!items || items.length === 0) return;
+
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                if (item && item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+                    const blob = item.getAsFile();
+                    if (!blob) continue;
+
+                    e.preventDefault();
+                    const mimeType = blob.type || item.type || 'image/png';
+                    const fileName = blob.name || ('clipboard-' + Date.now() + '.' + (mimeType.split('/')[1] || 'png'));
+
+                    if (typeof blob.size === 'number' && blob.size > effectiveMaxBytes) {
+                        const mbSize = (blob.size / (1024 * 1024)).toFixed(1);
+                        const mbMax = Math.round(effectiveMaxBytes / (1024 * 1024));
+                        const errorMsg = 'Pasted image (' + mbSize + ' MB) exceeds maximum allowed vision image size of ' + mbMax + ' MB.';
+                        dotNetRef.invokeMethodAsync('OnClipboardImageRejectedAsync', fileName, errorMsg).catch(function (err) {
+                            console.warn('NightCodeForge: clipboard image rejection callback failed', err);
+                        });
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.onload = function () {
+                        const result = typeof reader.result === 'string' ? reader.result : '';
+                        const commaIdx = result.indexOf(',');
+                        const base64 = commaIdx >= 0 ? result.substring(commaIdx + 1) : result;
+                        if (base64) {
+                            dotNetRef.invokeMethodAsync('OnClipboardImagePastedAsync', fileName, mimeType, base64).catch(function (err) {
+                                console.warn('NightCodeForge: clipboard image upload failed', err);
+                            });
+                        }
+                    };
+                    reader.readAsDataURL(blob);
+                    return;
+                }
+            }
+        };
+
+        el.addEventListener('paste', handler);
+        activePasteHandlers.set(elementId, { el: el, handler: handler });
+    };
+
+    window.NightCodeForge.disposeClipboardImagePaste = function (elementId) {
+        const entry = activePasteHandlers.get(elementId);
+        if (entry && entry.el && entry.handler) {
+            entry.el.removeEventListener('paste', entry.handler);
+        }
+        activePasteHandlers.delete(elementId);
+    };
+
     /**
      * Registers the PWA service worker when supported and running in a secure context or loopback.
      */

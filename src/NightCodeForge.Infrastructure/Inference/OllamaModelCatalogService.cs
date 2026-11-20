@@ -74,6 +74,7 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
     {
         int? context = null;
         var thinking = ModelThinkingCapability.None;
+        bool supportsVision = false;
 
         try
         {
@@ -86,12 +87,14 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
                 using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(showCts.Token), cancellationToken: showCts.Token);
                 context = OllamaShowParser.ParseContextWindow(doc.RootElement);
                 thinking = OllamaShowParser.ParseThinkingCapability(doc.RootElement);
+                supportsVision = OllamaShowParser.SupportsVision(doc.RootElement);
 
                 if (context is { } tokens && tokens > 0)
                 {
                     _contextWindowCache.SetContextWindow(name, tokens);
                 }
                 _contextWindowCache.SetThinkingCapability(name, thinking);
+                _contextWindowCache.SetVisionCapability(name, supportsVision);
             }
             else
             {
@@ -110,7 +113,8 @@ public sealed class OllamaModelCatalogService : LlmModelCatalogServiceBase
             SizeBytes: tag.Size > 0 ? tag.Size : null,
             ProviderType: ProviderType,
             SupportsReasoning: thinking.SupportsThinking,
-            ThinkingCapability: thinking);
+            ThinkingCapability: thinking,
+            SupportsVision: supportsVision);
     }
 
     private sealed class TagsResponse

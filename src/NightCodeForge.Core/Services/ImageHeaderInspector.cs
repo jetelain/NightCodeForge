@@ -50,6 +50,57 @@ public static class ImageHeaderInspector
         };
     }
 
+    /// <summary>
+    /// Auto-sniffs image format magic bytes (PNG, JPEG, GIF, WebP) without requiring a file extension
+    /// and extracts dimensions when valid. Returns <see langword="false"/> for unrecognized or malformed bytes.
+    /// </summary>
+    public static bool TryInspect(ReadOnlySpan<byte> data, out ImageHeaderInfo info)
+    {
+        info = default;
+        if (data.IsEmpty)
+        {
+            return false;
+        }
+
+        string? detectedExt = null;
+        if (data.Length >= PngSignature.Length && data[..PngSignature.Length].SequenceEqual(PngSignature))
+        {
+            detectedExt = ".png";
+        }
+        else if (data.Length >= 2 && data[0] == 0xFF && data[1] == 0xD8)
+        {
+            detectedExt = ".jpg";
+        }
+        else if (data.Length >= Gif87aSignature.Length &&
+                 (data[..Gif87aSignature.Length].SequenceEqual(Gif87aSignature) ||
+                  data[..Gif89aSignature.Length].SequenceEqual(Gif89aSignature)))
+        {
+            detectedExt = ".gif";
+        }
+        else if (data.Length >= 12 &&
+                 data[..RiffSignature.Length].SequenceEqual(RiffSignature) &&
+                 data.Slice(8, WebpSignature.Length).SequenceEqual(WebpSignature))
+        {
+            detectedExt = ".webp";
+        }
+
+        if (detectedExt == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            info = Inspect(data, detectedExt, "image");
+            return true;
+        }
+        catch (AttachmentConversionException)
+        {
+            info = default;
+            return false;
+        }
+    }
+
     private static ImageHeaderInfo InspectPng(ReadOnlySpan<byte> data, string sourceName)
     {
         const int minPngHeaderBytes = 24;

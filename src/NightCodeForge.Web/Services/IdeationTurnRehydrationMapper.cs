@@ -96,6 +96,16 @@ public static class IdeationTurnRehydrationMapper
             switch (turn.Role)
             {
                 case StageTurnRole.User:
+                    if (ConversationHistorySerializer.IsInjectedVisualTurn(turn.MetadataJson))
+                    {
+                        var imageRefs = ConversationHistorySerializer.ExtractImageRefs(turn.MetadataJson);
+                        if (imageRefs.Count > 0 || !string.IsNullOrWhiteSpace(turn.Content))
+                        {
+                            pendingParts.Add(new VisualInspectionContentPart(imageRefs, turn.Content));
+                        }
+                        break;
+                    }
+
                     FlushPendingAssistantParts(turn.Timestamp);
                     var restoredChips = ResolveUserTurnChips(turn, workspaceAttachments);
                     messages.Add(new ChatMessage(
@@ -256,7 +266,7 @@ public static class IdeationTurnRehydrationMapper
         var result = new List<ConversationAttachmentChipViewModel>();
         if (workspaceAttachments is { Count: > 0 })
         {
-            foreach (var id in ExtractAttachmentIds(turn.MetadataJson))
+            foreach (var id in ConversationHistorySerializer.ExtractAttachmentIds(turn.MetadataJson))
             {
                 var att = workspaceAttachments.FirstOrDefault(a => a.Id == id);
                 if (att != null)
@@ -273,40 +283,6 @@ public static class IdeationTurnRehydrationMapper
         }
 
         return result;
-    }
-
-    private static IReadOnlyList<int> ExtractAttachmentIds(string? metadataJson)
-    {
-        if (string.IsNullOrWhiteSpace(metadataJson))
-        {
-            return Array.Empty<int>();
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(metadataJson);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
-                (doc.RootElement.TryGetProperty("AttachmentIds", out var prop) ||
-                 doc.RootElement.TryGetProperty("attachmentIds", out prop)) &&
-                prop.ValueKind == JsonValueKind.Array)
-            {
-                var ids = new List<int>();
-                foreach (var el in prop.EnumerateArray())
-                {
-                    if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var id) && id > 0)
-                    {
-                        ids.Add(id);
-                    }
-                }
-                return ids;
-            }
-        }
-        catch (JsonException)
-        {
-            // Ignore malformed attachment metadata
-        }
-
-        return Array.Empty<int>();
     }
 
     private static void ProjectToolCallTurn(

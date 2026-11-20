@@ -11,11 +11,13 @@ namespace NightCodeForge.Infrastructure.Inference;
 internal static partial class OllamaShowParser
 {
     public const string ThinkingCapability = "thinking";
+    public const string VisionCapability = "vision";
 
     private const string ParametersProperty = "parameters";
     private const string ModelInfoProperty = "model_info";
     private const string DetailsProperty = "details";
     private const string CapabilitiesProperty = "capabilities";
+    private const string ProjectorInfoProperty = "projector_info";
     private const string ValuesProperty = "values";
     private const string DefaultProperty = "default";
     private const string ContextLengthSuffix = ".context_length";
@@ -151,6 +153,32 @@ internal static partial class OllamaShowParser
     /// <summary>True when the model declares reasoning/thinking support.</summary>
     public static bool SupportsThinking(JsonElement root) => ParseThinkingCapability(root).SupportsThinking;
 
+    /// <summary>
+    /// True when the model declares multimodal vision support via <c>capabilities: ["vision"]</c>
+    /// or non-empty <c>projector_info</c> in <c>POST /api/show</c>.
+    /// </summary>
+    public static bool SupportsVision(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (HasCapability(root, VisionCapability))
+        {
+            return true;
+        }
+
+        if (root.TryGetProperty(ProjectorInfoProperty, out var projectorInfo) &&
+            projectorInfo.ValueKind == JsonValueKind.Object &&
+            projectorInfo.EnumerateObject().MoveNext())
+        {
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool TryGetThinkingElement(JsonElement root, out JsonElement thinkingElement)
     {
         if (root.ValueKind == JsonValueKind.Object)
@@ -177,7 +205,10 @@ internal static partial class OllamaShowParser
         return false;
     }
 
-    private static bool HasLegacyThinkingCapability(JsonElement root)
+    private static bool HasLegacyThinkingCapability(JsonElement root) =>
+        HasCapability(root, ThinkingCapability);
+
+    private static bool HasCapability(JsonElement root, string capabilityName)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -189,7 +220,7 @@ internal static partial class OllamaShowParser
             foreach (var capability in capabilities.EnumerateArray())
             {
                 if (capability.ValueKind == JsonValueKind.String
-                    && string.Equals(capability.GetString(), ThinkingCapability, StringComparison.OrdinalIgnoreCase))
+                    && string.Equals(capability.GetString()?.Trim(), capabilityName, StringComparison.OrdinalIgnoreCase))
                 {
                     return true;
                 }

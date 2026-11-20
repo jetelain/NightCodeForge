@@ -216,7 +216,25 @@
                                 Select existing workspace attachments, drop files, or map a host file as a WSL2 symlink.
                             </p>
                         </div>
+                        @if (_taskVisionStatus?.SupportsVision == true)
+                        {
+                            <span class="forge-badge badge-teal vision-capability-badge">@VisionConstants.VisionBadgeLabel</span>
+                        }
                     </div>
+
+                    @{
+                        var hasSelectedImageAttachments = AttachmentPresentationHelper.HasSelectedOrCitedImageAttachments(
+                            _availableAttachments,
+                            _selectedAttachmentIds,
+                            _description);
+                        var taskVisionWarning = AttachmentPresentationHelper.BuildTextOnlyImageWarning(_taskVisionStatus, hasSelectedImageAttachments);
+                    }
+                    @if (!string.IsNullOrWhiteSpace(taskVisionWarning))
+                    {
+                        <div id="create-task-vision-warning" class="forge-alert forge-alert-amber vision-gating-warning" style="margin-bottom: 0.75rem; padding: 0.55rem 0.8rem; font-size: 0.82rem;">
+                            ⚠️ @taskVisionWarning
+                        </div>
+                    }
 
                     @if (_selectedAttachmentIds.Count > 0)
                     {
@@ -388,7 +406,7 @@
                             <button type="button"
                                     class="forge-btn btn-sm difficulty-chip-btn @(isSelected ? "selected" : "")"
                                     style="padding: 0.45rem 0.4rem; font-size: 0.8rem; @TaskDifficultyPresentationHelper.GetChipStyle(difficulty, isSelected)"
-                                    @onclick="() => _selectedDifficulty = difficulty"
+                                    @onclick="() => SelectDifficultyAsync(difficulty)"
                                     disabled="@_isSubmitting"
                                     title="@TaskDifficultyPresentationHelper.GetDescription(difficulty)">
                                 @TaskDifficultyPresentationHelper.GetDisplayLabel(difficulty)
@@ -583,6 +601,7 @@
     private List<WorkflowDefinition> _workflows = new();
     private List<ForgeTask> _availableTasks = new();
     private List<TaskAttachment> _availableAttachments = new();
+    private VisionCapabilityStatus? _taskVisionStatus;
     private bool _isPrDeliveryAvailable;
     private bool _disposed;
 
@@ -632,6 +651,7 @@
             _availableAttachments.Clear();
             _selectedPrereqIds.Clear();
             _selectedAttachmentIds.Clear();
+            _taskVisionStatus = null;
             _isPrDeliveryAvailable = false;
             return;
         }
@@ -656,10 +676,36 @@
 
             var attachments = await AttachmentUiService.LoadWorkspaceAttachmentsAsync(active.Id);
             _availableAttachments = attachments.ToList();
+            await RefreshTaskVisionStatusAsync();
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to load workflow or task data for workspace {WorkspaceId}", active.Id);
+        }
+    }
+
+    private async Task SelectDifficultyAsync(TaskDifficulty difficulty)
+    {
+        _selectedDifficulty = difficulty;
+        await RefreshTaskVisionStatusAsync();
+    }
+
+    private async Task RefreshTaskVisionStatusAsync()
+    {
+        var active = WorkspaceState.ActiveWorkspace;
+        if (active == null)
+        {
+            _taskVisionStatus = null;
+            return;
+        }
+
+        try
+        {
+            _taskVisionStatus = await AttachmentUiService.EvaluateTaskVisionAsync(active.Id, _selectedDifficulty);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogDebug(ex, "Non-fatal vision evaluation failure for workspace {WorkspaceId}.", active.Id);
         }
     }
 

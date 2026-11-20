@@ -17,6 +17,7 @@ using NightCodeForge.Agents.Optimizations;
 using NightCodeForge.Agents.Streaming;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Transcripts;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
@@ -1007,9 +1008,16 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
 
             await using var scope = _scopeFactory.CreateAsyncScope();
             var workspaceContext = scope.ServiceProvider.GetRequiredService<IAgentWorkspaceContextService>();
+            var agentFactory = scope.ServiceProvider.GetRequiredService<IHarnessAgentFactory>();
             var locations = workspaceContext.ResolveLocations(workspace, taskId: null, workspacePathOverride: null);
 
             TriggerNonBlockingInitialBacklogSync(session, workspace, locations);
+
+            bool supportsVision = await agentFactory.ResolveVisionCapabilityAsync(effectiveProfile, cancellationToken).ConfigureAwait(false);
+            var activeModelId = !string.IsNullOrWhiteSpace(effectiveProfile.ModelName) ? effectiveProfile.ModelName.Trim() : null;
+            var multimodalQueue = supportsVision
+                ? (session.MultimodalAttachmentQueue ?? new MultimodalAttachmentQueue())
+                : null;
 
             var permittedTools = ResolvePermittedTools(effectiveProfile);
             bool toolsetMatches = session.ToolsetSession != null
@@ -1019,6 +1027,8 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 && session.EffectiveProfile != null
                 && session.EffectiveProfile.Mode == effectiveProfile.Mode
                 && session.EffectiveProfile.SecurityTier == effectiveProfile.SecurityTier
+                && session.SupportsVision == supportsVision
+                && ReferenceEquals(session.ToolsetSession.MultimodalAttachmentQueue, multimodalQueue)
                 && session.PermittedTools.SequenceEqual(permittedTools, StringComparer.OrdinalIgnoreCase);
 
             var toolsetSession = session.ToolsetSession;
@@ -1033,7 +1043,10 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                             locations.RepoPath,
                             WorkspaceId: workspace.Id,
                             IsReadOnly: effectiveProfile.Mode == AgentMode.ReadOnly || effectiveProfile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly,
-                            OptimizationFlags: effectiveFlags),
+                            OptimizationFlags: effectiveFlags,
+                            SupportsVision: supportsVision,
+                            ActiveModelId: activeModelId,
+                            MultimodalAttachmentQueue: multimodalQueue),
                         permittedTools,
                         Array.Empty<CustomToolConfig>(),
                         new Dictionary<string, string>(),
@@ -1062,11 +1075,12 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 backlogDigest,
                 attachmentsDigest,
                 hotspotsDigest,
-                targetOptions.CustomSystemPrompt);
+                targetOptions.CustomSystemPrompt,
+                supportsVision);
 
             if (!session.HistoryHydrated)
             {
-                await HydrateHistoryFromDatabaseLockedAsync(session, scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+                await HydrateHistoryFromDatabaseLockedAsync(session, scope.ServiceProvider, toolsetSession.Tools.FileModule, cancellationToken).ConfigureAwait(false);
             }
 
             bool wasColdResumed;
@@ -1075,7 +1089,6 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 wasColdResumed = session.ChatHistory.Count > 0;
             }
 
-            var agentFactory = scope.ServiceProvider.GetRequiredService<IHarnessAgentFactory>();
             int maxTurns = effectiveProfile.MaxTurns is > 0 ? effectiveProfile.MaxTurns.Value : DefaultMaxTurns;
             var newSetup = await agentFactory.CreateAsync(
                 new HarnessAgentRequest(
@@ -1086,7 +1099,13 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                     Instructions: systemPrompt,
                     Tools: toolsetSession.AITools,
                     MaxTurns: maxTurns,
-                    CreateTracingClient: baseClient => new ThinkingAndActivityTracingChatClient(baseClient),
+                    CreateTracingClient: baseClient => new ThinkingAndActivityTracingChatClient(
+                        baseClient,
+                        onEntry: entry => RecordIdeationVisualTurn(session, entry),
+                        activityStreamer: null,
+                        sessionId: null,
+                        taskId: 0,
+                        stageId: StandardStageIds.Ideation),
                     DecorateTracingClient: tracing => new PerServiceCallChatHistoryPersistingChatClient(
                         tracing,
                         updatedHistory =>
@@ -1101,7 +1120,8 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                         },
                         _logger),
                     DefaultTemperature: DefaultTemperature,
-                    Dispatcher: toolsetSession.Dispatcher),
+                    Dispatcher: toolsetSession.Dispatcher,
+                    MultimodalAttachmentQueue: multimodalQueue),
                 cancellationToken).ConfigureAwait(false);
 
             WireCompactionCallbacks(session, newSetup, wasColdResumed);
@@ -1127,6 +1147,8 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 session.Locations = locations;
                 session.EffectiveProfile = effectiveProfile;
                 session.OptimizationFlags = effectiveFlags;
+                session.SupportsVision = supportsVision;
+                session.MultimodalAttachmentQueue = multimodalQueue;
                 session.SystemPrompt = systemPrompt;
                 session.PermittedTools = permittedTools;
                 session.ActiveSkills = promptContext.ActiveSkills;
@@ -1161,6 +1183,7 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
     private async Task HydrateHistoryFromDatabaseLockedAsync(
         WarmIdeationSession session,
         IServiceProvider serviceProvider,
+        WorkspaceFileToolModule? fileModule,
         CancellationToken cancellationToken)
     {
         int? activeUserTurnIndex;
@@ -1184,7 +1207,39 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
             if (turnsToRestore.Count > 0)
             {
                 var serialized = ConversationHistorySerializer.Serialize(turnsToRestore);
-                var restored = CrucibleAgentHarness.DeserializeSession(serialized, _logger);
+                bool supportsVision = fileModule?.SupportsVision ?? false;
+                string? ResolveIdeationHostPath(string sourcePath)
+                {
+                    if (!supportsVision || string.IsNullOrWhiteSpace(sourcePath) || fileModule?.SandboxPathResolver == null)
+                    {
+                        return null;
+                    }
+
+                    try
+                    {
+                        var resolved = fileModule.SandboxPathResolver.ResolveHostPath(sourcePath, forWrite: false);
+                        return !string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved) ? resolved : null;
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        return null;
+                    }
+                }
+
+                var restored = CrucibleAgentHarness.DeserializeSession(
+                    serialized,
+                    ResolveIdeationHostPath,
+                    trackUnresolvedRefs: fileModule != null,
+                    _logger);
+                if (fileModule != null)
+                {
+                    await CrucibleAgentHarness.RehydrateDeferredImageRefsAsync(restored, fileModule, _logger, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else if (!supportsVision)
+                {
+                    MultimodalToolInjectionChatClient.StripImagesForTextOnlyModel(restored);
+                }
                 restored.RemoveAll(m => m.Role == ChatRole.System);
                 CrucibleAgentHarness.SanitizeInFlightTurns(restored);
 
@@ -1206,6 +1261,22 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         }
 
         session.HistoryHydrated = true;
+    }
+
+    private void RecordIdeationVisualTurn(WarmIdeationSession session, TranscriptEntry entry)
+    {
+        if (!string.Equals(entry.Role, "USER", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(entry.MetadataJson) ||
+            !ConversationHistorySerializer.IsInjectedVisualTurn(entry.MetadataJson))
+        {
+            return;
+        }
+
+        session.TurnQueue.EnqueueTurn(
+            StageTurnRole.User,
+            $"Failed to record injected visual turn for ideation conversation #{session.ConversationId}",
+            content: entry.Content,
+            metadataJson: entry.MetadataJson);
     }
 
     private void WireCompactionCallbacks(
@@ -1231,10 +1302,17 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
 
         piStrategy.OnCompacted = async (notification, ct) =>
         {
+            var compactedMessages = notification.IncludedMessages.ToList();
+            if (session.MultimodalAttachmentQueue != null)
+            {
+                MultimodalAttachmentQueue.PruneToIncludedMessages(session.MultimodalAttachmentQueue, compactedMessages);
+                compactedMessages = MultimodalToolInjectionChatClient.TransformMessages(compactedMessages, session.MultimodalAttachmentQueue);
+            }
+
             lock (session.HistoryGate)
             {
                 session.ChatHistory.Clear();
-                session.ChatHistory.AddRange(notification.IncludedMessages);
+                session.ChatHistory.AddRange(compactedMessages);
                 CrucibleAgentHarness.StripAttribution(session.ChatHistory);
             }
 
@@ -1491,10 +1569,22 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         IdeationSendRequest request,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(request.Prompt))
+        var allAttachmentIds = AttachmentCitationParser.UnionAttachmentIds(
+                ConversationHistorySerializer.ExtractAttachmentIds(request.UserTurnMetadataJson),
+                request.Prompt)
+            .Where(id => id > 0)
+            .ToList();
+
+        if (string.IsNullOrWhiteSpace(request.Prompt) && allAttachmentIds.Count == 0)
         {
             throw new ArgumentException("Prompt cannot be empty.", nameof(request));
         }
+
+        var (preparedImages, enrichedMetadataJson) = await PrepareUserTurnImagesAsync(
+            session,
+            request,
+            allAttachmentIds,
+            cancellationToken).ConfigureAwait(false);
 
         List<ChatMessage> historySnapshot;
         lock (session.HistoryGate)
@@ -1517,16 +1607,144 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
             }
         }
 
+        var rawPrompt = !string.IsNullOrWhiteSpace(request.Prompt)
+            ? request.Prompt.Trim()
+            : VisionConstants.DefaultImageOnlyPrompt;
         var effectiveUserPrompt = IdeationSystemPromptBuilder.FormatUserPromptWithCurrentDate(
-            request.Prompt.Trim(),
+            rawPrompt,
             historySnapshot,
             _timeProvider);
 
-        return await session.TurnQueue.EnqueueAndAwaitTurnAsync(
+        var persistedTurn = await session.TurnQueue.EnqueueAndAwaitTurnAsync(
             StageTurnRole.User,
             $"Failed to record user turn for ideation conversation #{session.ConversationId}",
             content: effectiveUserPrompt,
-            metadataJson: request.UserTurnMetadataJson).ConfigureAwait(false);
+            metadataJson: enrichedMetadataJson).ConfigureAwait(false);
+
+        if (preparedImages.Count > 0)
+        {
+            lock (session.StateGate)
+            {
+                session.PendingUserTurnImages[persistedTurn.TurnIndex] = preparedImages;
+            }
+        }
+
+        return persistedTurn;
+    }
+
+    private async Task<(IReadOnlyList<DataContent> Images, string? MetadataJson)> PrepareUserTurnImagesAsync(
+        WarmIdeationSession session,
+        IdeationSendRequest request,
+        IReadOnlyList<int> allAttachmentIds,
+        CancellationToken cancellationToken)
+    {
+        if (allAttachmentIds.Count == 0)
+        {
+            return (Array.Empty<DataContent>(), request.UserTurnMetadataJson);
+        }
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var attachmentRepo = scope.ServiceProvider.GetRequiredService<ITaskAttachmentRepository>();
+
+        var attachments = await attachmentRepo.GetByIdsAsync(allAttachmentIds, cancellationToken).ConfigureAwait(false)
+            ?? Array.Empty<TaskAttachment>();
+        var imageAttachments = attachments
+            .Where(a => a != null && a.WorkspaceId == session.WorkspaceId && a.ContentKind == TaskAttachmentContentKind.Image)
+            .OrderBy(a => a.Id)
+            .ToList();
+
+        if (imageAttachments.Count == 0)
+        {
+            return (Array.Empty<DataContent>(), request.UserTurnMetadataJson);
+        }
+
+        var workspace = await LoadWorkspaceOrThrowAsync(session.WorkspaceId, cancellationToken).ConfigureAwait(false);
+        IdeationSessionOptions sessionOptions;
+        lock (session.StateGate)
+        {
+            sessionOptions = session.Options;
+        }
+        var (effectiveProfile, _) = await ResolveProfileAndFlagsAsync(workspace, sessionOptions, cancellationToken).ConfigureAwait(false);
+        var agentFactory = scope.ServiceProvider.GetRequiredService<IHarnessAgentFactory>();
+        bool supportsVision = await agentFactory.ResolveVisionCapabilityAsync(effectiveProfile, cancellationToken).ConfigureAwait(false);
+
+        if (!supportsVision)
+        {
+            var effectiveModelId = !string.IsNullOrWhiteSpace(effectiveProfile.ModelName)
+                ? effectiveProfile.ModelName
+                : (scope.ServiceProvider.GetService<IOptions<LlmProviderOptions>>()?.Value?.ModelId ?? string.Empty);
+            throw new ModelVisionNotSupportedException(effectiveModelId, imageAttachments[0].Title);
+        }
+
+        var pathResolver = scope.ServiceProvider.GetRequiredService<IWorkspacePathResolver>();
+        var preparedImages = new List<DataContent>(imageAttachments.Count);
+        var imageRefs = new List<ConversationHistorySerializer.SerializedImageRef>(imageAttachments.Count);
+
+        foreach (var att in imageAttachments)
+        {
+            var virtualPath = AttachmentDigestFormatter.ResolveVirtualAttachmentPath(att);
+            var hostPath = ResolveIdeationAttachmentHostPath(att, session.WorkspaceId, pathResolver);
+            if (string.IsNullOrWhiteSpace(hostPath) || !File.Exists(hostPath))
+            {
+                throw new AttachmentTargetNotFoundException(
+                    att.Id,
+                    !string.IsNullOrWhiteSpace(att.SourceRef) ? att.SourceRef : virtualPath,
+                    $"Attachment #{att.Id} ('{att.Title}') target does not exist or is unreadable.");
+            }
+
+            var normalized = await VisionImageNormalizer.LoadAndNormalizeAsync(hostPath, virtualPath, cancellationToken).ConfigureAwait(false);
+            preparedImages.Add(VisionImageNormalizer.CreateDataContent(normalized, virtualPath));
+            imageRefs.Add(new ConversationHistorySerializer.SerializedImageRef(
+                SourcePath: virtualPath,
+                MediaType: normalized.MediaType,
+                Sha256: normalized.Sha256,
+                WidthPx: normalized.WidthPx,
+                HeightPx: normalized.HeightPx));
+        }
+
+        var metadataJson = ConversationHistorySerializer.BuildVisualTurnMetadataJson(
+            imageRefs,
+            isInjectedVisual: false,
+            attachmentIds: allAttachmentIds);
+        return (preparedImages, metadataJson);
+    }
+
+    private static string? ResolveIdeationAttachmentHostPath(
+        TaskAttachment attachment,
+        int workspaceId,
+        IWorkspacePathResolver pathResolver)
+    {
+        var rawDir = pathResolver.GetAttachmentsPath(workspaceId);
+        var hostDir = !string.IsNullOrWhiteSpace(rawDir) ? pathResolver.ToHostPath(rawDir) : null;
+        var baseDir = !string.IsNullOrWhiteSpace(hostDir) ? hostDir : rawDir;
+        if (!string.IsNullOrWhiteSpace(baseDir) && !string.IsNullOrWhiteSpace(attachment.RelativePath))
+        {
+            var rel = attachment.RelativePath.Trim();
+            if (!Path.IsPathRooted(rel) && !rel.StartsWith('/') && !rel.StartsWith('\\'))
+            {
+                var candidate = Path.GetFullPath(Path.Combine(baseDir, rel.Replace('/', Path.DirectorySeparatorChar)));
+                if (SandboxPathResolver.IsPathInsideDirectory(candidate, baseDir) && File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        if (attachment.IsSymlink && !string.IsNullOrWhiteSpace(attachment.SourceRef))
+        {
+            if (File.Exists(attachment.SourceRef))
+            {
+                return attachment.SourceRef;
+            }
+
+            var mapped = pathResolver.ToHostPath(attachment.SourceRef);
+            if (!string.IsNullOrWhiteSpace(mapped) && File.Exists(mapped))
+            {
+                return mapped;
+            }
+        }
+
+        return null;
     }
 
     private async Task<IdeationResult> ExecuteTurnCoreAsync(
@@ -1658,16 +1876,41 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 turnCt,
                 metadata).ConfigureAwait(false);
 
-            var effectiveUserPrompt = prePersistedUserTurn.Content ?? request.Prompt.Trim();
+            var effectiveUserPrompt = prePersistedUserTurn.Content ?? (!string.IsNullOrWhiteSpace(request.Prompt) ? request.Prompt.Trim() : VisionConstants.DefaultImageOnlyPrompt);
             var llmUserPrompt = string.IsNullOrWhiteSpace(contextRefresh.Delta)
                 ? effectiveUserPrompt
                 : $"{contextRefresh.Delta}\n\n{effectiveUserPrompt}";
+
+            IReadOnlyList<DataContent>? turnImages = null;
+            lock (session.StateGate)
+            {
+                if (session.PendingUserTurnImages.Remove(prePersistedUserTurn.TurnIndex, out var foundImages))
+                {
+                    turnImages = foundImages;
+                }
+            }
 
             List<ChatMessage> messagesCopy;
             lock (session.HistoryGate)
             {
                 historyCountBeforeTurn = session.ChatHistory.Count;
-                var userMsg = new ChatMessage(ChatRole.User, llmUserPrompt);
+                ChatMessage userMsg;
+                if (turnImages is { Count: > 0 })
+                {
+                    var contents = new List<AIContent>(1 + turnImages.Count)
+                    {
+                        new TextContent(llmUserPrompt)
+                    };
+                    foreach (var img in turnImages)
+                    {
+                        contents.Add(img);
+                    }
+                    userMsg = new ChatMessage(ChatRole.User, contents);
+                }
+                else
+                {
+                    userMsg = new ChatMessage(ChatRole.User, llmUserPrompt);
+                }
                 if (session.HydratedMaxTurnIndex.HasValue
                     && session.HydratedMaxTurnIndex.Value >= prePersistedUserTurn.TurnIndex
                     && session.ChatHistory.Count > 0
@@ -1684,13 +1927,21 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 session.HydratedMaxTurnIndex = null;
                 userMsgAddedToChatHistory = true;
                 CrucibleAgentHarness.StripAttribution(session.ChatHistory);
+                MultimodalToolInjectionChatClient.EnforceActiveImageWindow(session.ChatHistory, VisionConstants.MaxImagesInActiveWindow);
                 messagesCopy = session.ChatHistory.ToList();
+                if (!session.SupportsVision)
+                {
+                    MultimodalToolInjectionChatClient.StripImagesForTextOnlyModel(messagesCopy);
+                }
             }
 
             var turnStopwatch = Stopwatch.StartNew();
+            var transcriptUserContent = turnImages is { Count: > 0 }
+                ? ThinkingAndActivityTracingChatClient.DescribeMessage(messagesCopy[^1])
+                : effectiveUserPrompt;
             var transcriptEntries = new List<TranscriptEntry>
             {
-                new(_timeProvider.GetUtcNow().UtcDateTime, "USER", effectiveUserPrompt)
+                new(_timeProvider.GetUtcNow().UtcDateTime, "USER", transcriptUserContent)
             };
             var transcriptBuffer = new TranscriptStreamBuffer(transcriptEntries);
             var sessionProposals = new List<IdeationProposal>();
@@ -2316,6 +2567,11 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
         }
         finally
         {
+            lock (session.StateGate)
+            {
+                session.PendingUserTurnImages.Remove(prePersistedUserTurn.TurnIndex);
+            }
+
             if (session.ToolsetSession != null)
             {
                 session.ToolsetSession.Tools.AskHandler = null;

@@ -1,6 +1,9 @@
 using System.Text.Json;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
+using NightCodeForge.Agents.Vision;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Services;
 using Pmad.AI.Tokens;
 
 namespace NightCodeForge.Agents.Compaction;
@@ -149,6 +152,9 @@ public static class ModelCalibratedTokenEstimator
                             totalTokens += EstimateTextTokens(resStr, estimator);
                         }
                         break;
+                    case DataContent dc when dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType):
+                        totalTokens += EstimateImageTokens(dc);
+                        break;
                 }
             }
         }
@@ -203,7 +209,7 @@ public static class ModelCalibratedTokenEstimator
         }
 
         int estimated = EstimateMessagesTokens(group.Messages, estimator);
-        if (useEstimatedOnly || ContainsClampedToolOutput(group.Messages))
+        if (useEstimatedOnly || ContainsMutatedInPlaceContent(group.Messages))
         {
             return estimated;
         }
@@ -224,7 +230,7 @@ public static class ModelCalibratedTokenEstimator
         return estimated;
     }
 
-    private static bool ContainsClampedToolOutput(IReadOnlyList<ChatMessage> messages)
+    private static bool ContainsMutatedInPlaceContent(IReadOnlyList<ChatMessage> messages)
     {
         foreach (var msg in messages)
         {
@@ -239,9 +245,10 @@ public static class ModelCalibratedTokenEstimator
                         return true;
                     }
                 }
-                else if (c is TextContent { Text: not null } tc && msg.Role == ChatRole.Tool)
+                else if (c is TextContent { Text: not null } tc)
                 {
-                    if (tc.Text.Contains(ClampedOutputMarker, StringComparison.Ordinal))
+                    if ((msg.Role == ChatRole.Tool && tc.Text.Contains(ClampedOutputMarker, StringComparison.Ordinal)) ||
+                        tc.Text.Contains(VisionConstants.EvictedImageMarkerPrefix, StringComparison.Ordinal))
                     {
                         return true;
                     }
@@ -250,6 +257,29 @@ public static class ModelCalibratedTokenEstimator
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Estimates vision tokens for an image <see cref="DataContent"/> using tile-based accounting
+    /// (512px tiles -> 85 base + 170 * tiles), falling back to <see cref="VisionConstants.DefaultFallbackImageTokens"/>.
+    /// </summary>
+    public static int EstimateImageTokens(DataContent? content)
+    {
+        if (content == null)
+        {
+            return 0;
+        }
+
+        int width = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(content, VisionConstants.PropWidthPx) ?? 0;
+        int height = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(content, VisionConstants.PropHeightPx) ?? 0;
+
+        if ((width <= 0 || height <= 0) && !content.Data.IsEmpty && ImageHeaderInspector.TryInspect(content.Data.Span, out var headerInfo))
+        {
+            width = headerInfo.WidthPx;
+            height = headerInfo.HeightPx;
+        }
+
+        return VisionConstants.EstimateVisionTokens(width, height);
     }
 
     private static int ComputeActualMessageBytes(IReadOnlyList<ChatMessage> messages)
@@ -285,6 +315,13 @@ public static class ModelCalibratedTokenEstimator
                         case FunctionResultContent frc:
                             if (!string.IsNullOrEmpty(frc.CallId)) bytes += System.Text.Encoding.UTF8.GetByteCount(frc.CallId);
                             if (frc.Result != null) bytes += System.Text.Encoding.UTF8.GetByteCount(frc.Result.ToString() ?? string.Empty);
+                            break;
+                        case DataContent dc:
+                            // Must match MAF CompactionMessageIndex.ComputeContentByteCount parity verbatim
+                            // so EstimateGroupTokens never falls back to ByteCount / 4 (which inflates image bytes).
+                            bytes += dc.Data.Length;
+                            if (!string.IsNullOrEmpty(dc.MediaType)) bytes += System.Text.Encoding.UTF8.GetByteCount(dc.MediaType);
+                            if (!string.IsNullOrEmpty(dc.Name)) bytes += System.Text.Encoding.UTF8.GetByteCount(dc.Name);
                             break;
                     }
                 }

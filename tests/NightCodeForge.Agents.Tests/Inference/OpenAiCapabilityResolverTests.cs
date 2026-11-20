@@ -3,23 +3,27 @@ using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Inference;
 using Xunit;
 
 namespace NightCodeForge.Agents.Tests.Inference;
 
 public class OpenAiCapabilityResolverTests
 {
+    private static OpenAiCapabilityResolver CreateResolver(LlmProviderOptions options) =>
+        new(Options.Create(options), new OpenAiModelAllowlistCache(), EmptyLlmContextWindowCache.Instance);
+
     [Fact]
     public void Constructor_WhenOptionsNull_ThrowsArgumentNullException()
     {
-        Assert.Throws<ArgumentNullException>(() => new OpenAiCapabilityResolver(null!));
+        Assert.Throws<ArgumentNullException>(() => new OpenAiCapabilityResolver(null!, new OpenAiModelAllowlistCache(), EmptyLlmContextWindowCache.Instance));
     }
 
     [Fact]
     public void ResolveReasoningEffort_WhenXhigh_NormalizesToHigh()
     {
         var options = new LlmProviderOptions();
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var effort = resolver.ResolveReasoningEffort("o3-mini", "xhigh");
 
@@ -33,7 +37,7 @@ public class OpenAiCapabilityResolverTests
     public void ResolveReasoningEffort_PreservesStandardOpenAiEfforts(string requested, string expected)
     {
         var options = new LlmProviderOptions();
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var effort = resolver.ResolveReasoningEffort("o1", requested);
 
@@ -44,11 +48,11 @@ public class OpenAiCapabilityResolverTests
     public void ResolveReasoningEffort_WhenEmpty_DefaultsToHighOrConfigured()
     {
         var optionsWithLow = new LlmProviderOptions { ReasoningEffort = "low" };
-        var resolverLow = new OpenAiCapabilityResolver(Options.Create(optionsWithLow));
+        var resolverLow = CreateResolver(optionsWithLow);
         Assert.Equal("low", resolverLow.ResolveReasoningEffort("gpt-4o", null));
 
         var optionsDefault = new LlmProviderOptions { ReasoningEffort = null };
-        var resolverDefault = new OpenAiCapabilityResolver(Options.Create(optionsDefault));
+        var resolverDefault = CreateResolver(optionsDefault);
         Assert.Equal("high", resolverDefault.ResolveReasoningEffort("gpt-4o", null));
     }
 
@@ -63,7 +67,7 @@ public class OpenAiCapabilityResolverTests
                 ["maximum"] = "xhigh"
             }
         };
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var effort = resolver.ResolveReasoningEffort("custom-reasoner", "maximum");
 
@@ -74,7 +78,7 @@ public class OpenAiCapabilityResolverTests
     public void BuildReasoningProperties_EmitsReasoningEffortWithoutThinkFlag()
     {
         var options = new LlmProviderOptions { ReasoningEffort = "medium" };
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var props = resolver.BuildReasoningProperties("o1-preview");
 
@@ -86,7 +90,7 @@ public class OpenAiCapabilityResolverTests
     public void CreateChatOptions_WithAgentProfile_PopulatesChatOptionsCorrectly()
     {
         var options = new LlmProviderOptions { DefaultModelId = "gpt-4o" };
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var profile = new AgentProfile
         {
@@ -107,7 +111,7 @@ public class OpenAiCapabilityResolverTests
     public void CreateChatOptions_WhenThinkingEffortNone_SuppressesReasoningProperties()
     {
         var options = new LlmProviderOptions { DefaultModelId = "gpt-4o" };
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var profile = new AgentProfile
         {
@@ -132,7 +136,7 @@ public class OpenAiCapabilityResolverTests
     public void CreateChatOptions_WithVariousThinkingEfforts_MapsCorrectly(ThinkingEffort effort, string expectedReasoningEffort)
     {
         var options = new LlmProviderOptions();
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var profile = new AgentProfile
         {
@@ -154,7 +158,7 @@ public class OpenAiCapabilityResolverTests
             DefaultModelId = "gpt-4o-mini",
             ReasoningEffort = "low"
         };
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var chatOptions = resolver.CreateChatOptions(null);
 
@@ -168,7 +172,7 @@ public class OpenAiCapabilityResolverTests
     public void ResolveReasoningEffort_WhenMinimal_NormalizesToLow()
     {
         var options = new LlmProviderOptions();
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         var effort = resolver.ResolveReasoningEffort("o3-mini", "minimal");
 
@@ -194,7 +198,7 @@ public class OpenAiCapabilityResolverTests
             }
         };
 
-        var resolver = new OpenAiCapabilityResolver(Options.Create(options));
+        var resolver = CreateResolver(options);
 
         // 1. Fallback to LlmProviderOptions
         var chatOptsFallback = resolver.CreateChatOptions(new AgentProfile { ModelName = "unknown-model" });

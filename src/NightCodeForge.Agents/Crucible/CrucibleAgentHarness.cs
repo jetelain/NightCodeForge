@@ -16,7 +16,9 @@ using NightCodeForge.Agents.Skills;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Agents.Tools.EditorConfig;
 using NightCodeForge.Agents.Transcripts;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
@@ -35,6 +37,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
     public const string TruncationContinuationPrompt =
         "[System Notice]: Your previous response was interrupted mid-thought before calling a tool. Please resume immediately and proceed with your planned action or tool call.";
+
+    private const string UnresolvedImageRefPropertyKey = "vision.unresolved_image_ref";
 
     private readonly ICanonicalToolsetFactory _toolsetFactory;
     private readonly IAgentWorkspaceContextService _workspaceContext;
@@ -111,6 +115,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var locations = _workspaceContext.ResolveLocations(workspace, worktreeTaskId, context.WorkspacePath);
         var workspacePath = locations.RepoPath;
 
+        bool supportsVision = !isTriageSession
+            && await _agentFactory.ResolveVisionCapabilityAsync(context.Profile, cancellationToken);
+        var multimodalQueue = supportsVision ? new MultimodalAttachmentQueue() : null;
+        var effectiveProfileModel = !string.IsNullOrWhiteSpace(context.Profile.ModelName) ? context.Profile.ModelName : null;
+
         var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
         var buildTimeout = workspace.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
         var testTimeout = workspace.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
@@ -148,7 +157,10 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     IsReadOnly: isTriageSession || context.Profile.Mode == AgentMode.ReadOnly || context.Profile.SecurityTier == SandboxSecurityTier.RestrictedReadOnly || context.SandboxScope?.IsReadOnly == true,
                     SandboxScope: context.SandboxScope,
                     OptimizationFlags: context.OptimizationFlags,
-                    BacklogMutationPolicy: effectiveBacklogPolicy),
+                    BacklogMutationPolicy: effectiveBacklogPolicy,
+                    SupportsVision: supportsVision,
+                    ActiveModelId: effectiveProfileModel,
+                    MultimodalAttachmentQueue: multimodalQueue),
                 permittedTools,
                 harnessConfig.CustomTools,
                 harnessConfig.ToolDirectives,
@@ -157,6 +169,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             cancellationToken);
         var canonicalTools = toolset.Tools;
         var dispatcher = toolset.Dispatcher;
+
+        await RehydrateDeferredImageRefsAsync(chatHistory, toolset.Tools.FileModule, _logger, cancellationToken);
 
         using var interruptionController = toolset.UseInterruptionController(cancellationToken);
 
@@ -235,7 +249,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
             customRolePersona: customPersona,
             workingDirectory: locations.AgentWorkingDir,
             backlogDigest: backlogDigest,
-            taskAttachmentsDigest: taskAttachmentsDigest);
+            taskAttachmentsDigest: taskAttachmentsDigest,
+            supportsVision: supportsVision);
 
         // 6. Assemble the agent and its middlewares.
         string latestSerializedState = SerializeSession(chatHistory);
@@ -269,7 +284,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     },
                     _logger),
                 GrammarFlags: context.OptimizationFlags,
-                Dispatcher: toolset.Dispatcher),
+                Dispatcher: toolset.Dispatcher,
+                MultimodalAttachmentQueue: multimodalQueue),
             cancellationToken);
 
         var tracingClient = setup.TracingClient;
@@ -293,8 +309,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
             piStrategy.OnCompacted = async (notification, ct) =>
             {
+                var compactedMessages = notification.IncludedMessages.ToList();
+                if (multimodalQueue != null)
+                {
+                    MultimodalAttachmentQueue.PruneToIncludedMessages(multimodalQueue, compactedMessages);
+                    compactedMessages = MultimodalToolInjectionChatClient.TransformMessages(compactedMessages, multimodalQueue);
+                }
+
                 chatHistory.Clear();
-                chatHistory.AddRange(notification.IncludedMessages);
+                chatHistory.AddRange(compactedMessages);
                 StripAttribution(chatHistory);
                 latestSerializedState = SerializeSession(chatHistory);
 
@@ -1634,9 +1657,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
 
             var conversationId = conversationState.Conversation.Id;
-            var metadataJson = !string.IsNullOrEmpty(entry.CallId)
-                ? JsonSerializer.Serialize(new { CallId = entry.CallId })
-                : null;
+            var metadataJson = !string.IsNullOrWhiteSpace(entry.MetadataJson)
+                ? entry.MetadataJson
+                : (!string.IsNullOrEmpty(entry.CallId)
+                    ? JsonSerializer.Serialize(new { CallId = entry.CallId })
+                    : null);
 
             conversationState.EnqueueTurn(
                 role,
@@ -1761,58 +1786,219 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
     public static string SerializeSession(List<ChatMessage> messages)
     {
-        // Contents are stored in their original order (reasoning, text, tool calls and results) so that a
-        // resumed session is identical to the one that was checkpointed.
-        var simpleList = messages.Select(m => new SerializedMessageItem(
+        // Contents are stored in their original order (reasoning, text, tool calls, results, image_ref)
+        // so that a resumed session is identical to the one that was checkpointed (zero Base64 bytes).
+        var simpleList = messages.Select(m => new ConversationHistorySerializer.SerializedMessageItem(
             m.Role.Value,
             Text: null,
             FunctionCalls: null,
             FunctionResults: null,
             AuthorName: m.AuthorName,
-            Contents: m.Contents.Select(ToSerializedContent).OfType<SerializedContent>().ToList()
+            Contents: m.Contents.Select(ToSerializedContent).OfType<ConversationHistorySerializer.SerializedContent>().ToList()
         )).ToList();
 
         return JsonSerializer.Serialize(simpleList, new JsonSerializerOptions { WriteIndented = false });
     }
 
-    private static SerializedContent? ToSerializedContent(AIContent content) => content switch
+    private static ConversationHistorySerializer.SerializedContent? ToSerializedContent(AIContent content) => content switch
     {
-        TextReasoningContent r => new SerializedContent("reasoning", Text: r.Text, ProtectedData: r.ProtectedData),
-        TextContent t => new SerializedContent("text", Text: t.Text),
-        FunctionCallContent f => new SerializedContent("call", CallId: f.CallId, Name: f.Name, Arguments: f.Arguments),
-        FunctionResultContent r => new SerializedContent("result", CallId: r.CallId, Result: r.Result?.ToString()),
+        TextReasoningContent r => new ConversationHistorySerializer.SerializedContent(
+            ConversationHistorySerializer.ContentTypeReasoning, Text: r.Text, ProtectedData: r.ProtectedData),
+        TextContent t => new ConversationHistorySerializer.SerializedContent(
+            ConversationHistorySerializer.ContentTypeText, Text: t.Text),
+        FunctionCallContent f => new ConversationHistorySerializer.SerializedContent(
+            ConversationHistorySerializer.ContentTypeCall, CallId: f.CallId, Name: f.Name, Arguments: f.Arguments),
+        FunctionResultContent r => new ConversationHistorySerializer.SerializedContent(
+            ConversationHistorySerializer.ContentTypeResult, CallId: r.CallId, Result: r.Result?.ToString()),
+        DataContent dc when dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType) =>
+            new ConversationHistorySerializer.SerializedContent(
+                ConversationHistorySerializer.ContentTypeImageRef,
+                CallId: MultimodalToolInjectionChatClient.ResolveDataContentStringProperty(dc, VisionConstants.PropCallId),
+                SourcePath: MultimodalToolInjectionChatClient.ResolveDataContentSourcePath(dc),
+                MediaType: dc.MediaType,
+                Sha256: MultimodalToolInjectionChatClient.ResolveDataContentStringProperty(dc, VisionConstants.PropSha256),
+                WidthPx: MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropWidthPx),
+                HeightPx: MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropHeightPx)),
         _ => null
     };
 
-    private static AIContent? FromSerializedContent(SerializedContent c)
+    private static AIContent? FromSerializedContent(
+        ConversationHistorySerializer.SerializedContent c,
+        Func<string, string?>? resolveHostPath,
+        bool trackUnresolvedRefs,
+        ILogger? logger)
     {
         switch (c.Type)
         {
-            case "reasoning":
+            case ConversationHistorySerializer.ContentTypeReasoning:
                 return new TextReasoningContent(c.Text) { ProtectedData = c.ProtectedData };
-            case "text":
+            case ConversationHistorySerializer.ContentTypeText:
                 return new TextContent(c.Text);
-            case "call":
+            case ConversationHistorySerializer.ContentTypeCall:
                 var args = c.Arguments != null
                     ? JsonSerializer.Deserialize<Dictionary<string, object?>>(JsonSerializer.Serialize(c.Arguments))
                     : null;
                 return new FunctionCallContent(c.CallId ?? Guid.NewGuid().ToString("N"), c.Name ?? string.Empty, args);
-            case "result":
+            case ConversationHistorySerializer.ContentTypeResult:
                 return new FunctionResultContent(c.CallId ?? Guid.NewGuid().ToString("N"), c.Result);
+            case ConversationHistorySerializer.ContentTypeImageRef:
+                return RehydrateImageRefContent(c, resolveHostPath, trackUnresolvedRefs, logger);
             default:
                 return null;
         }
     }
 
-    public static List<ChatMessage> DeserializeSession(string json, ILogger? logger = null)
+    private static AIContent RehydrateImageRefContent(
+        ConversationHistorySerializer.SerializedContent c,
+        Func<string, string?>? resolveHostPath,
+        bool trackUnresolvedRefs,
+        ILogger? logger)
+    {
+        var sourcePath = c.SourcePath ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(sourcePath))
+        {
+            return new TextContent(VisionConstants.FormatMissingImageMarker("unknown"));
+        }
+
+        string? hostPath = resolveHostPath?.Invoke(sourcePath);
+
+        if (!string.IsNullOrWhiteSpace(hostPath) && File.Exists(hostPath))
+        {
+            return LoadNormalizedImageOrMissingMarker(
+                hostPath,
+                sourcePath,
+                c.Sha256,
+                c.CallId,
+                logger);
+        }
+
+        var missing = new TextContent(VisionConstants.FormatMissingImageMarker(sourcePath));
+        if (trackUnresolvedRefs)
+        {
+            missing.AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                [UnresolvedImageRefPropertyKey] = c
+            };
+        }
+        return missing;
+    }
+
+    private static AIContent LoadNormalizedImageOrMissingMarker(
+        string hostPath,
+        string sourcePath,
+        string? expectedSha256,
+        string? callId,
+        ILogger? logger)
+    {
+        try
+        {
+            var rawBytes = File.ReadAllBytes(hostPath);
+            var normalized = VisionImageNormalizer.NormalizeBytes(rawBytes, Path.GetExtension(hostPath), sourcePath);
+            if (!string.IsNullOrWhiteSpace(expectedSha256) &&
+                !string.Equals(normalized.Sha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                logger?.LogWarning(
+                    "Visual attachment '{SourcePath}' on disk (sha256:{ActualSha}) no longer matches checkpoint digest (sha256:{ExpectedSha}); emitting missing marker.",
+                    sourcePath,
+                    normalized.Sha256,
+                    expectedSha256);
+                return new TextContent(VisionConstants.FormatMissingImageMarker(sourcePath));
+            }
+
+            return VisionImageNormalizer.CreateDataContent(normalized, sourcePath, callId);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or AttachmentConversionException)
+        {
+            logger?.LogWarning(ex, "Failed to reload visual attachment '{SourcePath}' from '{HostPath}'.", sourcePath, hostPath);
+            return new TextContent(VisionConstants.FormatMissingImageMarker(sourcePath));
+        }
+    }
+
+    internal static async Task RehydrateDeferredImageRefsAsync(
+        List<ChatMessage> chatHistory,
+        WorkspaceFileToolModule fileModule,
+        ILogger? logger,
+        CancellationToken cancellationToken)
+    {
+        if (chatHistory == null || chatHistory.Count == 0)
+        {
+            return;
+        }
+
+        bool supportsVision = fileModule.SupportsVision;
+        for (int mIdx = 0; mIdx < chatHistory.Count; mIdx++)
+        {
+            var contents = chatHistory[mIdx].Contents;
+            if (contents == null) continue;
+
+            for (int cIdx = 0; cIdx < contents.Count; cIdx++)
+            {
+                if (contents[cIdx] is TextContent tc &&
+                    tc.AdditionalProperties != null &&
+                    tc.AdditionalProperties.TryGetValue(UnresolvedImageRefPropertyKey, out var rawRef))
+                {
+                    tc.AdditionalProperties.Remove(UnresolvedImageRefPropertyKey);
+                    if (tc.AdditionalProperties.Count == 0)
+                    {
+                        tc.AdditionalProperties = null;
+                    }
+
+                    if (rawRef is ConversationHistorySerializer.SerializedContent serializedRef &&
+                        !string.IsNullOrWhiteSpace(serializedRef.SourcePath))
+                    {
+                        if (!supportsVision)
+                        {
+                            contents[cIdx] = new TextContent(
+                                VisionConstants.FormatVisionDisabledOmittedImageMarker(serializedRef.SourcePath));
+                            continue;
+                        }
+
+                        var hostPath = await fileModule.TryResolveReadableImageHostPathAsync(serializedRef.SourcePath, cancellationToken);
+                        if (!string.IsNullOrWhiteSpace(hostPath))
+                        {
+                            contents[cIdx] = LoadNormalizedImageOrMissingMarker(
+                                hostPath,
+                                serializedRef.SourcePath,
+                                serializedRef.Sha256,
+                                serializedRef.CallId,
+                                logger);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!supportsVision)
+        {
+            MultimodalToolInjectionChatClient.StripImagesForTextOnlyModel(chatHistory);
+            return;
+        }
+
+        MultimodalToolInjectionChatClient.EnforceActiveImageWindow(chatHistory, VisionConstants.MaxImagesInActiveWindow);
+    }
+
+    public static List<ChatMessage> DeserializeSession(string json, ILogger? logger = null) =>
+        DeserializeSession(json, resolveHostPath: null, logger);
+
+    public static List<ChatMessage> DeserializeSession(
+        string json,
+        Func<string, string?>? resolveHostPath,
+        ILogger? logger = null) =>
+        DeserializeSession(json, resolveHostPath, trackUnresolvedRefs: false, logger);
+
+    internal static List<ChatMessage> DeserializeSession(
+        string json,
+        Func<string, string?>? resolveHostPath,
+        bool trackUnresolvedRefs,
+        ILogger? logger = null)
     {
         var result = new List<ChatMessage>();
         if (string.IsNullOrWhiteSpace(json)) return result;
 
         try
         {
-            var items = JsonSerializer.Deserialize<List<SerializedMessageItem>>(json);
-            if (items == null) return result;
+            var items = ConversationHistorySerializer.Deserialize(json);
+            if (items.Count == 0) return result;
 
             foreach (var item in items)
             {
@@ -1821,16 +2007,38 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
                 if (item.Contents != null)
                 {
+                    var injectedCallIds = new List<string>();
+                    bool hasImageRefContent = false;
+
                     foreach (var serialized in item.Contents)
                     {
-                        var restored = FromSerializedContent(serialized);
+                        if (string.Equals(serialized.Type, ConversationHistorySerializer.ContentTypeImageRef, StringComparison.OrdinalIgnoreCase))
+                        {
+                            hasImageRefContent = true;
+                            if (!string.IsNullOrWhiteSpace(serialized.CallId))
+                            {
+                                injectedCallIds.Add(serialized.CallId);
+                            }
+                        }
+
+                        var restored = FromSerializedContent(serialized, resolveHostPath, trackUnresolvedRefs, logger);
                         if (restored != null)
                         {
                             contents.Add(restored);
                         }
                     }
 
-                    result.Add(new ChatMessage(role, contents) { AuthorName = item.AuthorName });
+                    var message = new ChatMessage(role, contents) { AuthorName = item.AuthorName };
+                    if (hasImageRefContent && injectedCallIds.Count > 0)
+                    {
+                        message.AdditionalProperties = new AdditionalPropertiesDictionary
+                        {
+                            [VisionConstants.PropIsInjectedVisual] = true,
+                            [VisionConstants.PropInjectedCallIds] = injectedCallIds.ToArray()
+                        };
+                    }
+
+                    result.Add(message);
                     continue;
                 }
 
@@ -1865,6 +2073,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             logger?.LogWarning(ex, "Failed to deserialize agent session JSON");
         }
 
+        MultimodalToolInjectionChatClient.EnforceActiveImageWindow(result, VisionConstants.MaxImagesInActiveWindow);
         return result;
     }
 
@@ -1929,24 +2138,4 @@ public partial class CrucibleAgentHarness : IAgentHarness
             }
         }
     }
-
-    private record SerializedMessageItem(
-        string Role,
-        string? Text,
-        List<SerializedFunctionCall>? FunctionCalls,
-        List<SerializedFunctionResult>? FunctionResults,
-        string? AuthorName = null,
-        List<SerializedContent>? Contents = null);
-
-    private record SerializedContent(
-        string Type,
-        string? Text = null,
-        string? CallId = null,
-        string? Name = null,
-        object? Arguments = null,
-        string? Result = null,
-        string? ProtectedData = null);
-
-    private record SerializedFunctionCall(string? CallId, string Name, object? Arguments);
-    private record SerializedFunctionResult(string? CallId, string? Result);
 }

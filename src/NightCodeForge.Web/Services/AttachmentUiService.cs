@@ -1,9 +1,11 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Web.Services;
 
@@ -66,6 +68,20 @@ public interface IAttachmentUiService
     Task DeleteAttachmentAsync(
         int attachmentId,
         CancellationToken cancellationToken = default);
+
+    Task<VisionCapabilityStatus> EvaluateIdeationVisionAsync(
+        int workspaceId,
+        string? modelOverride,
+        CancellationToken cancellationToken = default);
+
+    Task<VisionCapabilityStatus> EvaluateTaskVisionAsync(
+        int workspaceId,
+        TaskDifficulty difficulty,
+        CancellationToken cancellationToken = default);
+
+    Task<string?> LoadImageThumbnailDataUriAsync(
+        int attachmentId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
@@ -77,6 +93,7 @@ public class AttachmentUiService : IAttachmentUiService
     private readonly IWorkspaceRepository _workspaceRepository;
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IIdeationConversationCoordinator _ideationCoordinator;
+    private readonly IVisionCapabilityUiService _visionCapabilityUiService;
     private readonly ILogger<AttachmentUiService> _logger;
 
     public AttachmentUiService(
@@ -86,6 +103,7 @@ public class AttachmentUiService : IAttachmentUiService
         IWorkspaceRepository workspaceRepository,
         IWorkspacePathResolver pathResolver,
         IIdeationConversationCoordinator ideationCoordinator,
+        IVisionCapabilityUiService visionCapabilityUiService,
         ILogger<AttachmentUiService> logger)
     {
         _intakeService = intakeService ?? throw new ArgumentNullException(nameof(intakeService));
@@ -94,6 +112,7 @@ public class AttachmentUiService : IAttachmentUiService
         _workspaceRepository = workspaceRepository ?? throw new ArgumentNullException(nameof(workspaceRepository));
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _ideationCoordinator = ideationCoordinator ?? throw new ArgumentNullException(nameof(ideationCoordinator));
+        _visionCapabilityUiService = visionCapabilityUiService ?? throw new ArgumentNullException(nameof(visionCapabilityUiService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -392,14 +411,12 @@ public class AttachmentUiService : IAttachmentUiService
 
         if (attachment.ContentKind == TaskAttachmentContentKind.Image)
         {
-            var imagePath = ResolvePrimaryReadableFile(hostAttachmentsDir, attachment.RelativePath, resolvedSymlinkTarget, attachment.IsSymlink);
-            string? imageDataUri = null;
-            if (!string.IsNullOrWhiteSpace(imagePath) && File.Exists(imagePath))
-            {
-                var bytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
-                var mediaType = string.IsNullOrWhiteSpace(attachment.MediaType) ? "image/png" : attachment.MediaType;
-                imageDataUri = $"data:{mediaType};base64,{Convert.ToBase64String(bytes)}";
-            }
+            string? imageDataUri = await TryLoadImageDataUriAsync(
+                attachment,
+                hostAttachmentsDir,
+                resolvedSymlinkTarget,
+                downscaleForThumbnail: false,
+                cancellationToken);
 
             return new AttachmentPreviewModel
             {
@@ -466,6 +483,105 @@ public class AttachmentUiService : IAttachmentUiService
         if (existing is { WorkspaceId: > 0 })
         {
             _ideationCoordinator.MarkWorkspaceContextDirty(existing.WorkspaceId);
+        }
+    }
+
+    public Task<VisionCapabilityStatus> EvaluateIdeationVisionAsync(
+        int workspaceId,
+        string? modelOverride,
+        CancellationToken cancellationToken = default)
+        => _visionCapabilityUiService.EvaluateWorkspaceStageVisionAsync(
+            workspaceId,
+            StandardStageIds.Ideation,
+            difficulty: null,
+            modelOverride: modelOverride,
+            cancellationToken: cancellationToken);
+
+    public Task<VisionCapabilityStatus> EvaluateTaskVisionAsync(
+        int workspaceId,
+        TaskDifficulty difficulty,
+        CancellationToken cancellationToken = default)
+        => _visionCapabilityUiService.EvaluateWorkspaceTaskVisionAsync(
+            workspaceId,
+            difficulty,
+            cancellationToken);
+
+    public async Task<string?> LoadImageThumbnailDataUriAsync(
+        int attachmentId,
+        CancellationToken cancellationToken = default)
+    {
+        if (attachmentId <= 0)
+        {
+            return null;
+        }
+
+        var attachment = await _attachmentRepository.GetByIdAsync(attachmentId, cancellationToken)
+            ?? await _intakeService.GetAttachmentAsync(attachmentId, cancellationToken);
+        if (attachment == null || attachment.ContentKind != TaskAttachmentContentKind.Image)
+        {
+            return null;
+        }
+
+        var hostAttachmentsDir = ResolveHostAttachmentsDirectory(attachment.WorkspaceId);
+        var (isTargetReachable, resolvedSymlinkTarget) = EvaluateSymlinkReachability(attachment);
+        if (attachment.IsSymlink && !isTargetReachable)
+        {
+            return null;
+        }
+
+        return await TryLoadImageDataUriAsync(
+            attachment,
+            hostAttachmentsDir,
+            resolvedSymlinkTarget,
+            downscaleForThumbnail: true,
+            cancellationToken);
+    }
+
+    private async Task<string?> TryLoadImageDataUriAsync(
+        TaskAttachment attachment,
+        string hostAttachmentsDir,
+        string? resolvedSymlinkTarget,
+        bool downscaleForThumbnail,
+        CancellationToken cancellationToken)
+    {
+        var imagePath = ResolvePrimaryReadableFile(hostAttachmentsDir, attachment.RelativePath, resolvedSymlinkTarget, attachment.IsSymlink);
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(imagePath);
+            if (fileInfo.Length <= 0 || fileInfo.Length > VisionConstants.MaxVisionImageBytes)
+            {
+                return null;
+            }
+
+            var bytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
+            if (bytes.Length == 0 || bytes.Length > VisionConstants.MaxVisionImageBytes)
+            {
+                return null;
+            }
+
+            if (downscaleForThumbnail)
+            {
+                var thumb = VisionImageNormalizer.TryCreateThumbnailBytes(bytes, VisionConstants.ThumbnailMaxDimensionPx);
+                if (thumb is var (thumbBytes, thumbMediaType))
+                {
+                    return $"data:{thumbMediaType};base64,{Convert.ToBase64String(thumbBytes)}";
+                }
+            }
+
+            var mediaType = ImageHeaderInspector.TryInspect(bytes, out var header)
+                ? header.MediaType
+                : (string.IsNullOrWhiteSpace(attachment.MediaType) ? "image/png" : attachment.MediaType);
+            return $"data:{mediaType};base64,{Convert.ToBase64String(bytes)}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Failed reading image preview bytes for attachment #{AttachmentId} from '{Path}'.", attachment.Id, imagePath);
+            return null;
         }
     }
 

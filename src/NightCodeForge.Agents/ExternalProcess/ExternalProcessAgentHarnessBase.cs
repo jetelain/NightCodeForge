@@ -51,6 +51,8 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
 
     protected IHarnessActivityRecorder Recorder => _recorder;
 
+    protected IWorkspacePathResolver PathResolver => _pathResolver;
+
     /// <summary>Human readable agent name used in launch failure messages (e.g. "ACP agent").</summary>
     protected abstract string AgentDisplayName { get; }
 

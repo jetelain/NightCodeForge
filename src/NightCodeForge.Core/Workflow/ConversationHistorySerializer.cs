@@ -18,7 +18,20 @@ public static class ConversationHistorySerializer
         string? Name = null,
         object? Arguments = null,
         string? Result = null,
-        string? ProtectedData = null);
+        string? ProtectedData = null,
+        string? SourcePath = null,
+        string? MediaType = null,
+        string? Sha256 = null,
+        int? WidthPx = null,
+        int? HeightPx = null);
+
+    public record SerializedImageRef(
+        string SourcePath,
+        string MediaType,
+        string? Sha256 = null,
+        int? WidthPx = null,
+        int? HeightPx = null,
+        string? CallId = null);
 
     public record SerializedFunctionCall(string? CallId, string Name, object? Arguments);
     public record SerializedFunctionResult(string? CallId, string? Result);
@@ -54,6 +67,7 @@ public static class ConversationHistorySerializer
     public const string ContentTypeReasoning = "reasoning";
     public const string ContentTypeCall = "call";
     public const string ContentTypeResult = "result";
+    public const string ContentTypeImageRef = "image_ref";
 
     private const string RoleUser = "user";
     private const string RoleAssistant = "assistant";
@@ -128,13 +142,29 @@ public static class ConversationHistorySerializer
             switch (turn.Role)
             {
                 case StageTurnRole.User:
+                    var imageRefs = ExtractImageRefs(turn.MetadataJson);
+                    var userContents = new List<SerializedContent>();
+                    if (!string.IsNullOrEmpty(turn.Content) || imageRefs.Count == 0)
+                    {
+                        userContents.Add(new SerializedContent(ContentTypeText, Text: turn.Content));
+                    }
+
+                    foreach (var imgRef in imageRefs)
+                    {
+                        userContents.Add(new SerializedContent(
+                            ContentTypeImageRef,
+                            CallId: imgRef.CallId,
+                            SourcePath: imgRef.SourcePath,
+                            MediaType: imgRef.MediaType,
+                            Sha256: imgRef.Sha256,
+                            WidthPx: imgRef.WidthPx,
+                            HeightPx: imgRef.HeightPx));
+                    }
+
                     items.Add(new SerializedMessageItem(
                         Role: RoleUser,
                         Text: turn.Content,
-                        Contents: new List<SerializedContent>
-                        {
-                            new(ContentTypeText, Text: turn.Content)
-                        }));
+                        Contents: userContents));
                     sawThinkingTurnInExchange = false;
                     break;
 
@@ -735,6 +765,13 @@ public static class ConversationHistorySerializer
                         case ContentTypeResult:
                             sb.AppendLine($"[Tool Result]: {c.Result}");
                             break;
+                        case ContentTypeImageRef:
+                            sb.AppendLine(VisionConstants.FormatCompactionImagePlaceholder(
+                                c.SourcePath ?? "image",
+                                c.WidthPx,
+                                c.HeightPx,
+                                c.MediaType ?? "image/*"));
+                            break;
                     }
                 }
             }
@@ -773,6 +810,117 @@ public static class ConversationHistorySerializer
     }
 
     public static string? ExtractCallId(ConversationTurn? turn) => ExtractCallId(turn?.MetadataJson);
+
+    public static IReadOnlyList<SerializedImageRef> ExtractImageRefs(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            return Array.Empty<SerializedImageRef>();
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                (!doc.RootElement.TryGetProperty("ImageRefs", out var prop) &&
+                 !doc.RootElement.TryGetProperty("imageRefs", out prop)) ||
+                prop.ValueKind != JsonValueKind.Array)
+            {
+                return Array.Empty<SerializedImageRef>();
+            }
+
+            var list = JsonSerializer.Deserialize<List<SerializedImageRef>>(prop.GetRawText(), JsonOptions);
+            return list != null
+                ? list.Where(r => r != null && !string.IsNullOrWhiteSpace(r.SourcePath)).ToList()
+                : Array.Empty<SerializedImageRef>();
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<SerializedImageRef>();
+        }
+    }
+
+    public static bool IsInjectedVisualTurn(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   (doc.RootElement.TryGetProperty("IsInjectedVisual", out var prop) ||
+                    doc.RootElement.TryGetProperty("isInjectedVisual", out prop)) &&
+                   prop.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    public static IReadOnlyList<int> ExtractAttachmentIds(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            return Array.Empty<int>();
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                (doc.RootElement.TryGetProperty("AttachmentIds", out var prop) ||
+                 doc.RootElement.TryGetProperty("attachmentIds", out prop)) &&
+                prop.ValueKind == JsonValueKind.Array)
+            {
+                var ids = new List<int>();
+                foreach (var el in prop.EnumerateArray())
+                {
+                    if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var id) && id > 0)
+                    {
+                        ids.Add(id);
+                    }
+                }
+                return ids;
+            }
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<int>();
+        }
+
+        return Array.Empty<int>();
+    }
+
+    public static string BuildVisualTurnMetadataJson(
+        IReadOnlyList<SerializedImageRef>? imageRefs,
+        bool isInjectedVisual,
+        IReadOnlyList<int>? attachmentIds = null,
+        string? callId = null)
+    {
+        var payload = new Dictionary<string, object?>();
+        if (!string.IsNullOrWhiteSpace(callId))
+        {
+            payload["CallId"] = callId;
+        }
+        if (isInjectedVisual)
+        {
+            payload["IsInjectedVisual"] = true;
+        }
+        if (attachmentIds is { Count: > 0 })
+        {
+            payload["AttachmentIds"] = attachmentIds.Where(id => id > 0).Distinct().ToList();
+        }
+        if (imageRefs is { Count: > 0 })
+        {
+            payload["ImageRefs"] = imageRefs;
+        }
+
+        return JsonSerializer.Serialize(payload, JsonOptions);
+    }
 
     /// <summary>
     /// Identifies any trailing unanswered tool turns (and any immediately preceding thinking or

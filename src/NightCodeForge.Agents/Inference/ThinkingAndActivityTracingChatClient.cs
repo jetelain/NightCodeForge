@@ -3,7 +3,10 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Agents.Transcripts;
+using NightCodeForge.Agents.Vision;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Inference;
 
@@ -99,6 +102,7 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
     public const int RetainedLeadingModelCalls = 100;
 
     private readonly List<ModelCallSnapshot> _modelCalls = new();
+    private readonly HashSet<string> _recordedInjectedVisualKeys = new(StringComparer.Ordinal);
     private List<ModelCallMessage> _previousMessages = new();
     private string? _previousInstructions;
     private string? _previousToolsSignature;
@@ -185,7 +189,8 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         {
             var (inputTokens, outputTokens) = ExtractUsageTokens(usageDetails);
             int responseMsgCount = response.Messages is { Count: > 0 } ? response.Messages.Count : 1;
-            RecordMeasuredUsage(inputTokens, outputTokens, messages.Count, responseMsgCount);
+            int sentIncludedCount = Math.Max(0, messages.Count - CountNewlyInjectedMiddlewareMessages(messages));
+            RecordMeasuredUsage(inputTokens, outputTokens, sentIncludedCount, responseMsgCount);
         }
 
         return response;
@@ -285,7 +290,8 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         FlushStream(reasoningBuilder, textBuilder, functionCalls);
         if (measuredInputTokens.HasValue || measuredOutputTokens.HasValue)
         {
-            RecordMeasuredUsage(measuredInputTokens ?? 0, measuredOutputTokens ?? 0, messages.Count, 1);
+            int sentIncludedCount = Math.Max(0, messages.Count - CountNewlyInjectedMiddlewareMessages(messages));
+            RecordMeasuredUsage(measuredInputTokens ?? 0, measuredOutputTokens ?? 0, sentIncludedCount, 1);
         }
     }
 
@@ -386,8 +392,99 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
             }
         }
 
-        // 3. Record the full request (as sent to the model), diffed against the previous one.
+        // 3. Record any newly injected visual user turns for SQLite crash-recovery parity.
+        RecordNewlyInjectedVisualTurns(messages);
+
+        // 4. Record the full request (as sent to the model), diffed against the previous one.
         RecordModelCall(messages, options);
+    }
+
+    private static bool HasTrueProperty(ChatMessage msg, string key) =>
+        msg.AdditionalProperties != null &&
+        msg.AdditionalProperties.TryGetValue(key, out var flag) &&
+        (flag is true || (flag is JsonElement je && je.ValueKind == JsonValueKind.True));
+
+    private static int CountNewlyInjectedMiddlewareMessages(IReadOnlyList<ChatMessage> messages)
+    {
+        int count = 0;
+        foreach (var msg in messages)
+        {
+            if (HasTrueProperty(msg, MultimodalToolInjectionChatClient.PropNewlyInjectedInMiddleware))
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void RecordNewlyInjectedVisualTurns(IReadOnlyList<ChatMessage> messages)
+    {
+        foreach (var msg in messages)
+        {
+            if (msg.Role != ChatRole.User || msg.AdditionalProperties == null)
+            {
+                continue;
+            }
+
+            if (!HasTrueProperty(msg, VisionConstants.PropIsInjectedVisual) ||
+                !HasTrueProperty(msg, MultimodalToolInjectionChatClient.PropNewlyInjectedInMiddleware))
+            {
+                continue;
+            }
+
+            if (msg.Contents == null || msg.Contents.Count == 0)
+            {
+                continue;
+            }
+
+            var imageRefs = new List<ConversationHistorySerializer.SerializedImageRef>();
+            var textLines = new List<string>();
+            var keyParts = new List<string>();
+
+            foreach (var content in msg.Contents)
+            {
+                if (content is TextContent tc && !string.IsNullOrWhiteSpace(tc.Text))
+                {
+                    textLines.Add(tc.Text);
+                }
+                else if (content is DataContent dc && dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType))
+                {
+                    var sourcePath = MultimodalToolInjectionChatClient.ResolveDataContentSourcePath(dc);
+                    var width = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropWidthPx);
+                    var height = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropHeightPx);
+                    var sha = MultimodalToolInjectionChatClient.ResolveDataContentStringProperty(dc, VisionConstants.PropSha256);
+                    var cid = MultimodalToolInjectionChatClient.ResolveDataContentStringProperty(dc, VisionConstants.PropCallId);
+
+                    imageRefs.Add(new ConversationHistorySerializer.SerializedImageRef(
+                        SourcePath: sourcePath,
+                        MediaType: dc.MediaType,
+                        Sha256: sha,
+                        WidthPx: width,
+                        HeightPx: height,
+                        CallId: cid));
+                    keyParts.Add($"{cid}|{sourcePath}|{sha}");
+                }
+            }
+
+            if (imageRefs.Count == 0)
+            {
+                continue;
+            }
+
+            var dedupKey = string.Join(";", keyParts);
+            bool shouldRecord;
+            lock (_lock)
+            {
+                shouldRecord = _recordedInjectedVisualKeys.Add(dedupKey);
+            }
+
+            if (shouldRecord)
+            {
+                var summaryText = textLines.Count > 0 ? string.Join("\n", textLines) : string.Empty;
+                var metaJson = ConversationHistorySerializer.BuildVisualTurnMetadataJson(imageRefs, isInjectedVisual: true);
+                AddEntry(new TranscriptEntry(DateTime.UtcNow, "USER", summaryText, MetadataJson: metaJson));
+            }
+        }
     }
 
     private void RecordModelCall(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
@@ -463,6 +560,12 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
                 case FunctionResultContent result:
                     var value = result.Result is string s ? s : SafeSerialize(result.Result);
                     parts.Add($"[tool result {result.CallId}] {value}");
+                    break;
+                case DataContent dc when dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType):
+                    var width = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropWidthPx);
+                    var height = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropHeightPx);
+                    var sha = MultimodalToolInjectionChatClient.ResolveDataContentStringProperty(dc, VisionConstants.PropSha256);
+                    parts.Add(VisionConstants.FormatTranscriptImageSummary(dc.MediaType, width, height, dc.Data.Length, sha));
                     break;
                 default:
                     parts.Add($"[{content.GetType().Name}]");

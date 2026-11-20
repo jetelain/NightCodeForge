@@ -687,6 +687,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                                         syntheticPriming = pendingPriming;
                                     }
 
+                                    var taskAttachments = await LoadStageTaskAttachmentsAsync(task, stage.StageId, cancellationToken);
+
                                     var agentContext = new AgentSessionContext
                                     {
                                         ForgeTask = task,
@@ -709,7 +711,8 @@ public class TaskOrchestrator : ITaskOrchestrator
                                         BootstrapPrompt = bootstrapPrompt,
                                         OptimizationFlags = effectiveOptimizationFlags,
                                         DiscoveredSymbols = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.DiscoveredSymbols),
-                                        PipelineContext = pipelineContext
+                                        PipelineContext = pipelineContext,
+                                        TaskAttachments = taskAttachments
                                     };
 
                                     var runResult = await harness.RunStageAsync(agentContext, cancellationToken);
@@ -3308,4 +3311,80 @@ public class TaskOrchestrator : ITaskOrchestrator
             explicitIds,
             description,
             cancellationToken);
+
+    private async Task<IReadOnlyList<TaskAttachment>?> LoadStageTaskAttachmentsAsync(
+        ForgeTask task,
+        string stageId,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(stageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var byId = new Dictionary<int, TaskAttachment>();
+        if (task.Id > 0)
+        {
+            var persisted = await _attachmentRepository.GetByTaskIdAsync(task.Id, cancellationToken)
+                ?? Array.Empty<TaskAttachment>();
+            foreach (var att in persisted)
+            {
+                if (att != null)
+                {
+                    byId[att.Id] = att;
+                }
+            }
+        }
+
+        if (task.AttachmentLinks is { Count: > 0 })
+        {
+            var missingNavIds = task.AttachmentLinks
+                .Select(l => l.TaskAttachmentId)
+                .Where(id => id > 0 && !byId.ContainsKey(id))
+                .Distinct()
+                .ToList();
+            if (missingNavIds.Count > 0)
+            {
+                var resolved = await _attachmentRepository.GetByIdsAsync(missingNavIds, cancellationToken)
+                    ?? Array.Empty<TaskAttachment>();
+                foreach (var att in resolved)
+                {
+                    if (att != null && (task.WorkspaceId <= 0 || att.WorkspaceId == task.WorkspaceId))
+                    {
+                        byId[att.Id] = att;
+                    }
+                }
+            }
+
+            foreach (var link in task.AttachmentLinks)
+            {
+                if (link.TaskAttachment != null &&
+                    !byId.ContainsKey(link.TaskAttachment.Id) &&
+                    (task.WorkspaceId <= 0 || link.TaskAttachment.WorkspaceId == task.WorkspaceId))
+                {
+                    byId[link.TaskAttachment.Id] = link.TaskAttachment;
+                }
+            }
+        }
+
+        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(task.Description)
+            .Where(id => id > 0 && !byId.ContainsKey(id))
+            .ToList();
+        if (citedIds.Count > 0)
+        {
+            var cited = await _attachmentRepository.GetByIdsAsync(citedIds, cancellationToken)
+                ?? Array.Empty<TaskAttachment>();
+            foreach (var att in cited)
+            {
+                if (att != null && (task.WorkspaceId <= 0 || att.WorkspaceId == task.WorkspaceId))
+                {
+                    byId[att.Id] = att;
+                }
+            }
+        }
+
+        return byId.Count > 0
+            ? byId.Values.OrderBy(a => a.Id).ToList()
+            : null;
+    }
 }

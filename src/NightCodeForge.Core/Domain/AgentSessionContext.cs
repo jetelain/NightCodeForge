@@ -32,4 +32,5 @@ public class AgentSessionContext
     public string? ApprovedPlan { get; init; }
     public string? ReviewerFeedback { get; init; }
     public IReadOnlyList<string>? PriorDiagnostics { get; init; }
+    public IReadOnlyList<TaskAttachment>? TaskAttachments { get; init; }
 }

@@ -305,7 +305,7 @@
                                                             }
                                                             @foreach (var m in _availableModels)
                                                             {
-                                                                <option value="@m.ModelId">@m.DisplayName</option>
+                                                                <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
                                                             }
                                                         </select>
                                                     }
@@ -317,6 +317,12 @@
                                                                value="@cell.ModelName"
                                                                @onchange="(e) => OnMatrixModelChangedAsync(difficulty, role, e.Value?.ToString())"
                                                                placeholder="e.g. qwen3.5:35b-a3b" />
+                                                    }
+                                                    @if (GetVisionBadge(cell.ModelName) is { Length: > 0 } matrixVisionBadge)
+                                                    {
+                                                        <span class="forge-badge badge-teal vision-capability-badge" style="font-size: 0.7rem; margin-top: 0.25rem; display: inline-block;">
+                                                            @matrixVisionBadge
+                                                        </span>
                                                     }
                                                 }
                                             </div>
@@ -492,29 +498,35 @@
                                         {
                                             <option value="@profile.ModelName">@profile.ModelName (Configured)</option>
                                         }
-                                        @foreach (var m in _availableModels)
-                                        {
-                                            <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
-                                        }
-                                    </select>
-                                }
-                                else
-                                {
-                                    <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)" placeholder="e.g. qwen2.5-coder:32b" />
-                                }
+                                         @foreach (var m in _availableModels)
+                                         {
+                                             <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
+                                         }
+                                     </select>
+                                 }
+                                 else
+                                 {
+                                     <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="profile.ModelName" @bind:after="() => OnProfileModelChangedAsync(profile)" placeholder="e.g. qwen2.5-coder:32b" />
+                                 }
 
-                                @if (!string.IsNullOrWhiteSpace(profile.ModelName) && _discoveredContextWindows.TryGetValue(profile.ModelName, out var pTokens))
-                                {
-                                    <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-top: 0.35rem; display: inline-block;">
-                                        ⚡ @pTokens.ToString("N0") tokens discovered
-                                    </span>
-                                }
-                                @if (GetThinkingBadge(profile.ModelName) is { Length: > 0 } thinkingBadge)
-                                {
-                                    <span class="forge-badge badge-indigo" style="font-size: 0.72rem; margin-top: 0.35rem; margin-left: 0.35rem; display: inline-block;">
-                                        @thinkingBadge
-                                    </span>
-                                }
+                                 @if (!string.IsNullOrWhiteSpace(profile.ModelName) && _discoveredContextWindows.TryGetValue(profile.ModelName, out var pTokens))
+                                 {
+                                     <span class="forge-badge badge-teal" style="font-size: 0.72rem; margin-top: 0.35rem; display: inline-block;">
+                                         ⚡ @pTokens.ToString("N0") tokens discovered
+                                     </span>
+                                 }
+                                 @if (GetThinkingBadge(profile.ModelName) is { Length: > 0 } thinkingBadge)
+                                 {
+                                     <span class="forge-badge badge-indigo" style="font-size: 0.72rem; margin-top: 0.35rem; margin-left: 0.35rem; display: inline-block;">
+                                         @thinkingBadge
+                                     </span>
+                                 }
+                                 @if (GetVisionBadge(profile.ModelName) is { Length: > 0 } visionBadge)
+                                 {
+                                     <span class="forge-badge badge-teal vision-capability-badge" style="font-size: 0.72rem; margin-top: 0.35rem; margin-left: 0.35rem; display: inline-block;">
+                                         @visionBadge
+                                     </span>
+                                 }
                             }
                         </div>
 
@@ -679,6 +691,7 @@
     private List<AgentProfile> _profiles = new();
     private List<AvailableModelInfo> _availableModels = new();
     private ConcurrentDictionary<string, int> _discoveredContextWindows = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _discoveredVisionCapabilities = new(StringComparer.OrdinalIgnoreCase);
     private LlmProviderType _providerType = LlmProviderType.OllamaRouter;
     private AcpCatalogProviderStatus? _acpStatus;
 
@@ -824,6 +837,23 @@
                 }
             }
 
+            if (!ContextWindowCache.TryGetVisionCapability(modelName, out _))
+            {
+                try
+                {
+                    var supportsVision = await GatewayService.ResolveVisionCapabilityAsync(modelName);
+                    _discoveredVisionCapabilities[modelName] = supportsVision;
+                    if (GatewayService.ProviderType == LlmProviderType.OpenAiCompatible)
+                    {
+                        ContextWindowCache.SetVisionCapability(modelName, supportsVision);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "Non-fatal probe failure resolving vision capability for '{Model}'.", modelName);
+                }
+            }
+
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -865,6 +895,8 @@
                 {
                     ContextWindowCache.SetThinkingCapability(m.ModelId, m.ThinkingCapability);
                 }
+                ContextWindowCache.SetVisionCapability(m.ModelId, m.SupportsVision);
+                _discoveredVisionCapabilities[m.ModelId] = m.SupportsVision;
             }
         }
         catch (Exception)
@@ -918,7 +950,7 @@
                     _discoveredContextWindows[modelName] = cached;
                 }
 
-                if (!hasCachedContext || !ContextWindowCache.TryGetThinkingCapability(modelName, out _))
+                if (!hasCachedContext || !ContextWindowCache.TryGetThinkingCapability(modelName, out _) || !ContextWindowCache.TryGetVisionCapability(modelName, out _))
                 {
                     probeTasks.Add(ResolveModelContextWindowAsync(modelName));
                 }
@@ -1185,6 +1217,27 @@
 
         var available = _availableModels.FirstOrDefault(m => string.Equals(m.ModelId, modelName, StringComparison.OrdinalIgnoreCase));
         return available?.ThinkingCapability?.FormattedBadge;
+    }
+
+    private string? GetVisionBadge(string? modelName)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return null;
+        }
+
+        if (ContextWindowCache.TryGetVisionCapability(modelName, out var supportsVision))
+        {
+            return supportsVision ? VisionConstants.VisionBadgeLabel : null;
+        }
+
+        if (_discoveredVisionCapabilities.TryGetValue(modelName, out var discoveredVision))
+        {
+            return discoveredVision ? VisionConstants.VisionBadgeLabel : null;
+        }
+
+        var available = _availableModels.FirstOrDefault(m => string.Equals(m.ModelId, modelName, StringComparison.OrdinalIgnoreCase));
+        return available?.SupportsVision == true ? VisionConstants.VisionBadgeLabel : null;
     }
 
     private static string GetProviderShortName(LlmProviderType provider) => provider switch

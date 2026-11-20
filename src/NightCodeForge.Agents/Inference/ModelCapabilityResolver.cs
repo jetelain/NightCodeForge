@@ -52,23 +52,8 @@ public static class ModelCapabilityResolver
     /// <summary>
     /// Finds the profile whose key is the longest case-insensitive substring of <paramref name="modelId"/>.
     /// </summary>
-    public static ModelCapabilityProfile? FindProfile(LlmProviderOptions? options, string? modelId)
-    {
-        if (options?.ModelProfiles == null || string.IsNullOrWhiteSpace(modelId)) return null;
-
-        ModelCapabilityProfile? best = null;
-        int bestLength = -1;
-        foreach (var (key, profile) in options.ModelProfiles)
-        {
-            if (string.IsNullOrWhiteSpace(key) || key.Length <= bestLength) continue;
-            if (modelId.Contains(key, StringComparison.OrdinalIgnoreCase))
-            {
-                best = profile;
-                bestLength = key.Length;
-            }
-        }
-        return best;
-    }
+    public static ModelCapabilityProfile? FindProfile(LlmProviderOptions? options, string? modelId) =>
+        options?.FindModelProfile(modelId);
 
     /// <summary>
     /// Builds the Pi-style in-loop context compaction strategy sized for the model's context window.

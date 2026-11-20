@@ -38,7 +38,10 @@ public class ModelCapabilityResolverTests
 
         var xhigh = new LlmProviderOptions();
         Assert.Equal("xhigh", ModelCapabilityResolver.ResolveReasoningEffort(xhigh, "llama3:8b"));
-        var openAiResolver = new OpenAiCapabilityResolver(Microsoft.Extensions.Options.Options.Create(xhigh));
+        var openAiResolver = new OpenAiCapabilityResolver(
+            Microsoft.Extensions.Options.Options.Create(xhigh),
+            new NightCodeForge.Infrastructure.Inference.OpenAiModelAllowlistCache(),
+            NightCodeForge.Core.Interfaces.EmptyLlmContextWindowCache.Instance);
         Assert.Equal("high", openAiResolver.ResolveReasoningEffort("o3-mini"));
     }
 

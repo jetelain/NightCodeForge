@@ -324,7 +324,8 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
                     SupportsReasoning: m.SupportsReasoning || matched.SupportsReasoning,
                     PromptCostPerMillion: m.PromptCostPerMillion ?? matched.PromptCostPerMillion,
                     CompletionCostPerMillion: m.CompletionCostPerMillion ?? matched.CompletionCostPerMillion,
-                    IsMoE: matched.IsMoE));
+                    IsMoE: matched.IsMoE,
+                    SupportsVision: m.SupportsVision ?? matched.SupportsVision));
             }
             else
             {
@@ -337,7 +338,8 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
                     SupportsReasoning: m.SupportsReasoning,
                     PromptCostPerMillion: m.PromptCostPerMillion,
                     CompletionCostPerMillion: m.CompletionCostPerMillion,
-                    IsMoE: false));
+                    IsMoE: false,
+                    SupportsVision: m.SupportsVision ?? false));
             }
         }
 
@@ -365,7 +367,8 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
                 SupportsReasoning: m.SupportsReasoning,
                 PromptCostPerMillion: m.PromptCostPerMillion,
                 CompletionCostPerMillion: m.CompletionCostPerMillion,
-                IsMoE: false))
+                IsMoE: false,
+                SupportsVision: m.SupportsVision ?? false))
             .ToList();
     }
 }

@@ -115,6 +115,9 @@ public static class OpenAiModelsResponseParser
                 // Reasoning support heuristic: check model ID and flags
                 var supportsReasoning = CheckSupportsReasoning(item, trimmedId);
 
+                // Vision support metadata: check explicit supports_vision, input_modalities, or architecture.modality
+                var supportsVision = CheckSupportsVision(item);
+
                 // MoE heuristic: check model ID and architecture
                 var isMoe = CheckIsMoe(item, trimmedId);
 
@@ -127,7 +130,8 @@ public static class OpenAiModelsResponseParser
                     SupportsReasoning: supportsReasoning,
                     PromptCostPerMillion: promptCost,
                     CompletionCostPerMillion: completionCost,
-                    IsMoE: isMoe));
+                    IsMoE: isMoe,
+                    SupportsVision: supportsVision));
             }
 
             return results;
@@ -262,6 +266,63 @@ public static class OpenAiModelsResponseParser
                 {
                     return true;
                 }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool CheckSupportsVision(JsonElement item)
+    {
+        if (item.TryGetProperty("supports_vision", out var sv) && sv.ValueKind == JsonValueKind.True)
+        {
+            return true;
+        }
+
+        if (HasImageModalityInArray(item, "input_modalities"))
+        {
+            return true;
+        }
+
+        if (item.TryGetProperty("architecture", out var arch) && arch.ValueKind == JsonValueKind.Object)
+        {
+            if (HasImageModalityInArray(arch, "input_modalities") ||
+                HasImageModalityInArray(arch, "modalities"))
+            {
+                return true;
+            }
+
+            if (arch.TryGetProperty("modality", out var modalityProp) && modalityProp.ValueKind == JsonValueKind.String)
+            {
+                var modality = modalityProp.GetString();
+                if (!string.IsNullOrWhiteSpace(modality))
+                {
+                    var arrowIdx = modality.IndexOf("->", StringComparison.Ordinal);
+                    var inputPart = arrowIdx >= 0 ? modality[..arrowIdx] : modality;
+                    if (inputPart.Contains("image", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasImageModalityInArray(JsonElement parent, string propertyName)
+    {
+        if (!parent.TryGetProperty(propertyName, out var arr) || arr.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var el in arr.EnumerateArray())
+        {
+            if (el.ValueKind == JsonValueKind.String &&
+                string.Equals(el.GetString()?.Trim(), "image", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
             }
         }
 

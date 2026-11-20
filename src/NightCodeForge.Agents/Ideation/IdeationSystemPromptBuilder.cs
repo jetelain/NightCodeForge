@@ -85,7 +85,8 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         string backlogDigest,
         string attachmentsDigest,
         string hotspotsDigest,
-        string? customSystemPrompt)
+        string? customSystemPrompt,
+        bool? supportsVision = null)
     {
         var environmentSection = new StringBuilder();
         environmentSection.AppendLine("<environment>");
@@ -96,6 +97,14 @@ Only tasks that are Draft, Suggested or Open, never executed, and not currently 
         if (!string.IsNullOrEmpty(topLevelSummary))
         {
             environmentSection.AppendLine($"- Top-level files and directories in repository root: {topLevelSummary}");
+        }
+        if (supportsVision == true)
+        {
+            environmentSection.AppendLine("- Visual Inspection: Vision is ENABLED for the active model. You may call 'read' on image files (.png, .jpg, .jpeg, .webp, .gif) in the repository or /workspace/attachments/ to inspect them directly.");
+        }
+        else if (supportsVision == false)
+        {
+            environmentSection.AppendLine("- Visual Inspection: Vision is NOT supported by the active model. Do not call 'read' on image files.");
         }
         environmentSection.AppendLine($"- When exploring the codebase, begin by inspecting the directory structure or key files in '{locations.AgentWorkingDir}'.");
         environmentSection.AppendLine("</environment>");

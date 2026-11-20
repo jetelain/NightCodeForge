@@ -858,6 +858,38 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
         return true;
     }
 
+    /// <summary>
+    /// Verifies that <paramref name="candidatePath"/> resolves to or inside <paramref name="directoryPath"/>
+    /// using full canonical filesystem paths and platform-appropriate case sensitivity.
+    /// </summary>
+    public static bool IsPathInsideDirectory(string candidatePath, string directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(directoryPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullCandidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath));
+            var fullDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directoryPath));
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            if (string.Equals(fullCandidate, fullDir, comparison))
+            {
+                return true;
+            }
+
+            return fullCandidate.StartsWith(fullDir + Path.DirectorySeparatorChar, comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
     public static bool TryResolveTmpSubPath(string? path, out string subPath)
     {
         subPath = string.Empty;

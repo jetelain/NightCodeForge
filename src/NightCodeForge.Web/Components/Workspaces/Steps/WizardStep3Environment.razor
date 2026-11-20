@@ -4,6 +4,7 @@
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Models
+@using NightCodeForge.Web.Services
 @inject IWslMetadataService WslService
 @inject ILlmModelCatalogService ModelCatalogService
 @inject IConfiguration Configuration
@@ -157,7 +158,7 @@
                     <select id="dedicated-model-select" class="form-control-dark font-mono" @bind="Model.DedicatedModelName">
                         @foreach (var m in _availableModels)
                         {
-                            <option value="@m.ModelId">@m.DisplayName @(!string.IsNullOrWhiteSpace(m.FormattedBadge) ? $"({m.FormattedBadge})" : "")</option>
+                            <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
                         }
                     </select>
                 }

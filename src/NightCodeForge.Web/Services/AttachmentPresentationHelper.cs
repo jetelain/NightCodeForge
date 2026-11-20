@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Web.Services;
 
@@ -32,6 +34,8 @@ public sealed class ConversationAttachmentChipViewModel
     public string MediaType { get; set; } = string.Empty;
     public long SizeBytes { get; set; }
     public string? ErrorMessage { get; set; }
+    public string? ThumbnailDataUri { get; set; }
+    public bool IsImage => ContentKind == TaskAttachmentContentKind.Image;
 
     public static ConversationAttachmentChipViewModel FromAttachment(
         TaskAttachment attachment,
@@ -624,4 +628,237 @@ public static partial class AttachmentPresentationHelper
 
         return results;
     }
+
+    public static bool CanSubmitIdeationComposer(
+        string? userInput,
+        IReadOnlyList<ConversationAttachmentChipViewModel>? pendingChips,
+        bool hasActiveWorkspace,
+        bool isGenerating)
+    {
+        if (!hasActiveWorkspace || isGenerating)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(userInput))
+        {
+            return true;
+        }
+
+        return pendingChips != null && pendingChips.Any(IsReadyChip);
+    }
+
+    public static string BuildEffectivePromptWithCitations(
+        string? userInput,
+        IReadOnlyList<ConversationAttachmentChipViewModel>? pendingChips)
+    {
+        var effective = (userInput ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(effective))
+        {
+            return effective;
+        }
+
+        var readyChips = pendingChips?.Where(IsReadyChip).ToList() ?? new List<ConversationAttachmentChipViewModel>();
+        if (readyChips.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        effective = readyChips.Any(c => c.IsImage)
+            ? VisionConstants.DefaultImageOnlyPrompt
+            : string.Empty;
+
+        foreach (var chip in readyChips)
+        {
+            effective = AppendCitationToPrompt(effective, chip.AttachmentId!.Value, chip.Title);
+        }
+
+        return effective.Trim();
+    }
+
+    public static bool HasPendingOrCitedImageAttachments(
+        IReadOnlyList<ConversationAttachmentChipViewModel>? pendingChips,
+        IReadOnlyList<TaskAttachment>? workspaceAttachments,
+        string? userInput)
+    {
+        if (pendingChips != null && pendingChips.Any(c => c.IsImage))
+        {
+            return true;
+        }
+
+        return HasCitedImageAttachment(userInput, workspaceAttachments);
+    }
+
+    public static bool HasSelectedOrCitedImageAttachments(
+        IReadOnlyList<TaskAttachment>? availableAttachments,
+        IReadOnlyCollection<int>? selectedAttachmentIds,
+        string? description)
+    {
+        if (availableAttachments == null || availableAttachments.Count == 0)
+        {
+            return false;
+        }
+
+        if (selectedAttachmentIds != null &&
+            availableAttachments.Any(a => selectedAttachmentIds.Contains(a.Id) && a.ContentKind == TaskAttachmentContentKind.Image))
+        {
+            return true;
+        }
+
+        return HasCitedImageAttachment(description, availableAttachments);
+    }
+
+    private static bool HasCitedImageAttachment(string? text, IReadOnlyList<TaskAttachment>? attachments)
+    {
+        if (string.IsNullOrWhiteSpace(text) || attachments == null || attachments.Count == 0)
+        {
+            return false;
+        }
+
+        var citedIds = AttachmentCitationParser.ExtractAttachmentIds(text);
+        if (citedIds.Count == 0)
+        {
+            return false;
+        }
+
+        return citedIds.Any(id => attachments.Any(a => a.Id == id && a.ContentKind == TaskAttachmentContentKind.Image));
+    }
+
+    public static string? BuildTextOnlyImageWarning(
+        VisionCapabilityStatus? visionStatus,
+        bool hasImageAttachments)
+    {
+        if (!hasImageAttachments || visionStatus == null || visionStatus.SupportsVision)
+        {
+            return null;
+        }
+
+        return !string.IsNullOrWhiteSpace(visionStatus.WarningMessage)
+            ? visionStatus.WarningMessage
+            : "Selected model does not support vision. Attached images cannot be inspected visually.";
+    }
+
+    public static string FormatModelOptionLabel(AvailableModelInfo model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var badge = model.FormattedCapabilitiesBadge;
+        return !string.IsNullOrWhiteSpace(badge)
+            ? $"{model.DisplayName} ({badge})"
+            : model.DisplayName;
+    }
+
+    public static string FormatAllowedModelOptionLabel(OpenAiAllowedModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var label = string.IsNullOrWhiteSpace(model.DisplayName) ? model.ModelId : model.DisplayName;
+        var visionSuffix = model.SupportsVision == true ? $", {VisionConstants.VisionBadgeLabel}" : string.Empty;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{label} ({model.ContextWindowTokens:N0} tokens{visionSuffix})");
+    }
+
+    public static string FormatAllowedModelVisionBadge(bool? supportsVision) => supportsVision switch
+    {
+        true => VisionConstants.VisionBadgeLabel,
+        false => "Text only",
+        null => "Auto"
+    };
+
+    public static string FormatAllowedModelVisionValue(bool? supportsVision) => supportsVision switch
+    {
+        true => "true",
+        false => "false",
+        null => string.Empty
+    };
+
+    public static bool? ParseAllowedModelVisionValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return bool.TryParse(value.Trim(), out var parsed) ? parsed : null;
+    }
+
+    public static bool TryDecodeClipboardImage(
+        string? base64Data,
+        string? fileName,
+        string? contentType,
+        out byte[] bytes,
+        out string normalizedFileName,
+        out string? errorMessage)
+    {
+        bytes = Array.Empty<byte>();
+        normalizedFileName = string.Empty;
+        errorMessage = null;
+
+        if (string.IsNullOrWhiteSpace(base64Data))
+        {
+            errorMessage = "Clipboard paste did not include image data.";
+            return false;
+        }
+
+        var trimmed = base64Data.Trim();
+        var commaIdx = trimmed.IndexOf(',', StringComparison.Ordinal);
+        if (trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && commaIdx >= 0)
+        {
+            trimmed = trimmed[(commaIdx + 1)..].Trim();
+        }
+
+        try
+        {
+            bytes = Convert.FromBase64String(trimmed);
+        }
+        catch (FormatException)
+        {
+            errorMessage = "Clipboard image payload was not valid base64 data.";
+            return false;
+        }
+
+        if (bytes.Length == 0)
+        {
+            errorMessage = "Clipboard image payload is empty.";
+            return false;
+        }
+
+        if (bytes.Length > VisionConstants.MaxVisionImageBytes)
+        {
+            errorMessage = $"Pasted image ({bytes.Length / (1024.0 * 1024.0):F1} MB) exceeds maximum allowed vision image size of {VisionConstants.MaxVisionImageBytes / (1024 * 1024)} MB.";
+            bytes = Array.Empty<byte>();
+            return false;
+        }
+
+        if (!ImageHeaderInspector.TryInspect(bytes, out var header))
+        {
+            errorMessage = string.IsNullOrWhiteSpace(contentType)
+                ? "Pasted clipboard data does not contain a valid PNG, JPEG, WebP, or GIF image header."
+                : $"Pasted clipboard image ('{contentType.Trim()}') does not contain a valid PNG, JPEG, WebP, or GIF image header.";
+            bytes = Array.Empty<byte>();
+            return false;
+        }
+
+        var ext = header.MediaType switch
+        {
+            "image/jpeg" => ".jpg",
+            "image/webp" => ".webp",
+            "image/gif" => ".gif",
+            _ => ".png"
+        };
+
+        var stem = !string.IsNullOrWhiteSpace(fileName)
+            ? Path.GetFileNameWithoutExtension(fileName.Trim())
+            : string.Empty;
+        if (string.IsNullOrWhiteSpace(stem))
+        {
+            stem = $"clipboard-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        }
+
+        normalizedFileName = $"{stem}{ext}";
+        return true;
+    }
+
+    private static bool IsReadyChip(ConversationAttachmentChipViewModel chip) =>
+        chip.AttachmentId is > 0
+        && chip.Status is AttachmentIntakeStatus.Stored or AttachmentIntakeStatus.Symlinked;
 }

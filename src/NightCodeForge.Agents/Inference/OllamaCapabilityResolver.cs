@@ -211,6 +211,31 @@ public sealed class OllamaCapabilityResolver : ILlmCapabilityResolver
         return chatOptions;
     }
 
+    public bool SupportsVision(string? modelId)
+    {
+        var effectiveModel = !string.IsNullOrWhiteSpace(modelId)
+            ? modelId.Trim()
+            : _options.Value.DefaultModelId?.Trim();
+
+        if (string.IsNullOrWhiteSpace(effectiveModel))
+        {
+            return false;
+        }
+
+        var profile = ModelCapabilityResolver.FindProfile(_options.Value, effectiveModel);
+        if (profile?.SupportsVision is { } overrideSupport)
+        {
+            return overrideSupport;
+        }
+
+        if (_capabilityCache.TryGetVisionCapability(effectiveModel, out var cached))
+        {
+            return cached;
+        }
+
+        return false;
+    }
+
     private bool ShouldUseDynamicCapability(string modelId, ModelThinkingCapability capability)
     {
         var staticProfile = ModelCapabilityResolver.FindProfile(_options.Value, modelId);

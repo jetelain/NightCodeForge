@@ -67,6 +67,17 @@ public static class TestServices
             sp.GetRequiredService<IOptions<SecurityOptions>>(),
             Options.Create(new AttachmentIntakeOptions()),
             NullLogger<AttachmentIntakeService>.Instance));
+        services.TryAddSingleton<IVisionCapabilityUiService>(_ =>
+        {
+            var mock = new Mock<IVisionCapabilityUiService>();
+            mock.Setup(v => v.EvaluateModelVisionAsync(It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((string? model, bool acp, CancellationToken _) => new VisionCapabilityStatus(true, model ?? "test-vision", acp, null));
+            mock.Setup(v => v.EvaluateWorkspaceStageVisionAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<TaskDifficulty?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((int _, string _, TaskDifficulty? _, string? ov, CancellationToken _) => new VisionCapabilityStatus(true, ov ?? "test-vision", false, null));
+            mock.Setup(v => v.EvaluateWorkspaceTaskVisionAsync(It.IsAny<int>(), It.IsAny<TaskDifficulty>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new VisionCapabilityStatus(true, "test-vision", false, null));
+            return mock.Object;
+        });
         services.TryAddSingleton<IAttachmentUiService>(sp => new AttachmentUiService(
             sp.GetRequiredService<IAttachmentIntakeService>(),
             sp.GetRequiredService<ITaskAttachmentRepository>(),
@@ -74,6 +85,7 @@ public static class TestServices
             sp.GetRequiredService<IWorkspaceRepository>(),
             sp.GetRequiredService<IWorkspacePathResolver>(),
             sp.GetRequiredService<IIdeationConversationCoordinator>(),
+            sp.GetRequiredService<IVisionCapabilityUiService>(),
             NullLogger<AttachmentUiService>.Instance));
         services.TryAddSingleton<ICompanionTriageDraftStore>(_ => new CompanionTriageDraftStore(TimeProvider.System));
         services.TryAddSingleton<IdeationRefinementService>(sp => new IdeationRefinementService(sp.GetRequiredService<ITaskRepository>()));
@@ -164,6 +176,10 @@ public static class TestServices
                 .ReturnsAsync(Array.Empty<TaskAttachment>());
             mock.Setup(a => a.ExtractMessageCitations(It.IsAny<string?>()))
                 .Returns<string?>(text => AttachmentPresentationHelper.ExtractMessageCitations(text));
+            mock.Setup(a => a.EvaluateIdeationVisionAsync(It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((int _, string? ov, CancellationToken _) => new VisionCapabilityStatus(true, ov ?? "test-vision", false, null));
+            mock.Setup(a => a.EvaluateTaskVisionAsync(It.IsAny<int>(), It.IsAny<TaskDifficulty>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new VisionCapabilityStatus(true, "test-vision", false, null));
             effectiveAttachmentUi = mock.Object;
         }
 

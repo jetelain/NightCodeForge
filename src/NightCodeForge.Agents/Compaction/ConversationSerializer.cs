@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using NightCodeForge.Agents.Vision;
+using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Compaction;
@@ -264,6 +266,14 @@ public static class ConversationSerializer
             {
                 if (sb.Length > 0) sb.Append('\n');
                 sb.Append(tc.Text);
+            }
+            else if (content is DataContent dc && dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType))
+            {
+                if (sb.Length > 0) sb.Append('\n');
+                var sourcePath = MultimodalToolInjectionChatClient.ResolveDataContentSourcePath(dc);
+                var width = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropWidthPx);
+                var height = MultimodalToolInjectionChatClient.ResolveDataContentIntProperty(dc, VisionConstants.PropHeightPx);
+                sb.Append(VisionConstants.FormatCompactionImagePlaceholder(sourcePath, width, height, dc.MediaType));
             }
         }
 

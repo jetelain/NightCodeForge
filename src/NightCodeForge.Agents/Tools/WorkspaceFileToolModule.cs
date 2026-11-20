@@ -6,6 +6,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Tools.EditorConfig;
+using NightCodeForge.Agents.Vision;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
@@ -37,6 +38,9 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
     private readonly int? _taskId;
     private readonly bool _isReadOnly;
     private readonly int _maxReadFileBytes;
+    private readonly bool _supportsVision;
+    private readonly string _activeModelId;
+    private readonly IMultimodalAttachmentQueue? _multimodalAttachmentQueue;
     private readonly IEditorConfigService _editorConfigService;
     private readonly IEditorConfigFileApplier _editorConfigFileApplier;
     private readonly ILogger _logger;
@@ -47,6 +51,10 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
     public ISandboxPathResolver SandboxPathResolver { get; set; }
 
     public IServiceScopeFactory? ScopeFactory { get; set; }
+
+    public bool SupportsVision => _supportsVision;
+
+    public IMultimodalAttachmentQueue? MultimodalAttachmentQueue => _multimodalAttachmentQueue;
 
     public ITaskMarkdownValidator? TaskMarkdownValidator
     {
@@ -78,6 +86,9 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         _workspaceId = scope.WorkspaceId;
         _taskId = (scope.TaskId.HasValue && scope.TaskId.Value > 0) ? scope.TaskId.Value : null;
         _isReadOnly = scope.IsReadOnly;
+        _supportsVision = scope.SupportsVision;
+        _activeModelId = scope.ActiveModelId ?? string.Empty;
+        _multimodalAttachmentQueue = scope.MultimodalAttachmentQueue;
 
         if (scope.MaxReadFileBytes.HasValue && scope.MaxReadFileBytes.Value <= 0)
         {
@@ -130,13 +141,16 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
                     {
                         return await module.ReadAsync(path, offset, limit, ct);
                     }
-                    catch (UnauthorizedAccessException ex)
+                    catch (Exception ex) when (ex is UnauthorizedAccessException
+                                               or ModelVisionNotSupportedException
+                                               or AttachmentTargetNotFoundException
+                                               or AttachmentConversionException)
                     {
                         return $"Error: {ex.Message}";
                     }
                 },
                 CanonicalToolNames.Read,
-                $"Reads a file with line numbers and optional line-based pagination. Output is capped to {capKb} KB to avoid overflowing context; use offset and limit to page through large files."),
+                $"Reads a file with line numbers and optional line-based pagination (Output is capped to {capKb} KB to avoid overflowing context; use offset and limit for large files), or inspects a supported image file (.png, .jpg, .jpeg, .webp, .gif) when using a vision-capable model."),
 
             AIFunctionFactory.Create(
                 async ([Description("Workspace-relative path to write")] string path,
@@ -218,7 +232,24 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
             return $"Error: {ex.Message}";
         }
 
+        var requestedExtension = Path.GetExtension(path);
+        if (!_supportsVision && AttachmentConstants.ImageExtensions.Contains(requestedExtension))
+        {
+            throw new ModelVisionNotSupportedException(_activeModelId, path);
+        }
+
         var readPath = await ValidateAndResolveAttachmentReadPathAsync(path, fullPath, cancellationToken);
+
+        var extension = Path.GetExtension(readPath);
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            extension = Path.GetExtension(path);
+        }
+
+        if (AttachmentConstants.ImageExtensions.Contains(extension))
+        {
+            return await ReadImageAsync(path, readPath, cancellationToken);
+        }
 
         if (!File.Exists(readPath))
         {
@@ -239,6 +270,66 @@ public sealed partial class WorkspaceFileToolModule : IAgentToolModule
         var selectedLines = lines.Skip(startIndex).Take(count).ToList();
 
         return ReadOutputFormatter.FormatCapped(selectedLines, startLine, lines.Length, _maxReadFileBytes);
+    }
+
+    internal async Task<string?> TryResolveReadableImageHostPathAsync(string path, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var fullPath = SandboxPathResolver.ResolveHostPath(path, forWrite: false);
+            var resolved = await ValidateAndResolveAttachmentReadPathAsync(path, fullPath, cancellationToken);
+            return !string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved) ? resolved : null;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or AttachmentTargetNotFoundException or IOException)
+        {
+            _logger.LogWarning(ex, "Could not resolve visual attachment path '{Path}' on host filesystem.", path);
+            return null;
+        }
+    }
+
+    private async Task<string> ReadImageAsync(string requestedPath, string hostPath, CancellationToken cancellationToken)
+    {
+        if (!_supportsVision)
+        {
+            throw new ModelVisionNotSupportedException(_activeModelId, requestedPath);
+        }
+
+        if (!File.Exists(hostPath))
+        {
+            _logger.LogWarning("CanonicalTools.read: Image file not found '{Path}' (resolved: '{FullPath}')", requestedPath, hostPath);
+            return $"Error: File not found: '{requestedPath}'";
+        }
+
+        var normalized = await VisionImageNormalizer.LoadAndNormalizeAsync(hostPath, requestedPath, cancellationToken);
+        if (_multimodalAttachmentQueue == null)
+        {
+            throw new InvalidOperationException(
+                $"Vision is enabled for '{requestedPath}' but no {nameof(IMultimodalAttachmentQueue)} is configured for this session.");
+        }
+
+        var callId = FunctionInvokingChatClient.CurrentContext?.CallContent?.CallId;
+
+        _multimodalAttachmentQueue.Stage(new StagedVisualContent(
+            CallId: callId,
+            SourcePath: requestedPath,
+            MediaType: normalized.MediaType,
+            WidthPx: normalized.WidthPx,
+            HeightPx: normalized.HeightPx,
+            Sha256: normalized.Sha256,
+            EstimatedTokens: normalized.EstimatedTokens,
+            Data: normalized.Bytes));
+
+        return VisionConstants.FormatReadImageToolResult(
+            requestedPath,
+            normalized.WidthPx,
+            normalized.HeightPx,
+            normalized.MediaType,
+            normalized.EstimatedTokens);
     }
 
     private async Task<string> ValidateAndResolveAttachmentReadPathAsync(

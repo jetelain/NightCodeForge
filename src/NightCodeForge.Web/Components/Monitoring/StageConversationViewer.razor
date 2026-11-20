@@ -152,17 +152,39 @@
                     {
                         case StageTurnRole.User:
                         case StageTurnRole.System:
-                            <div class="chat-bubble user turn-user">
+                            var visualMeta = turn.Role == StageTurnRole.User
+                                ? StageConversationParser.ParseVisualTurnMetadata(turn)
+                                : new VisualTurnMetadata(false, Array.Empty<ConversationHistorySerializer.SerializedImageRef>());
+                            <div class="chat-bubble user turn-user @(visualMeta.IsInjectedVisual ? "turn-visual-inspection" : "")">
                                 <div class="chat-avatar">
-                                    @(turn.Role == StageTurnRole.System ? "⚙️" : "👤")
+                                    @(turn.Role == StageTurnRole.System ? "⚙️" : visualMeta.IsInjectedVisual ? "👁️" : "👤")
                                 </div>
                                 <div class="chat-bubble-body">
                                     <div class="chat-bubble-header">
-                                        <span class="chat-author">@(turn.Role == StageTurnRole.System ? "System Directive" : "User / Orchestrator")</span>
+                                        <span class="chat-author">@(turn.Role == StageTurnRole.System ? "System Directive" : visualMeta.IsInjectedVisual ? "Visual Inspection" : "User / Orchestrator")</span>
+                                        @if (visualMeta.IsInjectedVisual || visualMeta.ImageRefs.Count > 0)
+                                        {
+                                            <span class="forge-badge badge-teal visual-inspection-badge" style="font-size: 0.72rem; margin-left: 0.35rem;">@VisionConstants.VisionBadgeLabel Inspection</span>
+                                        }
                                         <span class="chat-timestamp font-mono">
                                             @turn.Timestamp.ToLocalTime().ToString("HH:mm:ss")
                                         </span>
                                     </div>
+                                    @if (visualMeta.ImageRefs.Count > 0)
+                                    {
+                                        <div class="visual-image-refs-strip" style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.4rem;">
+                                            @foreach (var imgRef in visualMeta.ImageRefs)
+                                            {
+                                                <span class="forge-chip font-mono visual-image-ref-chip" style="font-size: 0.76rem;">
+                                                    <span>🖼️ @(string.IsNullOrWhiteSpace(imgRef.SourcePath) ? imgRef.MediaType : imgRef.SourcePath)</span>
+                                                    @if (imgRef.WidthPx is > 0 && imgRef.HeightPx is > 0)
+                                                    {
+                                                        <span class="text-muted">(@(imgRef.WidthPx)x@(imgRef.HeightPx), @imgRef.MediaType)</span>
+                                                    }
+                                                </span>
+                                            }
+                                        </div>
+                                    }
                                     <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.86rem; line-height: 1.55; max-height: 450px; overflow-y: auto; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
                                         @MarkdownHelper.ToMarkupString(turn.Content)
                                     </div>

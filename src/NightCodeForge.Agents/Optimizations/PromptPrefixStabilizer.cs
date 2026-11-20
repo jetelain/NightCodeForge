@@ -65,7 +65,8 @@ public class PromptPrefixStabilizer
         string? workingDirectory = null,
         string? discoveredSymbols = null,
         string? backlogDigest = null,
-        string? taskAttachmentsDigest = null)
+        string? taskAttachmentsDigest = null,
+        bool? supportsVision = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<task_scope>");
@@ -85,13 +86,24 @@ public class PromptPrefixStabilizer
             sb.AppendLine(taskAttachmentsDigest.Trim());
         }
 
-        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        if (!string.IsNullOrWhiteSpace(workingDirectory) || supportsVision.HasValue)
         {
             sb.AppendLine();
             sb.AppendLine("<environment>");
-            sb.AppendLine($"- Current Working Directory (PWD): {workingDirectory}");
-            sb.AppendLine("- All relative paths, file operations (read, edit, write), bash commands, builds, and test runs execute in this working directory.");
-            sb.AppendLine("- The canonical clone on 'main' is read-only. Do not attempt to modify files in other directories.");
+            if (!string.IsNullOrWhiteSpace(workingDirectory))
+            {
+                sb.AppendLine($"- Current Working Directory (PWD): {workingDirectory}");
+                sb.AppendLine("- All relative paths, file operations (read, edit, write), bash commands, builds, and test runs execute in this working directory.");
+                sb.AppendLine("- The canonical clone on 'main' is read-only. Do not attempt to modify files in other directories.");
+            }
+            if (supportsVision == true)
+            {
+                sb.AppendLine("- Visual Inspection: Vision is ENABLED for the active model. You may call 'read' on image files (.png, .jpg, .jpeg, .webp, .gif) in the repository or /workspace/attachments/ to inspect screenshots, diagrams, and mockups directly.");
+            }
+            else if (supportsVision == false)
+            {
+                sb.AppendLine("- Visual Inspection: Vision is NOT supported by the active model. Do not call 'read' on image files.");
+            }
             sb.AppendLine("</environment>");
         }
 
@@ -114,11 +126,12 @@ public class PromptPrefixStabilizer
         string? customRolePersona = null,
         string? workingDirectory = null,
         string? backlogDigest = null,
-        string? taskAttachmentsDigest = null)
+        string? taskAttachmentsDigest = null,
+        bool? supportsVision = null)
     {
         var layer1 = BuildLayer1GlobalRules(projectGuidelines, skillsCatalog, customRulesPrompt, customRolePersona);
         var layer2 = BuildLayer2StagePersona(stagePersonaDirective);
-        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest, taskAttachmentsDigest);
+        var layer3 = BuildLayer3TaskScope(taskScopeAndPlan, workingDirectory, discoveredSymbols, backlogDigest, taskAttachmentsDigest, supportsVision);
         return new PromptLayers(layer1, layer2, layer3);
     }
 
@@ -133,7 +146,8 @@ public class PromptPrefixStabilizer
         string? customRolePersona = null,
         string? workingDirectory = null,
         string? backlogDigest = null,
-        string? taskAttachmentsDigest = null)
+        string? taskAttachmentsDigest = null,
+        bool? supportsVision = null)
     {
         var layers = BuildLayers(
             stagePersonaDirective,
@@ -146,7 +160,8 @@ public class PromptPrefixStabilizer
             customRolePersona,
             workingDirectory,
             backlogDigest,
-            taskAttachmentsDigest);
+            taskAttachmentsDigest,
+            supportsVision);
 
         var sb = new StringBuilder();
         sb.AppendLine(layers.Layer1GlobalRules);

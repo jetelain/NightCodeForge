@@ -288,6 +288,7 @@ public class IdeationCoordinatorWebIntegrationTests
             workspaceRepo,
             Mock.Of<IWorkspacePathResolver>(),
             coordinatorMock.Object,
+            Mock.Of<IVisionCapabilityUiService>(),
             NullLogger<AttachmentUiService>.Instance);
 
         await using var ms = new MemoryStream(Encoding.UTF8.GetBytes("# Notes"));
@@ -331,6 +332,7 @@ public class IdeationCoordinatorWebIntegrationTests
             services.AddScoped<IDevQueueService, DevQueueService>();
             services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
             services.AddScoped<ITaskMutationService, TaskMutationService>();
+            services.AddScoped<IVisionCapabilityUiService, VisionCapabilityUiService>();
             services.AddScoped<IAttachmentUiService, AttachmentUiService>();
             services.AddScoped<ITaskCreationUiService, TaskCreationUiService>();
             services.AddScoped<ITaskDiskSyncCoordinator, TaskDiskSyncCoordinator>();

@@ -39,6 +39,10 @@ public record OptimizationContentPart(
     int? PostCompactionTokens = null,
     double? DurationMs = null) : ChatContentPart;
 
+public record VisualInspectionContentPart(
+    IReadOnlyList<ConversationHistorySerializer.SerializedImageRef> Images,
+    string? Summary = null) : ChatContentPart;
+
 public record QuestionContentPart : ChatContentPart
 {
     private string? _prompt;
@@ -423,6 +427,9 @@ public class IdeationSessionState : IDisposable
     public TaskCostSummary ActiveSessionCost { get; set; } = TaskCostSummary.Empty;
     public OllamaRoutingTarget SelectedRoutingTarget { get; set; } = OllamaRoutingTarget.Auto;
     public string? SelectedModelOverride { get; set; }
+    public VisionCapabilityStatus? ActiveVisionStatus { get; private set; }
+    public bool HasPendingImageChips => PendingComposerChips.Any(c => c.IsImage);
+    public string? VisionWarningMessage => AttachmentPresentationHelper.BuildTextOnlyImageWarning(ActiveVisionStatus, HasPendingImageChips);
 
     public IdeationSessionOptions CurrentOptions => new(
         SelectedRoutingTarget,
@@ -605,6 +612,7 @@ public class IdeationSessionState : IDisposable
         ActiveSessionCost = TaskCostSummary.Empty;
         SelectedRoutingTarget = OllamaRoutingTarget.Auto;
         SelectedModelOverride = null;
+        ActiveVisionStatus = null;
         IsGenerating = false;
         _inFlightOptimisticUserMessage = null;
         _inFlightOptimisticChips = null;
@@ -640,6 +648,7 @@ public class IdeationSessionState : IDisposable
             WorkspaceSessions = Array.Empty<Conversation>();
             WorkspaceAttachments = Array.Empty<TaskAttachment>();
             PendingComposerChips.Clear();
+            ActiveVisionStatus = null;
             NotifyStateChanged();
             return new IdeationContextLoadResult(null, null);
         }
@@ -817,12 +826,43 @@ public class IdeationSessionState : IDisposable
         string? rawPrompt,
         CancellationToken cancellationToken = default)
     {
-        if (workspace == null || string.IsNullOrWhiteSpace(rawPrompt) || IsGenerating)
+        if (workspace == null || !AttachmentPresentationHelper.CanSubmitIdeationComposer(
+                rawPrompt,
+                PendingComposerChips,
+                hasActiveWorkspace: true,
+                isGenerating: IsGenerating))
         {
             return false;
         }
 
-        var prompt = rawPrompt.Trim();
+        var prompt = AttachmentPresentationHelper.BuildEffectivePromptWithCitations(rawPrompt, PendingComposerChips);
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return false;
+        }
+
+        bool hasImagePending = PendingComposerChips.Any(c => c.IsImage && c.AttachmentId is > 0);
+        bool hasCitedImage = _attachmentUiService.ExtractMessageCitations(prompt).CitedAttachmentIds
+            .Any(id => WorkspaceAttachments.Any(a => a.Id == id && a.ContentKind == TaskAttachmentContentKind.Image));
+        if (hasImagePending || hasCitedImage)
+        {
+            var visionStatus = ActiveVisionStatus
+                ?? await _attachmentUiService.EvaluateIdeationVisionAsync(workspace.Id, SelectedModelOverride, cancellationToken);
+            if (visionStatus != null)
+            {
+                ActiveVisionStatus = visionStatus;
+            }
+
+            if (visionStatus is { SupportsVision: false })
+            {
+                var warning = AttachmentPresentationHelper.BuildTextOnlyImageWarning(visionStatus, hasImageAttachments: true)
+                    ?? "Active model does not support vision. Select a vision-capable model or remove image attachments.";
+                OnNotification?.Invoke("Vision Not Supported", warning, ToastLevel.Error);
+                NotifyStateChanged();
+                return false;
+            }
+        }
+
         var messageChips = new List<ConversationAttachmentChipViewModel>(PendingComposerChips);
         PendingComposerChips.Clear();
 
@@ -854,6 +894,11 @@ public class IdeationSessionState : IDisposable
                         NotifyStateChanged();
                     },
                     cancellationToken: cancellationToken);
+
+                foreach (var chip in messageChips)
+                {
+                    await PopulateChipThumbnailBestEffortAsync(chip, cancellationToken);
+                }
 
                 WorkspaceAttachments = await _attachmentUiService.LoadWorkspaceAttachmentsAsync(workspace.Id, cancellationToken);
             }
@@ -1004,6 +1049,7 @@ public class IdeationSessionState : IDisposable
                 ActiveConversationTitle = handle.Conversation.Title;
                 WorkspaceSessions = await _coordinator.GetWorkspaceConversationsAsync(activeWorkspace.Id, cancellationToken);
                 EnsureSubscribedToConversation(handle.Conversation.Id);
+                await RefreshVisionStatusAsync(activeWorkspace.Id, cancellationToken);
                 OnNotification?.Invoke("New Session Started", "Previous session archived and fresh chat initialized.", ToastLevel.Info);
             }
             else
@@ -1025,6 +1071,11 @@ public class IdeationSessionState : IDisposable
     public async Task ApplyConfigChangeAsync(CancellationToken cancellationToken = default)
     {
         NotifyStateChanged();
+        if (BoundWorkspaceId.HasValue)
+        {
+            await RefreshVisionStatusAsync(BoundWorkspaceId.Value, cancellationToken);
+        }
+
         if (BoundWorkspaceId.HasValue && ActiveConversationId.HasValue)
         {
             try
@@ -1040,6 +1091,20 @@ public class IdeationSessionState : IDisposable
                 _logger.LogWarning(ex, "Failed applying ideation session configuration for conversation #{ConversationId}.", ActiveConversationId.Value);
                 OnNotification?.Invoke("Configuration Error", ex.Message, ToastLevel.Error);
             }
+        }
+    }
+
+    public async Task RefreshVisionStatusAsync(int workspaceId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            ActiveVisionStatus = await _attachmentUiService
+                .EvaluateIdeationVisionAsync(workspaceId, SelectedModelOverride, cancellationToken);
+            NotifyStateChanged();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed evaluating Ideation vision capability for workspace #{WorkspaceId}.", workspaceId);
         }
     }
 
@@ -1144,6 +1209,7 @@ public class IdeationSessionState : IDisposable
         {
             var ingested = await _attachmentUiService.UploadFileAsync(workspace.Id, fileName, content, cancellationToken);
             chip.ApplyIngested(ingested);
+            await PopulateChipThumbnailBestEffortAsync(chip, cancellationToken);
             AttachmentPresentationHelper.UpsertChip(PendingComposerChips, chip);
             WorkspaceAttachments = await _attachmentUiService.LoadWorkspaceAttachmentsAsync(workspace.Id, cancellationToken);
             OnNotification?.Invoke("Attachment Stored", $"#{ingested.Id} {ingested.Title} added to workspace attachments.", ToastLevel.Success);
@@ -1155,6 +1221,45 @@ public class IdeationSessionState : IDisposable
             OnNotification?.Invoke("Attachment Upload Failed", ex.Message, ToastLevel.Error);
         }
 
+        NotifyStateChanged();
+    }
+
+    public async Task PasteImageFromClipboardAsync(
+        Workspace? workspace,
+        string? fileName,
+        string? contentType,
+        string? base64Data,
+        CancellationToken cancellationToken = default)
+    {
+        if (workspace == null)
+        {
+            return;
+        }
+
+        if (!AttachmentPresentationHelper.TryDecodeClipboardImage(
+                base64Data,
+                fileName,
+                contentType,
+                out var bytes,
+                out var normalizedFileName,
+                out var errorMessage))
+        {
+            ReportClipboardImageError(fileName, errorMessage);
+            return;
+        }
+
+        await using var ms = new MemoryStream(bytes, writable: false);
+        await UploadAttachmentFileAsync(workspace, normalizedFileName, ms, cancellationToken);
+    }
+
+    public void ReportClipboardImageError(string? fileName, string? errorMessage)
+    {
+        var effectiveError = string.IsNullOrWhiteSpace(errorMessage) ? "Invalid pasted image." : errorMessage;
+        var failedChip = ConversationAttachmentChipViewModel.CreatePendingUpload(
+            string.IsNullOrWhiteSpace(fileName) ? "clipboard-image" : fileName);
+        failedChip.MarkFailed(effectiveError);
+        AttachmentPresentationHelper.UpsertChip(PendingComposerChips, failedChip);
+        OnNotification?.Invoke("Clipboard Image Error", effectiveError, ToastLevel.Error);
         NotifyStateChanged();
     }
 
@@ -1177,6 +1282,7 @@ public class IdeationSessionState : IDisposable
         {
             var ingested = await _attachmentUiService.AttachHostFileAsync(workspace.Id, hostPath, cancellationToken);
             chip.ApplyIngested(ingested);
+            await PopulateChipThumbnailBestEffortAsync(chip, cancellationToken);
             AttachmentPresentationHelper.UpsertChip(PendingComposerChips, chip);
             WorkspaceAttachments = await _attachmentUiService.LoadWorkspaceAttachmentsAsync(workspace.Id, cancellationToken);
             OnNotification?.Invoke("Host File Attached", $"#{ingested.Id} {ingested.Title} mapped as symlink.", ToastLevel.Success);
@@ -1357,9 +1463,49 @@ public class IdeationSessionState : IDisposable
         if (!preservePreSeededWorkspaceState)
         {
             SyncProposalsWithWorkspaceTasks(WorkspaceTasks, removeMissing: true);
+            await PopulateMessageThumbnailsBestEffortAsync(Messages, cancellationToken);
         }
+        await RefreshVisionStatusAsync(workspaceId, cancellationToken);
         StartStreamPump(channel, generation);
         return conv;
+    }
+
+    private async Task PopulateMessageThumbnailsBestEffortAsync(
+        IEnumerable<ChatMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        foreach (var msg in messages)
+        {
+            if (msg.AttachmentChips is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            foreach (var chip in msg.AttachmentChips)
+            {
+                await PopulateChipThumbnailBestEffortAsync(chip, cancellationToken);
+            }
+        }
+    }
+
+    private async Task PopulateChipThumbnailBestEffortAsync(
+        ConversationAttachmentChipViewModel chip,
+        CancellationToken cancellationToken)
+    {
+        if (!chip.IsImage || chip.AttachmentId is not > 0 || !string.IsNullOrEmpty(chip.ThumbnailDataUri))
+        {
+            return;
+        }
+
+        try
+        {
+            chip.ThumbnailDataUri = await _attachmentUiService
+                .LoadImageThumbnailDataUriAsync(chip.AttachmentId.Value, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Best-effort thumbnail generation skipped for attachment #{AttachmentId}.", chip.AttachmentId);
+        }
     }
 
     private void EnsureSubscribedToConversation(int conversationId)
@@ -1656,12 +1802,12 @@ public class IdeationSessionState : IDisposable
                 _inFlightOptimisticUserMessage = null;
                 _inFlightOptimisticChips = null;
                 _costAlreadyIncludesInFlightTurn = false;
-                IsGenerating = false;
                 CurrentThinkingBuffer = string.Empty;
                 CurrentMessageBuffer = string.Empty;
                 CurrentToolCalls.Clear();
                 CurrentParts.Clear();
                 OnNotification?.Invoke("Generation Error", update.ErrorMessage ?? "Ideation turn failed.", ToastLevel.Error);
+                IsGenerating = false;
                 NotifyStateChanged();
                 OnScrollRequested?.Invoke(true);
                 break;

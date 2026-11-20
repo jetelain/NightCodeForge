@@ -485,7 +485,12 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         List<ChatMessage> chatHistory;
         if (!string.IsNullOrEmpty(effectiveSerializedStateJson))
         {
-            chatHistory = CrucibleAgentHarness.DeserializeSession(effectiveSerializedStateJson, _logger);
+            var resolveHostPath = BuildRestoreHostPathResolver(context);
+            chatHistory = CrucibleAgentHarness.DeserializeSession(
+                effectiveSerializedStateJson,
+                resolveHostPath,
+                trackUnresolvedRefs: true,
+                _logger);
             // Legacy checkpoints stored the system prompt as the first message; strip it while preserving system notices
             chatHistory.RemoveAll(m => m.Role == ChatRole.System && (m.Text == null || !m.Text.Contains(SystemNoticeMarker, StringComparison.OrdinalIgnoreCase)));
         }
@@ -510,6 +515,51 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
         CrucibleAgentHarness.StripAttribution(chatHistory);
         return chatHistory;
+    }
+
+    internal static Func<string, string?> BuildRestoreHostPathResolver(AgentSessionContext context)
+    {
+        var sandboxResolver = context.SandboxScope != null ? new SandboxPathResolver(context.SandboxScope) : null;
+        return sourcePath =>
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+            {
+                return null;
+            }
+
+            if (sandboxResolver != null)
+            {
+                try
+                {
+                    var resolved = sandboxResolver.ResolveHostPath(sourcePath, forWrite: false);
+                    return !string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved) ? resolved : null;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return null;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(context.WorkspacePath))
+            {
+                var trimmed = sourcePath.Trim();
+                if (Path.IsPathRooted(trimmed) ||
+                    trimmed.StartsWith('/') ||
+                    trimmed.StartsWith('\\'))
+                {
+                    return null;
+                }
+
+                var fullWorkspace = Path.GetFullPath(context.WorkspacePath);
+                var combined = Path.GetFullPath(Path.Combine(fullWorkspace, trimmed.Replace('/', Path.DirectorySeparatorChar)));
+                if (SandboxPathResolver.IsPathInsideDirectory(combined, fullWorkspace) && File.Exists(combined))
+                {
+                    return combined;
+                }
+            }
+
+            return null;
+        };
     }
 
     private static SyntheticPrimingExecution FilterSyntheticPriming(
@@ -920,6 +970,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         {
             var role = msg.Role.Value;
             var text = msg.Text ?? string.Empty;
+            var contents = msg.Contents ?? Array.Empty<AIContent>();
 
             if (text.StartsWith(PiStyleCrucibleCompactionStrategy.CheckpointPreamble, StringComparison.Ordinal)
                 || text.StartsWith(LegacyCompactionMarker, StringComparison.Ordinal))
@@ -930,15 +981,15 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             // Structured reasoning (TextReasoningContent) is not part of msg.Text; emit it as its own step.
             if (msg.Role == ChatRole.Assistant)
             {
-                var reasoning = string.Concat(msg.Contents.OfType<TextReasoningContent>().Select(r => r.Text));
+                var reasoning = string.Concat(contents.OfType<TextReasoningContent>().Select(r => r.Text));
                 if (!string.IsNullOrWhiteSpace(reasoning))
                 {
                     entries.Add(new TranscriptEntry(now, "THINKING", reasoning));
                 }
             }
 
-            var functionCalls = msg.Contents.OfType<FunctionCallContent>().ToList();
-            var functionResults = msg.Contents.OfType<FunctionResultContent>().ToList();
+            var functionCalls = contents.OfType<FunctionCallContent>().ToList();
+            var functionResults = contents.OfType<FunctionResultContent>().ToList();
 
             if (functionCalls.Count > 0)
             {
@@ -978,10 +1029,12 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             }
             else
             {
+                bool hasImages = contents.Any(c => c is DataContent dc && dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType));
+                var effectiveContent = hasImages ? ThinkingAndActivityTracingChatClient.DescribeMessage(msg) : text;
                 entries.Add(new TranscriptEntry(
                     now,
                     role,
-                    Content: text,
+                    Content: effectiveContent,
                     ToolName: null,
                     ToolArguments: null,
                     ToolResult: null));

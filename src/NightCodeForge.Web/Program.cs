@@ -62,7 +62,11 @@ builder.Services.AddSerilog((services, lc) => lc
 
 // Add services to the container.
 builder.Services.AddRazorComponents()
-    .AddInteractiveServerComponents();
+    .AddInteractiveServerComponents()
+    .AddHubOptions(options =>
+    {
+        options.MaximumReceiveMessageSize = NightCodeForge.Core.Domain.VisionConstants.MaxClipboardSignalRMessageBytes;
+    });
 
 // Register Web UI State Services
 builder.Services.AddScoped<WorkspaceStateService>();
@@ -81,6 +85,7 @@ builder.Services.AddSingleton<IDevQueueSkippedJobRegistry, DevQueueSkippedJobReg
 builder.Services.AddScoped<IDevQueueService, DevQueueService>();
 builder.Services.AddSingleton<ITaskHistoryDiffService, TaskHistoryDiffService>();
 builder.Services.AddScoped<ITaskMutationService, TaskMutationService>();
+builder.Services.AddScoped<IVisionCapabilityUiService, VisionCapabilityUiService>();
 builder.Services.AddScoped<IAttachmentUiService, AttachmentUiService>();
 builder.Services.AddScoped<ITaskCreationUiService, TaskCreationUiService>();
 builder.Services.AddScoped<ITaskDiskSyncCoordinator, TaskDiskSyncCoordinator>();

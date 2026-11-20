@@ -97,6 +97,7 @@ public static class ServiceCollectionExtensions
         // 7. Local LLM Chat Client & Factory (Ollama / OllamaRouter via OllamaSharp with tuned timeout)
         services.AddMemoryCache();
         services.TryAddSingleton<ILlmContextWindowCache, NightCodeForge.Infrastructure.Inference.LlmContextWindowCache>();
+        services.TryAddSingleton<IOpenAiModelAllowlistCache, NightCodeForge.Infrastructure.Inference.OpenAiModelAllowlistCache>();
         switch (providerType)
         {
             case LlmProviderType.Ollama:

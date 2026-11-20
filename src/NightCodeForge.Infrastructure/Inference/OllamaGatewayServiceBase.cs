@@ -114,6 +114,7 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
         if (showDetails != null)
         {
             _contextWindowCache.SetThinkingCapability(normalizedModelName, showDetails.ThinkingCapability);
+            _contextWindowCache.SetVisionCapability(normalizedModelName, showDetails.SupportsVision);
             if (showDetails.ContextWindow is { } tokens && tokens > 0)
             {
                 _contextWindowCache.SetContextWindow(normalizedModelName, tokens);
@@ -143,19 +144,55 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
         if (showDetails != null)
         {
             _contextWindowCache.SetThinkingCapability(normalizedModelName, showDetails.ThinkingCapability);
-            if (!_contextWindowCache.TryGetContextWindow(normalizedModelName, out _))
-            {
-                var providerTokens = await ProbeProviderContextWindowAsync(normalizedModelName, cancellationToken);
-                var effectiveTokens = providerTokens is > 0 ? providerTokens : showDetails.ContextWindow;
-                if (effectiveTokens is { } tokens && tokens > 0)
-                {
-                    _contextWindowCache.SetContextWindow(normalizedModelName, tokens);
-                }
-            }
+            _contextWindowCache.SetVisionCapability(normalizedModelName, showDetails.SupportsVision);
+            await CacheContextWindowIfMissingAsync(normalizedModelName, showDetails.ContextWindow, cancellationToken);
             return showDetails.ThinkingCapability;
         }
 
         return null;
+    }
+
+    public async Task<bool> ResolveVisionCapabilityAsync(string modelName, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(modelName))
+        {
+            return false;
+        }
+
+        var normalizedModelName = modelName.Trim();
+        if (_contextWindowCache.TryGetVisionCapability(normalizedModelName, out var cached))
+        {
+            return cached;
+        }
+
+        var showDetails = await ProbeShowModelDetailsAsync(normalizedModelName, cancellationToken);
+        if (showDetails != null)
+        {
+            _contextWindowCache.SetThinkingCapability(normalizedModelName, showDetails.ThinkingCapability);
+            _contextWindowCache.SetVisionCapability(normalizedModelName, showDetails.SupportsVision);
+            await CacheContextWindowIfMissingAsync(normalizedModelName, showDetails.ContextWindow, cancellationToken);
+            return showDetails.SupportsVision;
+        }
+
+        return false;
+    }
+
+    private async Task CacheContextWindowIfMissingAsync(
+        string normalizedModelName,
+        int? showContextWindow,
+        CancellationToken cancellationToken)
+    {
+        if (_contextWindowCache.TryGetContextWindow(normalizedModelName, out _))
+        {
+            return;
+        }
+
+        var providerTokens = await ProbeProviderContextWindowAsync(normalizedModelName, cancellationToken);
+        var effectiveTokens = providerTokens is > 0 ? providerTokens : showContextWindow;
+        if (effectiveTokens is { } tokens && tokens > 0)
+        {
+            _contextWindowCache.SetContextWindow(normalizedModelName, tokens);
+        }
     }
 
     /// <summary>Provider-specific context window metadata; null falls through to <c>/api/show</c>.</summary>
@@ -191,7 +228,7 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
         !cancellationToken.IsCancellationRequested
         && ex is HttpRequestException or OperationCanceledException or JsonException or NotSupportedException;
 
-    private sealed record ShowModelDetails(int? ContextWindow, ModelThinkingCapability ThinkingCapability);
+    private sealed record ShowModelDetails(int? ContextWindow, ModelThinkingCapability ThinkingCapability, bool SupportsVision);
 
     private async Task<ShowModelDetails?> ProbeShowModelDetailsAsync(string modelName, CancellationToken cancellationToken)
     {
@@ -210,7 +247,8 @@ public abstract class OllamaGatewayServiceBase : ILlmGatewayService
             using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(showCts.Token), cancellationToken: showCts.Token);
             var ctx = OllamaShowParser.ParseContextWindow(document.RootElement);
             var thinking = OllamaShowParser.ParseThinkingCapability(document.RootElement);
-            return new ShowModelDetails(ctx, thinking);
+            var supportsVision = OllamaShowParser.SupportsVision(document.RootElement);
+            return new ShowModelDetails(ctx, thinking, supportsVision);
         }
         catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
         {

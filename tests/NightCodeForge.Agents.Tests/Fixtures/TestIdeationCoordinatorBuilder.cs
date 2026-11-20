@@ -44,6 +44,7 @@ public sealed class TestIdeationCoordinatorBuilder : IDisposable
     public IWorkspaceSkillsServiceFactory SkillsServiceFactory { get; set; } = new WorkspaceSkillsServiceFactory(new SkillsService(), new BundledSkillsProvider(), NullLogger<WorkspaceSkillsService>.Instance);
     public IWorkspaceRepository WorkspaceRepository { get; set; } = new InMemoryWorkspaceRepository();
     public ITaskRepository TaskRepository { get; set; } = new InMemoryTaskRepository();
+    public ITaskAttachmentRepository? TaskAttachmentRepository { get; set; }
     public ITaskMarkdownSyncService MarkdownSyncService { get; set; } = new Mock<ITaskMarkdownSyncService>().Object;
     public IMcpClientManager McpManager { get; set; } = CreateDefaultMcpManager();
     public IWorkspaceSymbolService SymbolService { get; set; } = new Mock<IWorkspaceSymbolService>().Object;
@@ -154,6 +155,7 @@ public sealed class TestIdeationCoordinatorBuilder : IDisposable
 
         services.AddScoped<IWorkspaceRepository>(_ => WorkspaceRepository);
         services.AddScoped<ITaskRepository>(_ => TaskRepository);
+        services.AddScoped<ITaskAttachmentRepository>(_ => TaskAttachmentRepository ?? new InMemoryTaskAttachmentRepository(TaskRepository));
         services.AddScoped<ITaskMarkdownSyncService>(_ => MarkdownSyncService);
 
         if (WebSearchServiceFactory != null)
