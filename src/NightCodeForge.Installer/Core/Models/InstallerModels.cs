@@ -195,3 +195,28 @@ public sealed record UninstallResult(
     bool DeferredSelfCleanupScheduled,
     IReadOnlyList<UninstallStepResult> Steps,
     string? ErrorMessage);
+
+public sealed record RouterNodeCeilingSummary(
+    string Target,
+    int ContextCeiling,
+    int? BaselineContext,
+    double TokensPerSecond,
+    int? VramMb);
+
+public sealed record RouterRoleAssignmentSummary(
+    string Role,
+    string Model,
+    int RecommendedContextWindow,
+    string? Description,
+    IReadOnlyList<RouterNodeCeilingSummary> Nodes);
+
+public sealed record RouterRoleRecommendationsSummary(
+    string ProviderType,
+    string Endpoint,
+    string? ArchitectModelId,
+    string? CoderModelId,
+    string? DefaultModelId,
+    int ContextWindowTokens,
+    DateTimeOffset? GeneratedAt,
+    string ConfigFilePath,
+    IReadOnlyList<RouterRoleAssignmentSummary> Roles);

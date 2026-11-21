@@ -16,10 +16,12 @@ public class LlmProviderOptions : ILlmProviderOptions
     /// </summary>
     public LlmProviderType ProviderType { get; set; } = LlmProviderType.OllamaRouter;
 
+    public const string DefaultEndpoint = "http://localhost:11434";
+
     /// <summary>
     /// Base HTTP/HTTPS endpoint of the Ollama or OllamaRouter server (defaults to http://localhost:11434).
     /// </summary>
-    public string Endpoint { get; set; } = "http://localhost:11434";
+    public string Endpoint { get; set; } = DefaultEndpoint;
 
     /// <summary>
     /// HTTP client request timeout in minutes to accommodate lengthy code generation and reasoning (default: 10 minutes).
@@ -69,11 +71,22 @@ public class LlmProviderOptions : ILlmProviderOptions
             ? OpenAiCompatible.Endpoint.Trim()
             : (Endpoint?.Trim() ?? string.Empty);
 
+    private string? _defaultModelId;
+    private bool _hasExplicitDefaultModelId;
+
     /// <summary>
     /// Standardized default model identifier across pipeline stages.
     /// Optional: if omitted (null or empty), the system automatically selects the default model via DefaultModelResolver.
     /// </summary>
-    public string? DefaultModelId { get; set; }
+    public string? DefaultModelId
+    {
+        get => _defaultModelId;
+        set
+        {
+            _defaultModelId = value;
+            _hasExplicitDefaultModelId = true;
+        }
+    }
 
     /// <summary>
     /// Default thinking/reasoning effort across pipeline stages.
@@ -96,8 +109,14 @@ public class LlmProviderOptions : ILlmProviderOptions
     [JsonIgnore]
     public string? ModelId
     {
-        get => DefaultModelId;
-        set => DefaultModelId = value;
+        get => _defaultModelId;
+        set
+        {
+            if (!_hasExplicitDefaultModelId)
+            {
+                _defaultModelId = value;
+            }
+        }
     }
 
     /// <summary>

@@ -104,4 +104,24 @@ public sealed class InstallerArchitectureTests
 
         Assert.True(violations.Count == 0, string.Join(Environment.NewLine, violations));
     }
+
+    [Fact]
+    public void InstallerAssembly_DoesNotReferenceInfrastructureCoreOrNewtonsoft_AndContainerConstructsHandoffServices()
+    {
+        var assembly = typeof(EnvironmentProvisioner).Assembly;
+        var referencedNames = assembly.GetReferencedAssemblies()
+            .Select(static a => a.Name)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.DoesNotContain("NightCodeForge.Infrastructure", referencedNames);
+        Assert.DoesNotContain("NightCodeForge.Core", referencedNames);
+        Assert.DoesNotContain("Newtonsoft.Json", referencedNames);
+        Assert.DoesNotContain("Microsoft.EntityFrameworkCore", referencedNames);
+        Assert.DoesNotContain("Hangfire.Core", referencedNames);
+
+        using var container = InstallerServiceContainer.CreateDefault();
+        Assert.NotNull(container.OllamaRouterRecommendationSync);
+        Assert.NotNull(container.OllamaRouterSetupHandoff);
+    }
 }

@@ -23,6 +23,33 @@ public static class InstallerConstants
     public const string PartFileExtension = ".part";
     public const string LauncherConfigFileName = "launcher.conf";
     public const string UninstallManifestFileName = "uninstall-manifest.json";
+    public const string UserConfigFileName = "config.json";
+
+    public const string DefaultOllamaRouterEndpoint = "http://localhost:11434";
+    public const string OllamaRouterRecommendationsApiPath = "/api/router/recommendations";
+    public const int OllamaRouterRecommendationsTimeoutSeconds = 10;
+    public const string LlmProviderSectionName = "LlmProvider";
+    public const string LlmProviderTypeKey = "ProviderType";
+    public const string LlmEndpointKey = "Endpoint";
+    public const string LlmArchitectModelIdKey = "ArchitectModelId";
+    public const string LlmCoderModelIdKey = "CoderModelId";
+    public const string LlmDefaultModelIdKey = "DefaultModelId";
+    public const string LlmLegacyModelIdKey = "ModelId";
+    public const string LlmContextWindowTokensKey = "ContextWindowTokens";
+    public const string OllamaRouterProviderTypeName = "OllamaRouter";
+    public const int DefaultContextWindowTokens = 131072;
+
+    public const string RoleBasic = "basic";
+    public const string RoleAgenticChat = "agentic_chat";
+    public const string RoleSoftwareArchitect = "software_architect";
+    public const string RoleSeniorDeveloper = "senior_developer";
+    public const string RoleJuniorDeveloper = "junior_developer";
+
+    public const string OllamaRouterSetupCommand = "setup";
+    public const string OllamaRouterWizardFlag = "--wizard";
+    public const string OllamaRouterWaitFlag = "--wait";
+    public const string OllamaRouterProtocolOpenUri = "ollamarouter://open";
+    public const string OllamaRouterProtocolWizardUri = "ollamarouter://wizard";
 
     public const string ConfigDirectoryName = "config";
     public const string DataDirectoryName = "data";

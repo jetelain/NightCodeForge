@@ -116,3 +116,19 @@ public sealed class UninstallException : InstallerException
     {
     }
 }
+
+/// <summary>
+/// Raised when fetching or persisting OllamaRouter role recommendations fails.
+/// </summary>
+public sealed class OllamaRouterSyncException : InstallerException
+{
+    public OllamaRouterSyncException(string message)
+        : base(message)
+    {
+    }
+
+    public OllamaRouterSyncException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}

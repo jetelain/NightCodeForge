@@ -114,6 +114,7 @@ public class OllamaGatewayServiceTests
 
         Assert.Null(await service.GetSessionUsageAsync("ncf-task1-stage-1"));
         Assert.False(await service.ReleaseSessionAffinityAsync("ncf-task1-stage-1"));
+        Assert.Null(await service.GetRecommendationsAsync());
         Assert.Empty(handler.Requests);
     }
 }

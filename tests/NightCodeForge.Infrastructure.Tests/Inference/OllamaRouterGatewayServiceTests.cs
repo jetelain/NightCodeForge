@@ -1,8 +1,12 @@
 using System.Net;
+using System.Text;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;
@@ -444,5 +448,271 @@ public class OllamaRouterGatewayServiceTests
 
         var errorService = CreateService(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError)));
         Assert.Null(await errorService.GetSessionUsageAsync("ncf-task42-stage-3"));
+    }
+
+    [Fact]
+    public async Task GetRecommendationsAsync_ParsesFullFiveRoleMatrixAndNodeProfiles()
+    {
+        const string RecommendationsJson = """
+            {
+              "generatedAt": "2026-11-11T10:30:00.0000000+00:00",
+              "roles": {
+                "basic": {
+                  "role": "basic",
+                  "model": "gemma4:e4b",
+                  "recommendedContextWindow": 131072,
+                  "description": "Fast auxiliary tasks",
+                  "nodes": [
+                    { "target": "Local", "contextCeiling": 131072, "baselineContext": null, "tokensPerSecond": 68.4, "vramMB": 16384 }
+                  ]
+                },
+                "agentic_chat": {
+                  "role": "agentic_chat",
+                  "model": "qwen3.8:27b",
+                  "recommendedContextWindow": 262144,
+                  "description": "Interactive ideation and chat",
+                  "nodes": [
+                    { "target": "Local", "contextCeiling": 49152, "baselineContext": null, "tokensPerSecond": 24.1, "vramMB": 16384 },
+                    { "target": "Server", "contextCeiling": 262144, "baselineContext": null, "tokensPerSecond": 42.8, "vramMB": 98304 }
+                  ]
+                },
+                "software_architect": {
+                  "role": "software_architect",
+                  "model": "qwen3.8:27b",
+                  "recommendedContextWindow": 262144,
+                  "description": "Architecture, task review, and code review",
+                  "nodes": [
+                    { "target": "Local", "contextCeiling": 49152, "baselineContext": null, "tokensPerSecond": 24.1, "vramMB": 16384 },
+                    { "target": "Server", "contextCeiling": 262144, "baselineContext": null, "tokensPerSecond": 42.8, "vramMB": 98304 }
+                  ]
+                },
+                "senior_developer": {
+                  "role": "senior_developer",
+                  "model": "qwen3.8:27b",
+                  "recommendedContextWindow": 262144,
+                  "description": "Complex code implementation",
+                  "nodes": [
+                    { "target": "Local", "contextCeiling": 49152, "baselineContext": null, "tokensPerSecond": 24.1, "vramMB": 16384 },
+                    { "target": "Server", "contextCeiling": 262144, "baselineContext": null, "tokensPerSecond": 42.8, "vramMB": 98304 }
+                  ]
+                },
+                "junior_developer": {
+                  "role": "junior_developer",
+                  "model": "qwen3.6:35b-a3b",
+                  "recommendedContextWindow": 131072,
+                  "description": "High-speed MoE implementation",
+                  "nodes": [
+                    { "target": "Local", "contextCeiling": 131072, "baselineContext": 65536, "tokensPerSecond": 54.0, "vramMB": 16384 }
+                  ]
+                }
+              }
+            }
+            """;
+
+        var handler = new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/router/recommendations"
+            ? StubHttpHandler.Json(RecommendationsJson)
+            : StubHttpHandler.Status(HttpStatusCode.NotFound));
+
+        var result = await CreateService(handler).GetRecommendationsAsync();
+
+        Assert.NotNull(result);
+        Assert.NotNull(result.GeneratedAt);
+        Assert.NotNull(result.Roles);
+        Assert.Equal(5, result.Roles.Count);
+        var junior = result.Roles[OllamaRouterRoleNames.JuniorDeveloper];
+        Assert.Equal("qwen3.6:35b-a3b", junior.Model);
+        Assert.Equal(131072, junior.RecommendedContextWindow);
+        Assert.NotNull(junior.Nodes);
+        var node = Assert.Single(junior.Nodes);
+        Assert.Equal(65536, node.BaselineContext);
+        Assert.Equal(54.0, node.TokensPerSecond);
+        Assert.Equal(16384, node.VramMB);
+    }
+
+    [Fact]
+    public async Task GetRecommendationsAsync_HandlesEmptyMatrix404ErrorAndMalformedJson()
+    {
+        var emptyService = CreateService(new StubHttpHandler(req => req.RequestUri!.AbsolutePath == "/api/router/recommendations"
+            ? StubHttpHandler.Json("""{"generatedAt":null,"roles":{}}""")
+            : StubHttpHandler.Status(HttpStatusCode.NotFound)));
+        var emptyResult = await emptyService.GetRecommendationsAsync();
+        Assert.NotNull(emptyResult);
+        Assert.Null(emptyResult.GeneratedAt);
+        Assert.NotNull(emptyResult.Roles);
+        Assert.Empty(emptyResult.Roles);
+
+        Assert.Null(await CreateService(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.NotFound))).GetRecommendationsAsync());
+        Assert.Null(await CreateService(new StubHttpHandler(_ => StubHttpHandler.Status(HttpStatusCode.InternalServerError))).GetRecommendationsAsync());
+        Assert.Null(await CreateService(new StubHttpHandler(_ => StubHttpHandler.Json("{ invalid json"))).GetRecommendationsAsync());
+    }
+
+    [Fact]
+    public void RecommendationMapper_MapsPriorityFallbacksFloorsAndAppliesOptions()
+    {
+        var fullDto = new RouterRecommendationsDto(
+            DateTimeOffset.UtcNow,
+            new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                ["BASIC"] = new("basic", "gemma4:e4b", 131072, null, []),
+                ["Agentic_Chat"] = new("agentic_chat", " chat-model ", 131072, null, []),
+                ["SOFTWARE_ARCHITECT"] = new("software_architect", " architect-model ", 262144, null, []),
+                ["senior_developer"] = new("senior_developer", " senior-model ", 262144, null, []),
+                ["junior_developer"] = new("junior_developer", " junior-model ", 131072, null, [])
+            });
+
+        var mappedFull = OllamaRouterRecommendationMapper.Map(fullDto);
+        Assert.True(mappedFull.HasRecommendations);
+        Assert.True(mappedFull.ShouldDifferentiateRoles);
+        Assert.Equal("architect-model", mappedFull.ArchitectModelId);
+        Assert.Equal("senior-model", mappedFull.CoderModelId);
+        Assert.Equal("chat-model", mappedFull.DefaultModelId);
+        Assert.Equal(262144, mappedFull.ContextWindowTokens);
+
+        var options = new LlmProviderOptions { ProviderType = LlmProviderType.Ollama, Endpoint = "" };
+        OllamaRouterRecommendationMapper.ApplyToOptions(options, mappedFull, " http://router.lan:11434 ");
+        Assert.Equal(LlmProviderType.OllamaRouter, options.ProviderType);
+        Assert.Equal("http://router.lan:11434", options.Endpoint);
+        Assert.Equal("architect-model", options.ArchitectModelId);
+        Assert.Equal("senior-model", options.CoderModelId);
+        Assert.Equal("chat-model", options.DefaultModelId);
+        Assert.Equal(262144, options.ContextWindowTokens);
+
+        // Fallback chain: no software_architect, no senior_developer, no agentic_chat -> junior_developer becomes Coder, Architect=null, Default=junior_developer
+        var juniorOnlyDto = new RouterRecommendationsDto(
+            DateTimeOffset.UtcNow,
+            new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                ["basic"] = new("basic", "gemma4:e4b", 131072, null, []),
+                ["junior_developer"] = new("junior_developer", "qwen3.6:35b-a3b", 65536, null, [])
+            });
+
+        var mappedJuniorOnly = OllamaRouterRecommendationMapper.Map(juniorOnlyDto);
+        Assert.Null(mappedJuniorOnly.ArchitectModelId);
+        Assert.Equal("qwen3.6:35b-a3b", mappedJuniorOnly.CoderModelId);
+        Assert.Equal("qwen3.6:35b-a3b", mappedJuniorOnly.DefaultModelId);
+        Assert.Equal(LlmProviderOptions.DefaultContextWindowTokens, mappedJuniorOnly.ContextWindowTokens);
+
+        // Context floor: software_architect < 131072 floors to 131072; missing senior_developer uses junior_developer; missing software_architect uses agentic_chat
+        var smallArchitectDto = new RouterRecommendationsDto(
+            DateTimeOffset.UtcNow,
+            new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                ["software_architect"] = new("software_architect", "arch-64k", 65536, null, [])
+            });
+        var mappedSmallArch = OllamaRouterRecommendationMapper.Map(smallArchitectDto);
+        Assert.Equal("arch-64k", mappedSmallArch.ArchitectModelId);
+        Assert.Equal("arch-64k", mappedSmallArch.DefaultModelId);
+        Assert.Null(mappedSmallArch.CoderModelId);
+        Assert.Equal(131072, mappedSmallArch.ContextWindowTokens);
+
+        // Basic-only / empty matrix has no usable recommendations and ApplyToOptions fails fast
+        var basicOnlyDto = new RouterRecommendationsDto(
+            null,
+            new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                ["basic"] = new("basic", "gemma4:e4b", 131072, null, [])
+            });
+        var mappedBasicOnly = OllamaRouterRecommendationMapper.Map(basicOnlyDto);
+        Assert.False(mappedBasicOnly.HasRecommendations);
+        Assert.Throws<InvalidOperationException>(() => OllamaRouterRecommendationMapper.ApplyToOptions(new LlmProviderOptions(), mappedBasicOnly));
+    }
+
+    [Fact]
+    public async Task GetRecommendationsAsync_PropagatesCallerCancellation_AndReturnsNullOnInternalTimeout()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var okService = CreateService(new StubHttpHandler(_ => StubHttpHandler.Json("""{"generatedAt":null,"roles":{}}""")));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => okService.GetRecommendationsAsync(cts.Token));
+
+        var timeoutService = CreateService(new StubHttpHandler(_ => throw new TaskCanceledException("Simulated HTTP client timeout")));
+        Assert.Null(await timeoutService.GetRecommendationsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public void RecommendationMapper_BlankSoftwareArchitectIgnoresContextFloor_AndNormalizeEndpointValidatesAndTrims()
+    {
+        var dto = new RouterRecommendationsDto(
+            DateTimeOffset.UtcNow,
+            new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.SoftwareArchitect] = new("software_architect", "   ", 262144, null, []),
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "chat-model", 131072, null, [])
+            });
+
+        var mapped = OllamaRouterRecommendationMapper.Map(dto);
+        Assert.Equal("chat-model", mapped.ArchitectModelId);
+        Assert.Equal(LlmProviderOptions.DefaultContextWindowTokens, mapped.ContextWindowTokens);
+
+        Assert.Equal(LlmProviderOptions.DefaultEndpoint, OllamaRouterRecommendationMapper.NormalizeEndpoint(null));
+        Assert.Equal(LlmProviderOptions.DefaultEndpoint, OllamaRouterRecommendationMapper.NormalizeEndpoint("   "));
+        Assert.Equal("http://router.lan:11434", OllamaRouterRecommendationMapper.NormalizeEndpoint(" http://router.lan:11434/ "));
+
+        Assert.Throws<ArgumentException>(() => OllamaRouterRecommendationMapper.NormalizeEndpoint("ftp://router.lan"));
+        Assert.Throws<ArgumentException>(() => OllamaRouterRecommendationMapper.NormalizeEndpoint("not-a-url"));
+        Assert.Throws<ArgumentException>(() => OllamaRouterRecommendationMapper.NormalizeEndpoint("http://router.lan?x=1"));
+        Assert.Throws<ArgumentException>(() => OllamaRouterRecommendationMapper.NormalizeEndpoint("http://router.lan#frag"));
+        Assert.Throws<ArgumentException>(() => OllamaRouterRecommendationMapper.NormalizeEndpoint("http:///path"));
+
+        var manualMapped = new MappedRouterRecommendations(
+            DefaultModelId: " default-m ",
+            ArchitectModelId: " arch-m ",
+            CoderModelId: " coder-m ",
+            ContextWindowTokens: 0,
+            GeneratedAt: null);
+        var options = new LlmProviderOptions();
+        OllamaRouterRecommendationMapper.ApplyToOptions(options, manualMapped, "https://router.local:8443/");
+        Assert.Equal("https://router.local:8443", options.Endpoint);
+        Assert.Equal("default-m", options.DefaultModelId);
+        Assert.Equal("arch-m", options.ArchitectModelId);
+        Assert.Equal("coder-m", options.CoderModelId);
+        Assert.Equal(LlmProviderOptions.DefaultContextWindowTokens, options.ContextWindowTokens);
+
+        Assert.Throws<ArgumentException>(() => OllamaRouterRecommendationMapper.ApplyToOptions(new LlmProviderOptions(), manualMapped, "not-a-url"));
+    }
+
+    [Fact]
+    public void ConfigurationBinding_DefaultModelIdWinsOverLegacyModelId_WhileLegacyOnlyStillBinds()
+    {
+        const string baseJson = """{"LlmProvider":{"ModelId":"Qwen3.8-27B:latest"}}""";
+        const string overlayJson = """{"LlmProvider":{"DefaultModelId":"qwen3.8:27b"}}""";
+
+        var overlaidConfig = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(baseJson)))
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(overlayJson)))
+            .Build();
+
+        var providerOpts = overlaidConfig.GetSection(LlmProviderOptions.SectionName).Get<LlmProviderOptions>();
+        var endpointOpts = overlaidConfig.GetSection(LlmProviderOptions.SectionName).Get<LlmEndpointOptions>();
+        Assert.NotNull(providerOpts);
+        Assert.NotNull(endpointOpts);
+        Assert.Equal("qwen3.8:27b", providerOpts.DefaultModelId);
+        Assert.Equal("qwen3.8:27b", providerOpts.ModelId);
+        Assert.Equal("qwen3.8:27b", endpointOpts.DefaultModelId);
+        Assert.Equal("qwen3.8:27b", endpointOpts.ModelId);
+
+        var legacyOnlyConfig = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(baseJson)))
+            .Build();
+
+        var legacyProviderOpts = legacyOnlyConfig.GetSection(LlmProviderOptions.SectionName).Get<LlmProviderOptions>();
+        var legacyEndpointOpts = legacyOnlyConfig.GetSection(LlmProviderOptions.SectionName).Get<LlmEndpointOptions>();
+        Assert.NotNull(legacyProviderOpts);
+        Assert.NotNull(legacyEndpointOpts);
+        Assert.Equal("Qwen3.8-27B:latest", legacyProviderOpts.DefaultModelId);
+        Assert.Equal("Qwen3.8-27B:latest", legacyProviderOpts.ModelId);
+        Assert.Equal("Qwen3.8-27B:latest", legacyEndpointOpts.DefaultModelId);
+        Assert.Equal("Qwen3.8-27B:latest", legacyEndpointOpts.ModelId);
+
+        const string explicitEmptyOverlayJson = """{"LlmProvider":{"DefaultModelId":""}}""";
+        var explicitEmptyConfig = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(baseJson)))
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(explicitEmptyOverlayJson)))
+            .Build();
+
+        var emptyDefaultProviderOpts = explicitEmptyConfig.GetSection(LlmProviderOptions.SectionName).Get<LlmProviderOptions>();
+        var emptyDefaultEndpointOpts = explicitEmptyConfig.GetSection(LlmProviderOptions.SectionName).Get<LlmEndpointOptions>();
+        Assert.Equal(string.Empty, emptyDefaultProviderOpts!.DefaultModelId);
+        Assert.Equal(string.Empty, emptyDefaultEndpointOpts!.DefaultModelId);
     }
 }

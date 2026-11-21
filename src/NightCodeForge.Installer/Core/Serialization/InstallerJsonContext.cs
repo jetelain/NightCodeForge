@@ -15,15 +15,15 @@ public sealed record GitHubReleaseAssetDto(
     [property: JsonPropertyName("size")] long Size);
 
 public sealed record RouterRecommendationsDto(
-    [property: JsonPropertyName("generatedAt")] DateTimeOffset GeneratedAt,
-    [property: JsonPropertyName("roles")] Dictionary<string, RouterRoleRecommendationDto> Roles);
+    [property: JsonPropertyName("generatedAt")] DateTimeOffset? GeneratedAt,
+    [property: JsonPropertyName("roles")] Dictionary<string, RouterRoleRecommendationDto>? Roles);
 
 public sealed record RouterRoleRecommendationDto(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("recommendedContextWindow")] int RecommendedContextWindow,
     [property: JsonPropertyName("description")] string? Description,
-    [property: JsonPropertyName("nodes")] List<RouterNodeRoleProfileDto> Nodes);
+    [property: JsonPropertyName("nodes")] List<RouterNodeRoleProfileDto>? Nodes);
 
 public sealed record RouterNodeRoleProfileDto(
     [property: JsonPropertyName("target")] string Target,

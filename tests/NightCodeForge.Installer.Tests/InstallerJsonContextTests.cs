@@ -69,12 +69,31 @@ public sealed class InstallerJsonContextTests
 
         var dto = JsonSerializer.Deserialize(json, InstallerJsonContext.Default.RouterRecommendationsDto);
         Assert.NotNull(dto);
+        Assert.NotNull(dto.Roles);
         Assert.True(dto.Roles.TryGetValue("software_architect", out var architect));
         Assert.Equal("qwen3.8:27b", architect.Model);
         Assert.Equal(262144, architect.RecommendedContextWindow);
+        Assert.NotNull(architect.Nodes);
         Assert.Single(architect.Nodes);
         Assert.Equal(16384, architect.Nodes[0].VramMb);
         Assert.Equal(24.1, architect.Nodes[0].TokensPerSecond);
+    }
+
+    [Fact]
+    public void RouterRecommendationsDto_DeserializesEmptyMatrixWithNullGeneratedAt()
+    {
+        const string json = """
+        {
+          "generatedAt": null,
+          "roles": {}
+        }
+        """;
+
+        var dto = JsonSerializer.Deserialize(json, InstallerJsonContext.Default.RouterRecommendationsDto);
+        Assert.NotNull(dto);
+        Assert.Null(dto.GeneratedAt);
+        Assert.NotNull(dto.Roles);
+        Assert.Empty(dto.Roles);
     }
 
     [Fact]

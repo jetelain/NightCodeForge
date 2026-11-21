@@ -780,4 +780,17 @@ public class MonitoringPageTests : BunitContext
         Assert.Empty(cut.FindAll("#reclaim-vram-btn"));
         Assert.DoesNotContain("Resident GPU Models In Memory", cut.Markup);
     }
+
+    [Fact]
+    public void OllamaRouterClusterMonitor_WhenOllamaRouterActive_RendersProtocolLinkWithoutBlankTargetOrMonitorUrl()
+    {
+        var cut = Render<OllamaRouterClusterMonitor>();
+
+        var appLink = cut.Find("#link-open-ollamarouter-app");
+        Assert.Equal(OllamaRouterProtocolUris.OpenApp, appLink.GetAttribute("href"));
+        Assert.False(appLink.HasAttribute("target"));
+        Assert.Contains("Open OllamaRouter App", appLink.TextContent);
+        Assert.DoesNotContain("/monitor", cut.Markup);
+        Assert.DoesNotContain("Gateway Monitor", cut.Markup);
+    }
 }

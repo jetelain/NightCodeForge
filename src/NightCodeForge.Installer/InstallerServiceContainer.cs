@@ -26,7 +26,9 @@ public sealed class InstallerServiceContainer : IDisposable
         IInstallationDetector installationDetector,
         IOsIntegrationService osIntegration,
         IReleaseManager releaseManager,
-        IUninstallService uninstallService)
+        IUninstallService uninstallService,
+        IOllamaRouterRecommendationSyncService ollamaRouterRecommendationSync,
+        IOllamaRouterSetupHandoffService ollamaRouterSetupHandoff)
     {
         ArgumentNullException.ThrowIfNull(abstractions);
         HttpClient = abstractions.HttpClient;
@@ -40,6 +42,8 @@ public sealed class InstallerServiceContainer : IDisposable
         OsIntegration = osIntegration ?? throw new ArgumentNullException(nameof(osIntegration));
         ReleaseManager = releaseManager ?? throw new ArgumentNullException(nameof(releaseManager));
         UninstallService = uninstallService ?? throw new ArgumentNullException(nameof(uninstallService));
+        OllamaRouterRecommendationSync = ollamaRouterRecommendationSync ?? throw new ArgumentNullException(nameof(ollamaRouterRecommendationSync));
+        OllamaRouterSetupHandoff = ollamaRouterSetupHandoff ?? throw new ArgumentNullException(nameof(ollamaRouterSetupHandoff));
     }
 
     public HttpClient HttpClient { get; }
@@ -53,6 +57,8 @@ public sealed class InstallerServiceContainer : IDisposable
     public IOsIntegrationService OsIntegration { get; }
     public IReleaseManager ReleaseManager { get; }
     public IUninstallService UninstallService { get; }
+    public IOllamaRouterRecommendationSyncService OllamaRouterRecommendationSync { get; }
+    public IOllamaRouterSetupHandoffService OllamaRouterSetupHandoff { get; }
 
     public static InstallerServiceContainer CreateDefault()
     {
@@ -89,6 +95,12 @@ public sealed class InstallerServiceContainer : IDisposable
             installationDetector,
             nuGetProvisioner,
             osIntegration);
+        var recommendationSync = new OllamaRouterRecommendationSyncService(httpClient, installationDetector);
+        var setupHandoff = new OllamaRouterSetupHandoffService(
+            platform,
+            processRunner,
+            installationDetector,
+            recommendationSync);
 
         return new InstallerServiceContainer(
             abstractions,
@@ -97,7 +109,9 @@ public sealed class InstallerServiceContainer : IDisposable
             installationDetector,
             osIntegration,
             releaseManager,
-            uninstallService);
+            uninstallService,
+            recommendationSync,
+            setupHandoff);
     }
 
     public void Dispose()
