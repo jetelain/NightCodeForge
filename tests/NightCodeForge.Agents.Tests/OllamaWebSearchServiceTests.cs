@@ -12,22 +12,13 @@ namespace NightCodeForge.Agents.Tests;
 
 public class OllamaWebSearchServiceTests
 {
-    private class MockHttpMessageHandler : HttpMessageHandler
+    private sealed class MockHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler
     {
-        public Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> Handler { get; set; }
-
-        public MockHttpMessageHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
-        {
-            Handler = handler;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            return Handler(request, cancellationToken);
-        }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            handler(request, cancellationToken);
     }
 
-    private class FakeSettingsService : IWebSearchSettingsService
+    private sealed class FakeSettingsService : IWebSearchSettingsService
     {
         private WebSearchSettings _settings;
         public event Action<WebSearchSettings>? OnSettingsChanged;
@@ -47,15 +38,59 @@ public class OllamaWebSearchServiceTests
         }
     }
 
+    private sealed class FakeSecretStore : IApiKeySecretStore
+    {
+        public string? KeyringOllamaKey { get; set; }
+        public string? EnvOllamaKey { get; set; }
+
+        public event EventHandler<ApiKeySecretChangedEventArgs>? SecretChanged;
+
+        public bool IsKeyringAvailable() => true;
+        public string? GetOpenAiApiKey(string? endpoint) => null;
+        public string? ResolveEffectiveOpenAiApiKey(string? endpoint) => null;
+        public bool HasOpenAiApiKey(string? endpoint) => false;
+        public void SetOpenAiApiKey(string endpoint, string apiKey) { }
+        public void DeleteOpenAiApiKey(string endpoint) { }
+
+        public string? GetOllamaWebSearchApiKey() =>
+            string.IsNullOrWhiteSpace(KeyringOllamaKey) ? null : KeyringOllamaKey.Trim();
+
+        public string? ResolveEffectiveOllamaWebSearchApiKey()
+        {
+            if (!string.IsNullOrWhiteSpace(KeyringOllamaKey))
+            {
+                return KeyringOllamaKey.Trim();
+            }
+
+            return string.IsNullOrWhiteSpace(EnvOllamaKey) ? null : EnvOllamaKey.Trim();
+        }
+
+        public bool HasOllamaWebSearchApiKey() => !string.IsNullOrWhiteSpace(GetOllamaWebSearchApiKey());
+
+        public void SetOllamaWebSearchApiKey(string apiKey)
+        {
+            KeyringOllamaKey = apiKey.Trim();
+            SecretChanged?.Invoke(this, new ApiKeySecretChangedEventArgs(ApiKeySecretKind.OllamaWebSearch, null));
+        }
+
+        public void DeleteOllamaWebSearchApiKey()
+        {
+            KeyringOllamaKey = null;
+            SecretChanged?.Invoke(this, new ApiKeySecretChangedEventArgs(ApiKeySecretKind.OllamaWebSearch, null));
+        }
+    }
+
     private static OllamaWebSearchService CreateService(
         HttpClient client,
         IWebSearchSettingsService? settingsService = null,
+        IApiKeySecretStore? secretStore = null,
         string? explicitApiKey = null,
         string? explicitEndpoint = null,
         SecurityOptions? securityOptions = null) =>
         new(
             client,
             settingsService ?? new FakeSettingsService(),
+            secretStore ?? new FakeSecretStore(),
             Options.Create(securityOptions ?? new SecurityOptions()),
             NullLogger<OllamaWebSearchService>.Instance,
             explicitApiKey,
@@ -67,30 +102,29 @@ public class OllamaWebSearchServiceTests
         var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var client = new HttpClient(handler);
         var settingsService = new FakeSettingsService();
+        var secretStore = new FakeSecretStore();
         var secOptions = Options.Create(new SecurityOptions());
         var logger = NullLogger<OllamaWebSearchService>.Instance;
 
-        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(null!, settingsService, secOptions, logger));
-        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, null!, secOptions, logger));
-        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, settingsService, null!, logger));
-        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, settingsService, secOptions, null!));
+        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(null!, settingsService, secretStore, secOptions, logger));
+        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, null!, secretStore, secOptions, logger));
+        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, settingsService, null!, secOptions, logger));
+        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, settingsService, secretStore, null!, logger));
+        Assert.Throws<ArgumentNullException>(() => new OllamaWebSearchService(client, settingsService, secretStore, secOptions, null!));
     }
 
     [Fact]
     public void IsConfigured_False_WhenNoApiKeyProvided()
     {
-        var originalEnv = Environment.GetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable);
         var originalAirGap = Environment.GetEnvironmentVariable(SecurityOptions.AirGappedEnvironmentVariable);
         try
         {
-            Environment.SetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable, null);
             Environment.SetEnvironmentVariable(SecurityOptions.AirGappedEnvironmentVariable, null);
 
             var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
             var client = new HttpClient(handler);
-            var settingsService = new FakeSettingsService(new WebSearchSettings { ApiKey = "" });
 
-            var service = CreateService(client, settingsService, explicitApiKey: null);
+            var service = CreateService(client, explicitApiKey: null);
 
             Assert.False(service.IsConfigured);
             Assert.False(service.IsEnabled);
@@ -99,7 +133,6 @@ public class OllamaWebSearchServiceTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable, originalEnv);
             Environment.SetEnvironmentVariable(SecurityOptions.AirGappedEnvironmentVariable, originalAirGap);
         }
     }
@@ -118,27 +151,35 @@ public class OllamaWebSearchServiceTests
     }
 
     [Fact]
-    public void IsConfigured_True_WhenSettingsServiceHasKey()
+    public void GetEffectiveApiKey_FollowsExplicitOverrideThenKeyringThenEnvVarPrecedence()
     {
         var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var client = new HttpClient(handler);
-        var settingsService = new FakeSettingsService(new WebSearchSettings { ApiKey = "settings_key_abc" });
+        var secretStore = new FakeSecretStore
+        {
+            KeyringOllamaKey = "keyring_key_2",
+            EnvOllamaKey = "env_key_3"
+        };
 
-        var service = CreateService(client, settingsService);
+        var withExplicit = CreateService(client, secretStore: secretStore, explicitApiKey: "explicit_key_1");
+        Assert.Equal("explicit_key_1", withExplicit.GetEffectiveApiKey());
 
-        Assert.True(service.IsConfigured);
-        Assert.True(service.IsEnabled);
-        Assert.Null(service.DisabledReason);
+        var withKeyring = CreateService(client, secretStore: secretStore, explicitApiKey: null);
+        Assert.Equal("keyring_key_2", withKeyring.GetEffectiveApiKey());
+
+        secretStore.KeyringOllamaKey = null;
+        Assert.Equal("env_key_3", withKeyring.GetEffectiveApiKey());
     }
 
     [Fact]
-    public void IsEnabled_False_And_DisabledReason_WhenAirGappedModeActive()
+    public void IsEnabled_False_And_DisabledReason_WhenAirGappedModeActive_EvenWithKeyringKey()
     {
         var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
         var client = new HttpClient(handler);
         var secOptions = new SecurityOptions { AirGappedMode = true };
+        var secretStore = new FakeSecretStore { KeyringOllamaKey = "ollama_keyring_key_123" };
 
-        var service = CreateService(client, explicitApiKey: "ollama_key_123", securityOptions: secOptions);
+        var service = CreateService(client, secretStore: secretStore, securityOptions: secOptions);
 
         Assert.True(service.IsConfigured);
         Assert.False(service.IsEnabled);
@@ -148,28 +189,18 @@ public class OllamaWebSearchServiceTests
     [Fact]
     public async Task IsEnabled_False_And_AirGappedReason_TakesPrecedence_WhenUnconfiguredAndAirGapped()
     {
-        var originalEnv = Environment.GetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable);
-        try
-        {
-            Environment.SetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable, null);
+        var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
+        var client = new HttpClient(handler);
+        var secOptions = new SecurityOptions { AirGappedMode = true };
 
-            var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
-            var client = new HttpClient(handler);
-            var secOptions = new SecurityOptions { AirGappedMode = true };
+        var service = CreateService(client, explicitApiKey: null, securityOptions: secOptions);
 
-            var service = CreateService(client, explicitApiKey: null, securityOptions: secOptions);
+        Assert.False(service.IsConfigured);
+        Assert.False(service.IsEnabled);
+        Assert.Equal(WebSearchConstants.AirGappedDisabledReason, service.DisabledReason);
 
-            Assert.False(service.IsConfigured);
-            Assert.False(service.IsEnabled);
-            Assert.Equal(WebSearchConstants.AirGappedDisabledReason, service.DisabledReason);
-
-            var ex = await Assert.ThrowsAsync<AirGappedOperationException>(() => service.SearchAsync("test query"));
-            Assert.Contains("Air-Gapped mode", ex.Message);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable, originalEnv);
-        }
+        var ex = await Assert.ThrowsAsync<AirGappedOperationException>(() => service.SearchAsync("test query"));
+        Assert.Contains("Air-Gapped mode", ex.Message);
     }
 
     [Fact]
@@ -193,11 +224,9 @@ public class OllamaWebSearchServiceTests
     [Fact]
     public async Task SearchAsync_ThrowsInvalidOperationException_WhenUnconfigured()
     {
-        var originalEnv = Environment.GetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable);
         var originalAirGap = Environment.GetEnvironmentVariable(SecurityOptions.AirGappedEnvironmentVariable);
         try
         {
-            Environment.SetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable, null);
             Environment.SetEnvironmentVariable(SecurityOptions.AirGappedEnvironmentVariable, null);
 
             var handler = new MockHttpMessageHandler((req, ct) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)));
@@ -209,7 +238,6 @@ public class OllamaWebSearchServiceTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable, originalEnv);
             Environment.SetEnvironmentVariable(SecurityOptions.AirGappedEnvironmentVariable, originalAirGap);
         }
     }
@@ -227,7 +255,7 @@ public class OllamaWebSearchServiceTests
     }
 
     [Fact]
-    public async Task SearchAsync_SendsCorrectRequestAndParsesResults()
+    public async Task SearchAsync_SendsCorrectRequestAndParsesResults_UsingSecretStoreKey()
     {
         HttpRequestMessage? capturedRequest = null;
         string? capturedBody = null;
@@ -254,7 +282,8 @@ public class OllamaWebSearchServiceTests
         });
 
         var client = new HttpClient(handler);
-        var service = CreateService(client, explicitApiKey: "ollama_secret_456");
+        var secretStore = new FakeSecretStore { KeyringOllamaKey = "ollama_secret_456" };
+        var service = CreateService(client, secretStore: secretStore);
 
         var result = await service.SearchAsync("Ollama local LLM", 5);
 

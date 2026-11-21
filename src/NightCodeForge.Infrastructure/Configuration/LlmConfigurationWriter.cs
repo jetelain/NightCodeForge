@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Core.Security;
 
 namespace NightCodeForge.Infrastructure.Configuration;
 
@@ -44,12 +45,14 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
                     updatedOptions.OpenAiCompatible.AllowedModels = SanitizeAllowedModels(updatedOptions.OpenAiCompatible.AllowedModels);
                 }
 
-                // Remove any alternate-casing section if present
-                UserConfigJsonFile.FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
+                // Remove any alternate-casing or duplicate LlmProvider sections before writing canonical section
+                RemoveAllMatchingKeys(root, LlmProviderOptions.SectionName);
 
                 var llmNode = JsonSerializer.SerializeToNode(updatedOptions, UserConfigJsonFile.JsonOptions) as JsonObject;
                 if (llmNode != null)
                 {
+                    var openAiNode = UserConfigJsonFile.FindAndNormalizeSection(llmNode, nameof(LlmProviderOptions.OpenAiCompatible));
+                    StripLegacyApiKeyProperties(openAiNode);
                     root[LlmProviderOptions.SectionName] = llmNode;
                 }
             },
@@ -67,6 +70,8 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
             _logger,
             root =>
             {
+                StripLegacyApiKeysAcrossDuplicateSections(root);
+
                 var llmNode = UserConfigJsonFile.FindAndNormalizeSection(root, LlmProviderOptions.SectionName);
                 if (llmNode == null)
                 {
@@ -81,12 +86,61 @@ public class LlmConfigurationWriter : ILlmConfigurationWriter
                     llmNode[nameof(LlmProviderOptions.OpenAiCompatible)] = openAiNode;
                 }
 
+                StripLegacyApiKeyProperties(openAiNode);
+
                 var sanitizedModels = SanitizeAllowedModels(allowedModels);
                 openAiNode[nameof(OpenAiCompatibleOptions.AllowedModels)] = JsonSerializer.SerializeToNode(sanitizedModels, UserConfigJsonFile.JsonOptions);
             },
             cancellationToken);
 
         _logger.LogInformation("Allowed models configuration saved to {Path}", configFilePath);
+    }
+
+    private static void StripLegacyApiKeysAcrossDuplicateSections(JsonObject root)
+    {
+        foreach (var (_, llmValue) in root.Where(kvp => string.Equals(kvp.Key, LlmProviderOptions.SectionName, StringComparison.OrdinalIgnoreCase)))
+        {
+            if (llmValue is not JsonObject llmObj)
+            {
+                continue;
+            }
+
+            foreach (var (_, openAiValue) in llmObj.Where(kvp => string.Equals(kvp.Key, nameof(LlmProviderOptions.OpenAiCompatible), StringComparison.OrdinalIgnoreCase)))
+            {
+                StripLegacyApiKeyProperties(openAiValue as JsonObject);
+            }
+        }
+    }
+
+    private static void RemoveAllMatchingKeys(JsonObject parent, string targetKey)
+    {
+        var keysToRemove = parent
+            .Select(kvp => kvp.Key)
+            .Where(key => string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            parent.Remove(key);
+        }
+    }
+
+    private static void StripLegacyApiKeyProperties(JsonObject? openAiNode)
+    {
+        if (openAiNode == null)
+        {
+            return;
+        }
+
+        var keysToRemove = openAiNode
+            .Select(kvp => kvp.Key)
+            .Where(key => string.Equals(key, ApiKeySecretConstants.LegacyApiKeyJsonPropertyName, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            openAiNode.Remove(key);
+        }
     }
 
     private LlmProviderOptions GetBaseOptionsForUpdate(JsonObject root)

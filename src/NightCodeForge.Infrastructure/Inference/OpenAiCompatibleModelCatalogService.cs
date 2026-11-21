@@ -11,33 +11,40 @@ namespace NightCodeForge.Infrastructure.Inference;
 
 /// <summary>
 /// Model catalog service for OpenAI-compatible inference endpoints (vLLM, LM Studio, OpenRouter, DeepSeek, OpenAI).
-/// Probes <c>/api/v1/models</c> (and <c>/v1/models</c>) dynamically, falling back to manual model configuration
+/// Probes <c>/api/v1/models</c> (and <c>/v1/models</c>) dynamically using live <see cref="IOptionsMonitor{TOptions}"/>
+/// configuration and <see cref="IApiKeySecretStore"/> credentials, falling back to manual model configuration
 /// (<see cref="OpenAiCompatibleOptions.AllowedModels"/>) only if discovery is unimplemented (HTTP 404/501).
 /// </summary>
 public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogServiceBase
 {
-    private readonly IOptions<LlmProviderOptions> _providerOptions;
+    private readonly IOptionsMonitor<LlmProviderOptions> _providerOptions;
     private readonly IOpenAiModelAllowlistCache _allowlistCache;
+    private readonly IApiKeySecretStore _secretStore;
 
     public OpenAiCompatibleModelCatalogService(
         HttpClient httpClient,
-        IOptions<LlmProviderOptions> providerOptions,
+        IOptionsMonitor<LlmProviderOptions> providerOptions,
         IOpenAiModelAllowlistCache allowlistCache,
         IDefaultModelSelector defaultModelSelector,
+        IApiKeySecretStore secretStore,
         ILogger<OpenAiCompatibleModelCatalogService> logger)
         : base(httpClient, providerOptions, defaultModelSelector, logger)
     {
         _providerOptions = providerOptions ?? throw new ArgumentNullException(nameof(providerOptions));
         _allowlistCache = allowlistCache ?? throw new ArgumentNullException(nameof(allowlistCache));
+        _secretStore = secretStore ?? throw new ArgumentNullException(nameof(secretStore));
     }
 
     protected override LlmProviderType ProviderType => LlmProviderType.OpenAiCompatible;
 
+    protected override string? DefaultModelId => _providerOptions.CurrentValue.DefaultModelId;
+
     public override async Task<IReadOnlyList<AvailableModelInfo>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
     {
+        var currentOptions = _providerOptions.CurrentValue;
         try
         {
-            var probeResult = await ProbeEndpointAsync(cancellationToken);
+            var probeResult = await ProbeEndpointAsync(currentOptions, cancellationToken);
             if (probeResult.IsSuccess && probeResult.VerifiedModels != null)
             {
                 return probeResult.VerifiedModels;
@@ -46,7 +53,7 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
             if (!probeResult.IsDiscoveryImplemented)
             {
                 // Discovery is not implemented (HTTP 404/501): return manual AllowedModels if present
-                var manualModels = GetManualAllowedModels();
+                var manualModels = GetManualAllowedModels(currentOptions);
                 if (manualModels.Count > 0)
                 {
                     _allowlistCache.SetDiscoveredModels(manualModels);
@@ -58,8 +65,8 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            Logger.LogWarning(ex, "Failed to query model catalog from OpenAI-compatible endpoint {BaseAddress}", HttpClient.BaseAddress);
-            var manual = GetManualAllowedModels();
+            Logger.LogWarning(ex, "Failed to query model catalog from OpenAI-compatible endpoint {Endpoint}", currentOptions.EffectiveEndpoint);
+            var manual = GetManualAllowedModels(currentOptions);
             if (manual.Count > 0)
             {
                 _allowlistCache.SetDiscoveredModels(manual);
@@ -70,7 +77,7 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
 
     public override async Task<EndpointVerificationResult> VerifyEndpointAsync(CancellationToken cancellationToken = default)
     {
-        return await ProbeEndpointAsync(cancellationToken);
+        return await ProbeEndpointAsync(_providerOptions.CurrentValue, cancellationToken);
     }
 
     public override async Task RefreshAsync(CancellationToken cancellationToken = default)
@@ -78,9 +85,18 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         await GetAvailableModelsAsync(cancellationToken);
     }
 
-    private async Task<EndpointVerificationResult> ProbeEndpointAsync(CancellationToken cancellationToken)
+    private async Task<EndpointVerificationResult> ProbeEndpointAsync(LlmProviderOptions currentOptions, CancellationToken cancellationToken)
     {
-        var candidates = GetCandidateUris().ToList();
+        var (baseUri, secretScopeEndpoint) = ResolveEndpointTarget(currentOptions);
+        if (baseUri == null)
+        {
+            return new EndpointVerificationResult(
+                IsSuccess: false,
+                IsDiscoveryImplemented: false,
+                ErrorMessage: "No valid endpoint URI configured for OpenAI-compatible provider.");
+        }
+
+        var candidates = GetCandidateUris(baseUri).ToList();
         if (candidates.Count == 0)
         {
             return new EndpointVerificationResult(
@@ -89,6 +105,7 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
                 ErrorMessage: "No valid endpoint URI configured for OpenAI-compatible provider.");
         }
 
+        var apiKey = _secretStore.ResolveEffectiveOpenAiApiKey(secretScopeEndpoint);
         var anySuccessStatusCode = false;
         var notFoundOrUnimplementedCount = 0;
         var probedCount = 0;
@@ -102,19 +119,19 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 cts.CancelAfter(ProbeTimeout);
 
-                using var request = CreateProbeRequest(uri);
+                using var request = CreateProbeRequest(uri, apiKey, currentOptions);
                 using var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
 
                 if (response.IsSuccessStatusCode)
                 {
                     anySuccessStatusCode = true;
                     var json = await response.Content.ReadAsStringAsync(cts.Token);
-                    var defaultTokens = _providerOptions.Value.OpenAiCompatible?.DefaultDiscoveredContextTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
+                    var defaultTokens = currentOptions.OpenAiCompatible?.DefaultDiscoveredContextTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
                     var discovered = OpenAiModelsResponseParser.Parse(json, defaultTokens);
 
                     if (discovered.Count > 0)
                     {
-                        var finalModels = ApplyAllowedModelsFilter(discovered);
+                        var finalModels = ApplyAllowedModelsFilter(currentOptions, discovered);
                         _allowlistCache.SetDiscoveredModels(finalModels);
 
                         return new EndpointVerificationResult(
@@ -164,7 +181,7 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         // Case 1: At least one candidate endpoint returned 200 OK, but 0 models were discovered across all candidates
         if (anySuccessStatusCode)
         {
-            var manual = GetManualAllowedModels();
+            var manual = GetManualAllowedModels(currentOptions);
             if (manual.Count > 0)
             {
                 _allowlistCache.SetDiscoveredModels(manual);
@@ -187,7 +204,7 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         // Case 2: All probed candidates returned 404 Not Found or 501 Not Implemented
         if (probedCount > 0 && notFoundOrUnimplementedCount == probedCount)
         {
-            var manual = GetManualAllowedModels();
+            var manual = GetManualAllowedModels(currentOptions);
             if (manual.Count > 0)
             {
                 _allowlistCache.SetDiscoveredModels(manual);
@@ -210,31 +227,35 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         return new EndpointVerificationResult(
             IsSuccess: false,
             IsDiscoveryImplemented: false,
-            ErrorMessage: lastError ?? $"Unable to reach endpoint {HttpClient.BaseAddress}");
+            ErrorMessage: lastError ?? $"Unable to reach endpoint {secretScopeEndpoint ?? currentOptions.EffectiveEndpoint}");
     }
 
-    private IEnumerable<Uri> GetCandidateUris()
+    private (Uri? BaseUri, string? SecretScopeEndpoint) ResolveEndpointTarget(LlmProviderOptions currentOptions)
     {
-        var effective = _providerOptions.Value.EffectiveEndpoint;
-        if (string.IsNullOrWhiteSpace(effective))
+        var openAiEndpoint = currentOptions.OpenAiCompatible?.Endpoint;
+        if (!string.IsNullOrWhiteSpace(openAiEndpoint))
         {
-            yield break;
+            var trimmed = openAiEndpoint.Trim();
+            if (Uri.TryCreate(trimmed.TrimEnd('/') + "/", UriKind.Absolute, out var parsed) &&
+                (string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)))
+            {
+                return (parsed, trimmed);
+            }
+
+            return (null, null);
         }
 
-        Uri baseUri;
         if (HttpClient.BaseAddress != null)
         {
-            baseUri = HttpClient.BaseAddress;
-        }
-        else if (Uri.TryCreate(effective.TrimEnd('/') + "/", UriKind.Absolute, out var parsed))
-        {
-            baseUri = parsed;
-        }
-        else
-        {
-            yield break;
+            return (HttpClient.BaseAddress, HttpClient.BaseAddress.AbsoluteUri);
         }
 
+        return (null, null);
+    }
+
+    private static IEnumerable<Uri> GetCandidateUris(Uri baseUri)
+    {
         // Ensure baseUri ends with a trailing slash so relative Uri constructor doesn't strip the final path segment
         if (!baseUri.AbsoluteUri.EndsWith('/'))
         {
@@ -278,16 +299,15 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         }
     }
 
-    private HttpRequestMessage CreateProbeRequest(Uri requestUri)
+    private static HttpRequestMessage CreateProbeRequest(Uri requestUri, string? apiKey, LlmProviderOptions currentOptions)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
-        var apiKey = _providerOptions.Value.OpenAiCompatible?.ApiKey;
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey.Trim());
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
 
-        var orgId = _providerOptions.Value.OpenAiCompatible?.OrganizationId;
+        var orgId = currentOptions.OpenAiCompatible?.OrganizationId;
         if (!string.IsNullOrWhiteSpace(orgId))
         {
             request.Headers.TryAddWithoutValidation("OpenAI-Organization", orgId.Trim());
@@ -296,16 +316,18 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         return request;
     }
 
-    private IReadOnlyList<AvailableModelInfo> ApplyAllowedModelsFilter(IReadOnlyList<AvailableModelInfo> discovered)
+    private IReadOnlyList<AvailableModelInfo> ApplyAllowedModelsFilter(
+        LlmProviderOptions currentOptions,
+        IReadOnlyList<AvailableModelInfo> discovered)
     {
-        var allowed = _providerOptions.Value.OpenAiCompatible?.AllowedModels;
+        var allowed = currentOptions.OpenAiCompatible?.AllowedModels;
         if (allowed == null || allowed.Count == 0)
         {
             return discovered;
         }
 
         var result = new List<AvailableModelInfo>();
-        var defaultTokens = _providerOptions.Value.OpenAiCompatible?.DefaultDiscoveredContextTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
+        var defaultTokens = currentOptions.OpenAiCompatible?.DefaultDiscoveredContextTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
 
         foreach (var m in allowed)
         {
@@ -346,15 +368,15 @@ public sealed class OpenAiCompatibleModelCatalogService : LlmModelCatalogService
         return result;
     }
 
-    private IReadOnlyList<AvailableModelInfo> GetManualAllowedModels()
+    private IReadOnlyList<AvailableModelInfo> GetManualAllowedModels(LlmProviderOptions currentOptions)
     {
-        var allowed = _providerOptions.Value.OpenAiCompatible?.AllowedModels;
+        var allowed = currentOptions.OpenAiCompatible?.AllowedModels;
         if (allowed == null || allowed.Count == 0)
         {
             return Array.Empty<AvailableModelInfo>();
         }
 
-        var defaultTokens = _providerOptions.Value.OpenAiCompatible?.DefaultDiscoveredContextTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
+        var defaultTokens = currentOptions.OpenAiCompatible?.DefaultDiscoveredContextTokens ?? LlmProviderOptions.DefaultContextWindowTokens;
 
         return allowed
             .Where(m => !string.IsNullOrWhiteSpace(m.ModelId))

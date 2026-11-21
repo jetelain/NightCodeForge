@@ -57,6 +57,8 @@ public class OpenAiAllowedModel
 
 /// <summary>
 /// Configuration settings for the OpenAI-compatible inference provider.
+/// API keys are stored separately in the native OS keyring via <see cref="Interfaces.IApiKeySecretStore"/>
+/// (or supplied via the <c>OPENAI_API_KEY</c> environment variable) and never persisted in config JSON.
 /// </summary>
 public class OpenAiCompatibleOptions
 {
@@ -64,12 +66,6 @@ public class OpenAiCompatibleOptions
     /// Base URL of the OpenAI-compatible API (e.g. "http://localhost:1234/v1", "https://openrouter.ai/api/v1", "https://api.openai.com/v1").
     /// </summary>
     public string Endpoint { get; set; } = "https://api.openai.com/v1";
-
-    /// <summary>
-    /// Optional API key for authenticated endpoints. Can be injected via environment variable (e.g. OPENAI_API_KEY).
-    /// May be omitted or empty for unauthenticated local endpoints (e.g. LM Studio, local vLLM).
-    /// </summary>
-    public string? ApiKey { get; set; }
 
     /// <summary>
     /// Optional organization identifier for multi-tenant OpenAI accounts.

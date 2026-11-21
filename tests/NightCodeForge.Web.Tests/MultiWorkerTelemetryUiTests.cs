@@ -331,6 +331,8 @@ public class MultiWorkerTelemetryUiTests : BunitContext
         Services.AddSingleton(catalogMock.Object);
         Services.AddSingleton(configWriterMock.Object);
         Services.AddSingleton<IOptions<LlmProviderOptions>>(Options.Create(initialOptions));
+        Services.AddSingleton<IApiKeySecretStore>(new NightCodeForge.Web.Tests.Fixtures.FakeApiKeySecretStore());
+        Services.AddSingleton<IApiKeySettingsUiService, ApiKeySettingsUiService>();
         Services.AddSingleton(TestServices.CreateToastService());
 
         var cut = Render<OllamaRouterGatewayCard>();

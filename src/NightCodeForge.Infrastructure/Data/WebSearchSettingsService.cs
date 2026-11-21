@@ -5,11 +5,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Security;
+using NightCodeForge.Infrastructure.Configuration;
 
 namespace NightCodeForge.Infrastructure.Data;
 
 /// <summary>
-/// Singleton service managing web search credentials and configuration with thread-safe in-memory caching
+/// Singleton service managing non-secret web search settings with thread-safe in-memory caching
 /// and asynchronous database persistence to the SystemSettings table.
 /// </summary>
 public class WebSearchSettingsService : IWebSearchSettingsService
@@ -33,27 +35,15 @@ public class WebSearchSettingsService : IWebSearchSettingsService
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        // Initialize fallback from environment variable or configuration if available
         InitializeDefaults();
     }
 
     private void InitializeDefaults()
     {
-        var envKey = Environment.GetEnvironmentVariable("OLLAMA_API_KEY");
-        var configKey = _configuration["WebSearch:Ollama:ApiKey"] ?? _configuration["OLLAMA_API_KEY"];
-        var endpoint = _configuration["WebSearch:Ollama:Endpoint"];
+        var endpoint = _configuration[ApiKeySecretConstants.WebSearchOllamaEndpointConfigPath];
 
         lock (_lock)
         {
-            if (!string.IsNullOrWhiteSpace(configKey))
-            {
-                _cachedSettings.ApiKey = configKey;
-            }
-            else if (!string.IsNullOrWhiteSpace(envKey))
-            {
-                _cachedSettings.ApiKey = envKey;
-            }
-
             if (!string.IsNullOrWhiteSpace(endpoint))
             {
                 _cachedSettings.Endpoint = endpoint;
@@ -66,17 +56,7 @@ public class WebSearchSettingsService : IWebSearchSettingsService
     {
         lock (_lock)
         {
-            var clone = _cachedSettings.Clone();
-            // If API key is still empty in cache, check dynamic environment variable as a fallback
-            if (string.IsNullOrWhiteSpace(clone.ApiKey))
-            {
-                var envKey = Environment.GetEnvironmentVariable("OLLAMA_API_KEY");
-                if (!string.IsNullOrWhiteSpace(envKey))
-                {
-                    clone.ApiKey = envKey;
-                }
-            }
-            return clone;
+            return _cachedSettings.Clone();
         }
     }
 
@@ -94,17 +74,17 @@ public class WebSearchSettingsService : IWebSearchSettingsService
 
             if (setting != null && !string.IsNullOrWhiteSpace(setting.Value))
             {
+                if (LegacyPlaintextSecretDetector.ContainsLegacyApiKeyProperty(setting.Value))
+                {
+                    _logger.LogWarning(
+                        "SECURITY WARNING: Legacy plaintext API key detected in SQLite SystemSettings entry '{SettingKey}'. Plaintext database keys are ignored and no longer loaded. Re-save the key in Settings (stored in the OS keyring via Pmad.KeySharp) or supply '{EnvVar}' and re-save settings to scrub the database row.",
+                        SettingKey,
+                        ApiKeySecretConstants.OllamaApiKeyEnvironmentVariable);
+                }
+
                 var loaded = JsonSerializer.Deserialize<WebSearchSettings>(setting.Value, (JsonSerializerOptions?)null);
                 if (loaded != null)
                 {
-                    // If DB doesn't have an API key, check env or configuration
-                    if (string.IsNullOrWhiteSpace(loaded.ApiKey))
-                    {
-                        var envKey = Environment.GetEnvironmentVariable("OLLAMA_API_KEY");
-                        var configKey = _configuration?["WebSearch:Ollama:ApiKey"] ?? _configuration?["OLLAMA_API_KEY"];
-                        loaded.ApiKey = !string.IsNullOrWhiteSpace(configKey) ? configKey : (envKey ?? string.Empty);
-                    }
-
                     if (string.IsNullOrWhiteSpace(loaded.Endpoint))
                     {
                         loaded.Endpoint = WebSearchSettings.DefaultEndpoint;

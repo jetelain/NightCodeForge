@@ -10,10 +10,13 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Inference;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Endpoints;
+using NightCodeForge.Web.Tests.Fixtures;
 using Pmad.LocalApi.Security;
 
 namespace NightCodeForge.Web.Tests;
@@ -132,20 +135,24 @@ public sealed class CompanionEndpointsTests : IDisposable
     [Fact]
     public async Task GetConfig_ReturnsProviderTypeStringEffectiveEndpointFallbacksAndOpenAiOptions()
     {
-        await using var host = await CreateHostAsync(configureLlm: opts =>
-        {
-            opts.ProviderType = LlmProviderType.OpenAiCompatible;
-            opts.Endpoint = "http://localhost:11434";
-            opts.DefaultModelId = "  gpt-4o-mini  ";
-            opts.ArchitectModelId = "  gpt-4o ";
-            opts.CoderModelId = "   ";
-            opts.OpenAiCompatible = new OpenAiCompatibleOptions
+        var secretStore = new FakeApiKeySecretStore();
+        secretStore.SeedOpenAiKey("https://openrouter.ai/api/v1", "  sk-test-123  ");
+
+        await using var host = await CreateHostAsync(
+            configureLlm: opts =>
             {
-                Endpoint = "  https://openrouter.ai/api/v1  ",
-                ApiKey = "  sk-test-123  ",
-                OrganizationId = "  org-456  "
-            };
-        });
+                opts.ProviderType = LlmProviderType.OpenAiCompatible;
+                opts.Endpoint = "http://localhost:11434";
+                opts.DefaultModelId = "  gpt-4o-mini  ";
+                opts.ArchitectModelId = "  gpt-4o ";
+                opts.CoderModelId = "   ";
+                opts.OpenAiCompatible = new OpenAiCompatibleOptions
+                {
+                    Endpoint = "  https://openrouter.ai/api/v1  ",
+                    OrganizationId = "  org-456  "
+                };
+            },
+            secretStore: secretStore);
 
         using var client = CreateClient(host);
         var validKey = host.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey();
@@ -166,18 +173,21 @@ public sealed class CompanionEndpointsTests : IDisposable
         Assert.Equal("https://openrouter.ai/api/v1", openAi.GetProperty("endpoint").GetString());
         Assert.Equal("sk-test-123", openAi.GetProperty("apiKey").GetString());
         Assert.Equal("org-456", openAi.GetProperty("organizationId").GetString());
+        Assert.Equal(1, secretStore.OpenAiResolveCalls);
 
-        // Whitespace-only OpenAiCompatible secrets/org IDs normalize to null
-        await using var blankSecretsHost = await CreateHostAsync(configureLlm: opts =>
-        {
-            opts.ProviderType = LlmProviderType.OpenAiCompatible;
-            opts.OpenAiCompatible = new OpenAiCompatibleOptions
+        // Absent key and whitespace-only org ID normalize to null
+        var blankSecretStore = new FakeApiKeySecretStore { OpenAiEnvFallback = "   " };
+        await using var blankSecretsHost = await CreateHostAsync(
+            configureLlm: opts =>
             {
-                Endpoint = "  https://api.openai.com/v1  ",
-                ApiKey = "   ",
-                OrganizationId = "\t "
-            };
-        });
+                opts.ProviderType = LlmProviderType.OpenAiCompatible;
+                opts.OpenAiCompatible = new OpenAiCompatibleOptions
+                {
+                    Endpoint = "  https://api.openai.com/v1  ",
+                    OrganizationId = "\t "
+                };
+            },
+            secretStore: blankSecretStore);
         using var blankSecretsClient = CreateClient(blankSecretsHost);
         var blankSecretsKey = blankSecretsHost.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey();
         blankSecretsClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", blankSecretsKey);
@@ -190,6 +200,40 @@ public sealed class CompanionEndpointsTests : IDisposable
         Assert.Equal("https://api.openai.com/v1", blankOpenAi.GetProperty("endpoint").GetString());
         Assert.Equal(JsonValueKind.Null, blankOpenAi.GetProperty("apiKey").ValueKind);
         Assert.Equal(JsonValueKind.Null, blankOpenAi.GetProperty("organizationId").ValueKind);
+    }
+
+    [Theory]
+    [InlineData(LlmProviderType.Ollama)]
+    [InlineData(LlmProviderType.OllamaRouter)]
+    public async Task GetConfig_WhenProviderIsOllamaOrOllamaRouter_ReturnsNullApiKeyWithoutTouchingSecretStore(LlmProviderType providerType)
+    {
+        var secretStore = new FakeApiKeySecretStore();
+        secretStore.SeedOpenAiKey("https://api.openai.com/v1", "sk-dormant-cloud-secret");
+
+        await using var host = await CreateHostAsync(
+            configureLlm: opts =>
+            {
+                opts.ProviderType = providerType;
+                opts.Endpoint = "http://localhost:11434";
+                opts.OpenAiCompatible = new OpenAiCompatibleOptions
+                {
+                    Endpoint = "https://api.openai.com/v1"
+                };
+            },
+            secretStore: secretStore);
+
+        using var client = CreateClient(host);
+        var validKey = host.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", validKey);
+
+        var response = await client.GetAsync("/api/companion/config");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var openAi = doc.RootElement.GetProperty("openAiCompatible");
+        Assert.Equal(JsonValueKind.Null, openAi.GetProperty("apiKey").ValueKind);
+        Assert.Equal(0, secretStore.OpenAiResolveCalls);
+        Assert.Equal(0, secretStore.OpenAiHasCalls);
     }
 
     [Fact]
@@ -550,7 +594,8 @@ public sealed class CompanionEndpointsTests : IDisposable
         InMemoryTaskRepository? taskRepo = null,
         TimeProvider? timeProvider = null,
         Action<LlmProviderOptions>? configureLlm = null,
-        ITriageService? triageService = null)
+        ITriageService? triageService = null,
+        IApiKeySecretStore? secretStore = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -569,6 +614,7 @@ public sealed class CompanionEndpointsTests : IDisposable
             sp.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton<ICompanionTriageDraftStore>(sp =>
             new CompanionTriageDraftStore(sp.GetRequiredService<TimeProvider>()));
+        builder.Services.AddSingleton<IApiKeySecretStore>(secretStore ?? new FakeApiKeySecretStore());
         builder.Services.AddSingleton<IWorkspaceRepository>(workspaceRepo ?? new InMemoryWorkspaceRepository());
         builder.Services.AddSingleton<ITaskRepository>(taskRepo ?? new InMemoryTaskRepository());
         builder.Services.AddSingleton<ITriageService>(triageService ?? new RecordingTriageService());

@@ -2,6 +2,7 @@
 @using Microsoft.Extensions.Options
 @using NightCodeForge.Agents.Inference
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Exceptions
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Infrastructure.Configuration
 @using NightCodeForge.Web.Services
@@ -9,6 +10,7 @@
 @inject ILlmModelCatalogService ModelCatalogService
 @inject ILlmConfigurationWriter ConfigurationWriter
 @inject IOptions<LlmProviderOptions> LlmOptions
+@inject IApiKeySettingsUiService ApiKeySettingsUi
 @inject ToastService ToastService
 
 <div class="forge-card mt-3" style="padding: 2rem;">
@@ -104,21 +106,55 @@
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
                 <div>
                     <label class="forge-field-label">Endpoint URL *</label>
-                    <input type="text" id="openai-endpoint-input" class="forge-input font-mono" style="width: 100%;" @bind="_openAiEndpoint" placeholder="https://api.openai.com/v1" />
+                    <input type="text"
+                           id="openai-endpoint-input"
+                           class="forge-input font-mono"
+                           style="width: 100%;"
+                           value="@_openAiEndpoint"
+                           @oninput="OnOpenAiEndpointChanged"
+                           @onchange="OnOpenAiEndpointChanged"
+                           placeholder="https://api.openai.com/v1" />
                     <span class="field-hint" style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem;">
                         Base completions URL (e.g. https://openrouter.ai/api/v1, http://localhost:1234/v1).
                     </span>
                 </div>
                 <div>
-                    <label class="forge-field-label">API Key</label>
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.35rem; flex-wrap: wrap;">
+                        <label class="forge-field-label" style="margin: 0;">API Key</label>
+                        @if (_openAiCredentialStatus != null)
+                        {
+                            <span id="openai-apikey-status-badge" class="forge-badge @_openAiCredentialStatus.BadgeCssClass" style="font-size: 0.75rem; padding: 0.2rem 0.55rem;">
+                                @_openAiCredentialStatus.BadgeText
+                            </span>
+                        }
+                    </div>
                     <div style="display: flex; gap: 0.5rem;">
-                        <input type="@(_showApiKey ? "text" : "password")" id="openai-apikey-input" class="forge-input font-mono" style="flex: 1;" @bind="_openAiApiKey" placeholder="sk-... (leave empty for local runtimes)" />
+                        <input type="@(_showApiKey ? "text" : "password")"
+                               id="openai-apikey-input"
+                               class="forge-input font-mono"
+                               style="flex: 1;"
+                               value="@_openAiApiKeyInput"
+                               @oninput="OnOpenAiApiKeyChanged"
+                               @onchange="OnOpenAiApiKeyChanged"
+                               autocomplete="new-password"
+                               placeholder="@(_openAiCredentialStatus?.InputPlaceholder ?? "sk-... (leave empty for local runtimes)")" />
                         <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.5rem 0.85rem;" @onclick="() => _showApiKey = !_showApiKey">
                             @(_showApiKey ? "🔒 Hide" : "👁️ Show")
                         </button>
+                        @if (_openAiCredentialStatus?.HasKeyringEntry == true)
+                        {
+                            <button type="button"
+                                    id="btn-clear-openai-apikey"
+                                    class="forge-btn forge-btn-outline"
+                                    style="padding: 0.5rem 0.85rem; color: var(--accent-crimson, #ef4444);"
+                                    @onclick="ClearOpenAiApiKey"
+                                    disabled="@(_isSaving || _isVerifying)">
+                                ✕ Clear Key
+                            </button>
+                        }
                     </div>
                     <span class="field-hint" style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem;">
-                        Optional for local unauthenticated runtimes (LM Studio, local vLLM).
+                        @(_openAiCredentialStatus?.StorageNoticeText ?? ApiKeySettingsUiService.OpenAiStorageNotice)
                     </span>
                 </div>
                 <div>
@@ -490,7 +526,8 @@
     private LlmProviderType _selectedProvider;
     private string _ollamaEndpoint = "http://localhost:11434";
     private string _openAiEndpoint = "https://api.openai.com/v1";
-    private string _openAiApiKey = "";
+    private string _openAiApiKeyInput = string.Empty;
+    private ApiKeyCredentialBadgeViewModel? _openAiCredentialStatus;
     private string _openAiOrgId = "";
     private string _defaultModelId = "";
     private bool _differentiateRoles;
@@ -513,12 +550,17 @@
         _initialMaxConcurrentTasks = _maxConcurrentTasks;
         _ollamaEndpoint = !string.IsNullOrWhiteSpace(opts.Endpoint) ? opts.Endpoint : "http://localhost:11434";
         _openAiEndpoint = !string.IsNullOrWhiteSpace(opts.OpenAiCompatible?.Endpoint) ? opts.OpenAiCompatible.Endpoint : "https://api.openai.com/v1";
-        _openAiApiKey = opts.OpenAiCompatible?.ApiKey ?? "";
+        _openAiApiKeyInput = string.Empty;
         _openAiOrgId = opts.OpenAiCompatible?.OrganizationId ?? "";
         _defaultModelId = opts.DefaultModelId ?? "";
         _coderModelId = opts.CoderModelId ?? "";
         _architectModelId = opts.ArchitectModelId ?? "";
         _differentiateRoles = !string.IsNullOrWhiteSpace(_coderModelId) || !string.IsNullOrWhiteSpace(_architectModelId);
+
+        if (_selectedProvider == LlmProviderType.OpenAiCompatible)
+        {
+            RefreshOpenAiCredentialStatus();
+        }
 
         _allowedModels = opts.OpenAiCompatible?.AllowedModels?
             .Select(m => new OpenAiAllowedModel
@@ -602,6 +644,15 @@
     private void OnProviderSelectionChanged(LlmProviderType provider)
     {
         _selectedProvider = provider;
+        if (_selectedProvider == LlmProviderType.OpenAiCompatible)
+        {
+            RefreshOpenAiCredentialStatus();
+        }
+        else
+        {
+            _openAiCredentialStatus = null;
+        }
+
         if (_selectedProvider == GatewayService.ProviderType)
         {
             _ = RefreshAsync();
@@ -622,6 +673,53 @@
         {
             _availableModels.Clear();
             _residentModels.Clear();
+        }
+    }
+
+    private void RefreshOpenAiCredentialStatus()
+    {
+        try
+        {
+            _openAiCredentialStatus = ApiKeySettingsUi.GetOpenAiCredentialStatus(_openAiEndpoint);
+        }
+        catch (SecretStoreException ex)
+        {
+            _openAiCredentialStatus = ApiKeySettingsUi.CreateOpenAiKeyringErrorStatus(_openAiEndpoint);
+            ToastService.Show("OS Keyring Error", ex.Message, ToastLevel.Error);
+        }
+    }
+
+    private void OnOpenAiEndpointChanged(ChangeEventArgs e)
+    {
+        _openAiEndpoint = e.Value?.ToString() ?? string.Empty;
+        if (_selectedProvider == LlmProviderType.OpenAiCompatible)
+        {
+            RefreshOpenAiCredentialStatus();
+        }
+    }
+
+    private void OnOpenAiApiKeyChanged(ChangeEventArgs e)
+    {
+        _openAiApiKeyInput = e.Value?.ToString() ?? string.Empty;
+    }
+
+    private void ClearOpenAiApiKey()
+    {
+        if (_isSaving || _isVerifying)
+        {
+            return;
+        }
+
+        try
+        {
+            _openAiCredentialStatus = ApiKeySettingsUi.ClearOpenAiApiKey(_openAiEndpoint);
+            _openAiApiKeyInput = string.Empty;
+            _showApiKey = false;
+            ToastService.Show("API Key Removed", "OpenAI-compatible API key deleted from OS keyring.", ToastLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Error Removing API Key", ex.Message, ToastLevel.Error);
         }
     }
 
@@ -751,6 +849,15 @@
         try
         {
             _maxConcurrentTasks = Math.Clamp(_maxConcurrentTasks, LlmProviderOptions.MinConcurrentInferenceTasks, LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
+
+            if (_selectedProvider == LlmProviderType.OpenAiCompatible)
+            {
+                var keyOutcome = ApiKeySettingsUi.ApplyOpenAiApiKeyInput(_openAiEndpoint, _openAiApiKeyInput);
+                _openAiApiKeyInput = string.Empty;
+                _showApiKey = false;
+                _openAiCredentialStatus = keyOutcome.UpdatedStatus;
+            }
+
             await ConfigurationWriter.SaveProviderConfigurationAsync(opts =>
             {
                 opts.ProviderType = _selectedProvider;
@@ -758,9 +865,8 @@
                 if (_selectedProvider == LlmProviderType.OpenAiCompatible)
                 {
                     opts.OpenAiCompatible ??= new();
-                    opts.OpenAiCompatible.Endpoint = _openAiEndpoint;
-                    opts.OpenAiCompatible.ApiKey = string.IsNullOrWhiteSpace(_openAiApiKey) ? null : _openAiApiKey;
-                    opts.OpenAiCompatible.OrganizationId = string.IsNullOrWhiteSpace(_openAiOrgId) ? null : _openAiOrgId;
+                    opts.OpenAiCompatible.Endpoint = _openAiEndpoint.Trim();
+                    opts.OpenAiCompatible.OrganizationId = string.IsNullOrWhiteSpace(_openAiOrgId) ? null : _openAiOrgId.Trim();
                     opts.OpenAiCompatible.AllowedModels = _allowedModels;
                 }
                 else

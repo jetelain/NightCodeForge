@@ -129,6 +129,7 @@ public static class ServiceCollectionExtensions
 
         // 11. GitHub Integration Services
         services.TryAddSingleton<IGitHubTokenStore, GitHub.GitHubTokenStore>();
+        services.TryAddSingleton<IApiKeySecretStore, Security.KeySharpApiKeySecretStore>();
         services.AddHttpClient<IGitHubDeviceAuthService, GitHub.GitHubDeviceAuthService>();
         services.AddHttpClient<IGitHubClientService, GitHub.GitHubClientService>();
         services.TryAddScoped<IGitHubPullRequestDeliveryService, GitHub.GitHubPullRequestDeliveryService>();

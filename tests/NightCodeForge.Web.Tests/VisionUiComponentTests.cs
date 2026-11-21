@@ -265,6 +265,8 @@ public class VisionUiComponentTests : BunitContext
         Services.AddSingleton(gatewayMock.Object);
         Services.AddSingleton(Mock.Of<ILlmConfigurationWriter>());
         Services.AddSingleton(Options.Create(new LlmProviderOptions()));
+        Services.AddSingleton<IApiKeySecretStore>(new NightCodeForge.Web.Tests.Fixtures.FakeApiKeySecretStore());
+        Services.AddSingleton<IApiKeySettingsUiService, ApiKeySettingsUiService>();
         Services.AddSingleton(TestServices.CreateToastService());
         Services.AddSingleton(Mock.Of<IWslMetadataService>());
         Services.AddSingleton<Microsoft.Extensions.Configuration.IConfiguration>(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());

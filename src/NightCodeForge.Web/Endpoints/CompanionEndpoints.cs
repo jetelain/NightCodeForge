@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
@@ -110,16 +111,22 @@ public static class CompanionEndpoints
         return group;
     }
 
-    private static IResult GetConfig(IOptionsMonitor<LlmProviderOptions> llmOptionsMonitor)
+    private static IResult GetConfig(
+        IOptionsMonitor<LlmProviderOptions> llmOptionsMonitor,
+        IApiKeySecretStore secretStore)
     {
         var options = llmOptionsMonitor.CurrentValue;
         var defaultModelId = NormalizeOptionalText(options.DefaultModelId);
         var architectModelId = NormalizeOptionalText(options.ArchitectModelId) ?? defaultModelId;
         var coderModelId = NormalizeOptionalText(options.CoderModelId) ?? defaultModelId;
 
+        string? openAiApiKey = options.ProviderType == LlmProviderType.OpenAiCompatible
+            ? NormalizeOptionalText(secretStore.ResolveEffectiveOpenAiApiKey(options.EffectiveEndpoint))
+            : null;
+
         var openAiCompatible = new CompanionOpenAiCompatibleConfig(
             Endpoint: options.OpenAiCompatible?.Endpoint?.Trim() ?? string.Empty,
-            ApiKey: NormalizeOptionalText(options.OpenAiCompatible?.ApiKey),
+            ApiKey: openAiApiKey,
             OrganizationId: NormalizeOptionalText(options.OpenAiCompatible?.OrganizationId));
 
         var response = new CompanionConfigResponse(

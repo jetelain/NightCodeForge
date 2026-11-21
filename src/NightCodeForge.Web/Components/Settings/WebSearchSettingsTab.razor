@@ -1,12 +1,14 @@
 @namespace NightCodeForge.Web.Components.Settings
 @using Microsoft.Extensions.Options
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Exceptions
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Core.Security
 @using NightCodeForge.Agents.Tools
 @using NightCodeForge.Web.Services
 @inject IWebSearchSettingsService SettingsService
 @inject IWebSearchService WebSearchService
+@inject IApiKeySettingsUiService ApiKeySettingsUi
 @inject IOptions<SecurityOptions> SecurityOptions
 @inject ToastService ToastService
 
@@ -43,10 +45,10 @@
             </p>
         </div>
         <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" @onclick="ResetDefaults" disabled="@(IsAirGapped || _isSaving || _isTesting)" title="@(IsAirGapped ? "Configuration cannot be reset in Air-Gapped mode." : null)">
+            <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" @onclick="ResetDefaults" disabled="@(IsAirGapped || _isSaving || _isTesting || _isClearing)" title="@(IsAirGapped ? "Configuration cannot be reset in Air-Gapped mode." : null)">
                 ↺ Reset Defaults
             </button>
-            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@(IsAirGapped || _isSaving || _isTesting)" title="@(IsAirGapped ? "Configuration cannot be saved in Air-Gapped mode." : null)">
+            <button type="button" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@(IsAirGapped || _isSaving || _isTesting || _isClearing)" title="@(IsAirGapped ? "Configuration cannot be saved in Air-Gapped mode." : null)">
                 @(_isSaving ? "Saving..." : "💾 Save Search Settings")
             </button>
         </div>
@@ -109,11 +111,11 @@
                         </button>
                     }
                 </div>
-                <input type="text" 
-                       class="forge-input font-mono" 
-                       style="width: 100%; font-size: 0.88rem;" 
-                       @bind="_settings.Endpoint" 
-                       @bind:event="oninput" 
+                <input type="text"
+                       class="forge-input font-mono"
+                       style="width: 100%; font-size: 0.88rem;"
+                       @bind="_settings.Endpoint"
+                       @bind:event="oninput"
                        placeholder="https://ollama.com/api/web_search"
                        disabled="@IsAirGapped"
                        title="@(IsAirGapped ? "Endpoint configuration is disabled in Air-Gapped mode." : null)" />
@@ -125,51 +127,52 @@
 
         <!-- API Key Row -->
         <div style="margin-bottom: 1.5rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; gap: 0.5rem; flex-wrap: wrap;">
                 <label class="forge-field-label" style="font-weight: 600; font-size: 0.88rem; color: var(--text-primary); margin: 0;">
                     Ollama API Key
                 </label>
-                @if (!string.IsNullOrWhiteSpace(_envKeyDetected) && string.IsNullOrWhiteSpace(_settings.ApiKey))
-                {
-                    <span class="forge-badge badge-teal" style="font-size: 0.78rem; padding: 0.2rem 0.5rem;">
-                        Detected from OLLAMA_API_KEY environment variable
-                    </span>
-                }
+                <span id="websearch-apikey-status-badge" class="forge-badge @_credentialStatus.BadgeCssClass" style="font-size: 0.78rem; padding: 0.2rem 0.5rem;">
+                    @_credentialStatus.BadgeText
+                </span>
             </div>
 
             <div style="display: flex; gap: 0.5rem; align-items: center;">
-                <input type="@(_showApiKey ? "text" : "password")" 
-                       class="forge-input font-mono" 
-                       style="flex: 1; font-size: 0.9rem;" 
-                       @bind="_settings.ApiKey" 
-                       @bind:event="oninput" 
-                       placeholder="@(!string.IsNullOrWhiteSpace(_envKeyDetected) ? $"Inherited from OLLAMA_API_KEY ({MaskKey(_envKeyDetected)})" : "Enter Ollama Cloud API Key...")"
+                <input id="websearch-apikey-input"
+                       type="@(_showApiKey ? "text" : "password")"
+                       class="forge-input font-mono"
+                       style="flex: 1; font-size: 0.9rem;"
+                       value="@_apiKeyInput"
+                       @oninput="OnApiKeyChanged"
+                       @onchange="OnApiKeyChanged"
+                       autocomplete="new-password"
+                       placeholder="@_credentialStatus.InputPlaceholder"
                        disabled="@IsAirGapped"
                        title="@(IsAirGapped ? "API key configuration is disabled in Air-Gapped mode." : null)" />
-                
-                <button type="button" 
-                        class="forge-btn forge-btn-outline" 
-                        style="padding: 0.6rem 0.9rem; font-size: 0.88rem; white-space: nowrap;" 
+
+                <button type="button"
+                        class="forge-btn forge-btn-outline"
+                        style="padding: 0.6rem 0.9rem; font-size: 0.88rem; white-space: nowrap;"
                         @onclick="() => _showApiKey = !_showApiKey"
                         disabled="@IsAirGapped"
                         title="@(IsAirGapped ? "API key configuration is disabled in Air-Gapped mode." : null)">
                     @(_showApiKey ? "🙈 Hide" : "👁️ Show")
                 </button>
 
-                @if (!string.IsNullOrWhiteSpace(_settings.ApiKey))
+                @if (_credentialStatus.HasKeyringEntry)
                 {
-                    <button type="button" 
-                            class="forge-btn forge-btn-outline" 
-                            style="padding: 0.6rem 0.9rem; font-size: 0.88rem; color: var(--text-muted);" 
-                            @onclick="() => _settings.ApiKey = string.Empty"
-                            disabled="@IsAirGapped"
+                    <button type="button"
+                            id="btn-clear-websearch-apikey"
+                            class="forge-btn forge-btn-outline"
+                            style="padding: 0.6rem 0.9rem; font-size: 0.88rem; color: var(--accent-crimson, #ef4444);"
+                            @onclick="ClearApiKey"
+                            disabled="@(IsAirGapped || _isSaving || _isTesting || _isClearing)"
                             title="@(IsAirGapped ? "API key configuration is disabled in Air-Gapped mode." : null)">
-                        ✕ Clear
+                        ✕ Clear Key
                     </button>
                 }
             </div>
             <span style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; display: block;">
-                Obtain your API key from <a href="https://ollama.com/settings/keys" target="_blank" style="color: var(--accent-indigo); text-decoration: underline;">ollama.com</a>. You can also export <span class="font-mono">OLLAMA_API_KEY</span> in your environment.
+                @_credentialStatus.StorageNoticeText Obtain your API key from <a href="https://ollama.com/settings/keys" target="_blank" style="color: var(--accent-indigo); text-decoration: underline;">ollama.com</a> or set <span class="font-mono">@ApiKeySecretConstants.OllamaApiKeyEnvironmentVariable</span> in your environment.
             </span>
         </div>
 
@@ -179,11 +182,11 @@
                 Default Max Results per Query
             </label>
             <div style="display: flex; align-items: center; gap: 0.5rem;">
-                <input type="number" 
-                       min="1" 
-                       max="10" 
-                       class="forge-input" 
-                       style="width: 100px; text-align: right;" 
+                <input type="number"
+                       min="1"
+                       max="10"
+                       class="forge-input"
+                       style="width: 100px; text-align: right;"
                        @bind="_settings.DefaultMaxResults"
                        disabled="@IsAirGapped"
                        title="@(IsAirGapped ? "Default max results is disabled in Air-Gapped mode." : null)" />
@@ -203,10 +206,10 @@
                     Execute an immediate probe query against the configured endpoint to verify API key validity, latency, and response schemas.
                 </p>
             </div>
-            <button type="button" 
-                    class="forge-btn forge-btn-primary" 
-                    style="padding: 0.65rem 1.35rem; font-size: 0.92rem; font-weight: 600;" 
-                    @onclick="TestConnectionAsync" 
+            <button type="button"
+                    class="forge-btn forge-btn-primary"
+                    style="padding: 0.65rem 1.35rem; font-size: 0.92rem; font-weight: 600;"
+                    @onclick="TestConnectionAsync"
                     disabled="@(IsAirGapped || _isTesting || !IsCurrentlyConfigured)"
                     title="@(IsAirGapped ? "Search testing is disabled in Air-Gapped mode." : (!IsCurrentlyConfigured ? "Enter or configure an API key to test connection." : null))">
                 @(_isTesting ? "Testing API..." : "🔍 Test Search Connection")
@@ -214,11 +217,11 @@
         </div>
 
         <div style="display: flex; gap: 0.75rem; margin-bottom: 1.25rem;">
-            <input type="text" 
-                   class="forge-input" 
-                   style="flex: 1;" 
-                   @bind="_testQuery" 
-                   @bind:event="oninput" 
+            <input type="text"
+                   class="forge-input"
+                   style="flex: 1;"
+                   @bind="_testQuery"
+                   @bind:event="oninput"
                    placeholder="Enter test search query (e.g. Ollama, .NET 10 Blazor)..."
                    disabled="@IsAirGapped"
                    title="@(IsAirGapped ? "Search testing is disabled in Air-Gapped mode." : null)" />
@@ -269,10 +272,12 @@
 
 @code {
     private WebSearchSettings _settings = new();
-    private string? _envKeyDetected;
+    private string _apiKeyInput = string.Empty;
+    private ApiKeyCredentialBadgeViewModel _credentialStatus = null!;
     private bool _showApiKey;
     private bool _isSaving;
     private bool _isTesting;
+    private bool _isClearing;
 
     private string _testQuery = "Ollama";
     private bool _testRun;
@@ -280,18 +285,36 @@
     private string _testMessage = string.Empty;
     private long _testElapsedMs;
     private List<WebSearchResultItem> _testResults = new();
+    private bool _serviceReportsAirGapped;
 
     private bool IsAirGapped =>
-        SecurityOptions.Value.AirGappedMode ||
-        (!WebSearchService.IsEnabled && (WebSearchService.IsConfigured || WebSearchService.DisabledReason?.Contains("Air-Gapped", StringComparison.OrdinalIgnoreCase) == true));
+        SecurityOptions.Value.AirGappedMode || _serviceReportsAirGapped;
 
     private bool IsCurrentlyConfigured =>
-        !IsAirGapped && (!string.IsNullOrWhiteSpace(_settings.ApiKey) || !string.IsNullOrWhiteSpace(_envKeyDetected));
+        ApiKeySettingsUi.CanTestWebSearchConnection(IsAirGapped, _credentialStatus, _apiKeyInput);
 
     protected override void OnInitialized()
     {
         _settings = SettingsService.GetSettings().Clone();
-        _envKeyDetected = Environment.GetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable);
+        _apiKeyInput = string.Empty;
+
+        try
+        {
+            _serviceReportsAirGapped = !SecurityOptions.Value.AirGappedMode &&
+                !WebSearchService.IsEnabled &&
+                (WebSearchService.IsConfigured || WebSearchService.DisabledReason?.Contains("Air-Gapped", StringComparison.OrdinalIgnoreCase) == true);
+            _credentialStatus = ApiKeySettingsUi.GetOllamaWebSearchCredentialStatus();
+        }
+        catch (SecretStoreException ex)
+        {
+            _credentialStatus = ApiKeySettingsUi.CreateOllamaWebSearchKeyringErrorStatus();
+            ToastService.Show("OS Keyring Error", ex.Message, ToastLevel.Error);
+        }
+    }
+
+    private void OnApiKeyChanged(ChangeEventArgs e)
+    {
+        _apiKeyInput = e.Value?.ToString() ?? string.Empty;
     }
 
     private async Task SaveSettingsAsync()
@@ -301,14 +324,7 @@
 
         try
         {
-            if (string.IsNullOrWhiteSpace(_settings.Endpoint))
-            {
-                _settings.Endpoint = WebSearchSettings.DefaultEndpoint;
-            }
-            if (_settings.DefaultMaxResults < WebSearchSettings.MinMaxResultsCount) _settings.DefaultMaxResults = WebSearchSettings.MinMaxResultsCount;
-            if (_settings.DefaultMaxResults > WebSearchSettings.MaxMaxResultsCount) _settings.DefaultMaxResults = WebSearchSettings.MaxMaxResultsCount;
-
-            await SettingsService.UpdateSettingsAsync(_settings);
+            await PersistSettingsAndCredentialsAsync();
             ToastService.Show("Settings Saved", "Web search settings and credentials updated successfully.", ToastLevel.Success);
         }
         catch (Exception ex)
@@ -318,6 +334,28 @@
         finally
         {
             _isSaving = false;
+        }
+    }
+
+    private void ClearApiKey()
+    {
+        if (IsAirGapped || _isClearing) return;
+        _isClearing = true;
+
+        try
+        {
+            _credentialStatus = ApiKeySettingsUi.ClearOllamaWebSearchApiKey();
+            _apiKeyInput = string.Empty;
+            _showApiKey = false;
+            ToastService.Show("API Key Removed", "Ollama Cloud Search API key deleted from OS keyring.", ToastLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Clear Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isClearing = false;
         }
     }
 
@@ -339,8 +377,7 @@
 
         try
         {
-            // Persist current settings first if modified
-            await SettingsService.UpdateSettingsAsync(_settings);
+            await PersistSettingsAndCredentialsAsync();
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -367,9 +404,19 @@
         }
     }
 
-    private static string MaskKey(string key)
+    private async Task PersistSettingsAndCredentialsAsync()
     {
-        if (string.IsNullOrEmpty(key) || key.Length <= 8) return "••••••••";
-        return $"{key[..4]}••••{key[^4..]}";
+        if (string.IsNullOrWhiteSpace(_settings.Endpoint))
+        {
+            _settings.Endpoint = WebSearchSettings.DefaultEndpoint;
+        }
+        _settings.DefaultMaxResults = Math.Clamp(_settings.DefaultMaxResults, WebSearchSettings.MinMaxResultsCount, WebSearchSettings.MaxMaxResultsCount);
+
+        var keyOutcome = ApiKeySettingsUi.ApplyOllamaWebSearchApiKeyInput(_apiKeyInput);
+        _apiKeyInput = string.Empty;
+        _showApiKey = false;
+        _credentialStatus = keyOutcome.UpdatedStatus;
+
+        await SettingsService.UpdateSettingsAsync(_settings);
     }
 }

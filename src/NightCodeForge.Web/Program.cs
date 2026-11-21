@@ -118,6 +118,7 @@ try
     builder.Services.AddScoped<ITaskDiffService, TaskDiffService>();
     builder.Services.AddScoped<IGlobalSkillsManagerService, GlobalSkillsManagerService>();
     builder.Services.AddScoped<GitHubSettingsUiService>();
+    builder.Services.AddSingleton<IApiKeySettingsUiService, ApiKeySettingsUiService>();
 
     // Register NightCodeForge domain and infrastructure services
     var defaultConnStr = builder.Configuration.GetConnectionString("DefaultConnection") ?? "Data Source=nightcodeforge.db;";
@@ -191,6 +192,8 @@ try
         "User configuration status: {Status} (Path: {Path})",
         userConfigStatus,
         HostConfigurationSources.GetFullPath(builder.Environment.ContentRootPath));
+
+    LegacyPlaintextSecretDetector.DetectAndWarnConfigurationSecrets(builder.Configuration, app.Logger);
 
     // Ensure default companion API key file (<ContentRoot>/config/default-key.dat) exists at startup.
     app.Services.GetRequiredService<IApiKeyStore>().GetDefaultKey();

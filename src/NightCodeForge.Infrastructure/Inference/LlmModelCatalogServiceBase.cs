@@ -14,6 +14,8 @@ public abstract class LlmModelCatalogServiceBase : ILlmModelCatalogService
 {
     protected static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(3);
     private readonly IDefaultModelSelector _defaultModelSelector;
+    private readonly string? _endpointDefaultModelId;
+    private readonly IOptionsMonitor<LlmProviderOptions>? _providerOptionsMonitor;
 
     protected LlmModelCatalogServiceBase(
         HttpClient httpClient,
@@ -25,25 +27,26 @@ public abstract class LlmModelCatalogServiceBase : ILlmModelCatalogService
         Logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _defaultModelSelector = defaultModelSelector ?? throw new ArgumentNullException(nameof(defaultModelSelector));
         ArgumentNullException.ThrowIfNull(options);
-        DefaultModelId = options.Value.DefaultModelId;
+        _endpointDefaultModelId = options.Value.DefaultModelId;
         LlmEndpointHttpClient.Configure(httpClient, options);
     }
 
     protected LlmModelCatalogServiceBase(
         HttpClient httpClient,
-        IOptions<LlmProviderOptions> options,
+        IOptionsMonitor<LlmProviderOptions> options,
         IDefaultModelSelector defaultModelSelector,
         ILogger logger)
     {
         HttpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         Logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _defaultModelSelector = defaultModelSelector ?? throw new ArgumentNullException(nameof(defaultModelSelector));
-        ArgumentNullException.ThrowIfNull(options);
-        DefaultModelId = options.Value.DefaultModelId;
-        var effective = options.Value.EffectiveEndpoint;
-        if (!string.IsNullOrWhiteSpace(effective) && httpClient.BaseAddress == null)
+        _providerOptionsMonitor = options ?? throw new ArgumentNullException(nameof(options));
+        var effective = options.CurrentValue.EffectiveEndpoint;
+        if (!string.IsNullOrWhiteSpace(effective) &&
+            httpClient.BaseAddress == null &&
+            Uri.TryCreate(effective.TrimEnd('/') + "/", UriKind.Absolute, out var parsedBaseUri))
         {
-            httpClient.BaseAddress = new Uri(effective.TrimEnd('/') + "/");
+            httpClient.BaseAddress = parsedBaseUri;
         }
     }
 
@@ -51,7 +54,7 @@ public abstract class LlmModelCatalogServiceBase : ILlmModelCatalogService
 
     protected ILogger Logger { get; }
 
-    protected string? DefaultModelId { get; }
+    protected virtual string? DefaultModelId => _providerOptionsMonitor?.CurrentValue.DefaultModelId ?? _endpointDefaultModelId;
 
     protected abstract LlmProviderType ProviderType { get; }
 

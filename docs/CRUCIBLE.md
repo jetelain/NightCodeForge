@@ -215,7 +215,7 @@ public record WebSearchResultItem(string Title, string Url, string Content);
 #### Available Providers:
 1. **`OllamaWebSearchService` (Default):**
    * Connects to the official **[Ollama Web Search API](https://github.com/ollama/ollama/blob/main/docs/capabilities/web-search.mdx)** (`POST https://ollama.com/api/web_search`) or transparently via `OllamaRouter`.
-   * Authenticates with `OLLAMA_API_KEY` (configured in `appsettings.json`, environment variable, or workspace settings).
+   * Authenticates via credentials stored securely in the native OS keyring via `Pmad.KeySharp` (configured in **Settings → Cloud & Web Search**) or via the `OLLAMA_API_KEY` process environment variable (never persisted in `appsettings.json`, `config/config.json`, or SQLite).
    * Payloads:
      ```json
      POST https://ollama.com/api/web_search
@@ -238,7 +238,7 @@ public record WebSearchResultItem(string Title, string Url, string Content);
   "WebSearch": {
     "DefaultProvider": "Ollama", // "Ollama" | "SearXNG" | "Brave" | "Custom"
     "Ollama": {
-      "ApiKey": "...",
+      // API key is stored in the OS keyring via Pmad.KeySharp or OLLAMA_API_KEY environment variable
       "Endpoint": "https://ollama.com/api/web_search"
     },
     "SearXNG": {

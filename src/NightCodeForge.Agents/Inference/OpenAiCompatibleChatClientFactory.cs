@@ -7,6 +7,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Resilience;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Streaming;
 using OpenAI;
 using OpenAI.Chat;
@@ -15,13 +16,15 @@ namespace NightCodeForge.Agents.Inference;
 
 /// <summary>
 /// Chat client factory for OpenAI-compatible inference endpoints (vLLM, LM Studio, OpenRouter, DeepSeek, OpenAI).
-/// Validates models synchronously against the allowlist cache and manual model configuration before construction.
-/// Uses standard Bearer token authentication and enforces clean header hygiene (suppressing X-OllamaRouter-* headers).
+/// Validates models synchronously against the allowlist cache and manual model configuration before construction,
+/// resolves endpoint-scoped API keys via <see cref="IApiKeySecretStore"/> (with <c>OPENAI_API_KEY</c> fallback),
+/// evicts cached session-less clients on credential change, and enforces clean header hygiene.
 /// </summary>
 public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
 {
     private readonly IOpenAiModelAllowlistCache _allowlistCache;
     private readonly IDefaultModelSelector _defaultModelSelector;
+    private readonly IApiKeySecretStore _secretStore;
 
     public OpenAiCompatibleChatClientFactory(
         IOptions<LlmProviderOptions> options,
@@ -32,11 +35,32 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
         IOptions<LlmRetryPolicyOptions> retryOptions,
         IOpenAiModelAllowlistCache allowlistCache,
         IDefaultModelSelector defaultModelSelector,
-        IAgentActivityStreamer activityStreamer)
+        IAgentActivityStreamer activityStreamer,
+        IApiKeySecretStore secretStore)
         : base(options, loggerFactory, telemetryService, operationsControlService, timeProvider, retryOptions, activityStreamer)
     {
         _allowlistCache = allowlistCache ?? throw new ArgumentNullException(nameof(allowlistCache));
         _defaultModelSelector = defaultModelSelector ?? throw new ArgumentNullException(nameof(defaultModelSelector));
+        _secretStore = secretStore ?? throw new ArgumentNullException(nameof(secretStore));
+        _secretStore.SecretChanged += OnSecretChanged;
+    }
+
+    private void OnSecretChanged(object? sender, ApiKeySecretChangedEventArgs e)
+    {
+        if (e.Kind == ApiKeySecretKind.OpenAiCompatible)
+        {
+            InvalidateClientCache();
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _secretStore.SecretChanged -= OnSecretChanged;
+        }
+
+        base.Dispose(disposing);
     }
 
     protected override string ResolveEffectiveModelId(string? modelId, LlmProviderOptions options)
@@ -95,11 +119,12 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
         // 1. Fail-fast allowlist check
         OpenAiModelAllowlistValidator.ValidateModelAllowed(options, _allowlistCache, effectiveModel);
 
-        // 2. Unauthenticated local endpoints handling:
-        // ApiKeyCredential throws ArgumentException on null/empty strings.
-        // For local endpoints without auth (e.g. LM Studio, local vLLM), inject KnownDefaultModels.LocalAuthBypassKey.
-        var apiKey = !string.IsNullOrWhiteSpace(options.OpenAiCompatible?.ApiKey)
-            ? options.OpenAiCompatible.ApiKey.Trim()
+        // 2. Resolve endpoint-scoped key from OS keyring (or OPENAI_API_KEY env fallback);
+        //    ApiKeyCredential throws ArgumentException on null/empty strings, so unauthenticated
+        //    local endpoints (LM Studio, local vLLM) fall back to KnownDefaultModels.LocalAuthBypassKey.
+        var resolvedKey = _secretStore.ResolveEffectiveOpenAiApiKey(options.EffectiveEndpoint);
+        var apiKey = !string.IsNullOrWhiteSpace(resolvedKey)
+            ? resolvedKey
             : KnownDefaultModels.LocalAuthBypassKey;
 
         // 3. Pipeline transport using shared SocketsHttpHandler and TransientHttpErrorRetryHandler
@@ -140,4 +165,3 @@ public sealed class OpenAiCompatibleChatClientFactory : LlmChatClientFactoryBase
         return openAiClient.GetChatClient(effectiveModel).AsIChatClient();
     }
 }
-

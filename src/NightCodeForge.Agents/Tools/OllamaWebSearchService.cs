@@ -15,13 +15,14 @@ namespace NightCodeForge.Agents.Tools;
 
 /// <summary>
 /// Web search service backed by the official Ollama Web Search API (https://ollama.com/api/web_search).
-/// Supports credentials via IWebSearchSettingsService or the OLLAMA_API_KEY environment variable.
+/// Resolves credentials via <see cref="IApiKeySecretStore"/> (OS keyring with <c>OLLAMA_API_KEY</c> fallback).
 /// Automatically disabled when Air-Gapped mode is active.
 /// </summary>
 public class OllamaWebSearchService : IWebSearchService
 {
     private readonly HttpClient _httpClient;
     private readonly IWebSearchSettingsService _settingsService;
+    private readonly IApiKeySecretStore _secretStore;
     private readonly IOptions<SecurityOptions> _securityOptions;
     private readonly ILogger<OllamaWebSearchService> _logger;
     private readonly string? _explicitApiKey;
@@ -30,7 +31,7 @@ public class OllamaWebSearchService : IWebSearchService
     public string ProviderName => WebSearchSettings.DefaultProvider;
 
     /// <summary>
-    /// Indicates whether an API key is configured either in settings or via environment variable.
+    /// Indicates whether an API key is configured either in OS keyring or via environment variable.
     /// </summary>
     public bool IsConfigured => !string.IsNullOrWhiteSpace(GetEffectiveApiKey());
 
@@ -65,15 +66,17 @@ public class OllamaWebSearchService : IWebSearchService
     public OllamaWebSearchService(
         HttpClient httpClient,
         IWebSearchSettingsService settingsService,
+        IApiKeySecretStore secretStore,
         IOptions<SecurityOptions> securityOptions,
         ILogger<OllamaWebSearchService> logger)
-        : this(httpClient, settingsService, securityOptions, logger, null, null)
+        : this(httpClient, settingsService, secretStore, securityOptions, logger, null, null)
     {
     }
 
     public OllamaWebSearchService(
         HttpClient httpClient,
         IWebSearchSettingsService settingsService,
+        IApiKeySecretStore secretStore,
         IOptions<SecurityOptions> securityOptions,
         ILogger<OllamaWebSearchService> logger,
         string? explicitApiKey,
@@ -81,6 +84,7 @@ public class OllamaWebSearchService : IWebSearchService
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+        _secretStore = secretStore ?? throw new ArgumentNullException(nameof(secretStore));
         _securityOptions = securityOptions ?? throw new ArgumentNullException(nameof(securityOptions));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _explicitApiKey = explicitApiKey;
@@ -170,10 +174,12 @@ public class OllamaWebSearchService : IWebSearchService
 
     public string? GetEffectiveApiKey()
     {
-        if (!string.IsNullOrWhiteSpace(_explicitApiKey)) return _explicitApiKey;
-        var settingsKey = _settingsService.GetSettings().ApiKey;
-        if (!string.IsNullOrWhiteSpace(settingsKey)) return settingsKey;
-        return Environment.GetEnvironmentVariable(WebSearchSettings.OllamaApiKeyEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(_explicitApiKey))
+        {
+            return _explicitApiKey.Trim();
+        }
+
+        return _secretStore.ResolveEffectiveOllamaWebSearchApiKey();
     }
 
     public string GetEffectiveEndpoint()

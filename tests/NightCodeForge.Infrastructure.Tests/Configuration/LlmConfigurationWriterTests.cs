@@ -54,7 +54,6 @@ public class LlmConfigurationWriterTests : IDisposable
         {
             opts.ProviderType = LlmProviderType.OpenAiCompatible;
             opts.OpenAiCompatible.Endpoint = "https://api.openai.com/v1";
-            opts.OpenAiCompatible.ApiKey = "sk-test-key";
         });
 
         var configFilePath = HostConfigurationSources.GetFullPath(_tempDirectory);
@@ -72,7 +71,102 @@ public class LlmConfigurationWriterTests : IDisposable
         var openAi = llm["OpenAiCompatible"] as JsonObject;
         Assert.NotNull(openAi);
         Assert.Equal("https://api.openai.com/v1", openAi["Endpoint"]?.ToString());
-        Assert.Equal("sk-test-key", openAi["ApiKey"]?.ToString());
+        Assert.False(openAi.ContainsKey("ApiKey"));
+        Assert.False(openAi.ContainsKey("apiKey"));
+    }
+
+    [Fact]
+    public async Task SaveProviderConfigurationAsync_And_SaveAllowedModelsAsync_ScrubLegacyApiKeyProperties()
+    {
+        var configFilePath = HostConfigurationSources.GetFullPath(_tempDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
+
+        var legacyJson = """
+        {
+          "LlmProvider": {
+            "ProviderType": "OpenAiCompatible",
+            "OpenAiCompatible": {
+              "Endpoint": "https://api.openai.com/v1",
+              "ApiKey": "sk-legacy-plaintext-1",
+              "apiKey": "sk-legacy-plaintext-2"
+            }
+          }
+        }
+        """;
+        await File.WriteAllTextAsync(configFilePath, legacyJson);
+
+        var options = Options.Create(new LlmProviderOptions { ProviderType = LlmProviderType.OpenAiCompatible });
+        var writer = new LlmConfigurationWriter(_hostEnvMock.Object, options, NullLogger<LlmConfigurationWriter>.Instance);
+
+        await writer.SaveAllowedModelsAsync([new OpenAiAllowedModel { ModelId = "gpt-4o" }]);
+
+        var afterModelsText = await File.ReadAllTextAsync(configFilePath);
+        Assert.DoesNotContain("sk-legacy-plaintext", afterModelsText);
+        var afterModelsOpenAi = (JsonNode.Parse(afterModelsText) as JsonObject)?["LlmProvider"]?["OpenAiCompatible"] as JsonObject;
+        Assert.NotNull(afterModelsOpenAi);
+        Assert.False(afterModelsOpenAi.ContainsKey("ApiKey"));
+        Assert.False(afterModelsOpenAi.ContainsKey("apiKey"));
+
+        // Re-seed legacy key and verify SaveProviderConfigurationAsync scrubs it as well
+        await File.WriteAllTextAsync(configFilePath, legacyJson);
+        await writer.SaveProviderConfigurationAsync(opts =>
+        {
+            opts.ProviderType = LlmProviderType.OpenAiCompatible;
+            opts.OpenAiCompatible.Endpoint = "https://openrouter.ai/api/v1";
+        });
+
+        var afterProviderText = await File.ReadAllTextAsync(configFilePath);
+        Assert.DoesNotContain("sk-legacy-plaintext", afterProviderText);
+        var afterProviderOpenAi = (JsonNode.Parse(afterProviderText) as JsonObject)?["LlmProvider"]?["OpenAiCompatible"] as JsonObject;
+        Assert.NotNull(afterProviderOpenAi);
+        Assert.False(afterProviderOpenAi.ContainsKey("ApiKey"));
+        Assert.False(afterProviderOpenAi.ContainsKey("apiKey"));
+        Assert.Equal("https://openrouter.ai/api/v1", afterProviderOpenAi["Endpoint"]?.ToString());
+    }
+
+    [Fact]
+    public async Task SaveMethods_ScrubLegacyApiKeysAcrossCamelCaseAndDuplicateCasingSections()
+    {
+        var configFilePath = HostConfigurationSources.GetFullPath(_tempDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(configFilePath)!);
+
+        var duplicateSectionJson = """
+        {
+          "LlmProvider": {
+            "ProviderType": "OpenAiCompatible",
+            "OpenAiCompatible": {
+              "Endpoint": "https://api.openai.com/v1"
+            }
+          },
+          "llmProvider": {
+            "openAiCompatible": {
+              "apiKey": "sk-legacy-camel-duplicate"
+            }
+          }
+        }
+        """;
+        await File.WriteAllTextAsync(configFilePath, duplicateSectionJson);
+
+        var options = Options.Create(new LlmProviderOptions { ProviderType = LlmProviderType.OpenAiCompatible });
+        var writer = new LlmConfigurationWriter(_hostEnvMock.Object, options, NullLogger<LlmConfigurationWriter>.Instance);
+
+        await writer.SaveAllowedModelsAsync([new OpenAiAllowedModel { ModelId = "gpt-4o" }]);
+        var afterModelsText = await File.ReadAllTextAsync(configFilePath);
+        Assert.DoesNotContain("sk-legacy-camel-duplicate", afterModelsText);
+
+        await File.WriteAllTextAsync(configFilePath, duplicateSectionJson);
+        await writer.SaveProviderConfigurationAsync(opts =>
+        {
+            opts.ProviderType = LlmProviderType.OpenAiCompatible;
+            opts.OpenAiCompatible.Endpoint = "https://api.openai.com/v1";
+        });
+
+        var afterProviderText = await File.ReadAllTextAsync(configFilePath);
+        Assert.DoesNotContain("sk-legacy-camel-duplicate", afterProviderText);
+        var root = JsonNode.Parse(afterProviderText) as JsonObject;
+        Assert.NotNull(root);
+        Assert.NotNull(root["LlmProvider"]);
+        Assert.Null(root["llmProvider"]);
     }
 
     [Fact]

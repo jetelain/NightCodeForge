@@ -8,8 +8,10 @@ using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Skills;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Security;
 using NightCodeForge.Infrastructure.Configuration;
 using NightCodeForge.Infrastructure.Data;
 using NightCodeForge.Infrastructure.Data.Repositories;
@@ -18,6 +20,7 @@ using NightCodeForge.Web.Components.Settings;
 using NightCodeForge.Web.Components.Workspaces;
 using NightCodeForge.Web.Services;
 using NightCodeForge.Web.Tailscale;
+using NightCodeForge.Web.Tests.Fixtures;
 using Moq;
 using Xunit;
 
@@ -43,6 +46,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
     private readonly Mock<ITailscaleConfigurationWriter> _tailscaleConfigWriter;
     private readonly Mock<IOptionsMonitor<TailscaleOptions>> _tailscaleOptionsMonitor;
     private readonly MockAcpHarnessCatalogService _acpCatalogService;
+    private readonly FakeApiKeySecretStore _secretStore;
+    private readonly Dictionary<string, string?> _fakeEnvVars = new(StringComparer.Ordinal);
+    private readonly ApiKeySettingsUiService _apiKeyUiService;
 
     public SettingsComponentTests()
     {
@@ -76,6 +82,10 @@ public class SettingsComponentTests : BunitContext, IDisposable
         _tailscaleConfigWriter = new Mock<ITailscaleConfigurationWriter>();
         _tailscaleOptionsMonitor = new Mock<IOptionsMonitor<TailscaleOptions>>();
         _acpCatalogService = new MockAcpHarnessCatalogService();
+        _secretStore = new FakeApiKeySecretStore();
+        _apiKeyUiService = new ApiKeySettingsUiService(
+            _secretStore,
+            name => _fakeEnvVars.TryGetValue(name, out var val) ? val : null);
 
         _tailscaleOptionsMonitor.SetupGet(m => m.CurrentValue).Returns(new TailscaleOptions());
         _tailscaleServeService.Setup(s => s.GetStatusSnapshotAsync(It.IsAny<CancellationToken>()))
@@ -119,6 +129,8 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.AddSingleton<ITailscaleServeService>(_tailscaleServeService.Object);
         Services.AddSingleton<ITailscaleConfigurationWriter>(_tailscaleConfigWriter.Object);
         Services.AddSingleton<IOptionsMonitor<TailscaleOptions>>(_tailscaleOptionsMonitor.Object);
+        Services.AddSingleton<IApiKeySecretStore>(_secretStore);
+        Services.AddSingleton<IApiKeySettingsUiService>(_apiKeyUiService);
 
         var mockNotificationService = new Mock<IWebNotificationService>();
         mockNotificationService.Setup(n => n.GetPermissionStateAsync()).ReturnsAsync(NotificationConstants.PermissionStates.Default);
@@ -561,6 +573,134 @@ public class SettingsComponentTests : BunitContext, IDisposable
         var defaultSelect = cut.Find("#select-default-model");
         Assert.Contains("Auto-select (Strategy-based: lowest prompt cost)", defaultSelect.InnerHtml);
         Assert.Contains("custom-qwen", defaultSelect.InnerHtml);
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_WriteOnlyKeyUx_NeverEchoesStoredKey_PreservesOnBlank_ReplacesAndClears()
+    {
+        const string initialSecret = "sk-secret-never-rendered-in-dom";
+        const string rotatedSecret = "sk-rotated-openai-key-999";
+
+        _llmOptions.ProviderType = LlmProviderType.OpenAiCompatible;
+        _llmOptions.OpenAiCompatible.Endpoint = "https://api.openai.com/v1";
+        _gatewayService.ProviderType = LlmProviderType.OpenAiCompatible;
+        _secretStore.SeedOpenAiKey("https://api.openai.com/v1", initialSecret);
+
+        var cut = Render<OllamaRouterGatewayCard>();
+
+        // Stored key MUST never appear in DOM or input value
+        Assert.DoesNotContain(initialSecret, cut.Markup);
+        var keyInput = cut.Find("#openai-apikey-input");
+        Assert.True(string.IsNullOrEmpty(keyInput.GetAttribute("value")));
+
+        var badge = cut.Find("#openai-apikey-status-badge");
+        Assert.Contains(ApiKeySettingsUiService.StoredInKeyringBadgeText, badge.TextContent);
+        Assert.Contains("Pmad.KeySharp", cut.Markup);
+        Assert.Contains("config/config.json", cut.Markup);
+
+        // Save with blank input preserves existing keyring entry
+        cut.Find("#btn-save-settings").Click();
+        Assert.Equal(initialSecret, _secretStore.PeekRawOpenAiKey("https://api.openai.com/v1"));
+        Assert.True(_configWriter.SaveProviderCalled);
+
+        // Save with new non-empty input trims, stores in keyring, clears input, keeps badge
+        cut.Find("#openai-apikey-input").Input($"  {rotatedSecret}  ");
+        cut.Find("#btn-save-settings").Click();
+
+        Assert.Equal(rotatedSecret, _secretStore.PeekRawOpenAiKey("https://api.openai.com/v1"));
+        Assert.DoesNotContain(rotatedSecret, cut.Markup);
+        Assert.True(string.IsNullOrEmpty(cut.Find("#openai-apikey-input").GetAttribute("value")));
+        Assert.Contains(ApiKeySettingsUiService.StoredInKeyringBadgeText, cut.Find("#openai-apikey-status-badge").TextContent);
+
+        // Explicit Clear Key removes entry from keyring and updates badge
+        cut.Find("#btn-clear-openai-apikey").Click();
+        Assert.Null(_secretStore.PeekRawOpenAiKey("https://api.openai.com/v1"));
+        Assert.Contains(ApiKeySettingsUiService.NotConfiguredBadgeText, cut.Find("#openai-apikey-status-badge").TextContent);
+        Assert.Empty(cut.FindAll("#btn-clear-openai-apikey"));
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_EditingEndpointRefreshesBadgeWithoutCopying_AndOllamaModeSkipsKeyring()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.OpenAiCompatible.Endpoint = "https://api.openai.com/v1";
+        _secretStore.SeedOpenAiKey("https://api.openai.com/v1", "sk-openai-only");
+
+        var cut = Render<OllamaRouterGatewayCard>();
+
+        // In OllamaRouter mode, OS keyring MUST NOT be queried
+        Assert.Equal(0, _secretStore.OpenAiHasCalls);
+
+        // Switch to OpenAI Compatible -> queries keyring for initial endpoint
+        var radioInputs = cut.FindAll("input[name=providerOption]");
+        radioInputs[2].Change(new ChangeEventArgs { Value = "OpenAiCompatible" });
+
+        Assert.Equal(1, _secretStore.OpenAiHasCalls);
+        Assert.Contains(ApiKeySettingsUiService.StoredInKeyringBadgeText, cut.Find("#openai-apikey-status-badge").TextContent);
+
+        // Edit endpoint URL -> badge updates immediately for target endpoint, never copying key
+        cut.Find("#openai-endpoint-input").Input("https://openrouter.ai/api/v1");
+        Assert.Contains(ApiKeySettingsUiService.NotConfiguredBadgeText, cut.Find("#openai-apikey-status-badge").TextContent);
+        Assert.Null(_secretStore.PeekRawOpenAiKey("https://openrouter.ai/api/v1"));
+        Assert.Equal("sk-openai-only", _secretStore.PeekRawOpenAiKey("https://api.openai.com/v1"));
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_DisplaysInheritedEnvAndKeyringUnavailableBadges()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OpenAiCompatible;
+        _gatewayService.ProviderType = LlmProviderType.OpenAiCompatible;
+        _fakeEnvVars[ApiKeySecretConstants.OpenAiApiKeyEnvironmentVariable] = "sk-env-inherited";
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        Assert.Contains(ApiKeySettingsUiService.InheritedFromOpenAiEnvBadgeText, cut.Find("#openai-apikey-status-badge").TextContent);
+        Assert.DoesNotContain("sk-env-inherited", cut.Markup);
+
+        _fakeEnvVars.Clear();
+        _secretStore.KeyringAvailable = false;
+        var unavailableCut = Render<OllamaRouterGatewayCard>();
+        Assert.Contains(ApiKeySettingsUiService.KeyringUnavailableBadgeText, unavailableCut.Find("#openai-apikey-status-badge").TextContent);
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_HandlesSecretStoreExceptionGracefully_AndRejectsInvalidEndpointOnSave()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OpenAiCompatible;
+        _llmOptions.OpenAiCompatible.Endpoint = "https://api.openai.com/v1";
+        _gatewayService.ProviderType = LlmProviderType.OpenAiCompatible;
+        _secretStore.ThrowOnRead = new SecretStoreException("Keyring access denied on read");
+
+        var errorCut = Render<OllamaRouterGatewayCard>();
+        Assert.Contains(ApiKeySettingsUiService.KeyringErrorBadgeText, errorCut.Find("#openai-apikey-status-badge").TextContent);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Message.Contains("Keyring access denied on read"));
+
+        // Endpoint edit while keyring read fails surfaces error badge & toast without crashing
+        errorCut.Find("#openai-endpoint-input").Input("https://openrouter.ai/api/v1");
+        Assert.Contains(ApiKeySettingsUiService.KeyringErrorBadgeText, errorCut.Find("#openai-apikey-status-badge").TextContent);
+
+        // Save and Clear errors surface error toasts without persisting config.json
+        _secretStore.ThrowOnRead = null;
+        _secretStore.SeedOpenAiKey("https://api.openai.com/v1", "sk-existing");
+        var cut = Render<OllamaRouterGatewayCard>();
+
+        _secretStore.ThrowOnWrite = new SecretStoreException("Keyring write failure");
+        cut.Find("#openai-apikey-input").Input("sk-new-secret");
+        cut.Find("#btn-save-settings").Click();
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Message.Contains("Keyring write failure"));
+
+        _secretStore.ThrowOnWrite = null;
+        _secretStore.ThrowOnDelete = new SecretStoreException("Keyring delete failure");
+        cut.Find("#btn-clear-openai-apikey").Click();
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Message.Contains("Keyring delete failure"));
+
+        // Invalid endpoint URL on save -> shows error toast and never invokes ConfigurationWriter
+        _secretStore.ThrowOnDelete = null;
+        cut.Find("#openai-endpoint-input").Input("not-a-valid-uri");
+        cut.Find("#btn-save-settings").Click();
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Title == "Error Saving Settings");
     }
 
     #endregion
@@ -1021,15 +1161,19 @@ public class SettingsComponentTests : BunitContext, IDisposable
     [Fact]
     public void WebSearchSettingsTab_PastingApiKey_EnablesTestButtonAndAllowsSaving()
     {
-        // Ensure no env key or settings key
-        Environment.SetEnvironmentVariable("OLLAMA_API_KEY", null);
-        _webSearchSettingsService.CurrentSettings = new WebSearchSettings { ApiKey = "" };
+        _fakeEnvVars.Clear();
+        _secretStore.SeedOllamaKey(null);
+        _webSearchSettingsService.CurrentSettings = new WebSearchSettings();
 
         var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
 
-        // Find the API key input (password input)
-        var apiKeyInput = cut.Find("input[type='password']");
-        Assert.NotNull(apiKeyInput);
+        // Find the API key input (password input) — must start empty
+        var apiKeyInput = cut.Find("#websearch-apikey-input");
+        Assert.Equal("password", apiKeyInput.GetAttribute("type"));
+        Assert.True(string.IsNullOrEmpty(apiKeyInput.GetAttribute("value")));
+        Assert.Contains(ApiKeySettingsUiService.NotConfiguredBadgeText, cut.Find("#websearch-apikey-status-badge").TextContent);
+        Assert.Contains("Pmad.KeySharp", cut.Markup);
+        Assert.Contains("SQLite", cut.Markup);
 
         // Save button in header should be enabled (not disabled)
         var saveBtn = cut.Find("button.forge-btn-primary");
@@ -1041,18 +1185,57 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.True(testBtn.HasAttribute("disabled"));
 
         // Simulate pasting / typing an API key
-        apiKeyInput.Input("ollama_pasted_key_12345");
+        apiKeyInput.Input("  ollama_pasted_key_12345  ");
 
         // Now the test button should be enabled!
         testBtn = cut.FindAll("button").FirstOrDefault(b => b.TextContent.Contains("Test Search Connection"));
         Assert.NotNull(testBtn);
         Assert.False(testBtn.HasAttribute("disabled"));
 
-        // Click save button
+        // Click save button -> stores trimmed key in OS keyring, clears input, updates badge
         saveBtn.Click();
 
-        // Verify settings were persisted
-        Assert.Equal("ollama_pasted_key_12345", _webSearchSettingsService.CurrentSettings.ApiKey);
+        Assert.Equal("ollama_pasted_key_12345", _secretStore.PeekRawOllamaKey());
+        Assert.DoesNotContain("ollama_pasted_key_12345", cut.Markup);
+        Assert.True(string.IsNullOrEmpty(cut.Find("#websearch-apikey-input").GetAttribute("value")));
+        Assert.Contains(ApiKeySettingsUiService.StoredInKeyringBadgeText, cut.Find("#websearch-apikey-status-badge").TextContent);
+    }
+
+    [Fact]
+    public void WebSearchSettingsTab_WriteOnlyPreserveOnBlank_ExplicitClear_AndInheritedEnvTestEnablement()
+    {
+        const string storedKey = "ollama_stored_keyring_secret_777";
+        _secretStore.SeedOllamaKey(storedKey);
+
+        var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+
+        // Stored key must never be echoed into DOM
+        Assert.DoesNotContain(storedKey, cut.Markup);
+        Assert.True(string.IsNullOrEmpty(cut.Find("#websearch-apikey-input").GetAttribute("value")));
+        Assert.Contains(ApiKeySettingsUiService.StoredInKeyringBadgeText, cut.Find("#websearch-apikey-status-badge").TextContent);
+
+        // Test Search Connection enabled when keyring key exists
+        var testBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Test Search Connection"));
+        Assert.False(testBtn.HasAttribute("disabled"));
+
+        // Save with blank input preserves stored keyring entry
+        cut.Find("button.forge-btn-primary").Click();
+        Assert.Equal(storedKey, _secretStore.PeekRawOllamaKey());
+
+        // Clear Key deletes entry from keyring and disables Test button
+        cut.Find("#btn-clear-websearch-apikey").Click();
+        Assert.Null(_secretStore.PeekRawOllamaKey());
+        Assert.Contains(ApiKeySettingsUiService.NotConfiguredBadgeText, cut.Find("#websearch-apikey-status-badge").TextContent);
+        testBtn = cut.FindAll("button").First(b => b.TextContent.Contains("Test Search Connection"));
+        Assert.True(testBtn.HasAttribute("disabled"));
+
+        // Inherited from OLLAMA_API_KEY env var shows badge without echoing key and enables Test button
+        _fakeEnvVars[ApiKeySecretConstants.OllamaApiKeyEnvironmentVariable] = "ollama_env_secret_888";
+        var envCut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+        Assert.Contains(ApiKeySettingsUiService.InheritedFromOllamaEnvBadgeText, envCut.Find("#websearch-apikey-status-badge").TextContent);
+        Assert.DoesNotContain("ollama_env_secret_888", envCut.Markup);
+        var envTestBtn = envCut.FindAll("button").First(b => b.TextContent.Contains("Test Search Connection"));
+        Assert.False(envTestBtn.HasAttribute("disabled"));
     }
 
     [Fact]
@@ -1062,7 +1245,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Services.Remove(secDescriptor);
         Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new NightCodeForge.Core.Security.SecurityOptions { AirGappedMode = true }));
 
-        _webSearchSettingsService.CurrentSettings = new WebSearchSettings { ApiKey = "ollama_key_123" };
+        _secretStore.SeedOllamaKey("ollama_key_123");
 
         var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
 
@@ -1084,7 +1267,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         // Show/Hide and Clear API Key buttons should also be disabled with tooltips
         var showBtn = buttons.First(b => b.TextContent.Contains("Show") || b.TextContent.Contains("Hide"));
-        var clearBtn = buttons.First(b => b.TextContent.Contains("Clear"));
+        var clearBtn = cut.Find("#btn-clear-websearch-apikey");
         Assert.True(showBtn.HasAttribute("disabled"));
         Assert.True(clearBtn.HasAttribute("disabled"));
         Assert.Equal("API key configuration is disabled in Air-Gapped mode.", showBtn.GetAttribute("title"));
@@ -1114,7 +1297,7 @@ public class SettingsComponentTests : BunitContext, IDisposable
                 isEnabled: false,
                 disabledReason: "Web search is disabled in Air-Gapped mode (external cloud search to ollama.com is prohibited)."));
 
-        _webSearchSettingsService.CurrentSettings = new WebSearchSettings { ApiKey = "ollama_key_123" };
+        _secretStore.SeedOllamaKey("ollama_key_123");
 
         var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
 
@@ -1124,6 +1307,30 @@ public class SettingsComponentTests : BunitContext, IDisposable
         var buttons = cut.FindAll("button");
         var saveBtn = buttons.First(b => b.TextContent.Contains("Save Search Settings"));
         Assert.True(saveBtn.HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void WebSearchSettingsTab_HandlesSecretStoreExceptionGracefully_OnRenderSaveAndClear()
+    {
+        _secretStore.ThrowOnRead = new SecretStoreException("Ollama keyring read denied");
+        var errorCut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+
+        Assert.Contains(ApiKeySettingsUiService.KeyringErrorBadgeText, errorCut.Find("#websearch-apikey-status-badge").TextContent);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Message.Contains("Ollama keyring read denied"));
+
+        _secretStore.ThrowOnRead = null;
+        _secretStore.SeedOllamaKey("ollama-existing");
+        var cut = Render<NightCodeForge.Web.Components.Settings.WebSearchSettingsTab>();
+
+        _secretStore.ThrowOnWrite = new SecretStoreException("Ollama keyring write failed");
+        cut.Find("#websearch-apikey-input").Input("ollama-new-key");
+        cut.Find("button.forge-btn-primary").Click();
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Message.Contains("Ollama keyring write failed"));
+
+        _secretStore.ThrowOnWrite = null;
+        _secretStore.ThrowOnDelete = new SecretStoreException("Ollama keyring delete failed");
+        cut.Find("#btn-clear-websearch-apikey").Click();
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Message.Contains("Ollama keyring delete failed"));
     }
 
     #endregion

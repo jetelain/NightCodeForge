@@ -27,6 +27,7 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
     protected readonly IAgentActivityStreamer _activityStreamer;
     private readonly ConcurrentDictionary<string, IChatClient> _clientCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly SocketsHttpHandler _sharedSocketsHandler;
+    private long _cacheGeneration;
     private bool _disposed;
 
     protected LlmChatClientFactoryBase(
@@ -72,8 +73,15 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
             return BuildClient(options, effectiveModel, routingTarget, sessionId);
         }
 
-        var cacheKey = $"{effectiveModel}:{routingTarget}";
-        return _clientCache.GetOrAdd(cacheKey, _ => BuildClient(options, effectiveModel, routingTarget, null));
+        var generation = Volatile.Read(ref _cacheGeneration);
+        var cacheKey = $"{generation}:{effectiveModel}:{routingTarget}";
+        var client = _clientCache.GetOrAdd(cacheKey, _ => BuildClient(options, effectiveModel, routingTarget, null));
+        if (Volatile.Read(ref _cacheGeneration) != generation)
+        {
+            _clientCache.TryRemove(cacheKey, out _);
+        }
+
+        return client;
     }
 
     /// <summary>
@@ -282,20 +290,35 @@ public abstract class LlmChatClientFactoryBase : ILlmChatClientFactory, IDisposa
         string? sessionId,
         SocketsHttpHandler socketsHandler);
 
+    protected void InvalidateClientCache()
+    {
+        Interlocked.Increment(ref _cacheGeneration);
+        _clientCache.Clear();
+    }
+
     public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
     {
         if (_disposed) return;
         _disposed = true;
 
-        foreach (var client in _clientCache.Values)
+        if (disposing)
         {
-            if (client is IDisposable d)
+            foreach (var client in _clientCache.Values)
             {
-                d.Dispose();
+                if (client is IDisposable d)
+                {
+                    d.Dispose();
+                }
             }
+            _clientCache.Clear();
+            _sharedSocketsHandler.Dispose();
         }
-        _clientCache.Clear();
-        _sharedSocketsHandler.Dispose();
     }
 }
 

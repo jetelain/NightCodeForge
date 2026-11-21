@@ -1,10 +1,11 @@
 using System.Net;
-using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Moq;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Inference;
 using Xunit;
 
@@ -21,6 +22,21 @@ public class OpenAiCompatibleModelCatalogServiceTests
             CapturedRequests.Add(request);
             return Task.FromResult(handler(request));
         }
+    }
+
+    private sealed class MutableOptionsMonitor<T>(T initialValue) : IOptionsMonitor<T>
+    {
+        public T CurrentValue { get; set; } = initialValue;
+        public T Get(string? name) => CurrentValue;
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
+    }
+
+    private static IApiKeySecretStore CreateSecretStoreMock(Func<string?, string?>? resolveKey = null)
+    {
+        var mock = new Mock<IApiKeySecretStore>();
+        mock.Setup(s => s.ResolveEffectiveOpenAiApiKey(It.IsAny<string?>()))
+            .Returns((string? endpoint) => resolveKey?.Invoke(endpoint));
+        return mock.Object;
     }
 
     [Fact]
@@ -41,19 +57,19 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("https://api.test-gateway.com/v1/") };
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions
             {
                 Endpoint = "https://api.test-gateway.com/v1",
-                ApiKey = "sk-test-key-123",
                 OrganizationId = "org-test-456"
             }
         });
 
+        var secretStore = CreateSecretStoreMock(ep => ep == "https://api.test-gateway.com/v1" ? "sk-test-key-123" : null);
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), secretStore, NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var models = await catalog.GetAvailableModelsAsync();
 
@@ -80,6 +96,60 @@ public class OpenAiCompatibleModelCatalogServiceTests
     }
 
     [Fact]
+    public async Task VerifyEndpointAsync_WhenUnconfigured_OmitsAuthorizationHeader_AndAdoptsLiveEndpointAndKeyChangesWithoutRestart()
+    {
+        var stub = new DelegatingHandlerStub(req => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"data":[{"id":"live-model"}]}""")
+        });
+
+        // Simulate startup BaseAddress pointing to initial endpoint
+        var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:1234/v1/") };
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
+        {
+            ProviderType = LlmProviderType.OpenAiCompatible,
+            OpenAiCompatible = new OpenAiCompatibleOptions
+            {
+                Endpoint = "http://localhost:1234/v1"
+            }
+        });
+
+        string? storedKeyForUpdatedEndpoint = null;
+        var secretStore = CreateSecretStoreMock(ep =>
+            string.Equals(ep, "https://api.updated-provider.test/v1", StringComparison.OrdinalIgnoreCase)
+                ? storedKeyForUpdatedEndpoint
+                : null);
+
+        var cache = new OpenAiModelAllowlistCache();
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), secretStore, NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+
+        // Probe 1: unconfigured key -> Authorization header must be omitted
+        var firstProbe = await catalog.VerifyEndpointAsync();
+        Assert.True(firstProbe.IsSuccess);
+        Assert.Single(stub.CapturedRequests);
+        Assert.Null(stub.CapturedRequests[0].Headers.Authorization);
+        Assert.Equal("http://localhost:1234/v1/models", stub.CapturedRequests[0].RequestUri?.AbsoluteUri);
+
+        // Live edit endpoint + save key in keyring (no restart / no new catalog instance)
+        options.CurrentValue = new LlmProviderOptions
+        {
+            ProviderType = LlmProviderType.OpenAiCompatible,
+            OpenAiCompatible = new OpenAiCompatibleOptions
+            {
+                Endpoint = "https://api.updated-provider.test/v1"
+            }
+        };
+        storedKeyForUpdatedEndpoint = "sk-live-rotated-999";
+
+        var secondProbe = await catalog.VerifyEndpointAsync();
+        Assert.True(secondProbe.IsSuccess);
+        Assert.Equal(2, stub.CapturedRequests.Count);
+        Assert.Equal("https://api.updated-provider.test/v1/models", stub.CapturedRequests[1].RequestUri?.AbsoluteUri);
+        Assert.Equal("Bearer", stub.CapturedRequests[1].Headers.Authorization?.Scheme);
+        Assert.Equal("sk-live-rotated-999", stub.CapturedRequests[1].Headers.Authorization?.Parameter);
+    }
+
+    [Fact]
     public async Task GetAvailableModelsAsync_WhenAllowedModelsConfigured_OverridesAndFiltersDiscovered()
     {
         var responseJson = """
@@ -97,7 +167,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("https://api.test-gateway.com/v1/") };
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions
@@ -111,7 +181,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var models = await catalog.GetAvailableModelsAsync();
 
@@ -120,7 +190,6 @@ public class OpenAiCompatibleModelCatalogServiceTests
         Assert.Equal("Custom Model B", models[0].DisplayName);
         Assert.Equal(120000, models[0].ContextWindowTokens);
 
-        // Verify cache reflects filtered allowed models with overridden context tokens
         Assert.True(cache.IsModelAllowed("model-b"));
         Assert.False(cache.IsModelAllowed("model-a"));
         Assert.True(cache.TryGetModel("model-b", out var cachedB));
@@ -135,7 +204,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         var stub = new DelegatingHandlerStub(req => new HttpResponseMessage(statusCode));
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:8080/v1/") };
 
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions
@@ -149,7 +218,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var models = await catalog.GetAvailableModelsAsync();
 
@@ -170,14 +239,14 @@ public class OpenAiCompatibleModelCatalogServiceTests
         var stub = new DelegatingHandlerStub(req => new HttpResponseMessage(HttpStatusCode.Unauthorized));
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("https://api.openai.com/v1/") };
 
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions { Endpoint = "https://api.openai.com/v1" }
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var verify = await catalog.VerifyEndpointAsync();
 
@@ -193,14 +262,14 @@ public class OpenAiCompatibleModelCatalogServiceTests
         var stub = new DelegatingHandlerStub(req => throw new HttpRequestException("Connection refused by peer"));
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:9999/v1/") };
 
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions { Endpoint = "http://localhost:9999/v1" }
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var verify = await catalog.VerifyEndpointAsync();
 
@@ -218,7 +287,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         var stub = new DelegatingHandlerStub(req => new HttpResponseMessage(statusCode));
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:8080/v1/") };
 
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions
@@ -229,7 +298,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var verify = await catalog.VerifyEndpointAsync();
 
@@ -258,14 +327,14 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:1234/") };
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions { Endpoint = "http://localhost:1234" }
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var models = await catalog.GetAvailableModelsAsync();
 
@@ -282,7 +351,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:1234/v1/") };
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions
@@ -296,7 +365,7 @@ public class OpenAiCompatibleModelCatalogServiceTests
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var verify = await catalog.VerifyEndpointAsync();
 
@@ -323,16 +392,15 @@ public class OpenAiCompatibleModelCatalogServiceTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        // BaseAddress configured without trailing slash: http://localhost:1234/v1
         var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:1234/v1") };
-        var options = Options.Create(new LlmProviderOptions
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
         {
             ProviderType = LlmProviderType.OpenAiCompatible,
             OpenAiCompatible = new OpenAiCompatibleOptions { Endpoint = "http://localhost:1234/v1" }
         });
 
         var cache = new OpenAiModelAllowlistCache();
-        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+        var catalog = new OpenAiCompatibleModelCatalogService(httpClient, options, cache, new OpenAiDefaultModelSelector(), CreateSecretStoreMock(), NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var models = await catalog.GetAvailableModelsAsync();
 
@@ -340,5 +408,92 @@ public class OpenAiCompatibleModelCatalogServiceTests
         Assert.Equal("slash-test-model", models[0].ModelId);
         Assert.Contains(stub.CapturedRequests, r => r.RequestUri?.AbsolutePath == "/v1/models");
     }
-}
 
+    [Fact]
+    public async Task Constructor_WithMalformedEndpoint_DoesNotThrow_AndVerifyEndpointFailsGracefully()
+    {
+        var stub = new DelegatingHandlerStub(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var httpClient = new HttpClient(stub);
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
+        {
+            ProviderType = LlmProviderType.OpenAiCompatible,
+            OpenAiCompatible = new OpenAiCompatibleOptions
+            {
+                Endpoint = "not a valid uri"
+            }
+        });
+
+        var catalog = new OpenAiCompatibleModelCatalogService(
+            httpClient,
+            options,
+            new OpenAiModelAllowlistCache(),
+            new OpenAiDefaultModelSelector(),
+            CreateSecretStoreMock(),
+            NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+
+        var verify = await catalog.VerifyEndpointAsync();
+        Assert.False(verify.IsSuccess);
+        Assert.Contains("No valid endpoint URI configured", verify.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VerifyEndpointAsync_ResolvesKeyOncePerProbe_FallsBackToBaseAddress_AndIgnoresProviderTypeSwitchBeforeRestart()
+    {
+        var stub = new DelegatingHandlerStub(req =>
+        {
+            if (req.RequestUri?.AbsolutePath == "/models")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"data":[{"id":"m1"}]}""")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var httpClient = new HttpClient(stub) { BaseAddress = new Uri("http://localhost:1234/") };
+        var options = new MutableOptionsMonitor<LlmProviderOptions>(new LlmProviderOptions
+        {
+            ProviderType = LlmProviderType.OpenAiCompatible,
+            Endpoint = "http://localhost:11434",
+            OpenAiCompatible = new OpenAiCompatibleOptions
+            {
+                Endpoint = "   "
+            }
+        });
+
+        var secretStoreMock = new Mock<IApiKeySecretStore>();
+        secretStoreMock
+            .Setup(s => s.ResolveEffectiveOpenAiApiKey(It.IsAny<string?>()))
+            .Returns("sk-fallback-base-key");
+
+        var catalog = new OpenAiCompatibleModelCatalogService(
+            httpClient,
+            options,
+            new OpenAiModelAllowlistCache(),
+            new OpenAiDefaultModelSelector(),
+            secretStoreMock.Object,
+            NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
+
+        // Multiple 404 candidates probed (v1/models, api/v1/models, models) -> key resolved strictly ONCE with BaseAddress
+        var verify = await catalog.VerifyEndpointAsync();
+        Assert.True(verify.IsSuccess);
+        Assert.Equal(3, stub.CapturedRequests.Count);
+        secretStoreMock.Verify(s => s.ResolveEffectiveOpenAiApiKey("http://localhost:1234/"), Times.Once);
+
+        // Simulate hot-reload switching ProviderType before restart while OpenAiCompatible.Endpoint is configured
+        options.CurrentValue = new LlmProviderOptions
+        {
+            ProviderType = LlmProviderType.Ollama,
+            Endpoint = "http://localhost:11434",
+            OpenAiCompatible = new OpenAiCompatibleOptions
+            {
+                Endpoint = "https://openrouter.ai/api/v1"
+            }
+        };
+
+        await catalog.VerifyEndpointAsync();
+        Assert.Contains(stub.CapturedRequests, r => r.RequestUri?.AbsoluteUri == "https://openrouter.ai/api/v1/models");
+        secretStoreMock.Verify(s => s.ResolveEffectiveOpenAiApiKey("https://openrouter.ai/api/v1"), Times.Once);
+    }
+}

@@ -13,6 +13,7 @@ using NightCodeForge.Core.Security;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Web.Services;
+using NightCodeForge.Web.Tests.Fixtures;
 using Pmad.Markitdown;
 
 namespace NightCodeForge.Web.Tests;
@@ -49,6 +50,8 @@ public static class TestServices
         services.TryAddSingleton<IGitHubTaskMirrorService>(new Mock<IGitHubTaskMirrorService>().Object);
         services.TryAddSingleton<IGitHubPullRequestDeliveryService>(new Mock<IGitHubPullRequestDeliveryService>().Object);
         services.TryAddSingleton<IOptions<SecurityOptions>>(Options.Create(new SecurityOptions { AirGappedMode = false }));
+        services.TryAddSingleton<IApiKeySecretStore, FakeApiKeySecretStore>();
+        services.TryAddSingleton<IApiKeySettingsUiService, ApiKeySettingsUiService>();
         services.TryAddSingleton<IWorkspacePathResolver>(_ =>
         {
             var mock = new Mock<IWorkspacePathResolver>();

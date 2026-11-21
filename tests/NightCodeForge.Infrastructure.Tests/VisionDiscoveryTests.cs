@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Moq;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
@@ -143,12 +144,16 @@ public class VisionDiscoveryTests
             }
         });
 
+        var optionsMonitor = new Mock<IOptionsMonitor<LlmProviderOptions>>();
+        optionsMonitor.SetupGet(m => m.CurrentValue).Returns(options.Value);
+
         var allowlistCache = new OpenAiModelAllowlistCache();
         var catalog = new OpenAiCompatibleModelCatalogService(
             StubHttpHandler.Client(handler),
-            options,
+            optionsMonitor.Object,
             allowlistCache,
             new OpenAiDefaultModelSelector(),
+            Mock.Of<IApiKeySecretStore>(),
             NullLogger<OpenAiCompatibleModelCatalogService>.Instance);
 
         var listed = await catalog.GetAvailableModelsAsync();

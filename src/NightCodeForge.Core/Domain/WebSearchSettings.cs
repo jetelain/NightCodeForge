@@ -2,7 +2,8 @@ namespace NightCodeForge.Core.Domain;
 
 /// <summary>
 /// Configuration settings for web search providers (e.g. Ollama Web Search API).
-/// Persisted in the SQLite SystemSettings table or inherited from environment variables.
+/// Non-secret parameters are persisted in the SQLite SystemSettings table; API keys are stored
+/// separately in the native OS keyring via <see cref="Interfaces.IApiKeySecretStore"/> or via <c>OLLAMA_API_KEY</c>.
 /// </summary>
 public class WebSearchSettings
 {
@@ -19,11 +20,6 @@ public class WebSearchSettings
     public string Provider { get; set; } = DefaultProvider;
 
     /// <summary>
-    /// API key for authentication with the search provider (e.g. Ollama cloud API key).
-    /// </summary>
-    public string ApiKey { get; set; } = string.Empty;
-
-    /// <summary>
     /// Web search API endpoint URL (default: "https://ollama.com/api/web_search").
     /// </summary>
     public string Endpoint { get; set; } = DefaultEndpoint;
@@ -36,7 +32,6 @@ public class WebSearchSettings
     public WebSearchSettings Clone() => new()
     {
         Provider = Provider,
-        ApiKey = ApiKey,
         Endpoint = Endpoint,
         DefaultMaxResults = DefaultMaxResults
     };
