@@ -28,16 +28,9 @@ All Tier 1 MVP feature specifications have been implemented, verified, and archi
 
 To accelerate delivery of **`v0.1.0`**, remaining work is organized into four streams. Once the **Common Trunk** stabilizes `NightCodeForge.Core` and `NightCodeForge.Agents` contracts, the **Installer**, **Benchmark**, and **`v0.1` Features** streams execute in parallel:
 
-#### 1. Common Trunk — Stabilize Internals (`v0.1.0` Critical Path)
-*Lock down `Core`, `Agents` public APIs, `TaskOrchestrator` DAG behavior, and `config/config.json` schema.*
-*(Note: Fix [Step 11.49B](../fixes/STEP_11_49B_RETIRE_OLLAMASHARP_STREAM_CANCELLATION_WORKAROUND.md) is opportunistic on the trunk if `OllamaSharp` releases upstream; [Step 11.43C](../fixes/STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md) is deferred to `v0.2`.)*
-
-| Order | Step | Specification | Focus & Key Deliverables | Status |
-| :---: | :--- | :--- | :--- | :--- |
-| **1** | **12.31** | [💡 Step 12.31: Interactive Ideation Agent Coordinator & Warm Execution Context](STEP_12_31_INTERACTIVE_IDEATION_AGENT_COORDINATOR_AND_WARM_EXECUTION_CONTEXT.md) | Redesign Ideation Chat around an **Interactive Crucible Agent** paradigm (positioned ahead of `12.2D` and `12.39` so both build directly on `IIdeationConversationCoordinator` / `WarmIdeationSession`): replace `IIdeationService` with singleton `IIdeationConversationCoordinator` to manage conversation lifecycle and survive browser reloads mid-turn, persist structured turns in SQLite, warm up execution context (`CanonicalToolsetSession`, `HarnessAgent`) and preload the model (`ContextIntentTokens = 49152` / `48k`) on page open, decouple `SyncAllTasksToDiskAsync`, and reduce turn dispatch latency to `< 1s`. | **Next in Line (#1)** |
-| **2** | **12.2D** | [👁️ Step 12.2D: Multimodal Vision Support, In-Loop Image Inspection & Context Compaction](STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md) | Zero-KV-loss native multimodal vision: `OllamaShowParser` / `ModelCapabilityProfile` / OpenAI allowlist vision discovery + fail-fast `ModelVisionNotSupportedException`, canonical `read(path)` image loading with `SixLabors.ImageSharp` downscaling in `WorkspaceFileToolModule.ReadAsync` + `MultimodalToolInjectionChatClient` (compaction-aligned), upfront image turns in Ideation (via `IIdeationConversationCoordinator`) & `AcpAgentHarness` (keeping Stage 0 Untrusted Triage isolated from `/workspace/attachments` and vision), tile-based `ModelCalibratedTokenEstimator` accounting, reference-only `"image_ref"` SQLite serialization, and `PiStyleCrucibleCompactionStrategy` image window eviction. | Planned |
-| **3** | **12.39** | [🧠 Step 12.39: Two-Tier Agent Memory Management, Selective `:rw` Memory Mount & Live UI Notifications](STEP_12_39_TWO_TIER_AGENT_MEMORY_MANAGEMENT_AND_UI_NOTIFICATIONS.md) | Two-tier auditable Markdown memory: Tier 1 committed in-Git memory (`AGENTS.md` + `.agents/memory/*.md`) and Tier 2 local workspace memory (`~/.nightcodeforge/wks/{id}/memory/`), mounted `:rw` at `/workspace/memory` for all non-triage agents (including Ideation `-ro` containers via `VirtualMountEntry.AllowWriteInReadOnlyScope`, writing only `/workspace/memory/*.md`) and strictly `:ro` for Stage 0 Triage (in an isolated `ncf-sandbox-{id}-triage-ro` container) and Nightwatch, while Stages 1–3 (`Crucible` & `ACP`) can use both `/workspace/memory/*.md` and `.agents/memory/*.md`; progressive-disclosure `<workspace_memory>` + `<memory_catalog>` in `AgentsMdService` & Layer 3 `PromptPrefixStabilizer`, `IIdeationConversationCoordinator` warm-session integration, `IAgentMemoryMonitorService` SignalR notifications, and `WorkspaceMemoryDrawer.razor`. | Planned |
-| **4** | **11.54** | [🔐 Step 11.54: Store OpenAI-Compatible & Ollama Cloud Search API Keys in OS Keyring via `Pmad.KeySharp`](../fixes/STEP_11_54_KEYSHARP_OS_KEYRING_STORAGE_FOR_API_KEYS.md) | Remove plaintext `ApiKey` persistence from `OpenAiCompatibleOptions` (`config/config.json`) and `WebSearchSettings` (SQLite `SystemSettings`), persist endpoint-normalized OpenAI-compatible keys and the Ollama Cloud Search key in the native OS keyring via `Pmad.KeySharp` with thread-safe caching, client-cache invalidation, environment-variable fallback, and write-only Settings UI controls. | Planned |
+#### 1. Common Trunk — Stabilize Internals (`v0.1.0` Critical Path) — Completed ✅
+*All `v0.1.0` Common Trunk steps (`12.31`, `12.2D`, `12.39`, `11.54`) have been implemented, verified, and archived (`docs/archive/phase-12/` and `docs/archive/phase-11/`).*  
+*(Note: Fix [Step 11.49B](../fixes/STEP_11_49B_RETIRE_OLLAMASHARP_STREAM_CANCELLATION_WORKAROUND.md) remains opportunistic on the trunk if `OllamaSharp` releases upstream; [Step 11.43C](../fixes/STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md) is deferred to `v0.2`.)*
 
 ---
 
@@ -99,14 +92,15 @@ The following specifications are deferred until after `v0.1.0` ships:
 ---
 
 ### ✅ Recently Completed (Phase 12)
-* **12.1B:** Dynamic Task Suspension on Unclosed Prerequisites, Clean Workflow Reset & UI Blocker Badges.
-* **12.6:** Smart CLI & Build Tool Output Filtering (`dotnet build`, `dotnet test`, `npm`, `tsc`, `cargo`), `/tmp` offload, and `50 KB` output cap.
+* **12.2D:** Multimodal Vision Support, In-Loop Image Inspection & Context Compaction.
+* **12.31:** Interactive Ideation Agent Coordinator & Warm Execution Context.
 * **12.38:** Triage Task Lifecycle, Verbatim Intake Persistence, Scoped Backlog Mutations & Inspector Visibility.
+* **12.39:** Two-Tier Agent Memory Management, Selective `:rw` Memory Mount & Live UI Notifications.
 
 ---
 
 ## 3. Completed Features Archive
 
-Completed feature steps (`12.1A`, `12.1B`, `12.2A`, `12.2B`, `12.2C`, `12.3`, `12.5A`, `12.5B`, `12.6`, `12.8A`, `12.8B`, `12.8C`, `12.11A`, `12.11B`, `12.11C`, `12.11D`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.16B`, `12.17`, `12.19`, `12.20A`, `12.24`, `12.25A`, `12.25B`, `12.26`, `12.27`, `12.29`, `12.30`, `12.33A`, `12.33B`, `12.35A`, `12.36A`, `12.36B`, `12.37`, `12.38`) are archived in:
+Completed feature steps (`12.1A`, `12.1B`, `12.2A`, `12.2B`, `12.2C`, `12.2D`, `12.3`, `12.5A`, `12.5B`, `12.6`, `12.8A`, `12.8B`, `12.8C`, `12.11A`, `12.11B`, `12.11C`, `12.11D`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.16B`, `12.17`, `12.19`, `12.20A`, `12.24`, `12.25A`, `12.25B`, `12.26`, `12.27`, `12.29`, `12.30`, `12.31`, `12.33A`, `12.33B`, `12.35A`, `12.36A`, `12.36B`, `12.37`, `12.38`, `12.39`) are archived in:
 - **Summary & DoD Record:** [`docs/archive/12_EXTEND_FEATURES.md`](../archive/12_EXTEND_FEATURES.md)
 - **Step Specifications:** [`docs/archive/phase-12/`](../archive/phase-12/)

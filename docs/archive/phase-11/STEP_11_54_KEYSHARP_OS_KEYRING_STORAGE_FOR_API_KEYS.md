@@ -1,9 +1,9 @@
 # 🔐 Step 11.54: Store OpenAI-Compatible & Ollama Cloud Search API Keys in OS Keyring via `Pmad.KeySharp`
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
-> **Roadmap Stream:** `v0.1.0` — **1. Common Trunk** ([docs/PLAN.md](../PLAN.md))  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
+> **Roadmap Stream:** `v0.1.0` — **1. Common Trunk** ([docs/PLAN.md](../../PLAN.md))  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Planned (v0.1.0 Common Trunk)  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Infrastructure`, `NightCodeForge.Agents`, `NightCodeForge.Web`, `NightCodeForge.Core.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Web.Tests`  
 > **Dependencies:** `Pmad.KeySharp` (already referenced in [`NightCodeForge.Infrastructure.csproj`](../../src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj), introduced in [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md))  
 > **Aligns With:** [`AGENTS.md`](../../AGENTS.md), [`docs/PLAN.md`](../PLAN.md)
@@ -133,24 +133,24 @@ Both [`OllamaRouterGatewayCard.razor`](../../src/NightCodeForge.Web/Components/S
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] **Core Contract, Exception & `Pmad.KeySharp` Secret Store:**
-  - [ ] Define the secret-storage interface in `NightCodeForge.Core`, dedicated domain exception in `NightCodeForge.Core.Exceptions`, and endpoint URL normalization rules.
-  - [ ] Implement the `Pmad.KeySharp`-backed singleton store in `NightCodeForge.Infrastructure` using constants for coordinates (with constructor overrides for test isolation), thread-safe in-memory caching, change notifications, `Keyring.IsAvailable()` awareness, `ErrorType.Unavailable` read fallback to environment variables, and fail-fast domain exceptions on write/delete/unexpected errors.
-  - [ ] Register the store in `ServiceCollectionExtensions.AddNightCodeForgeCoreAndInfrastructure` without altering `GitHubTokenStore` or `Pmad.LocalApi.Security` (`default-key.dat`).
-- [ ] **Clean-Break Plaintext Removal & Legacy Scrubbing:**
-  - [ ] Remove `ApiKey` from `OpenAiCompatibleOptions` (`src/NightCodeForge.Core/Inference/OpenAiCompatibleOptions.cs`) and scrub legacy `"ApiKey"` JSON properties in `LlmConfigurationWriter.SaveProviderConfigurationAsync`.
-  - [ ] Remove `ApiKey` from `WebSearchSettings` (`src/NightCodeForge.Core/Domain/WebSearchSettings.cs`), stop reading `WebSearch:Ollama:ApiKey` / `OLLAMA_API_KEY` from JSON config in `WebSearchSettingsService`, and scrub legacy `"ApiKey"` fields when persisting to SQLite `SystemSettings`.
-  - [ ] Add redacted startup (`Program.cs`) and load (`WebSearchSettingsService.LoadSettingsAsync`) warnings when legacy plaintext `ApiKey` entries are found on disk or in SQLite.
-- [ ] **Runtime Consumers:**
-  - [ ] Update `OpenAiCompatibleChatClientFactory` to resolve endpoint-scoped keys from the secret store (`OPENAI_API_KEY` fallback, `LocalAuthBypassKey` only when unconfigured), invalidate cached session-less clients on key change, and stay `<= 10` constructor parameters (no optional parameters).
-  - [ ] Update `OpenAiCompatibleModelCatalogService` to resolve live options (`IOptionsMonitor<LlmProviderOptions>`) and endpoint-scoped keys from the secret store.
-  - [ ] Update `OllamaWebSearchService` to resolve keys from the secret store (with explicit test override and `OLLAMA_API_KEY` fallback) while preserving `AirGappedMode` gating.
-  - [ ] Update `CompanionEndpoints` (`/api/companion/config`) to resolve `openAiCompatible.apiKey` from the secret store only when `ProviderType == LlmProviderType.OpenAiCompatible` (returning `null` otherwise).
-- [ ] **Settings UI & Presentation Separation:**
-  - [ ] Extract presentation/orchestration helpers so Razor components remain thin per `AGENTS.md`.
-  - [ ] Update `OllamaRouterGatewayCard.razor` and `WebSearchSettingsTab.razor` to use write-only/non-echoed key inputs, credential-source status badges, preserve-on-blank Save semantics, explicit Clear/Remove keyring deletion, endpoint-change status refresh, and Air-Gapped mode lockdown.
-- [ ] **Documentation & Automated Verification:**
-  - [ ] Update `docs/CRUCIBLE.md` to reflect OS keyring (`Pmad.KeySharp`) and environment variable authentication for `web_search`.
-  - [ ] Add isolated `Pmad.KeySharp` OS keyring integration tests (`NightCodeForge.Tests` package with unique per-test coordinates and `Dispose()` cleanup) verifying round-trip, endpoint normalization, overwrite, `NotFound`, and idempotent delete.
-  - [ ] Add/update unit and component tests across `NightCodeForge.Core.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Agents.Tests`, and `NightCodeForge.Web.Tests` (using mocked/fake secret stores so unit tests never touch the host OS keyring) verifying plaintext exclusion in `config/config.json` and SQLite, legacy scrubbing & redacted warnings, keyring/env-var precedence, headless `Unavailable` read fallback & write fail-fast, chat client cache invalidation, `CompanionEndpoints` provider gating, UI write-only/preserve/replace/clear/air-gapped flows, and `ConstructorParameterCeilingTests`.
-  - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`, then run the full test suite including E2E tests (`dotnet test`) upon completion.
+- [x] **Core Contract, Exception & `Pmad.KeySharp` Secret Store:**
+  - [x] Define the secret-storage interface in `NightCodeForge.Core`, dedicated domain exception in `NightCodeForge.Core.Exceptions`, and endpoint URL normalization rules.
+  - [x] Implement the `Pmad.KeySharp`-backed singleton store in `NightCodeForge.Infrastructure` using constants for coordinates (with constructor overrides for test isolation), thread-safe in-memory caching, change notifications, `Keyring.IsAvailable()` awareness, `ErrorType.Unavailable` read fallback to environment variables, and fail-fast domain exceptions on write/delete/unexpected errors.
+  - [x] Register the store in `ServiceCollectionExtensions.AddNightCodeForgeCoreAndInfrastructure` without altering `GitHubTokenStore` or `Pmad.LocalApi.Security` (`default-key.dat`).
+- [x] **Clean-Break Plaintext Removal & Legacy Scrubbing:**
+  - [x] Remove `ApiKey` from `OpenAiCompatibleOptions` (`src/NightCodeForge.Core/Inference/OpenAiCompatibleOptions.cs`) and scrub legacy `"ApiKey"` JSON properties in `LlmConfigurationWriter.SaveProviderConfigurationAsync`.
+  - [x] Remove `ApiKey` from `WebSearchSettings` (`src/NightCodeForge.Core/Domain/WebSearchSettings.cs`), stop reading `WebSearch:Ollama:ApiKey` / `OLLAMA_API_KEY` from JSON config in `WebSearchSettingsService`, and scrub legacy `"ApiKey"` fields when persisting to SQLite `SystemSettings`.
+  - [x] Add redacted startup (`Program.cs`) and load (`WebSearchSettingsService.LoadSettingsAsync`) warnings when legacy plaintext `ApiKey` entries are found on disk or in SQLite.
+- [x] **Runtime Consumers:**
+  - [x] Update `OpenAiCompatibleChatClientFactory` to resolve endpoint-scoped keys from the secret store (`OPENAI_API_KEY` fallback, `LocalAuthBypassKey` only when unconfigured), invalidate cached session-less clients on key change, and stay `<= 10` constructor parameters (no optional parameters).
+  - [x] Update `OpenAiCompatibleModelCatalogService` to resolve live options (`IOptionsMonitor<LlmProviderOptions>`) and endpoint-scoped keys from the secret store.
+  - [x] Update `OllamaWebSearchService` to resolve keys from the secret store (with explicit test override and `OLLAMA_API_KEY` fallback) while preserving `AirGappedMode` gating.
+  - [x] Update `CompanionEndpoints` (`/api/companion/config`) to resolve `openAiCompatible.apiKey` from the secret store only when `ProviderType == LlmProviderType.OpenAiCompatible` (returning `null` otherwise).
+- [x] **Settings UI & Presentation Separation:**
+  - [x] Extract presentation/orchestration helpers so Razor components remain thin per `AGENTS.md`.
+  - [x] Update `OllamaRouterGatewayCard.razor` and `WebSearchSettingsTab.razor` to use write-only/non-echoed key inputs, credential-source status badges, preserve-on-blank Save semantics, explicit Clear/Remove keyring deletion, endpoint-change status refresh, and Air-Gapped mode lockdown.
+- [x] **Documentation & Automated Verification:**
+  - [x] Update `docs/CRUCIBLE.md` to reflect OS keyring (`Pmad.KeySharp`) and environment variable authentication for `web_search`.
+  - [x] Add isolated `Pmad.KeySharp` OS keyring integration tests (`NightCodeForge.Tests` package with unique per-test coordinates and `Dispose()` cleanup) verifying round-trip, endpoint normalization, overwrite, `NotFound`, and idempotent delete.
+  - [x] Add/update unit and component tests across `NightCodeForge.Core.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Agents.Tests`, and `NightCodeForge.Web.Tests` (using mocked/fake secret stores so unit tests never touch the host OS keyring) verifying plaintext exclusion in `config/config.json` and SQLite, legacy scrubbing & redacted warnings, keyring/env-var precedence, headless `Unavailable` read fallback & write fail-fast, chat client cache invalidation, `CompanionEndpoints` provider gating, UI write-only/preserve/replace/clear/air-gapped flows, and `ConstructorParameterCeilingTests`.
+  - [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`, then run the full test suite including E2E tests (`dotnet test`) upon completion.
