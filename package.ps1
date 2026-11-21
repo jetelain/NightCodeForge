@@ -4,8 +4,11 @@
 .DESCRIPTION
     Builds and packages the unreleased NightCodeForge release artifacts for local air-gapped bundles or offline testing:
       1. Packs src/NightCodeForge.Cli/NightCodeForge.Cli.csproj as NightCodeForge.Cli.<version>.nupkg.
-      2. Publishes NightCodeForge.Web (--self-contained) + Native AOT NightCodeForge.Launcher (ncf-web / ncf-web.exe at archive root),
-         bundles skills/, VERSION, README.md, and LICENSE, and compresses into NightCodeForge-Web-<Runtime>.zip.
+      2. Publishes NightCodeForge.Web (--self-contained) + Native AOT NightCodeForge.Launcher staged to match
+         the publish.ps1 installation layout (nightcodeforge-web(.exe) at root, bin/ncf-web(.exe),
+         bin/nightcodeforge-web(.exe), plus bin/nightcodeforge-web bash shim on Windows), portable
+         appsettings.Production.json, skills/, VERSION, README.md, and LICENSE, and compresses into
+         NightCodeForge-Web-<Runtime>.zip.
       3. Optionally (-IncludeReleasedCompanionTools) downloads published Pmad.CSharpNav, Pmad.MarkdownFetch, and Pmad.CodeCondenser
          .nupkg files from nuget.org into -OutputDir.
 
@@ -60,13 +63,17 @@ $resolvedOutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPa
 New-Item -ItemType Directory -Path $resolvedOutputDir -Force | Out-Null
 
 $isWindowsRid = $Runtime -like "win-*"
+$webBinaryName = if ($isWindowsRid) { "NightCodeForge.Web.exe" } else { "NightCodeForge.Web" }
 $launcherBinaryName = if ($isWindowsRid) { "ncf-web.exe" } else { "ncf-web" }
+$longLauncherBinaryName = if ($isWindowsRid) { "nightcodeforge-web.exe" } else { "nightcodeforge-web" }
 $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ncf-pkg-" + [System.Guid]::NewGuid().ToString("N"))
 $webStagingDir = Join-Path $stagingRoot "web"
+$webBinDir = Join-Path $webStagingDir "bin"
 $launcherStagingDir = Join-Path $stagingRoot "launcher"
 
 try {
     New-Item -ItemType Directory -Path $webStagingDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $webBinDir -Force | Out-Null
     New-Item -ItemType Directory -Path $launcherStagingDir -Force | Out-Null
 
     Write-Host "Packing NightCodeForge.Cli ($Version) -> $resolvedOutputDir..." -ForegroundColor Cyan
@@ -106,7 +113,55 @@ try {
     if (-not (Test-Path $stagedLauncher)) {
         throw "Published launcher binary was not found at: $stagedLauncher"
     }
-    Copy-Item -Path $stagedLauncher -Destination (Join-Path $webStagingDir $launcherBinaryName) -Force
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+    # Match publish.ps1 layout: nightcodeforge-web(.exe) at root, bin/nightcodeforge-web(.exe) and bin/ncf-web(.exe) in bin/.
+    Copy-Item -Path $stagedLauncher -Destination (Join-Path $webStagingDir $longLauncherBinaryName) -Force
+    Copy-Item -Path $stagedLauncher -Destination (Join-Path $webBinDir $longLauncherBinaryName) -Force
+    Copy-Item -Path $stagedLauncher -Destination (Join-Path $webBinDir $launcherBinaryName) -Force
+
+    if ($isWindowsRid) {
+        $binBash = Join-Path $webBinDir "nightcodeforge-web"
+        $binBashContent = @"
+#!/usr/bin/env bash
+DIR="`$( cd "`$( dirname "`${BASH_SOURCE[0]}" )" && pwd )"
+exec "`$DIR/$launcherBinaryName" "`$@"
+"@
+        $binBashContent = ($binBashContent -replace "`r`n", "`n").TrimEnd("`n") + "`n"
+        [System.IO.File]::WriteAllText($binBash, $binBashContent, $utf8NoBom)
+    } elseif (-not [System.OperatingSystem]::IsWindows()) {
+        foreach ($exePath in @(
+            (Join-Path $webStagingDir $webBinaryName),
+            (Join-Path $webStagingDir $longLauncherBinaryName),
+            (Join-Path $webBinDir $longLauncherBinaryName),
+            (Join-Path $webBinDir $launcherBinaryName)
+        )) {
+            if (Test-Path $exePath) {
+                & chmod +x $exePath
+            }
+        }
+    }
+
+    # Portable appsettings.Production.json matching publish.ps1 schema with relative data/logs paths.
+    $prodAppSettings = @"
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Data Source=data/nightcodeforge.db;",
+    "HangfireConnection": "Data Source=data/nightcodeforge_hangfire.db;"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Warning",
+      "NightCodeForge": "Information"
+    },
+    "LogsDirectory": "logs"
+  },
+  "Urls": "http://localhost:5270"
+}
+"@
+    $prodAppSettings = ($prodAppSettings -replace "`r`n", "`n").TrimEnd("`n") + "`n"
+    [System.IO.File]::WriteAllText((Join-Path $webStagingDir "appsettings.Production.json"), $prodAppSettings, $utf8NoBom)
 
     # Strip PDBs and copy skills/ + metadata
     Get-ChildItem -Path $webStagingDir -Filter "*.pdb" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -118,7 +173,7 @@ try {
         Copy-Item -Path (Join-Path $skillsSource "*") -Destination $skillsDest -Recurse -Force
     }
 
-    [System.IO.File]::WriteAllText((Join-Path $webStagingDir "VERSION"), "$Version`n", [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText((Join-Path $webStagingDir "VERSION"), "$Version`n", $utf8NoBom)
     Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination $webStagingDir -Force
     Copy-Item -Path (Join-Path $repoRoot "LICENSE") -Destination $webStagingDir -Force
 

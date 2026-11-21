@@ -93,7 +93,7 @@ Copy [`NightCodeForgeTheme.axaml`](file:///C:/Users/Julien/source/repos/jetelain
 - **Step 2 — Host & Subsystem Provisioning:**
   - Visual stepper with real-time log terminal and progress bar (`IEnvironmentProvisioner`), including reboot prompt if WSL2 installation returns `3010`.
 - **Step 3 — Software, Companion NuGet Tools & OS Registration:**
-  - Installs `NightCodeForge-Web-{rid}.zip` (including Native AOT `ncf-web` / `nightcodeforge-web` launcher, `appsettings` configuration, and `skills/`) and `OllamaRouter-{rid}.zip` / `.tar.gz` (including `appsettings.Production.json`, `bin/` shims, User `PATH`, and `ollamarouter://` protocol registration) via `IReleaseManager` (from Online GitHub Releases or Air-Gapped Local Bundle).
+  - Installs `NightCodeForge-Web-{rid}.zip` (already structured to match `publish.ps1` with `nightcodeforge-web(.exe)` at root, `bin/ncf-web(.exe)` + `bin/nightcodeforge-web(.exe)` + Windows bash `bin/nightcodeforge-web`, portable `appsettings.Production.json`, and `skills/`) and `OllamaRouter-{rid}.zip` / `.tar.gz` (already structured to match `OllamaRouter/publish.ps1` with `appsettings.Production.json`, root `ollamarouter.cmd` on Windows, and `bin/` shims), configuring User `PATH` and `ollamarouter://` protocol registration via `IReleaseManager` (from Online GitHub Releases or Air-Gapped Local Bundle).
   - Pre-installs all 5 NuGet global tools (`NightCodeForge.Cli` / `ncf`, `NightCodeForge.Assay` / `nightcodeassay`, `Pmad.CSharpNav` / `csnav`, `Pmad.MarkdownFetch` / `mdfetch`, `Pmad.CodeCondenser` / `codecondenser`) on Host and WSL2 via `ICompanionNuGetProvisioner` (using `--add-source <bundleDir> --no-cache` when in Air-Gapped mode).
   - Copies installer binary into `<InstallDir>` and registers OS uninstall entry & shortcuts via `IOsIntegrationService`.
 - **Step 4 — AI Fleet & Model Setup (Delegated to OllamaRouter Wizard):**
@@ -143,12 +143,12 @@ Create `.github/workflows/ci.yml` automating build, tests, NuGet tool packaging,
    - `dotnet pack src/NightCodeForge.Cli/NightCodeForge.Cli.csproj -c Release --no-build -p:Version=${{ env.VERSION }} -o ./artifacts/nuget`
    - Upload `nuget-package` artifact (`./artifacts/nuget/*.nupkg`).
 4. **`publish` Matrix Job:**
-   - Target RID matrix: `win-x64` (`windows-latest`), `win-arm64` (`windows-latest`), `linux-x64` (`ubuntu-latest`), `linux-arm64` (`ubuntu-24.04-arm`), `osx-x64` (`macos-15-intel`), `osx-arm64` (`macos-latest`). *(Pin `osx-x64` strictly to `macos-15-intel` and `osx-arm64` strictly to `macos-latest` because Native AOT does not cross-compile architectures on macOS with default linker flags.)*
+   - Target RID matrix: `win-x64` (`windows-latest`), `win-arm64` (`windows-latest`), `linux-x64` (`ubuntu-latest`), `linux-arm64` (`ubuntu-24.04-arm`), `osx-x64` (`macos-15-intel`), `osx-arm64` (`macos-15-intel`). *(Both `osx-x64` and `osx-arm64` run on `macos-15-intel` because `macos-latest` has very low availability.)*
    - On Linux runners, install Native AOT + Avalonia X11 dependencies: `clang lldb zlib1g-dev libicu-dev libssl-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcb-dri3-dev libfontconfig1-dev`.
-   - Publish **Web Bundle (`NightCodeForge-Web-${{ matrix.rid }}.zip`)**:
+   - Publish **Web Bundle (`NightCodeForge-Web-${{ matrix.rid }}.zip`)** matching the exact `publish.ps1` installation layout:
      - `dotnet publish src/NightCodeForge.Web/NightCodeForge.Web.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:DebugType=none -p:Version=${{ env.VERSION }}`
-     - `dotnet publish src/NightCodeForge.Launcher/NightCodeForge.Launcher.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true -p:DebugType=none -p:Version=${{ env.VERSION }}` (places `ncf-web` / `ncf-web.exe` at the archive root for `IReleaseManager` fan-out).
-     - Include `skills/`, `VERSION`, `README.md`, `LICENSE`.
+     - `dotnet publish src/NightCodeForge.Launcher/NightCodeForge.Launcher.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true -p:DebugType=none -p:Version=${{ env.VERSION }}` staged as `nightcodeforge-web(.exe)` at archive root, `bin/nightcodeforge-web(.exe)` + `bin/ncf-web(.exe)`, and on Windows the WSL/Git Bash `bin/nightcodeforge-web` shim (with no `ncf-web(.exe)` at archive root).
+     - Generate portable `appsettings.Production.json` (relative `data/` SQLite connection strings, `logs`, `http://localhost:5270`) and include `skills/`, `VERSION`, `README.md`, `LICENSE`.
    - Publish **Native AOT Installer Bundle (`NightCodeForge-Setup-${{ matrix.rid }}.zip`)**:
      - `dotnet publish src/NightCodeForge.Installer/NightCodeForge.Installer.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true -p:StripSymbols=true -p:DebugType=none -p:DebugSymbols=false -p:Version=${{ env.VERSION }}`
      - Include `README.md`, `LICENSE`.

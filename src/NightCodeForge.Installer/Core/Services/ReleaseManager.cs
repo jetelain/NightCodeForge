@@ -17,7 +17,7 @@ using NightCodeForge.Installer.Core.Serialization;
 /// <summary>
 /// Production release manager handling Online GitHub Releases, Air-Gapped Local Bundles,
 /// resumable downloads, SHA-256 verification, <c>.zip</c>/<c>.tar.gz</c> extraction,
-/// atomic <c>.backup</c> swap/rollback, launcher fan-out, and OllamaRouter setup.
+/// atomic <c>.backup</c> swap/rollback, and post-extract configuration for NightCodeForge and OllamaRouter.
 /// </summary>
 public sealed class ReleaseManager : IReleaseManager
 {
@@ -829,7 +829,7 @@ public sealed class ReleaseManager : IReleaseManager
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        Report(progress, StepConfigure, "Configuring appsettings, launchers, PATH, and OS registration...", InstallerLogLevel.Info, 85);
+        Report(progress, StepConfigure, "Configuring appsettings, PATH, and OS registration...", InstallerLogLevel.Info, 85);
 
         var configDir = Path.Combine(installDir, InstallerConstants.ConfigDirectoryName);
         var dataDir = Path.Combine(installDir, InstallerConstants.DataDirectoryName);
@@ -853,8 +853,6 @@ public sealed class ReleaseManager : IReleaseManager
             await UpdateNightCodeForgeAppSettingsAsync(filePath, dbPath, hangfireDbPath, logsPath, preservedUrls, cancellationToken)
                 .ConfigureAwait(false);
         }
-
-        FanOutNightCodeForgeLaunchers(installDir, binDir);
 
         if (_platform.Platform != HostPlatformType.Windows)
         {
@@ -899,7 +897,7 @@ public sealed class ReleaseManager : IReleaseManager
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        Report(progress, StepConfigure, "Configuring OllamaRouter state/logs, shims, PATH, and ollamarouter:// URI handler...", InstallerLogLevel.Info, 85);
+        Report(progress, StepConfigure, "Configuring OllamaRouter state/logs, PATH, and ollamarouter:// URI handler...", InstallerLogLevel.Info, 85);
 
         var configDir = Path.Combine(installDir, InstallerConstants.ConfigDirectoryName);
         var stateDir = Path.Combine(installDir, InstallerConstants.StateDirectoryName);
@@ -917,8 +915,6 @@ public sealed class ReleaseManager : IReleaseManager
             stateDir.Replace('\\', '/'),
             logsDir.Replace('\\', '/'),
             cancellationToken).ConfigureAwait(false);
-
-        WriteOllamaRouterLauncherShims(installDir, binDir);
 
         if (_platform.Platform != HostPlatformType.Windows)
         {
@@ -944,117 +940,6 @@ public sealed class ReleaseManager : IReleaseManager
             : InstallerConstants.OllamaRouterAppUnix;
         var appExePath = Path.Combine(installDir, appExeName);
         await _osIntegration.RegisterOllamaRouterProtocolAsync(appExePath, cancellationToken).ConfigureAwait(false);
-    }
-
-    private void FanOutNightCodeForgeLaunchers(string installDir, string binDir)
-    {
-        var isWindows = _platform.Platform == HostPlatformType.Windows;
-        var shortName = isWindows ? InstallerConstants.LauncherShortWindows : InstallerConstants.LauncherShortUnix;
-        var longName = isWindows ? InstallerConstants.LauncherLongWindows : InstallerConstants.LauncherLongUnix;
-
-        var rootShortPath = Path.Combine(installDir, shortName);
-        var rootLongPath = Path.Combine(installDir, longName);
-        var sourceLauncher = File.Exists(rootShortPath)
-            ? rootShortPath
-            : File.Exists(rootLongPath)
-                ? rootLongPath
-                : null;
-
-        if (sourceLauncher is not null)
-        {
-            var targets = new[]
-            {
-                rootLongPath,
-                Path.Combine(binDir, longName),
-                Path.Combine(binDir, shortName)
-            };
-
-            foreach (var target in targets)
-            {
-                if (!string.Equals(Path.GetFullPath(sourceLauncher), Path.GetFullPath(target), StringComparison.OrdinalIgnoreCase))
-                {
-                    File.Copy(sourceLauncher, target, overwrite: true);
-                }
-            }
-
-            if (File.Exists(rootShortPath) &&
-                !string.Equals(Path.GetFullPath(rootShortPath), Path.GetFullPath(rootLongPath), StringComparison.OrdinalIgnoreCase))
-            {
-                File.Delete(rootShortPath);
-            }
-        }
-
-        foreach (var legacyCmd in InstallerConstants.LegacyNightCodeForgeCmdLaunchers)
-        {
-            DeleteFileIfExists(Path.Combine(installDir, legacyCmd));
-            DeleteFileIfExists(Path.Combine(binDir, legacyCmd));
-        }
-
-        if (isWindows)
-        {
-            var bashShimPath = Path.Combine(binDir, InstallerConstants.LauncherLongUnix);
-            var bashShim =
-                "#!/usr/bin/env bash\n" +
-                "DIR=\"$( cd \"$( dirname \"${BASH_SOURCE[0]}\" )\" && pwd )\"\n" +
-                $"exec \"$DIR/{shortName}\" \"$@\"\n";
-            File.WriteAllText(bashShimPath, bashShim, new UTF8Encoding(false));
-        }
-    }
-
-    private void WriteOllamaRouterLauncherShims(string installDir, string binDir)
-    {
-        var utf8NoBom = new UTF8Encoding(false);
-        DeleteFileIfExists(Path.Combine(installDir, InstallerConstants.LegacyOllamaRouterWebCmd));
-
-        if (_platform.Platform == HostPlatformType.Windows)
-        {
-            var installCmd =
-                "@echo off\r\n" +
-                "setlocal\r\n" +
-                "cd /d \"%~dp0\"\r\n" +
-                $"\"%~dp0{InstallerConstants.OllamaRouterCliWindows}\" %*\r\n";
-            File.WriteAllText(Path.Combine(installDir, InstallerConstants.OllamaRouterCliShimCmd), installCmd, Encoding.ASCII);
-
-            var binCliCmd =
-                "@echo off\r\n" +
-                "setlocal\r\n" +
-                "cd /d \"%~dp0..\"\r\n" +
-                $"\"%~dp0..\\{InstallerConstants.OllamaRouterCliWindows}\" %*\r\n";
-            File.WriteAllText(Path.Combine(binDir, InstallerConstants.OllamaRouterCliShimCmd), binCliCmd, Encoding.ASCII);
-
-            var binAppCmd =
-                "@echo off\r\n" +
-                "setlocal\r\n" +
-                "cd /d \"%~dp0..\"\r\n" +
-                $"\"%~dp0..\\{InstallerConstants.OllamaRouterAppWindows}\" %*\r\n";
-            File.WriteAllText(Path.Combine(binDir, InstallerConstants.OllamaRouterAppShimCmd), binAppCmd, Encoding.ASCII);
-
-            var binBash =
-                "#!/usr/bin/env bash\n" +
-                "DIR=\"$( cd \"$( dirname \"${BASH_SOURCE[0]}\" )\" && pwd )\"\n" +
-                "cd \"$DIR/..\"\n" +
-                $"if [ -f \"$DIR/../{InstallerConstants.OllamaRouterCliWindows}\" ]; then\n" +
-                $"    \"$DIR/../{InstallerConstants.OllamaRouterCliWindows}\" \"$@\"\n" +
-                $"elif [ -f \"$DIR/../{InstallerConstants.OllamaRouterCliUnix}\" ]; then\n" +
-                $"    \"$DIR/../{InstallerConstants.OllamaRouterCliUnix}\" \"$@\"\n" +
-                "fi\n";
-            File.WriteAllText(Path.Combine(binDir, InstallerConstants.OllamaRouterCliUnix), binBash, utf8NoBom);
-            return;
-        }
-
-        var unixCliWrapper =
-            "#!/usr/bin/env bash\n" +
-            "DIR=\"$( cd \"$( dirname \"${BASH_SOURCE[0]}\" )\" && pwd )\"\n" +
-            "cd \"$DIR/..\"\n" +
-            $"exec \"$DIR/../{InstallerConstants.OllamaRouterCliUnix}\" \"$@\"\n";
-        File.WriteAllText(Path.Combine(binDir, InstallerConstants.OllamaRouterCliUnix), unixCliWrapper, utf8NoBom);
-
-        var unixAppWrapper =
-            "#!/usr/bin/env bash\n" +
-            "DIR=\"$( cd \"$( dirname \"${BASH_SOURCE[0]}\" )\" && pwd )\"\n" +
-            "cd \"$DIR/..\"\n" +
-            $"exec \"$DIR/../{InstallerConstants.OllamaRouterAppUnix}\" \"$@\"\n";
-        File.WriteAllText(Path.Combine(binDir, InstallerConstants.OllamaRouterAppUnix), unixAppWrapper, utf8NoBom);
     }
 
     private bool CopySelfToInstallDirectory(string installDir)

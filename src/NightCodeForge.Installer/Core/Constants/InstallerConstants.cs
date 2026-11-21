@@ -75,9 +75,6 @@ public static class InstallerConstants
     public const string OllamaRouterCliUnix = "ollamarouter";
     public const string OllamaRouterAppWindows = "ollamarouter-app.exe";
     public const string OllamaRouterAppUnix = "ollamarouter-app";
-    public const string OllamaRouterCliShimCmd = "ollamarouter.cmd";
-    public const string OllamaRouterAppShimCmd = "ollamarouter-app.cmd";
-    public const string LegacyOllamaRouterWebCmd = "ollamarouter-web.cmd";
 
     public const string AppSettingsFileName = "appsettings.json";
     public const string AppSettingsProductionFileName = "appsettings.Production.json";
@@ -204,16 +201,9 @@ public static class InstallerConstants
         LogsDirectoryName
     ];
 
-    public static readonly string[] LegacyNightCodeForgeCmdLaunchers =
-    [
-        "nightcodeforge-web.cmd",
-        "ncf-web.cmd"
-    ];
-
     public static readonly string[] NightCodeForgeUnixExecutables =
     [
         WebExeUnix,
-        LauncherShortUnix,
         LauncherLongUnix,
         InstallerExeUnix
     ];

@@ -81,7 +81,7 @@ jobs:
             rid: linux-arm64
           - os: macos-15-intel
             rid: osx-x64
-          - os: macos-latest
+          - os: macos-15-intel
             rid: osx-arm64
 
     steps:
@@ -107,7 +107,7 @@ jobs:
           RID: ${{ matrix.rid }}
         run: |
           set -euo pipefail
-          mkdir -p ./dist/web ./dist/launcher ./dist/setup ./artifacts
+          mkdir -p ./dist/web ./dist/web/bin ./dist/launcher ./dist/setup ./artifacts
 
           dotnet publish src/NightCodeForge.Web/NightCodeForge.Web.csproj \
             -c Release \
@@ -129,11 +129,37 @@ jobs:
             -o ./dist/launcher
 
           if [[ "${RID}" == win-* ]]; then
-            cp ./dist/launcher/ncf-web.exe ./dist/web/ncf-web.exe
+            cp ./dist/launcher/ncf-web.exe ./dist/web/nightcodeforge-web.exe
+            cp ./dist/launcher/ncf-web.exe ./dist/web/bin/nightcodeforge-web.exe
+            cp ./dist/launcher/ncf-web.exe ./dist/web/bin/ncf-web.exe
+            printf '%s\n' \
+              '#!/usr/bin/env bash' \
+              'DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"' \
+              'exec "$DIR/ncf-web.exe" "$@"' \
+              > ./dist/web/bin/nightcodeforge-web
           else
-            cp ./dist/launcher/ncf-web ./dist/web/ncf-web
-            chmod +x ./dist/web/ncf-web
+            cp ./dist/launcher/ncf-web ./dist/web/nightcodeforge-web
+            cp ./dist/launcher/ncf-web ./dist/web/bin/nightcodeforge-web
+            cp ./dist/launcher/ncf-web ./dist/web/bin/ncf-web
+            chmod +x ./dist/web/NightCodeForge.Web ./dist/web/nightcodeforge-web ./dist/web/bin/nightcodeforge-web ./dist/web/bin/ncf-web
           fi
+
+          printf '%s\n' \
+            '{' \
+            '  "ConnectionStrings": {' \
+            '    "DefaultConnection": "Data Source=data/nightcodeforge.db;",' \
+            '    "HangfireConnection": "Data Source=data/nightcodeforge_hangfire.db;"' \
+            '  },' \
+            '  "Logging": {' \
+            '    "LogLevel": {' \
+            '      "Default": "Warning",' \
+            '      "NightCodeForge": "Information"' \
+            '    },' \
+            '    "LogsDirectory": "logs"' \
+            '  },' \
+            '  "Urls": "http://localhost:5270"' \
+            '}' \
+            > ./dist/web/appsettings.Production.json
 
           find ./dist/web -type f -name '*.pdb' -delete
           if [[ -d ./skills ]]; then

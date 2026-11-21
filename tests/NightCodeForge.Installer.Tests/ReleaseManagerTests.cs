@@ -62,7 +62,7 @@ public sealed class ReleaseManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task DeployNightCodeForgeAsync_LegacyInPlaceUpgrade_PreservesUserFilesAdaptsConfigFansOutLaunchersAndRestarts()
+    public async Task DeployNightCodeForgeAsync_LegacyInPlaceUpgrade_PreservesUserFilesAdaptsConfigDeploysArchiveLayoutAndRestarts()
     {
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var installDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "NightCodeForge");
@@ -88,8 +88,12 @@ public sealed class ReleaseManagerTests : IDisposable
         var sha = TestArchiveHelper.CreateZipArchive(archivePath, new Dictionary<string, string>
         {
             ["NightCodeForge.Web.exe"] = "new-web-v2",
-            ["ncf-web.exe"] = "new-launcher-v2",
+            ["nightcodeforge-web.exe"] = "new-launcher-v2",
+            ["bin/nightcodeforge-web.exe"] = "new-launcher-v2",
+            ["bin/ncf-web.exe"] = "new-launcher-v2",
+            ["bin/nightcodeforge-web"] = "#!/usr/bin/env bash\nexec \"$( dirname \"${BASH_SOURCE[0]}\" )/ncf-web.exe\" \"$@\"\n",
             ["appsettings.json"] = """{"Logging":{"LogLevel":{"Default":"Warning"}},"AllowedHosts":"*"}""",
+            ["appsettings.Production.json"] = """{"ConnectionStrings":{"DefaultConnection":"Data Source=data/nightcodeforge.db;","HangfireConnection":"Data Source=data/nightcodeforge_hangfire.db;"},"Logging":{"LogLevel":{"Default":"Warning","NightCodeForge":"Information"},"LogsDirectory":"logs"},"Urls":"http://localhost:5270"}""",
             ["skills/ncf-backlog/SKILL.md"] = "# Skill",
             ["VERSION"] = "2.0.0\n",
             ["README.md"] = "readme",
@@ -122,12 +126,12 @@ public sealed class ReleaseManagerTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(installDir, "wks")));
         Assert.True(File.Exists(Path.Combine(installDir, "launcher.conf")));
 
-        // Launcher fan-out and cleanup
+        // Archive layout deployed directly and legacy .cmd removed by atomic swap
         Assert.False(File.Exists(Path.Combine(installDir, "ncf-web.exe")));
         Assert.False(File.Exists(Path.Combine(installDir, "nightcodeforge-web.cmd")));
-        Assert.True(File.Exists(Path.Combine(installDir, "nightcodeforge-web.exe")));
-        Assert.True(File.Exists(Path.Combine(installDir, "bin", "nightcodeforge-web.exe")));
-        Assert.True(File.Exists(Path.Combine(installDir, "bin", "ncf-web.exe")));
+        Assert.Equal("new-launcher-v2", File.ReadAllText(Path.Combine(installDir, "nightcodeforge-web.exe")));
+        Assert.Equal("new-launcher-v2", File.ReadAllText(Path.Combine(installDir, "bin", "nightcodeforge-web.exe")));
+        Assert.Equal("new-launcher-v2", File.ReadAllText(Path.Combine(installDir, "bin", "ncf-web.exe")));
         Assert.True(File.Exists(Path.Combine(installDir, "bin", "nightcodeforge-web")));
         Assert.True(File.Exists(Path.Combine(installDir, InstallerConstants.InstallerExeWindows)));
 
@@ -163,6 +167,8 @@ public sealed class ReleaseManagerTests : IDisposable
                 ["ollamarouter-server"] = "server-elf",
                 ["ollamarouter"] = "cli-elf",
                 ["ollamarouter-app"] = "app-elf",
+                ["bin/ollamarouter"] = "#!/usr/bin/env bash\nexec \"$( dirname \"${BASH_SOURCE[0]}\" )/../ollamarouter\" \"$@\"\n",
+                ["bin/ollamarouter-app"] = "#!/usr/bin/env bash\nexec \"$( dirname \"${BASH_SOURCE[0]}\" )/../ollamarouter-app\" \"$@\"\n",
                 ["appsettings.Production.json"] = "// JSONC comment\n{\n  \"OllamaRouter\": {\n    \"BindAddress\": \"http://+:11434/\"\n  }\n}\n",
                 ["VERSION"] = "1.5.0\n"
             },
@@ -180,6 +186,12 @@ public sealed class ReleaseManagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(routerDir, "bin", "ollamarouter")));
         Assert.True(File.Exists(Path.Combine(routerDir, "bin", "ollamarouter-app")));
 
+        platform.Verify(p => p.SetUnixExecutablePermissions(Path.Combine(routerDir, "ollamarouter-server")), Times.Once);
+        platform.Verify(p => p.SetUnixExecutablePermissions(Path.Combine(routerDir, "ollamarouter")), Times.Once);
+        platform.Verify(p => p.SetUnixExecutablePermissions(Path.Combine(routerDir, "ollamarouter-app")), Times.Once);
+        platform.Verify(p => p.SetUnixExecutablePermissions(Path.Combine(routerDir, "bin", "ollamarouter")), Times.Once);
+        platform.Verify(p => p.SetUnixExecutablePermissions(Path.Combine(routerDir, "bin", "ollamarouter-app")), Times.Once);
+
         using var prodDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(routerDir, "appsettings.Production.json")));
         var stateDir = prodDoc.RootElement.GetProperty("OllamaRouter").GetProperty("StateDirectory").GetString();
         Assert.Equal(Path.Combine(routerDir, "state").Replace('\\', '/'), stateDir);
@@ -191,6 +203,80 @@ public sealed class ReleaseManagerTests : IDisposable
         processControl.Verify(
             c => c.StopProcessesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task DeployOllamaRouterAsync_WindowsZip_DeploysArchiveBinShimsPreservesUserDataAndRegistersProtocol()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var routerDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "OllamaRouter");
+        var bundleDir = _workspace.CreateSubdirectory("or-win-bundle");
+
+        // Pre-populate existing installation with user state/config/logs and legacy cmd.
+        Directory.CreateDirectory(Path.Combine(routerDir, "config"));
+        Directory.CreateDirectory(Path.Combine(routerDir, "state"));
+        Directory.CreateDirectory(Path.Combine(routerDir, "logs"));
+        File.WriteAllText(Path.Combine(routerDir, "config", "config.json"), """{"OllamaRouter":{"Targets":[]}}""");
+        File.WriteAllText(Path.Combine(routerDir, "state", "targets.json"), """{"targets":[]}""");
+        File.WriteAllText(Path.Combine(routerDir, "logs", "old.log"), "existing-log");
+        File.WriteAllText(Path.Combine(routerDir, "ollamarouter-web.cmd"), "legacy");
+
+        var archivePath = Path.Combine(bundleDir, "OllamaRouter-win-x64.zip");
+        var rootCmdContent = "@echo off\r\nsetlocal\r\ncd /d \"%~dp0\"\r\n\"%~dp0ollamarouter.exe\" %*\r\n";
+        var binCliCmdContent = "@echo off\r\nsetlocal\r\ncd /d \"%~dp0..\"\r\n\"%~dp0..\\ollamarouter.exe\" %*\r\n";
+        var binAppCmdContent = "@echo off\r\nsetlocal\r\ncd /d \"%~dp0..\"\r\n\"%~dp0..\\ollamarouter-app.exe\" %*\r\n";
+        var binBashContent = "#!/usr/bin/env bash\nDIR=\"$( cd \"$( dirname \"${BASH_SOURCE[0]}\" )\" && pwd )\"\ncd \"$DIR/..\"\n\"$DIR/../ollamarouter.exe\" \"$@\"\n";
+
+        var sha = TestArchiveHelper.CreateZipArchive(archivePath, new Dictionary<string, string>
+        {
+            ["ollamarouter-server.exe"] = "server-v2",
+            ["ollamarouter.exe"] = "cli-v2",
+            ["ollamarouter-app.exe"] = "app-v2",
+            ["ollamarouter.cmd"] = rootCmdContent,
+            ["bin/ollamarouter.cmd"] = binCliCmdContent,
+            ["bin/ollamarouter-app.cmd"] = binAppCmdContent,
+            ["bin/ollamarouter"] = binBashContent,
+            ["appsettings.json"] = """{"AllowedHosts":"*"}""",
+            ["appsettings.Production.json"] = """{"OllamaRouter":{"StateDirectory":"state"},"Logging":{"LogLevel":{"Default":"Warning","OllamaRouter":"Information"},"LogsDirectory":"logs"}}""",
+            ["VERSION"] = "2.1.0\n",
+            ["README.md"] = "readme",
+            ["LICENSE"] = "MIT"
+        });
+        File.WriteAllText(Path.Combine(bundleDir, "SHA256SUMS.txt"), $"{sha}  OllamaRouter-win-x64.zip\n");
+
+        using var httpClient = new HttpClient(new StubHttpMessageHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+        var sut = CreateSut(httpClient, platform.Object, out _, out _, out var registry);
+
+        var asset = await sut.ResolveLatestOllamaRouterReleaseAsync(new InstallSourceOptions(InstallSourceMode.AirGappedBundle, bundleDir));
+        var deployment = await sut.DeployOllamaRouterAsync(asset, targetInstallDirectory: null);
+
+        Assert.Equal("2.1.0", deployment.Version);
+        Assert.Equal(routerDir, deployment.InstallDirectory);
+
+        // User state/config/logs preserved; legacy cmd swept away by atomic swap
+        Assert.Equal("""{"OllamaRouter":{"Targets":[]}}""", File.ReadAllText(Path.Combine(routerDir, "config", "config.json")));
+        Assert.Equal("""{"targets":[]}""", File.ReadAllText(Path.Combine(routerDir, "state", "targets.json")));
+        Assert.Equal("existing-log", File.ReadAllText(Path.Combine(routerDir, "logs", "old.log")));
+        Assert.False(File.Exists(Path.Combine(routerDir, "ollamarouter-web.cmd")));
+
+        // Shims come straight from the archive unchanged
+        Assert.Equal(rootCmdContent, File.ReadAllText(Path.Combine(routerDir, "ollamarouter.cmd")));
+        Assert.Equal(binCliCmdContent, File.ReadAllText(Path.Combine(routerDir, "bin", "ollamarouter.cmd")));
+        Assert.Equal(binAppCmdContent, File.ReadAllText(Path.Combine(routerDir, "bin", "ollamarouter-app.cmd")));
+        Assert.Equal(binBashContent, File.ReadAllText(Path.Combine(routerDir, "bin", "ollamarouter")));
+
+        // StateDirectory and LogsDirectory adapted to absolute paths
+        using var prodDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(routerDir, "appsettings.Production.json")));
+        Assert.Equal(Path.Combine(routerDir, "state").Replace('\\', '/'), prodDoc.RootElement.GetProperty("OllamaRouter").GetProperty("StateDirectory").GetString());
+        Assert.Equal(Path.Combine(routerDir, "logs").Replace('\\', '/'), prodDoc.RootElement.GetProperty("Logging").GetProperty("LogsDirectory").GetString());
+
+        // bin/ registered in User PATH and ollamarouter:// URI protocol registered
+        Assert.Contains(Path.Combine(routerDir, "bin"), platform.Object.GetUserPathVariable()!, StringComparison.OrdinalIgnoreCase);
+        registry.Verify(
+            r => r.WriteCurrentUserValues(
+                InstallerConstants.WindowsOllamaRouterProtocolSubKey,
+                It.IsAny<IReadOnlyDictionary<string, object>>()),
+            Times.Once);
     }
 
     [Fact]
@@ -272,7 +358,9 @@ public sealed class ReleaseManagerTests : IDisposable
         var sha = TestArchiveHelper.CreateZipArchive(sourceZip, new Dictionary<string, string>
         {
             ["NightCodeForge.Web.exe"] = "resumed-web-exe",
-            ["ncf-web.exe"] = "resumed-launcher-exe",
+            ["nightcodeforge-web.exe"] = "resumed-launcher-exe",
+            ["bin/nightcodeforge-web.exe"] = "resumed-launcher-exe",
+            ["bin/ncf-web.exe"] = "resumed-launcher-exe",
             ["VERSION"] = "3.0.0"
         });
         var fullBytes = await File.ReadAllBytesAsync(sourceZip);
@@ -438,7 +526,9 @@ public sealed class ReleaseManagerTests : IDisposable
         TestArchiveHelper.CreateZipArchive(archivePath, new Dictionary<string, string>
         {
             ["NightCodeForge.Web.exe"] = "fresh-web",
-            ["ncf-web.exe"] = "fresh-launcher",
+            ["nightcodeforge-web.exe"] = "fresh-launcher",
+            ["bin/nightcodeforge-web.exe"] = "fresh-launcher",
+            ["bin/ncf-web.exe"] = "fresh-launcher",
             ["VERSION"] = "1.0.0"
         });
 
@@ -460,7 +550,9 @@ public sealed class ReleaseManagerTests : IDisposable
         var sha = TestArchiveHelper.CreateZipArchive(sourceZip, new Dictionary<string, string>
         {
             ["NightCodeForge.Web.exe"] = "slash-web-exe",
-            ["ncf-web.exe"] = "slash-launcher-exe",
+            ["nightcodeforge-web.exe"] = "slash-launcher-exe",
+            ["bin/nightcodeforge-web.exe"] = "slash-launcher-exe",
+            ["bin/ncf-web.exe"] = "slash-launcher-exe",
             ["VERSION"] = "4.1.0"
         });
         var fullBytes = await File.ReadAllBytesAsync(sourceZip);
@@ -594,7 +686,9 @@ public sealed class ReleaseManagerTests : IDisposable
         var sha = TestArchiveHelper.CreateZipArchive(sourceZip, new Dictionary<string, string>
         {
             ["NightCodeForge.Web.exe"] = "fresh-after-mismatch",
-            ["ncf-web.exe"] = "launcher",
+            ["nightcodeforge-web.exe"] = "launcher",
+            ["bin/nightcodeforge-web.exe"] = "launcher",
+            ["bin/ncf-web.exe"] = "launcher",
             ["VERSION"] = "5.0.0"
         });
         var fullBytes = await File.ReadAllBytesAsync(sourceZip);
