@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wvm="using:NightCodeForge.Installer.ViewModels.Wizard"
+             x:Class="NightCodeForge.Installer.Views.Wizard.WizardStep3SoftwareView"
+             x:DataType="wvm:WizardStep3SoftwareViewModel">
+
+  <Grid RowDefinitions="Auto,Auto,*" RowSpacing="12">
+
+    <Border Grid.Row="0"
+            Padding="14"
+            CornerRadius="8"
+            Background="{DynamicResource NightCodeBgSurface}"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            BorderThickness="1">
+      <StackPanel Spacing="10">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Spacing="2">
+            <TextBlock Text="Software, Companion NuGet Tools &amp; OS Registration" FontSize="14" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding StatusMessage}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+          </StackPanel>
+          <Button Grid.Column="1"
+                  Content="Install / Retry"
+                  Classes="Primary"
+                  Command="{Binding RunInstallationCommand}"
+                  IsEnabled="{Binding !IsRunning}" />
+        </Grid>
+
+        <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}" Height="8" />
+
+        <CheckBox Content="Create Desktop shortcut alongside Start Menu / XDG registration"
+                  IsChecked="{Binding CreateDesktopShortcut}"
+                  IsEnabled="{Binding !IsRunning}" />
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Row="1"
+            IsVisible="{Binding HasError}"
+            Padding="12"
+            CornerRadius="8"
+            Background="{DynamicResource SemiColorDangerLight}"
+            BorderBrush="{DynamicResource SemiColorDanger}"
+            BorderThickness="1">
+      <TextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap" />
+    </Border>
+
+    <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="12">
+      <Border Grid.Column="0"
+              Padding="12"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Deployed Components" FontWeight="SemiBold" Margin="0,0,0,8" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding SummaryLines}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                  <Border Padding="8" Margin="0,0,0,6" CornerRadius="6" Background="{DynamicResource NightCodeBgInput}">
+                    <TextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" />
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Column="1"
+              Padding="12"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgInput}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Installation Log" FontWeight="SemiBold" Margin="0,0,0,8" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding LogLines}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                  <TextBlock Text="{Binding}" FontFamily="Consolas,Menlo,monospace" FontSize="11" TextWrapping="Wrap" Margin="0,1" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</UserControl>

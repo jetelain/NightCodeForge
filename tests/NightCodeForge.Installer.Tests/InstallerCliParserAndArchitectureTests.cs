@@ -1,8 +1,11 @@
 namespace NightCodeForge.Installer.Tests;
 
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Avalonia;
 using NightCodeForge.Installer.Cli;
+using NightCodeForge.Installer.Converters;
 using NightCodeForge.Installer.Core.Models;
 using NightCodeForge.Installer.Core.Services;
 
@@ -123,5 +126,24 @@ public sealed class InstallerArchitectureTests
         using var container = InstallerServiceContainer.CreateDefault();
         Assert.NotNull(container.OllamaRouterRecommendationSync);
         Assert.NotNull(container.OllamaRouterSetupHandoff);
+        Assert.NotNull(container.UpgradeService);
+        Assert.NotNull(container.HostAppControl);
+        Assert.NotNull(container.ForgeDoctor);
+    }
+
+    [Fact]
+    public void BuildAvaloniaApp_AndConverters_AreConfiguredProperly()
+    {
+        var builder = Program.BuildAvaloniaApp();
+        Assert.NotNull(builder);
+        Assert.Equal(typeof(App), builder.ApplicationType);
+
+        Assert.Equal(true, IntEqualityToVisibilityConverter.Instance.Convert(2, typeof(bool), "2", CultureInfo.InvariantCulture));
+        Assert.Equal(false, IntEqualityToVisibilityConverter.Instance.Convert(1, typeof(bool), "2", CultureInfo.InvariantCulture));
+        Assert.Equal(true, UiModeToVisibilityConverter.Instance.Convert(InstallerUiMode.MaintenanceHub, typeof(bool), "MaintenanceHub", CultureInfo.InvariantCulture));
+        Assert.Equal(false, UiModeToVisibilityConverter.Instance.Convert(InstallerUiMode.OobeWizard, typeof(bool), "MaintenanceHub", CultureInfo.InvariantCulture));
+        Assert.NotNull(DoctorStatusToBrushConverter.Instance.Convert(DoctorCheckStatus.Pass, typeof(object), null, CultureInfo.InvariantCulture));
+        Assert.NotNull(ProvisioningStatusToBrushConverter.Instance.Convert(ProvisioningStatus.RebootRequired, typeof(object), null, CultureInfo.InvariantCulture));
+        Assert.NotNull(BoolToStatusBrushConverter.Instance.Convert(true, typeof(object), null, CultureInfo.InvariantCulture));
     }
 }

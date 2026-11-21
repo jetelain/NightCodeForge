@@ -220,3 +220,47 @@ public sealed record RouterRoleRecommendationsSummary(
     DateTimeOffset? GeneratedAt,
     string ConfigFilePath,
     IReadOnlyList<RouterRoleAssignmentSummary> Roles);
+
+public enum InstallerUiMode
+{
+    OobeWizard,
+    MaintenanceHub,
+    InteractiveUninstaller
+}
+
+public enum DoctorCheckStatus
+{
+    Pass,
+    Warning,
+    Fail
+}
+
+public sealed record ForgeDoctorCheckItem(
+    string Name,
+    DoctorCheckStatus Status,
+    string Summary,
+    string? Detail);
+
+public sealed record ForgeDoctorReport(
+    DateTimeOffset CheckedAtUtc,
+    IReadOnlyList<ForgeDoctorCheckItem> Checks,
+    int PassedCount,
+    int WarningCount,
+    int FailedCount);
+
+public sealed record UpgradeAvailabilityResult(
+    InstallationDiscoveryResult Discovery,
+    InstallSourceOptions Source,
+    ComponentReleaseAsset? NightCodeForgeRelease,
+    ComponentReleaseAsset? OllamaRouterRelease,
+    bool IsNightCodeForgeUpdateAvailable,
+    bool IsOllamaRouterUpdateAvailable,
+    bool CanUpgradeFromBundle,
+    string? ResolutionWarning);
+
+public sealed record AllComponentUpgradeResult(
+    bool Succeeded,
+    ReleaseDeploymentResult? NightCodeForgeDeployment,
+    ReleaseDeploymentResult? OllamaRouterDeployment,
+    IReadOnlyList<CompanionToolInstallOutcome> CompanionToolOutcomes,
+    string? ErrorMessage);

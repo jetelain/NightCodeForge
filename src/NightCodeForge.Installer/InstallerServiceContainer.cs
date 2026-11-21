@@ -15,35 +15,66 @@ public sealed record InstallerCoreAbstractions(
     IWindowsRegistryAccessor Registry);
 
 /// <summary>
+/// Cohesive group of host provisioning, release delivery, and OS integration services.
+/// </summary>
+public sealed record InstallerProvisioningServices(
+    IEnvironmentProvisioner EnvironmentProvisioner,
+    ICompanionNuGetProvisioner NuGetProvisioner,
+    IInstallationDetector InstallationDetector,
+    IOsIntegrationService OsIntegration,
+    IReleaseManager ReleaseManager,
+    IUninstallService UninstallService);
+
+/// <summary>
+/// Cohesive group of OllamaRouter handoff and recommendation sync services.
+/// </summary>
+public sealed record InstallerOllamaRouterServices(
+    IOllamaRouterRecommendationSyncService RecommendationSync,
+    IOllamaRouterSetupHandoffService SetupHandoff);
+
+/// <summary>
+/// Cohesive group of Maintenance Hub upgrade, host process control, and Forge Doctor services.
+/// </summary>
+public sealed record InstallerMaintenanceServices(
+    IAllComponentUpgradeService UpgradeService,
+    IHostAppControlService HostAppControl,
+    IForgeDoctorService ForgeDoctor);
+
+/// <summary>
 /// Composition root constructing the Native AOT installer core services without reflection-based DI containers.
 /// </summary>
 public sealed class InstallerServiceContainer : IDisposable
 {
     public InstallerServiceContainer(
         InstallerCoreAbstractions abstractions,
-        IEnvironmentProvisioner environmentProvisioner,
-        ICompanionNuGetProvisioner nuGetProvisioner,
-        IInstallationDetector installationDetector,
-        IOsIntegrationService osIntegration,
-        IReleaseManager releaseManager,
-        IUninstallService uninstallService,
-        IOllamaRouterRecommendationSyncService ollamaRouterRecommendationSync,
-        IOllamaRouterSetupHandoffService ollamaRouterSetupHandoff)
+        InstallerProvisioningServices provisioning,
+        InstallerOllamaRouterServices ollamaRouter,
+        InstallerMaintenanceServices maintenance)
     {
         ArgumentNullException.ThrowIfNull(abstractions);
+        ArgumentNullException.ThrowIfNull(provisioning);
+        ArgumentNullException.ThrowIfNull(ollamaRouter);
+        ArgumentNullException.ThrowIfNull(maintenance);
+
         HttpClient = abstractions.HttpClient;
         Platform = abstractions.Platform;
         ProcessRunner = abstractions.ProcessRunner;
         ProcessControl = abstractions.ProcessControl;
         Registry = abstractions.Registry;
-        EnvironmentProvisioner = environmentProvisioner ?? throw new ArgumentNullException(nameof(environmentProvisioner));
-        NuGetProvisioner = nuGetProvisioner ?? throw new ArgumentNullException(nameof(nuGetProvisioner));
-        InstallationDetector = installationDetector ?? throw new ArgumentNullException(nameof(installationDetector));
-        OsIntegration = osIntegration ?? throw new ArgumentNullException(nameof(osIntegration));
-        ReleaseManager = releaseManager ?? throw new ArgumentNullException(nameof(releaseManager));
-        UninstallService = uninstallService ?? throw new ArgumentNullException(nameof(uninstallService));
-        OllamaRouterRecommendationSync = ollamaRouterRecommendationSync ?? throw new ArgumentNullException(nameof(ollamaRouterRecommendationSync));
-        OllamaRouterSetupHandoff = ollamaRouterSetupHandoff ?? throw new ArgumentNullException(nameof(ollamaRouterSetupHandoff));
+
+        EnvironmentProvisioner = provisioning.EnvironmentProvisioner;
+        NuGetProvisioner = provisioning.NuGetProvisioner;
+        InstallationDetector = provisioning.InstallationDetector;
+        OsIntegration = provisioning.OsIntegration;
+        ReleaseManager = provisioning.ReleaseManager;
+        UninstallService = provisioning.UninstallService;
+
+        OllamaRouterRecommendationSync = ollamaRouter.RecommendationSync;
+        OllamaRouterSetupHandoff = ollamaRouter.SetupHandoff;
+
+        UpgradeService = maintenance.UpgradeService;
+        HostAppControl = maintenance.HostAppControl;
+        ForgeDoctor = maintenance.ForgeDoctor;
     }
 
     public HttpClient HttpClient { get; }
@@ -59,6 +90,9 @@ public sealed class InstallerServiceContainer : IDisposable
     public IUninstallService UninstallService { get; }
     public IOllamaRouterRecommendationSyncService OllamaRouterRecommendationSync { get; }
     public IOllamaRouterSetupHandoffService OllamaRouterSetupHandoff { get; }
+    public IAllComponentUpgradeService UpgradeService { get; }
+    public IHostAppControlService HostAppControl { get; }
+    public IForgeDoctorService ForgeDoctor { get; }
 
     public static InstallerServiceContainer CreateDefault()
     {
@@ -95,23 +129,43 @@ public sealed class InstallerServiceContainer : IDisposable
             installationDetector,
             nuGetProvisioner,
             osIntegration);
+        var provisioning = new InstallerProvisioningServices(
+            environmentProvisioner,
+            nuGetProvisioner,
+            installationDetector,
+            osIntegration,
+            releaseManager,
+            uninstallService);
+
         var recommendationSync = new OllamaRouterRecommendationSyncService(httpClient, installationDetector);
         var setupHandoff = new OllamaRouterSetupHandoffService(
             platform,
             processRunner,
             installationDetector,
             recommendationSync);
+        var ollamaRouter = new InstallerOllamaRouterServices(recommendationSync, setupHandoff);
 
-        return new InstallerServiceContainer(
-            abstractions,
+        var upgradeService = new AllComponentUpgradeService(
+            installationDetector,
+            releaseManager,
+            nuGetProvisioner,
+            environmentProvisioner,
+            platform);
+        var hostAppControl = new HostAppControlService(
+            platform,
+            processRunner,
+            processControl,
+            installationDetector);
+        var forgeDoctor = new ForgeDoctorService(
+            httpClient,
+            platform,
             environmentProvisioner,
             nuGetProvisioner,
             installationDetector,
-            osIntegration,
-            releaseManager,
-            uninstallService,
-            recommendationSync,
-            setupHandoff);
+            processControl);
+        var maintenance = new InstallerMaintenanceServices(upgradeService, hostAppControl, forgeDoctor);
+
+        return new InstallerServiceContainer(abstractions, provisioning, ollamaRouter, maintenance);
     }
 
     public void Dispose()

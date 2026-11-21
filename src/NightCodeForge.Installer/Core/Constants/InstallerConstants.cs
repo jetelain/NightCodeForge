@@ -130,6 +130,21 @@ public static class InstallerConstants
     public const int ExitCodeError = 1;
     public const int ExitCodeRebootRequired = 3010;
 
+    public const int DefaultWebPort = 5270;
+    public const int DoctorProbeTimeoutSeconds = 5;
+    public const string SqliteFileHeaderMagic = "SQLite format 3\0";
+    public const int WizardStepCount = 5;
+
+    public const string DoctorCheckWsl2 = "WSL2 Subsystem";
+    public const string DoctorCheckDocker = "Docker Daemon";
+    public const string DoctorCheckOllamaRouter = "OllamaRouter Endpoint";
+    public const string DoctorCheckWebPort = "NightCodeForge Web (Port 5270)";
+    public const string DoctorCheckCompanionTools = "Companion Global Tools";
+    public const string DoctorCheckDatabase = "Database Health";
+
+    public const string UiStatusWebRunning = "Running on port 5270";
+    public const string UiStatusWebStopped = "Stopped";
+
     public const int OllamaRouterStopTimeoutSeconds = 30;
     public const int LauncherStopDelayMs = 300;
     public const int WebStopDelayMs = 500;

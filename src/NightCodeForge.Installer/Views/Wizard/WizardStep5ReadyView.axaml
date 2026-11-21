@@ -1,0 +1,78 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wvm="using:NightCodeForge.Installer.ViewModels.Wizard"
+             x:Class="NightCodeForge.Installer.Views.Wizard.WizardStep5ReadyView"
+             x:DataType="wvm:WizardStep5ReadyViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="14">
+
+      <Border Padding="16"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Ready to Forge!" FontSize="18" FontWeight="Bold" />
+          <TextBlock Text="{Binding StatusMessage}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+
+          <Grid ColumnDefinitions="170,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12" Margin="0,6,0,0">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Installed Version:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InstalledVersionDisplay}" FontWeight="SemiBold" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Install Directory:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InstallDirectoryDisplay}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="OllamaRouter:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding OllamaRouterSummary}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="AI Fleet Roles:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AiModelsSummary}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="Companion Tools:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding CompanionToolsSummary}" TextWrapping="Wrap" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <Border Padding="14"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <StackPanel Spacing="8">
+          <TextBlock Text="Desktop &amp; Menu Shortcuts" FontSize="14" FontWeight="SemiBold" />
+          <CheckBox Content="Register Start Menu / Applications Launcher shortcut" IsChecked="{Binding CreateStartMenuShortcut}" />
+          <CheckBox Content="Create Desktop shortcut for NightCodeForge" IsChecked="{Binding CreateDesktopShortcut}" />
+          <Button Content="Apply Shortcut Preferences"
+                  Command="{Binding ApplyShortcutsCommand}"
+                  IsEnabled="{Binding !IsBusy}"
+                  HorizontalAlignment="Left" />
+        </StackPanel>
+      </Border>
+
+      <Border Padding="14"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Launch Applications" FontSize="14" FontWeight="SemiBold" />
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <Button Content="Launch NightCodeForge Web"
+                    Classes="Primary"
+                    Command="{Binding LaunchNightCodeForgeWebCommand}"
+                    IsEnabled="{Binding !IsBusy}" />
+            <Button Content="Launch NightCode Assay"
+                    Command="{Binding LaunchNightCodeAssayCommand}"
+                    IsEnabled="{Binding !IsBusy}" />
+            <Button Content="Open Maintenance Hub"
+                    Command="{Binding OpenMaintenanceHubCommand}"
+                    IsEnabled="{Binding !IsBusy}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

@@ -1,0 +1,235 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:NightCodeForge.Installer.ViewModels"
+             xmlns:m="using:NightCodeForge.Installer.Core.Models"
+             xmlns:conv="using:NightCodeForge.Installer.Converters"
+             x:Class="NightCodeForge.Installer.Views.MaintenanceHubView"
+             x:DataType="vm:MaintenanceHubViewModel">
+
+  <DockPanel>
+
+    <!-- Bottom Status & Activity Strip -->
+    <Border DockPanel.Dock="Bottom"
+            Padding="12,10"
+            Margin="0,12,0,0"
+            CornerRadius="8"
+            Background="{DynamicResource NightCodeBgSurface}"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            BorderThickness="1">
+      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
+        <StackPanel Grid.Column="0" Spacing="4" VerticalAlignment="Center">
+          <TextBlock Text="{Binding StatusMessage}" FontSize="12" TextTrimming="CharacterEllipsis" />
+          <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}" Height="4" IsVisible="{Binding IsBusy}" />
+        </StackPanel>
+        <Button Grid.Column="1" Content="Refresh Status" Command="{Binding RefreshAllCommand}" IsEnabled="{Binding !IsBusy}" />
+        <Button Grid.Column="2" Content="🗑️ Uninstall NightCodeForge..." Classes="Danger" Command="{Binding OpenUninstallerCommand}" IsEnabled="{Binding !IsBusy}" />
+      </Grid>
+    </Border>
+
+    <ScrollViewer>
+      <StackPanel Spacing="12">
+
+        <!-- Application Status Card -->
+        <Border Padding="14"
+                CornerRadius="8"
+                Background="{DynamicResource NightCodeBgSurface}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                BorderThickness="1">
+          <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0" Text="Application Status" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1"
+                         Text="{Binding ServerStatusText}"
+                         FontWeight="SemiBold"
+                         Foreground="{Binding IsWebServerRunning, Converter={x:Static conv:BoolToStatusBrushConverter.Instance}}"
+                         VerticalAlignment="Center" />
+            </Grid>
+
+            <Grid ColumnDefinitions="160,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="4" ColumnSpacing="10">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Install Directory:" Foreground="{DynamicResource SemiColorText2}" />
+              <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InstallDirectory}" TextWrapping="Wrap" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Installed Version:" Foreground="{DynamicResource SemiColorText2}" />
+              <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding InstalledVersion}" FontWeight="SemiBold" />
+                <TextBlock Text="(Adopted legacy publish.ps1 install)"
+                           IsVisible="{Binding IsLegacyPublishInstall}"
+                           FontSize="11"
+                           Foreground="{DynamicResource NightCodeAccentAmberColor}"
+                           VerticalAlignment="Center" />
+              </StackPanel>
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Available Version:" Foreground="{DynamicResource SemiColorText2}" />
+              <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AvailableVersion}" />
+
+              <TextBlock Grid.Row="3" Grid.Column="0" Text="Web UI Endpoint:" Foreground="{DynamicResource SemiColorText2}" />
+              <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding WebUrl}" />
+            </Grid>
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Start Server" Classes="Primary" Command="{Binding StartServerCommand}" IsEnabled="{Binding !IsBusy}" />
+              <Button Content="Stop Server" Command="{Binding StopServerCommand}" IsEnabled="{Binding !IsBusy}" />
+              <Button Content="Open Web UI in Browser" Command="{Binding OpenWebUiCommand}" />
+              <Button Content="Open CLI Terminal" Command="{Binding OpenCliTerminalCommand}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- 1-Click In-Place Upgrade Card -->
+        <Border Padding="14"
+                CornerRadius="8"
+                Background="{DynamicResource NightCodeBgSurface}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                BorderThickness="1">
+          <StackPanel Spacing="10">
+            <TextBlock Text="1-Click In-Place Upgrade (Online &amp; Air-Gapped)" FontSize="14" FontWeight="SemiBold" />
+
+            <StackPanel Orientation="Horizontal" Spacing="20">
+              <RadioButton GroupName="HubInstallSource"
+                           Content="Online (GitHub Releases &amp; NuGet.org)"
+                           IsChecked="{Binding IsOnlineSource}" />
+              <RadioButton GroupName="HubInstallSource"
+                           Content="Air-Gapped / Local Bundle (bundle/)"
+                           IsChecked="{Binding IsAirGappedSource}" />
+            </StackPanel>
+
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding IsAirGappedSource}">
+              <TextBox Grid.Column="0" Text="{Binding BundleDirectory}" PlaceholderText="Path to local air-gapped bundle directory" />
+              <Button Grid.Column="1" Content="Browse Bundle..." Command="{Binding BrowseBundleFolderCommand}" />
+            </Grid>
+
+            <TextBlock Text="{Binding DetectedBundleSummary}"
+                       FontSize="11"
+                       Foreground="{DynamicResource SemiColorText2}"
+                       IsVisible="{Binding IsAirGappedSource}" />
+
+            <TextBlock Text="{Binding UpgradeSummaryText}" FontSize="12" TextWrapping="Wrap" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="{Binding UpgradeButtonLabel}"
+                      Classes="Primary"
+                      Command="{Binding UpgradeAllCommand}"
+                      IsEnabled="{Binding CanExecuteUpgrade}" />
+              <Button Content="🧙 Re-run Full Setup Wizard (Upgrade Mode)"
+                      Command="{Binding RerunSetupWizardCommand}"
+                      IsEnabled="{Binding !IsBusy}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- Companion NuGet Global Tools Card -->
+        <Border Padding="14"
+                CornerRadius="8"
+                Background="{DynamicResource NightCodeBgSurface}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                BorderThickness="1">
+          <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Text="Companion NuGet Global Tools" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Content="Reinstall / Update All Tools" Command="{Binding UpdateAllToolsCommand}" IsEnabled="{Binding !IsBusy}" />
+              <Button Grid.Column="2" Content="Launch NightCode Assay" Command="{Binding LaunchNightCodeAssayCommand}" />
+            </Grid>
+
+            <ItemsControl ItemsSource="{Binding CompanionTools}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:CompanionToolRowViewModel">
+                  <Border Padding="8" Margin="0,0,0,6" CornerRadius="6" Background="{DynamicResource NightCodeBgInput}">
+                    <Grid ColumnDefinitions="130,*,Auto,Auto" ColumnSpacing="10">
+                      <TextBlock Grid.Column="0" Text="{Binding ToolCommand}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding PackageId}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="2"
+                                 Text="{Binding HostStatusText, StringFormat='Host: {0}'}"
+                                 FontSize="12"
+                                 Foreground="{Binding HostInstalled, Converter={x:Static conv:BoolToStatusBrushConverter.Instance}}"
+                                 VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="3"
+                                 Text="{Binding WslStatusText, StringFormat='WSL2: {0}'}"
+                                 FontSize="12"
+                                 IsVisible="{Binding ShowWslColumn}"
+                                 Foreground="{Binding WslInstalled, Converter={x:Static conv:BoolToStatusBrushConverter.Instance}}"
+                                 VerticalAlignment="Center" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- OllamaRouter & AI Fleet Card -->
+        <Border Padding="14"
+                CornerRadius="8"
+                Background="{DynamicResource NightCodeBgSurface}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                BorderThickness="1">
+          <StackPanel Spacing="10">
+            <TextBlock Text="OllamaRouter &amp; AI Fleet" FontSize="14" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding OllamaRouterStatusText}" FontSize="12" />
+            <TextBlock Text="{Binding LastSyncedModelsSummary}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Open OllamaRouter App" Command="{Binding OpenOllamaRouterAppCommand}" />
+              <Button Content="Run OllamaRouter Setup Wizard" Command="{Binding RunOllamaRouterWizardCommand}" IsEnabled="{Binding !IsBusy}" />
+              <Button Content="Sync Role Recommendations" Command="{Binding SyncRecommendationsCommand}" IsEnabled="{Binding !IsBusy}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <!-- Forge Doctor Card -->
+        <Border Padding="14"
+                CornerRadius="8"
+                Background="{DynamicResource NightCodeBgSurface}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                BorderThickness="1">
+          <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Grid.Column="0" Spacing="2">
+                <TextBlock Text="Forge Doctor (System Diagnostics)" FontSize="14" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding DoctorSummaryText}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+              </StackPanel>
+              <Button Grid.Column="1" Content="Run Forge Doctor" Classes="Primary" Command="{Binding RunForgeDoctorCommand}" IsEnabled="{Binding !IsBusy}" />
+            </Grid>
+
+            <ItemsControl ItemsSource="{Binding DoctorChecks}" IsVisible="{Binding HasDoctorReport}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="m:ForgeDoctorCheckItem">
+                  <Border Padding="8" Margin="0,0,0,6" CornerRadius="6" Background="{DynamicResource NightCodeBgInput}">
+                    <StackPanel Spacing="2">
+                      <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding Status}"
+                                   FontWeight="Bold"
+                                   Foreground="{Binding Status, Converter={x:Static conv:DoctorStatusToBrushConverter.Instance}}" />
+                      </Grid>
+                      <TextBlock Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+        <!-- Activity Log -->
+        <Border Padding="12"
+                CornerRadius="8"
+                Background="{DynamicResource NightCodeBgInput}"
+                BorderBrush="{DynamicResource SemiColorBorder}"
+                BorderThickness="1">
+          <StackPanel Spacing="6">
+            <TextBlock Text="Maintenance Activity Log" FontSize="13" FontWeight="SemiBold" />
+            <ItemsControl ItemsSource="{Binding LogLines}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                  <TextBlock Text="{Binding}" FontFamily="Consolas,Menlo,monospace" FontSize="11" TextWrapping="Wrap" Margin="0,1" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </Border>
+
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</UserControl>
