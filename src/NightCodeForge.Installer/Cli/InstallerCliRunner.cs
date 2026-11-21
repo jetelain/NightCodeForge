@@ -26,10 +26,16 @@ public static class InstallerCliRunner
             return InstallerConstants.ExitCodeSuccess;
         }
 
+        if (!plan.RunHeadless)
+        {
+            throw new InvalidOperationException("InstallerCliRunner.RunHeadlessAsync cannot run a GUI startup plan.");
+        }
+
         var progress = new TextWriterProgress(
             output,
             error,
-            quietInfo: plan.CliOptions.UninstallOptions.Quiet && plan.HeadlessAction == InstallerLaunchMode.Uninstall);
+            quietInfo: plan.CliOptions.UninstallOptions.Quiet &&
+                       plan.HeadlessAction is InstallerLaunchMode.Uninstall or InstallerLaunchMode.Upgrade);
 
         if (plan.HeadlessAction == InstallerLaunchMode.Uninstall)
         {
@@ -77,27 +83,29 @@ public static class InstallerCliRunner
     {
         ArgumentNullException.ThrowIfNull(output);
 
-        output.WriteLine("NightCodeForge Installer");
+        output.WriteLine($"{InstallerConstants.ApplicationDisplayName} Installer");
         output.WriteLine("Usage:");
         output.WriteLine("  NightCodeForge.Installer [uninstall | upgrade] [options]");
         output.WriteLine("Options:");
-        output.WriteLine("  uninstall, --uninstall       Open Interactive Uninstaller (or run headlessly with --quiet)");
-        output.WriteLine("  upgrade, --upgrade           Open Maintenance Hub focused on upgrading");
-        output.WriteLine("  --wizard                     Force 5-step OOBE Setup Wizard (Upgrade/Repair mode if installed)");
-        output.WriteLine("  --keep-data                  Preserve config/, data/, and logs/ during uninstall");
-        output.WriteLine("  --remove-tools               Also uninstall companion .NET global tools");
-        output.WriteLine("  --remove-ollamarouter        Also uninstall OllamaRouter and ollamarouter:// handler");
-        output.WriteLine("  --quiet                      Execute uninstall or upgrade headlessly without opening a UI");
-        output.WriteLine("  --bundle <dir>               Use an air-gapped local bundle directory");
-        output.WriteLine("  --air-gapped                 Prefer air-gapped local bundle source");
-        output.WriteLine("  --install-dir <dir>          Override target installation directory");
-        output.WriteLine("  --wsl-distro <name>          Override target WSL2 distribution (default: Ubuntu)");
-        output.WriteLine("  -h, --help                   Show this help message");
+        output.WriteLine($"  {InstallerCliParser.VerbUninstall}, {InstallerCliParser.FlagUninstall}       Open Interactive Uninstaller (or run headlessly with {InstallerCliParser.FlagQuiet})");
+        output.WriteLine($"  {InstallerCliParser.VerbUpgrade}, {InstallerCliParser.FlagUpgrade}           Open Maintenance Hub focused on upgrading (or run headlessly with {InstallerCliParser.FlagQuiet})");
+        output.WriteLine($"  {InstallerCliParser.FlagWizard}                     Force {InstallerConstants.WizardStepCount}-step OOBE Setup Wizard (Upgrade/Repair mode if installed)");
+        output.WriteLine($"  {InstallerCliParser.FlagKeepData}                  Preserve {InstallerConstants.ConfigDirectoryName}/, {InstallerConstants.DataDirectoryName}/, and {InstallerConstants.LogsDirectoryName}/ during uninstall");
+        output.WriteLine($"  {InstallerCliParser.FlagRemoveTools}               Also uninstall companion .NET global tools");
+        output.WriteLine($"  {InstallerCliParser.FlagRemoveOllamaRouter}        Also uninstall {InstallerConstants.ComponentOllamaRouter} and {InstallerConstants.OllamaRouterProtocolScheme}:// handler");
+        output.WriteLine($"  {InstallerCliParser.FlagQuiet}                      Execute uninstall or upgrade headlessly without opening a UI");
+        output.WriteLine($"  {InstallerCliParser.FlagBundle} <dir>               Use an air-gapped local bundle directory");
+        output.WriteLine($"  {InstallerCliParser.FlagAirGapped}                 Prefer air-gapped local bundle source");
+        output.WriteLine($"  {InstallerCliParser.FlagInstallDir} <dir>          Override target installation directory");
+        output.WriteLine($"  {InstallerCliParser.FlagWslDistro} <name>          Override target WSL2 distribution (default: {InstallerConstants.DefaultWslDistro})");
+        output.WriteLine($"  {InstallerCliParser.FlagHelpShort}, {InstallerCliParser.FlagHelp}                   Show this help message");
     }
 
     private sealed class TextWriterProgress(TextWriter output, TextWriter error, bool quietInfo)
         : IProgress<InstallerProgressEvent>
     {
+        private readonly object _syncLock = new();
+
         public void Report(InstallerProgressEvent value)
         {
             if (quietInfo && value.Level != InstallerLogLevel.Error)
@@ -106,7 +114,10 @@ public static class InstallerCliRunner
             }
 
             var writer = value.Level == InstallerLogLevel.Error ? error : output;
-            writer.WriteLine($"[{value.Step}] {value.Message}");
+            lock (_syncLock)
+            {
+                writer.WriteLine($"[{value.Step}] {value.Message}");
+            }
         }
     }
 }

@@ -63,6 +63,24 @@ public sealed class InstallerCliParserTests
         Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["--install-dir="]));
         Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["--wsl-distro="]));
     }
+
+    [Fact]
+    public void Parse_HelpFlagAlwaysWinsOverEarlierOrLaterVerbs()
+    {
+        Assert.Equal(InstallerLaunchMode.Help, InstallerCliParser.Parse(["upgrade", "--help"]).Mode);
+        Assert.Equal(InstallerLaunchMode.Help, InstallerCliParser.Parse(["-h", "uninstall"]).Mode);
+        Assert.Equal(InstallerLaunchMode.Help, InstallerCliParser.Parse(["--wizard", "/?"]).Mode);
+    }
+
+    [Fact]
+    public void Parse_ConflictingModesOrFlagAsOptionValue_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["upgrade", "uninstall"]));
+        Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["--wizard", "--upgrade"]));
+        Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["--bundle", "--quiet"]));
+        Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["--install-dir", "-h"]));
+        Assert.Throws<ArgumentException>(() => InstallerCliParser.Parse(["--wsl-distro", "--wizard"]));
+    }
 }
 
 public sealed class InstallerArchitectureTests

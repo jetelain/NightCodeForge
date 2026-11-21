@@ -152,4 +152,29 @@ public sealed class InstallationDetectorTests : IDisposable
         Assert.False(result.OllamaRouter.IsInstalled);
         Assert.Equal(Path.GetFullPath(customRouter), result.OllamaRouter.InstallDirectory);
     }
+
+    [Fact]
+    public void Detect_HonorsExplicitInstallDirectoryAndDoesNotFallbackExplicitInvalidBundleDir()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, _workspace.RootPath);
+        var registry = new Mock<IWindowsRegistryAccessor>();
+
+        // Valid adjacent bundle exists next to installer, but explicit non-existent bundle dir must not fall back.
+        var adjacentBundle = Path.Combine(platform.Object.InstallerBaseDirectory, InstallerConstants.BundleDirectoryName);
+        Directory.CreateDirectory(adjacentBundle);
+        File.WriteAllText(Path.Combine(adjacentBundle, "NightCodeForge-Web-linux-x64.tar.gz"), "tgz");
+
+        var explicitInstallDir = _workspace.CreateSubdirectory("explicit-ncf");
+        File.WriteAllText(Path.Combine(explicitInstallDir, InstallerConstants.WebDll), "dll");
+
+        var sut = new InstallationDetector(platform.Object, registry.Object);
+        var result = sut.Detect(
+            explicitBundleDirectory: Path.Combine(_workspace.RootPath, "missing-explicit-bundle"),
+            explicitInstallDirectory: explicitInstallDir);
+
+        Assert.True(result.NightCodeForge.IsInstalled);
+        Assert.Equal(Path.GetFullPath(explicitInstallDir), result.NightCodeForge.InstallDirectory);
+        Assert.Null(result.DetectedBundleDirectory);
+        Assert.Equal(InstallSourceMode.Online, result.RecommendedSourceMode);
+    }
 }

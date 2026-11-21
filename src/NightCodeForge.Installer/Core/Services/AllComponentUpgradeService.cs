@@ -1,6 +1,7 @@
 namespace NightCodeForge.Installer.Core.Services;
 
 using System.Globalization;
+using System.Text.Json;
 using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Constants;
 using NightCodeForge.Installer.Core.Exceptions;
@@ -13,12 +14,12 @@ using NightCodeForge.Installer.Core.Models;
 public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
 {
     private const string StepUpgrade = "1-Click Upgrade";
-    private const double ProgressNightCodeForgeStart = 5.0;
-    private const double ProgressNightCodeForgeEnd = 45.0;
-    private const double ProgressOllamaRouterStart = 45.0;
-    private const double ProgressOllamaRouterEnd = 75.0;
-    private const double ProgressToolsStart = 75.0;
-    private const double ProgressToolsEnd = 100.0;
+    private const double ProgressOllamaRouterStart = 5.0;
+    private const double ProgressOllamaRouterEnd = 35.0;
+    private const double ProgressToolsStart = 35.0;
+    private const double ProgressToolsEnd = 60.0;
+    private const double ProgressNightCodeForgeStart = 60.0;
+    private const double ProgressNightCodeForgeEnd = 100.0;
 
     private readonly IInstallationDetector _installationDetector;
     private readonly IReleaseManager _releaseManager;
@@ -47,7 +48,7 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        var discovery = _installationDetector.Detect(source.BundleDirectory);
+        var discovery = _installationDetector.Detect(source.BundleDirectory, explicitInstallDirectory);
         var warnings = new List<string>();
 
         ComponentReleaseAsset? ncfRelease = null;
@@ -56,7 +57,11 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
             ncfRelease = await _releaseManager.ResolveLatestNightCodeForgeReleaseAsync(source, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is ReleaseDownloadException or BundleValidationException or HttpRequestException)
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            warnings.Add($"NightCodeForge: Timed out checking updates ({ex.Message})");
+        }
+        catch (Exception ex) when (ex is ReleaseDownloadException or BundleValidationException or HttpRequestException or JsonException)
         {
             warnings.Add($"NightCodeForge: {ex.Message}");
         }
@@ -67,7 +72,11 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
             routerRelease = await _releaseManager.ResolveLatestOllamaRouterReleaseAsync(source, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is ReleaseDownloadException or BundleValidationException or HttpRequestException)
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            warnings.Add($"OllamaRouter: Timed out checking updates ({ex.Message})");
+        }
+        catch (Exception ex) when (ex is ReleaseDownloadException or BundleValidationException or HttpRequestException or JsonException)
         {
             warnings.Add($"OllamaRouter: {ex.Message}");
         }
@@ -114,26 +123,34 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
                 ? InstallerConstants.DefaultWslDistro
                 : wslDistroName.Trim();
 
-            Report(progress, "Resolving NightCodeForge release package...", InstallerLogLevel.Info, ProgressNightCodeForgeStart);
+            Report(progress, "Resolving release packages...", InstallerLogLevel.Info, ProgressOllamaRouterStart);
             var ncfAsset = await _releaseManager.ResolveLatestNightCodeForgeReleaseAsync(source, cancellationToken)
                 .ConfigureAwait(false);
 
-            ncfDeployment = await _releaseManager.DeployNightCodeForgeAsync(
-                ncfAsset,
-                targetInstallDirectory,
-                createDesktopShortcut,
-                CreateRangeProgress(progress, ProgressNightCodeForgeStart, ProgressNightCodeForgeEnd),
-                cancellationToken).ConfigureAwait(false);
+            ComponentReleaseAsset? routerAsset = null;
+            try
+            {
+                routerAsset = await _releaseManager.ResolveLatestOllamaRouterReleaseAsync(source, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (BundleValidationException ex) when (source.Mode == InstallSourceMode.AirGappedBundle)
+            {
+                Report(
+                    progress,
+                    $"OllamaRouter package not found in local bundle ({ex.Message}); skipping OllamaRouter upgrade.",
+                    InstallerLogLevel.Warning,
+                    null);
+            }
 
-            Report(progress, "Resolving OllamaRouter release package...", InstallerLogLevel.Info, ProgressOllamaRouterStart);
-            var routerAsset = await _releaseManager.ResolveLatestOllamaRouterReleaseAsync(source, cancellationToken)
-                .ConfigureAwait(false);
-
-            routerDeployment = await _releaseManager.DeployOllamaRouterAsync(
-                routerAsset,
-                targetInstallDirectory: null,
-                CreateRangeProgress(progress, ProgressOllamaRouterStart, ProgressOllamaRouterEnd),
-                cancellationToken).ConfigureAwait(false);
+            if (routerAsset is not null)
+            {
+                Report(progress, "Upgrading OllamaRouter...", InstallerLogLevel.Info, ProgressOllamaRouterStart);
+                routerDeployment = await _releaseManager.DeployOllamaRouterAsync(
+                    routerAsset,
+                    targetInstallDirectory: null,
+                    CreateRangeProgress(progress, ProgressOllamaRouterStart, ProgressOllamaRouterEnd),
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             string? resolvedWslDistro = null;
             if (_platform.Platform == HostPlatformType.Windows)
@@ -152,6 +169,14 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
                 CreateRangeProgress(progress, ProgressToolsStart, ProgressToolsEnd),
                 cancellationToken).ConfigureAwait(false);
 
+            Report(progress, "Upgrading NightCodeForge Web...", InstallerLogLevel.Info, ProgressNightCodeForgeStart);
+            ncfDeployment = await _releaseManager.DeployNightCodeForgeAsync(
+                ncfAsset,
+                targetInstallDirectory,
+                createDesktopShortcut,
+                CreateRangeProgress(progress, ProgressNightCodeForgeStart, ProgressNightCodeForgeEnd),
+                cancellationToken).ConfigureAwait(false);
+
             Report(progress, "All components upgraded successfully.", InstallerLogLevel.Info, 100);
             return new AllComponentUpgradeResult(
                 Succeeded: true,
@@ -160,7 +185,9 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
                 CompanionToolOutcomes: toolOutcomes,
                 ErrorMessage: null);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (
+            ex is InstallerException or IOException or UnauthorizedAccessException or HttpRequestException or JsonException ||
+            (ex is OperationCanceledException && !cancellationToken.IsCancellationRequested))
         {
             Report(progress, $"Upgrade failed: {ex.Message}", InstallerLogLevel.Error, null);
             return new AllComponentUpgradeResult(
@@ -216,21 +243,29 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
     {
         if (!string.IsNullOrWhiteSpace(explicitInstallDirectory))
         {
-            var versionPath = Path.Combine(explicitInstallDirectory.Trim(), InstallerConstants.VersionFileName);
-            if (File.Exists(versionPath))
+            try
             {
-                var raw = File.ReadAllText(versionPath).Trim();
-                if (!string.IsNullOrWhiteSpace(raw))
+                var versionPath = Path.Combine(explicitInstallDirectory.Trim(), InstallerConstants.VersionFileName);
+                if (File.Exists(versionPath))
                 {
-                    return raw;
+                    var raw = File.ReadAllText(versionPath).Trim();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        return raw;
+                    }
                 }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                // Justification: Unreadable or malformed explicit version path falls back to detector result.
+                _ = ex;
             }
         }
 
         return detected.Version;
     }
 
-    private static (int[] Numbers, string PreRelease) ParseVersionParts(string rawVersion)
+    private static (long[] Numbers, string PreRelease) ParseVersionParts(string rawVersion)
     {
         var clean = rawVersion.Trim();
         if (clean.StartsWith('v') || clean.StartsWith('V'))
@@ -249,10 +284,10 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
         var preRelease = dashIdx >= 0 ? clean[(dashIdx + 1)..] : string.Empty;
 
         var segments = corePart.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        var numbers = new int[segments.Length];
+        var numbers = new long[segments.Length];
         for (var i = 0; i < segments.Length; i++)
         {
-            if (int.TryParse(segments[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var num))
+            if (long.TryParse(segments[i], NumberStyles.None, CultureInfo.InvariantCulture, out var num))
             {
                 numbers[i] = num;
             }
@@ -279,8 +314,8 @@ public sealed class AllComponentUpgradeService : IAllComponentUpgradeService
                 return 1;
             }
 
-            var leftIsNum = int.TryParse(leftParts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var leftNum);
-            var rightIsNum = int.TryParse(rightParts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out var rightNum);
+            var leftIsNum = long.TryParse(leftParts[i], NumberStyles.None, CultureInfo.InvariantCulture, out var leftNum);
+            var rightIsNum = long.TryParse(rightParts[i], NumberStyles.None, CultureInfo.InvariantCulture, out var rightNum);
 
             var cmp = (leftIsNum, rightIsNum) switch
             {

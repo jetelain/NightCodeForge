@@ -3,9 +3,11 @@ namespace NightCodeForge.Installer.Core.Services;
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Constants;
 using NightCodeForge.Installer.Core.Models;
+using NightCodeForge.Installer.Core.Serialization;
 
 /// <summary>
 /// Executes Forge Doctor self-tests for WSL2, Docker, OllamaRouter, Web server port 5270,
@@ -13,6 +15,7 @@ using NightCodeForge.Installer.Core.Models;
 /// </summary>
 public sealed class ForgeDoctorService : IForgeDoctorService
 {
+    private const int DatabaseReadBufferBytes = 4096;
     private readonly HttpClient _httpClient;
     private readonly IPlatformEnvironment _platform;
     private readonly IEnvironmentProvisioner _environmentProvisioner;
@@ -38,7 +41,7 @@ public sealed class ForgeDoctorService : IForgeDoctorService
 
     public async Task<ForgeDoctorReport> RunDiagnosticsAsync(
         string? installDirectory,
-        string wslDistroName,
+        string? wslDistroName,
         string? routerBaseUrl,
         CancellationToken cancellationToken = default)
     {
@@ -46,24 +49,32 @@ public sealed class ForgeDoctorService : IForgeDoctorService
             ? InstallerConstants.DefaultWslDistro
             : wslDistroName.Trim();
 
-        var discovery = _installationDetector.Detect();
         var effectiveInstallDir = string.IsNullOrWhiteSpace(installDirectory)
-            ? discovery.NightCodeForge.InstallDirectory
-            : Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory.Trim()));
+            ? _installationDetector.Detect().NightCodeForge.InstallDirectory
+            : NormalizeExplicitInstallDirectory(installDirectory);
 
-        var effectiveRouterUrl = string.IsNullOrWhiteSpace(routerBaseUrl)
+        var rawRouterUrl = string.IsNullOrWhiteSpace(routerBaseUrl)
             ? InstallerConstants.DefaultOllamaRouterEndpoint
             : routerBaseUrl.Trim().TrimEnd('/');
 
-        var probe = await _environmentProvisioner.ProbeAsync(effectiveDistro, cancellationToken).ConfigureAwait(false);
+        var probeTask = _environmentProvisioner.ProbeAsync(effectiveDistro, cancellationToken);
+        var routerTask = CheckOllamaRouterAsync(rawRouterUrl, cancellationToken);
+        var webTask = CheckWebPortAsync(effectiveInstallDir, cancellationToken);
+        var dbTask = CheckDatabaseHealthAsync(effectiveInstallDir, cancellationToken);
+
+        var probe = await probeTask.ConfigureAwait(false);
+        var companionTask = CheckCompanionToolsAsync(probe, effectiveDistro, cancellationToken);
+
+        await Task.WhenAll(routerTask, webTask, companionTask, dbTask).ConfigureAwait(false);
+
         var checks = new List<ForgeDoctorCheckItem>(6)
         {
             CheckWsl2(probe, effectiveDistro),
             CheckDocker(probe),
-            await CheckOllamaRouterAsync(effectiveRouterUrl, cancellationToken).ConfigureAwait(false),
-            await CheckWebPortAsync(effectiveInstallDir, cancellationToken).ConfigureAwait(false),
-            await CheckCompanionToolsAsync(probe, effectiveDistro, cancellationToken).ConfigureAwait(false),
-            await CheckDatabaseHealthAsync(effectiveInstallDir, cancellationToken).ConfigureAwait(false)
+            await routerTask.ConfigureAwait(false),
+            await webTask.ConfigureAwait(false),
+            await companionTask.ConfigureAwait(false),
+            await dbTask.ConfigureAwait(false)
         };
 
         var passed = checks.Count(static c => c.Status == DoctorCheckStatus.Pass);
@@ -76,6 +87,21 @@ public sealed class ForgeDoctorService : IForgeDoctorService
             PassedCount: passed,
             WarningCount: warnings,
             FailedCount: failed);
+    }
+
+    private static string NormalizeExplicitInstallDirectory(string installDirectory)
+    {
+        var trimmed = installDirectory.Trim();
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(trimmed));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Justification: Invalid explicit path is preserved so individual checks fail deterministically without throwing out of RunDiagnosticsAsync.
+            _ = ex;
+            return trimmed;
+        }
     }
 
     private ForgeDoctorCheckItem CheckWsl2(EnvironmentProbeResult probe, string requestedDistro)
@@ -108,11 +134,17 @@ public sealed class ForgeDoctorService : IForgeDoctorService
         }
 
         var activeDistro = probe.ResolvedWslDistroName ?? requestedDistro;
-        return new ForgeDoctorCheckItem(
-            InstallerConstants.DoctorCheckWsl2,
-            DoctorCheckStatus.Pass,
-            $"WSL2 active ({activeDistro}).",
-            probe.WslDotNet10Installed ? ".NET 10 SDK present inside WSL2." : ".NET 10 SDK missing inside WSL2.");
+        return probe.WslDotNet10Installed
+            ? new ForgeDoctorCheckItem(
+                InstallerConstants.DoctorCheckWsl2,
+                DoctorCheckStatus.Pass,
+                $"WSL2 active ({activeDistro}).",
+                ".NET 10 SDK present inside WSL2.")
+            : new ForgeDoctorCheckItem(
+                InstallerConstants.DoctorCheckWsl2,
+                DoctorCheckStatus.Warning,
+                $"WSL2 active ({activeDistro}), .NET 10 SDK missing.",
+                "Run Setup Wizard Step 2 to install .NET 10 SDK inside WSL2.");
     }
 
     private ForgeDoctorCheckItem CheckDocker(EnvironmentProbeResult probe)
@@ -140,14 +172,71 @@ public sealed class ForgeDoctorService : IForgeDoctorService
         string routerBaseUrl,
         CancellationToken cancellationToken)
     {
+        if (!Uri.TryCreate(routerBaseUrl, UriKind.Absolute, out var parsedUri) ||
+            (parsedUri.Scheme != Uri.UriSchemeHttp && parsedUri.Scheme != Uri.UriSchemeHttps) ||
+            string.IsNullOrWhiteSpace(parsedUri.Host) ||
+            !string.IsNullOrEmpty(parsedUri.Query) ||
+            !string.IsNullOrEmpty(parsedUri.Fragment))
+        {
+            return new ForgeDoctorCheckItem(
+                InstallerConstants.DoctorCheckOllamaRouter,
+                DoctorCheckStatus.Fail,
+                $"Invalid OllamaRouter base URL '{routerBaseUrl}'.",
+                "Expected an absolute HTTP or HTTPS URL without query or fragment.");
+        }
+
+        var infoUri = $"{routerBaseUrl}{InstallerConstants.OllamaRouterInfoApiPath}";
         var probeUri = $"{routerBaseUrl}{InstallerConstants.OllamaRouterRecommendationsApiPath}";
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linkedCts.CancelAfter(TimeSpan.FromSeconds(InstallerConstants.DoctorProbeTimeoutSeconds));
 
         try
         {
+            using var infoRequest = new HttpRequestMessage(HttpMethod.Get, infoUri);
+            using var infoResponse = await _httpClient
+                .SendAsync(infoRequest, HttpCompletionOption.ResponseHeadersRead, linkedCts.Token)
+                .ConfigureAwait(false);
+
+            if (!infoResponse.IsSuccessStatusCode)
+            {
+                return new ForgeDoctorCheckItem(
+                    InstallerConstants.DoctorCheckOllamaRouter,
+                    DoctorCheckStatus.Fail,
+                    $"Endpoint at {routerBaseUrl} did not identify as OllamaRouter (HTTP {(int)infoResponse.StatusCode}).",
+                    $"GET {infoUri} failed; ensure OllamaRouter (not standalone Ollama) is running on this port.");
+            }
+
+            RouterInfoProbeDto? infoDto;
+            try
+            {
+                await using var infoStream = await infoResponse.Content.ReadAsStreamAsync(linkedCts.Token).ConfigureAwait(false);
+                infoDto = await JsonSerializer.DeserializeAsync(
+                    infoStream,
+                    InstallerJsonContext.Default.RouterInfoProbeDto,
+                    linkedCts.Token).ConfigureAwait(false);
+            }
+            catch (JsonException ex)
+            {
+                return new ForgeDoctorCheckItem(
+                    InstallerConstants.DoctorCheckOllamaRouter,
+                    DoctorCheckStatus.Fail,
+                    $"Invalid OllamaRouter identity response from {routerBaseUrl}.",
+                    ex.Message);
+            }
+
+            if (infoDto is not { IsRouter: true })
+            {
+                return new ForgeDoctorCheckItem(
+                    InstallerConstants.DoctorCheckOllamaRouter,
+                    DoctorCheckStatus.Fail,
+                    $"Service at {routerBaseUrl} is not OllamaRouter.",
+                    $"GET {infoUri} returned isRouter=false.");
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Get, probeUri);
-            using var response = await _httpClient.SendAsync(request, linkedCts.Token).ConfigureAwait(false);
+            using var response = await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linkedCts.Token)
+                .ConfigureAwait(false);
 
             if (response.IsSuccessStatusCode)
             {
@@ -155,7 +244,7 @@ public sealed class ForgeDoctorService : IForgeDoctorService
                     InstallerConstants.DoctorCheckOllamaRouter,
                     DoctorCheckStatus.Pass,
                     $"OllamaRouter reachable at {routerBaseUrl}.",
-                    "Role recommendations endpoint responded HTTP 200.");
+                    "Verified OllamaRouter identity and role recommendations endpoint.");
             }
 
             if (response.StatusCode == HttpStatusCode.NotFound)
@@ -198,23 +287,39 @@ public sealed class ForgeDoctorService : IForgeDoctorService
         var isProcessRunning = _processControl.IsAnyProcessRunning(InstallerConstants.NightCodeForgeWebProcesses) ||
                                _processControl.IsAnyProcessRunning(InstallerConstants.NightCodeForgeLauncherProcesses);
 
-        var configuredUrl = ReadConfiguredWebUrl(installDirectory);
+        var configuredRawUrls = Directory.Exists(installDirectory)
+            ? InstalledAppConfigReader.ReadFirstNonEmptyString(installDirectory, InstallerConstants.KeyUrls)
+            : null;
+        var configuredUrl = string.IsNullOrWhiteSpace(configuredRawUrls)
+            ? InstallerConstants.DefaultWebUrls
+            : HostAppControlService.NormalizeListeningUrlToLocalhost(configuredRawUrls);
+
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linkedCts.CancelAfter(TimeSpan.FromSeconds(InstallerConstants.DoctorProbeTimeoutSeconds));
 
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, configuredUrl);
-            using var response = await _httpClient.SendAsync(request, linkedCts.Token).ConfigureAwait(false);
+            using var response = await _httpClient
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, linkedCts.Token)
+                .ConfigureAwait(false);
             var statusCode = (int)response.StatusCode;
 
-            if ((statusCode >= 200 && statusCode < 400) || response.StatusCode == HttpStatusCode.Unauthorized)
+            if ((statusCode >= InstallerConstants.HttpStatusSuccessMin &&
+                 statusCode < InstallerConstants.HttpStatusSuccessMaxExclusive) ||
+                response.StatusCode == HttpStatusCode.Unauthorized)
             {
-                return new ForgeDoctorCheckItem(
-                    InstallerConstants.DoctorCheckWebPort,
-                    DoctorCheckStatus.Pass,
-                    $"Listening at {configuredUrl} (HTTP {statusCode}).",
-                    isProcessRunning ? "NightCodeForge.Web process active." : "HTTP endpoint responded.");
+                return isProcessRunning
+                    ? new ForgeDoctorCheckItem(
+                        InstallerConstants.DoctorCheckWebPort,
+                        DoctorCheckStatus.Pass,
+                        $"Listening at {configuredUrl} (HTTP {statusCode}).",
+                        "NightCodeForge.Web process active.")
+                    : new ForgeDoctorCheckItem(
+                        InstallerConstants.DoctorCheckWebPort,
+                        DoctorCheckStatus.Warning,
+                        $"Port responded HTTP {statusCode}, but NightCodeForge.Web process was not detected.",
+                        $"Endpoint {configuredUrl} may be served by another process.");
             }
 
             return new ForgeDoctorCheckItem(
@@ -292,24 +397,37 @@ public sealed class ForgeDoctorService : IForgeDoctorService
         string installDirectory,
         CancellationToken cancellationToken)
     {
-        var dataDir = Path.Combine(installDirectory, InstallerConstants.DataDirectoryName);
-        if (!Directory.Exists(dataDir))
+        string dbPath;
+        try
+        {
+            dbPath = InstalledAppConfigReader.ReadDefaultDatabasePath(installDirectory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return new ForgeDoctorCheckItem(
+                InstallerConstants.DoctorCheckDatabase,
+                DoctorCheckStatus.Fail,
+                "Invalid database configuration or install path.",
+                ex.Message);
+        }
+
+        var dbDirectory = Path.GetDirectoryName(dbPath) ?? Path.Combine(installDirectory, InstallerConstants.DataDirectoryName);
+        if (!Directory.Exists(dbDirectory))
         {
             return new ForgeDoctorCheckItem(
                 InstallerConstants.DoctorCheckDatabase,
                 DoctorCheckStatus.Fail,
                 "Data directory is missing.",
-                $"Expected directory: {dataDir}");
+                $"Expected directory: {dbDirectory}");
         }
 
-        var dbPath = Path.Combine(dataDir, InstallerConstants.MainDatabaseFileName);
         if (!File.Exists(dbPath))
         {
             return new ForgeDoctorCheckItem(
                 InstallerConstants.DoctorCheckDatabase,
                 DoctorCheckStatus.Warning,
                 "Will initialize on first server launch.",
-                $"Data directory exists ({dataDir}); database file not created yet.");
+                $"Data directory exists ({dbDirectory}); database file not created yet.");
         }
 
         try
@@ -321,10 +439,11 @@ public sealed class ForgeDoctorService : IForgeDoctorService
                 dbPath,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.ReadWrite,
-                bufferSize: 4096,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: DatabaseReadBufferBytes,
                 useAsync: true);
-            var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, expectedMagic.Length), cancellationToken)
+            var bytesRead = await stream
+                .ReadAtLeastAsync(buffer.AsMemory(0, expectedMagic.Length), expectedMagic.Length, throwOnEndOfStream: false, cancellationToken)
                 .ConfigureAwait(false);
 
             if (bytesRead < expectedMagic.Length || !buffer.AsSpan().SequenceEqual(expectedMagic))
@@ -336,7 +455,7 @@ public sealed class ForgeDoctorService : IForgeDoctorService
                     $"File: {dbPath}");
             }
 
-            var sizeKb = Math.Max(1L, stream.Length / 1024L);
+            var sizeKb = Math.Max(1L, stream.Length / InstallerConstants.BytesPerKilobyte);
             return new ForgeDoctorCheckItem(
                 InstallerConstants.DoctorCheckDatabase,
                 DoctorCheckStatus.Pass,
@@ -351,41 +470,5 @@ public sealed class ForgeDoctorService : IForgeDoctorService
                 "Unable to read SQLite database file.",
                 ex.Message);
         }
-    }
-
-    private static string ReadConfiguredWebUrl(string installDirectory)
-    {
-        foreach (var fileName in new[] { InstallerConstants.AppSettingsProductionFileName, InstallerConstants.AppSettingsFileName })
-        {
-            var configPath = Path.Combine(installDirectory, fileName);
-            if (!File.Exists(configPath))
-            {
-                continue;
-            }
-
-            try
-            {
-                var raw = File.ReadAllText(configPath);
-                var docOptions = new System.Text.Json.JsonDocumentOptions
-                {
-                    CommentHandling = System.Text.Json.JsonCommentHandling.Skip,
-                    AllowTrailingCommas = true
-                };
-                var root = System.Text.Json.Nodes.JsonNode.Parse(raw, nodeOptions: null, documentOptions: docOptions)
-                    as System.Text.Json.Nodes.JsonObject;
-                var urls = root?["Urls"]?.GetValue<string>();
-                if (!string.IsNullOrWhiteSpace(urls))
-                {
-                    return HostAppControlService.NormalizeListeningUrlToLocalhost(urls);
-                }
-            }
-            catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or IOException or UnauthorizedAccessException)
-            {
-                // Justification: Fall back to default port 5270 URL if config is temporarily unreadable or invalid.
-                _ = ex;
-            }
-        }
-
-        return InstallerConstants.DefaultWebUrls;
     }
 }

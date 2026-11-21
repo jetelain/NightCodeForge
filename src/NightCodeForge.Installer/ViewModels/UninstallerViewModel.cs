@@ -21,6 +21,7 @@ public sealed partial class UninstallerViewModel : ObservableObject
     private readonly IUiDispatcher _dispatcher;
     private readonly Action _returnToHubAction;
     private readonly bool _canReturnToHub;
+    private readonly CancellationToken _lifetimeToken;
 
     public UninstallerViewModel(
         IUninstallService uninstallService,
@@ -29,7 +30,8 @@ public sealed partial class UninstallerViewModel : ObservableObject
         IInstallerUiHost uiHost,
         IUiDispatcher dispatcher,
         Action returnToHubAction,
-        bool canReturnToHub)
+        bool canReturnToHub,
+        CancellationToken lifetimeToken)
     {
         _uninstallService = uninstallService ?? throw new ArgumentNullException(nameof(uninstallService));
         _installationDetector = installationDetector ?? throw new ArgumentNullException(nameof(installationDetector));
@@ -38,6 +40,7 @@ public sealed partial class UninstallerViewModel : ObservableObject
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _returnToHubAction = returnToHubAction ?? throw new ArgumentNullException(nameof(returnToHubAction));
         _canReturnToHub = canReturnToHub;
+        _lifetimeToken = lifetimeToken;
 
         Steps = [];
         LogLines = [];
@@ -95,24 +98,38 @@ public sealed partial class UninstallerViewModel : ObservableObject
     public partial string StatusMessage { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasError))]
+    [NotifyPropertyChangedFor(nameof(CanClose))]
     public partial string ErrorMessage { get; set; }
+
+    public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
     public bool CanUninstall => !IsRunning && !IsCompleted;
     public bool CanCancel => !IsRunning && !IsCompleted;
-    public bool CanClose => !IsRunning && IsCompleted;
+    public bool CanClose => !IsRunning && (IsCompleted || HasError);
 
     public void RefreshSummary()
     {
-        var discovery = _installationDetector.Detect(_startupPlan.EffectiveSource.BundleDirectory);
-        InstallDirectory = string.IsNullOrWhiteSpace(_startupPlan.CliOptions.InstallDirectory)
+        var discovery = _installationDetector.Detect(
+            _startupPlan.EffectiveSource.BundleDirectory,
+            _startupPlan.CliOptions.InstallDirectory);
+        var effectiveDir = string.IsNullOrWhiteSpace(_startupPlan.CliOptions.InstallDirectory)
             ? discovery.NightCodeForge.InstallDirectory
             : _startupPlan.EffectiveInstallDirectory;
-        InstalledVersion = FormatVersion(discovery.NightCodeForge.Version);
-        IsLegacyInstall = discovery.NightCodeForge.IsLegacyPublishInstall;
+        var formattedVersion = FormatVersion(discovery.NightCodeForge.Version);
+        var isLegacy = discovery.NightCodeForge.IsLegacyPublishInstall;
+
+        _dispatcher.Post(() =>
+        {
+            InstallDirectory = effectiveDir;
+            InstalledVersion = formattedVersion;
+            IsLegacyInstall = isLegacy;
+        });
     }
 
     partial void OnIsRunningChanged(bool value) => NotifyActionStatesChanged();
     partial void OnIsCompletedChanged(bool value) => NotifyActionStatesChanged();
+    partial void OnErrorMessageChanged(string value) => NotifyActionStatesChanged();
 
     [RelayCommand(CanExecute = nameof(CanUninstall))]
     public async Task UninstallAsync()
@@ -158,7 +175,7 @@ public sealed partial class UninstallerViewModel : ObservableObject
                 InstallDirectory,
                 _startupPlan.EffectiveWslDistroName,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _lifetimeToken).ConfigureAwait(false);
 
             _dispatcher.Post(() =>
             {
@@ -170,7 +187,7 @@ public sealed partial class UninstallerViewModel : ObservableObject
 
                 Succeeded = result.Succeeded;
                 DeferredSelfCleanupScheduled = result.DeferredSelfCleanupScheduled;
-                IsCompleted = true;
+                IsCompleted = result.Succeeded;
 
                 if (result.Succeeded)
                 {
@@ -184,6 +201,21 @@ public sealed partial class UninstallerViewModel : ObservableObject
                     ErrorMessage = result.ErrorMessage ?? "Uninstallation failed.";
                     StatusMessage = ErrorMessage;
                 }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Uninstallation cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                Succeeded = false;
+                IsCompleted = false;
+                ErrorMessage = ex.Message;
+                StatusMessage = $"Uninstallation failed: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
             });
         }
         finally

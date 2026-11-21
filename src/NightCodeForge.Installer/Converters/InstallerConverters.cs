@@ -3,11 +3,13 @@ namespace NightCodeForge.Installer.Converters;
 using System.Globalization;
 using Avalonia.Data.Converters;
 using Avalonia.Media;
+using Avalonia.Media.Immutable;
+using NightCodeForge.Installer.Core.Constants;
 using NightCodeForge.Installer.Core.Models;
 
 internal static class ConverterParameterParser
 {
-    internal static bool TryParseInt(object? parameter, CultureInfo culture, out int value)
+    internal static bool TryParseInt(object? parameter, out int value)
     {
         switch (parameter)
         {
@@ -15,7 +17,7 @@ internal static class ConverterParameterParser
                 value = intParameter;
                 return true;
             case string stringParameter:
-                return int.TryParse(stringParameter, NumberStyles.Integer, culture, out value);
+                return int.TryParse(stringParameter, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
             default:
                 value = 0;
                 return false;
@@ -33,7 +35,7 @@ public sealed class IntEqualityToVisibilityConverter : IValueConverter
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is int valueInt &&
-        ConverterParameterParser.TryParseInt(parameter, culture, out var parameterInt) &&
+        ConverterParameterParser.TryParseInt(parameter, out var parameterInt) &&
         valueInt == parameterInt;
 
     public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
@@ -50,7 +52,7 @@ public sealed class IntEqualityToFontWeightConverter : IValueConverter
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
         value is int valueInt &&
-        ConverterParameterParser.TryParseInt(parameter, culture, out var parameterInt) &&
+        ConverterParameterParser.TryParseInt(parameter, out var parameterInt) &&
         valueInt == parameterInt
             ? FontWeight.Bold
             : FontWeight.Normal;
@@ -91,9 +93,9 @@ public sealed class DoctorStatusToBrushConverter : IValueConverter
 {
     public static readonly DoctorStatusToBrushConverter Instance = new();
 
-    private static readonly IBrush PassBrush = new SolidColorBrush(Color.Parse("#10B981"));
-    private static readonly IBrush WarningBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
-    private static readonly IBrush FailBrush = new SolidColorBrush(Color.Parse("#EF4444"));
+    private static readonly IBrush PassBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.SuccessHex));
+    private static readonly IBrush WarningBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.WarningHex));
+    private static readonly IBrush FailBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.DangerHex));
 
     private DoctorStatusToBrushConverter()
     {
@@ -116,11 +118,11 @@ public sealed class ProvisioningStatusToBrushConverter : IValueConverter
 {
     public static readonly ProvisioningStatusToBrushConverter Instance = new();
 
-    private static readonly IBrush CompletedBrush = new SolidColorBrush(Color.Parse("#10B981"));
-    private static readonly IBrush WarningBrush = new SolidColorBrush(Color.Parse("#F59E0B"));
-    private static readonly IBrush FailedBrush = new SolidColorBrush(Color.Parse("#EF4444"));
-    private static readonly IBrush ActiveBrush = new SolidColorBrush(Color.Parse("#6366F1"));
-    private static readonly IBrush MutedBrush = new SolidColorBrush(Color.Parse("#94A3B8"));
+    private static readonly IBrush CompletedBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.SuccessHex));
+    private static readonly IBrush WarningBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.WarningHex));
+    private static readonly IBrush FailedBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.DangerHex));
+    private static readonly IBrush ActiveBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.PrimaryHex));
+    private static readonly IBrush MutedBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.MutedHex));
 
     private ProvisioningStatusToBrushConverter()
     {
@@ -144,8 +146,8 @@ public sealed class BoolToStatusBrushConverter : IValueConverter
 {
     public static readonly BoolToStatusBrushConverter Instance = new();
 
-    private static readonly IBrush TrueBrush = new SolidColorBrush(Color.Parse("#10B981"));
-    private static readonly IBrush FalseBrush = new SolidColorBrush(Color.Parse("#94A3B8"));
+    private static readonly IBrush TrueBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.SuccessHex));
+    private static readonly IBrush FalseBrush = new ImmutableSolidColorBrush(Color.Parse(InstallerThemeColors.MutedHex));
 
     private BoolToStatusBrushConverter()
     {

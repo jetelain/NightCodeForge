@@ -16,6 +16,20 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
     private const string StepHostDotNet = "Host .NET 10 SDK";
     private const string StepToolchain = "Subsystem Toolchain";
     private const string StepMacOsPrerequisites = "macOS Prerequisites";
+    private const string WslProbeCommand =
+        "if [ -f /etc/profile.d/dotnet.sh ]; then . /etc/profile.d/dotnet.sh >/dev/null 2>&1 || true; fi; " +
+        "echo \"DOTNET=$(dotnet --list-sdks 2>/dev/null | grep -c '^10\\.' || true)\"; " +
+        "echo \"DOCKER=$((command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1) && echo 1 || echo 0)\"; " +
+        "echo \"RG=$(command -v rg >/dev/null 2>&1 && echo 1 || echo 0)\"";
+
+    private const double ProgressWslStart = 10.0;
+    private const double ProgressDistroStart = 25.0;
+    private const double ProgressDistroRetry = 28.0;
+    private const double ProgressHostDotNetStart = 40.0;
+    private const double ProgressHostDotNetFallback = 48.0;
+    private const double ProgressMacOsStart = 50.0;
+    private const double ProgressToolchainStart = 60.0;
+    private const double ProgressComplete = 100.0;
 
     private readonly IPlatformEnvironment _platform;
     private readonly IProcessRunner _processRunner;
@@ -38,8 +52,8 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         var notes = new List<string>();
 
         var hostDotNet10 = await ProbeDotNet10Async(null, cancellationToken).ConfigureAwait(false);
-        var hostGit = await ProbeSimpleSuccessAsync("git", ["--version"], cancellationToken).ConfigureAwait(false);
-        var hostRipgrep = await ProbeSimpleSuccessAsync("rg", ["--version"], cancellationToken).ConfigureAwait(false);
+        var hostGit = await ProbeSimpleSuccessAsync(InstallerConstants.GitExecutable, ["--version"], cancellationToken).ConfigureAwait(false);
+        var hostRipgrep = await ProbeSimpleSuccessAsync(InstallerConstants.RipgrepExecutable, ["--version"], cancellationToken).ConfigureAwait(false);
 
         if (_platform.Platform == HostPlatformType.Windows)
         {
@@ -145,7 +159,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 break;
 
             case HostPlatformType.Linux:
-                await ProvisionLinuxAsync(options, steps, progress, cancellationToken).ConfigureAwait(false);
+                await ProvisionLinuxAsync(options, probe, steps, progress, cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostPlatformType.MacOS:
@@ -163,6 +177,10 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         var sb = new StringBuilder();
         sb.Append("#!/usr/bin/env bash\n");
         sb.Append("set -euo pipefail\n\n");
+        sb.Append("if ! command -v apt-get >/dev/null 2>&1; then\n");
+        sb.Append("    echo \"Unsupported Linux distribution: automated toolchain provisioning requires apt-get (Ubuntu/Debian).\" >&2\n");
+        sb.Append("    exit 1\n");
+        sb.Append("fi\n\n");
         sb.Append("export DEBIAN_FRONTEND=noninteractive\n\n");
         sb.Append("echo \"--> Updating apt package repository...\"\n");
         sb.Append("apt-get update -y\n\n");
@@ -194,9 +212,11 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         sb.Append("        if [ -z \"$DISTRO_VERSION\" ]; then\n");
         sb.Append("            DISTRO_VERSION=$(lsb_release -rs 2>/dev/null || echo \"24.04\")\n");
         sb.Append("        fi\n");
-        sb.Append("        curl -fsSL \"https://packages.microsoft.com/config/${DISTRO_ID}/${DISTRO_VERSION}/packages-microsoft-prod.deb\" -o /tmp/packages-microsoft-prod.deb\n");
-        sb.Append("        dpkg -i /tmp/packages-microsoft-prod.deb\n");
-        sb.Append("        rm -f /tmp/packages-microsoft-prod.deb\n");
+        sb.Append("        DEB_TMP=$(mktemp /tmp/packages-microsoft-prod.XXXXXX.deb)\n");
+        sb.Append("        trap 'rm -f \"$DEB_TMP\"' EXIT\n");
+        sb.Append("        curl -fsSL \"https://packages.microsoft.com/config/${DISTRO_ID}/${DISTRO_VERSION}/packages-microsoft-prod.deb\" -o \"$DEB_TMP\"\n");
+        sb.Append("        dpkg -i \"$DEB_TMP\"\n");
+        sb.Append("        rm -f \"$DEB_TMP\"\n");
         sb.Append("        apt-get update -y\n");
         sb.Append("        apt-get install -y --no-install-recommends dotnet-sdk-10.0\n");
         sb.Append("    fi\n");
@@ -229,10 +249,10 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 sb.Append("    mkdir -p /etc\n");
                 sb.Append("    if [ -f /etc/wsl.conf ] && grep -Eq '^[[:space:]]*systemd[[:space:]]*=' /etc/wsl.conf; then\n");
                 sb.Append("        sed -i -E 's/^[[:space:]]*systemd[[:space:]]*=.*/systemd=true/' /etc/wsl.conf\n");
-                sb.Append("    elif ! grep -q \"\\[boot\\]\" /etc/wsl.conf 2>/dev/null; then\n");
+                sb.Append("    elif ! grep -Eq '^[[:space:]]*\\[boot\\]' /etc/wsl.conf 2>/dev/null; then\n");
                 sb.Append("        printf \"\\n[boot]\\nsystemd=true\\n\" >> /etc/wsl.conf\n");
                 sb.Append("    else\n");
-                sb.Append("        sed -i '/\\[boot\\]/a systemd=true' /etc/wsl.conf\n");
+                sb.Append("        sed -i -E '/^[[:space:]]*\\[boot\\]/a systemd=true' /etc/wsl.conf\n");
                 sb.Append("    fi\n");
                 sb.Append("fi\n\n");
                 sb.Append("service docker status >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true\n\n");
@@ -247,7 +267,6 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             sb.Append("done\n\n");
         }
 
-        sb.Append("git config --system --add safe.directory '*' || true\n");
         return sb.ToString();
     }
 
@@ -294,12 +313,13 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         CancellationToken cancellationToken)
     {
         var activeDistro = initialProbe.ResolvedWslDistroName ?? distro;
+        var distroInstalled = initialProbe.WslDistroInstalled;
 
         if (options.ProvisionWsl)
         {
             if (!initialProbe.WslInstalled)
             {
-                Report(progress, StepWsl, "WSL2 not detected. Requesting elevated installation (wsl --install --no-launch)...", InstallerLogLevel.Info, 10);
+                Report(progress, StepWsl, "WSL2 not detected. Requesting elevated installation (wsl --install --no-launch)...", InstallerLogLevel.Info, ProgressWslStart);
                 var wslInstallResult = await _processRunner.RunAsync(
                     CreateWslRequest(["--install", "--no-launch"], useShellExecute: true, runAsAdmin: true),
                     cancellationToken).ConfigureAwait(false);
@@ -308,7 +328,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 {
                     var rebootMessage = "WSL2 feature was enabled and requires a Windows reboot (exit code 3010). Please reboot and re-run the installer.";
                     steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.RebootRequired, rebootMessage));
-                    Report(progress, StepWsl, rebootMessage, InstallerLogLevel.Warning, 100);
+                    Report(progress, StepWsl, rebootMessage, InstallerLogLevel.Warning, ProgressComplete);
                     return ProvisioningStatus.RebootRequired;
                 }
 
@@ -321,19 +341,36 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 }
 
                 steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.Completed, "WSL2 installed successfully."));
+
+                var (_, refreshedDistros) = await ProbeWindowsWslAsync(cancellationToken).ConfigureAwait(false);
+                var resolvedAfterInstall = ResolveWslDistroName(refreshedDistros, distro);
+                if (resolvedAfterInstall is not null)
+                {
+                    distroInstalled = true;
+                    activeDistro = resolvedAfterInstall;
+                }
             }
             else
             {
                 steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.Skipped, "WSL2 is already installed."));
             }
 
-            await _processRunner.RunAsync(
+            var setDefaultVersionResult = await _processRunner.RunAsync(
                 CreateWslRequest(["--set-default-version", "2"]),
                 cancellationToken).ConfigureAwait(false);
-
-            if (!initialProbe.WslDistroInstalled)
+            if (setDefaultVersionResult.ExitCode != InstallerConstants.ExitCodeSuccess)
             {
-                Report(progress, StepWslDistro, $"Installing WSL2 distribution '{distro}'...", InstallerLogLevel.Info, 25);
+                Report(
+                    progress,
+                    StepWsl,
+                    $"Warning: 'wsl --set-default-version 2' exited with code {setDefaultVersionResult.ExitCode}.",
+                    InstallerLogLevel.Warning,
+                    null);
+            }
+
+            if (!distroInstalled)
+            {
+                Report(progress, StepWslDistro, $"Installing WSL2 distribution '{distro}'...", InstallerLogLevel.Info, ProgressDistroStart);
                 var distroResult = await _processRunner.RunAsync(
                     CreateWslRequest(["--install", "-d", distro, "--web-download", "--no-launch"]),
                     cancellationToken).ConfigureAwait(false);
@@ -347,7 +384,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 
                 if (distroResult.ExitCode != InstallerConstants.ExitCodeSuccess)
                 {
-                    Report(progress, StepWslDistro, $"Retrying installation of '{distro}' without --web-download...", InstallerLogLevel.Warning, 28);
+                    Report(progress, StepWslDistro, $"Retrying installation of '{distro}' without --web-download...", InstallerLogLevel.Warning, ProgressDistroRetry);
                     distroResult = await _processRunner.RunAsync(
                         CreateWslRequest(["--install", "-d", distro, "--no-launch"]),
                         cancellationToken).ConfigureAwait(false);
@@ -367,9 +404,18 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                     return ProvisioningStatus.Failed;
                 }
 
-                await _processRunner.RunAsync(
+                var setDistroVersionResult = await _processRunner.RunAsync(
                     CreateWslRequest(["--set-version", distro, "2"]),
                     cancellationToken).ConfigureAwait(false);
+                if (setDistroVersionResult.ExitCode != InstallerConstants.ExitCodeSuccess)
+                {
+                    Report(
+                        progress,
+                        StepWslDistro,
+                        $"Warning: 'wsl --set-version {distro} 2' exited with code {setDistroVersionResult.ExitCode}.",
+                        InstallerLogLevel.Warning,
+                        null);
+                }
 
                 steps.Add(new ProvisioningStepResult(StepWslDistro, ProvisioningStatus.Completed, $"Installed WSL2 distribution '{distro}'."));
                 activeDistro = distro;
@@ -407,20 +453,33 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 
         if (options.ProvisionLinuxOrWslToolchain)
         {
-            Report(progress, StepToolchain, $"Provisioning .NET 10, Docker, ripgrep, and toolchain inside WSL2 '{activeDistro}'...", InstallerLogLevel.Info, 60);
-            var script = BuildLinuxToolchainScript(isWsl: true, skipDocker: options.SkipDocker);
-            var wslExecResult = await ExecuteWslRootBashScriptAsync(activeDistro, script, cancellationToken).ConfigureAwait(false);
+            var wslAlreadyReady = initialProbe.WslInstalled &&
+                                  initialProbe.WslDistroInstalled &&
+                                  initialProbe.WslDotNet10Installed &&
+                                  initialProbe.WslRipgrepInstalled &&
+                                  (options.SkipDocker || initialProbe.WslDockerInstalled);
 
-            if (wslExecResult.ExitCode != InstallerConstants.ExitCodeSuccess)
+            if (wslAlreadyReady)
             {
-                var err = string.IsNullOrWhiteSpace(wslExecResult.StandardError) ? wslExecResult.StandardOutput : wslExecResult.StandardError;
-                var message = $"WSL2 toolchain provisioning failed (exit code {wslExecResult.ExitCode}): {err}".Trim();
-                steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Failed, message));
-                Report(progress, StepToolchain, message, InstallerLogLevel.Error, null);
-                return ProvisioningStatus.Failed;
+                steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, $"WSL2 toolchain in '{activeDistro}' is already installed."));
             }
+            else
+            {
+                Report(progress, StepToolchain, $"Provisioning .NET 10, Docker, ripgrep, and toolchain inside WSL2 '{activeDistro}'...", InstallerLogLevel.Info, ProgressToolchainStart);
+                var script = BuildLinuxToolchainScript(isWsl: true, skipDocker: options.SkipDocker);
+                var wslExecResult = await ExecuteWslRootBashScriptAsync(activeDistro, script, cancellationToken).ConfigureAwait(false);
 
-            steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Completed, $"Provisioned toolchain inside WSL2 '{activeDistro}'."));
+                if (wslExecResult.ExitCode != InstallerConstants.ExitCodeSuccess)
+                {
+                    var err = string.IsNullOrWhiteSpace(wslExecResult.StandardError) ? wslExecResult.StandardOutput : wslExecResult.StandardError;
+                    var message = $"WSL2 toolchain provisioning failed (exit code {wslExecResult.ExitCode}): {err}".Trim();
+                    steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Failed, message));
+                    Report(progress, StepToolchain, message, InstallerLogLevel.Error, null);
+                    return ProvisioningStatus.Failed;
+                }
+
+                steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Completed, $"Provisioned toolchain inside WSL2 '{activeDistro}'."));
+            }
         }
         else
         {
@@ -434,11 +493,11 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        Report(progress, StepHostDotNet, "Installing .NET 10 SDK via winget...", InstallerLogLevel.Info, 40);
+        Report(progress, StepHostDotNet, "Installing .NET 10 SDK via winget...", InstallerLogLevel.Info, ProgressHostDotNetStart);
         var wingetResult = await _processRunner.RunAsync(
             new ProcessRunRequest
             {
-                FileName = "winget",
+                FileName = InstallerConstants.WingetExecutable,
                 Arguments =
                 [
                     "install",
@@ -452,17 +511,20 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             },
             cancellationToken).ConfigureAwait(false);
 
-        if (wingetResult.ExitCode == InstallerConstants.ExitCodeSuccess &&
-            await ProbeDotNet10Async(null, cancellationToken).ConfigureAwait(false))
+        if (wingetResult.ExitCode == InstallerConstants.ExitCodeSuccess)
         {
-            return new ProvisioningStepResult(StepHostDotNet, ProvisioningStatus.Completed, "Installed .NET 10 SDK via winget.");
+            _platform.RefreshProcessPath();
+            if (await ProbeDotNet10Async(null, cancellationToken).ConfigureAwait(false))
+            {
+                return new ProvisioningStepResult(StepHostDotNet, ProvisioningStatus.Completed, "Installed .NET 10 SDK via winget.");
+            }
         }
 
-        Report(progress, StepHostDotNet, "Winget unavailable or incomplete; installing .NET 10 SDK via dotnet-install.ps1...", InstallerLogLevel.Warning, 48);
+        Report(progress, StepHostDotNet, "Winget unavailable or incomplete; installing .NET 10 SDK via dotnet-install.ps1...", InstallerLogLevel.Warning, ProgressHostDotNetFallback);
         var installScriptCmd =
             $"$ErrorActionPreference='Stop'; " +
             $"$p=Join-Path $env:TEMP 'dotnet-install-{Guid.NewGuid():N}.ps1'; " +
-            $"try {{ Invoke-WebRequest -Uri '{InstallerConstants.DotNetInstallScriptUrl}' -OutFile $p -UseBasicParsing; & $p -Channel 10.0; " +
+            $"try {{ Invoke-WebRequest -Uri '{InstallerConstants.DotNetInstallScriptUrl}' -OutFile $p -UseBasicParsing; & $p -Channel {InstallerConstants.DotNet10Channel}; " +
             $"$dotnetDir=Join-Path $env:LOCALAPPDATA 'Microsoft\\dotnet'; " +
             $"if (Test-Path $dotnetDir) {{ " +
             $"$userPath=[Environment]::GetEnvironmentVariable('Path','User'); " +
@@ -489,22 +551,35 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 $"Failed to install .NET 10 SDK on Windows host (exit code {psResult.ExitCode}): {psResult.StandardError}".Trim());
         }
 
+        _platform.RefreshProcessPath();
         return new ProvisioningStepResult(StepHostDotNet, ProvisioningStatus.Completed, "Installed .NET 10 SDK via dotnet-install.ps1.");
     }
 
     private async Task ProvisionLinuxAsync(
         ProvisioningOptions options,
+        EnvironmentProbeResult probe,
         List<ProvisioningStepResult> steps,
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        if (!options.ProvisionLinuxOrWslToolchain)
+        if (!options.ProvisionLinuxOrWslToolchain && !options.ProvisionHostDotNet)
         {
             steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, "Linux toolchain provisioning skipped by options."));
             return;
         }
 
-        Report(progress, StepToolchain, "Provisioning Linux toolchain (.NET 10 SDK, Docker Engine, ripgrep, git, ICU, locales)...", InstallerLogLevel.Info, 40);
+        var alreadyReady = (!options.ProvisionHostDotNet || probe.HostDotNet10Installed) &&
+                           (!options.ProvisionLinuxOrWslToolchain ||
+                            (probe.HostGitInstalled &&
+                             probe.HostRipgrepInstalled &&
+                             (options.SkipDocker || probe.HostDockerAvailable)));
+        if (alreadyReady)
+        {
+            steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, "Linux toolchain prerequisites are already installed."));
+            return;
+        }
+
+        Report(progress, StepToolchain, "Provisioning Linux toolchain (.NET 10 SDK, Docker Engine, ripgrep, git, ICU, locales)...", InstallerLogLevel.Info, ProgressHostDotNetStart);
         var script = BuildLinuxToolchainScript(isWsl: false, skipDocker: options.SkipDocker);
         var tempScript = Path.Combine(Path.GetTempPath(), $"ncf-provision-{Guid.NewGuid():N}.sh");
 
@@ -513,11 +588,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             await File.WriteAllTextAsync(tempScript, script.Replace("\r\n", "\n", StringComparison.Ordinal), new UTF8Encoding(false), cancellationToken)
                 .ConfigureAwait(false);
 
-            var isRoot = string.Equals(_platform.GetEnvironmentVariable("USER"), "root", StringComparison.OrdinalIgnoreCase);
-            var request = isRoot
-                ? new ProcessRunRequest { FileName = "bash", Arguments = [tempScript] }
-                : new ProcessRunRequest { FileName = "sudo", Arguments = ["bash", tempScript] };
-
+            var request = BuildLinuxElevatedScriptRequest(tempScript);
             var result = await _processRunner.RunAsync(request, cancellationToken).ConfigureAwait(false);
             if (result.ExitCode != InstallerConstants.ExitCodeSuccess)
             {
@@ -537,6 +608,35 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         }
     }
 
+    private ProcessRunRequest BuildLinuxElevatedScriptRequest(string tempScriptPath)
+    {
+        var isRoot = string.Equals(
+            _platform.GetEnvironmentVariable(InstallerConstants.EnvUserUnix),
+            InstallerConstants.RootUserUnix,
+            StringComparison.OrdinalIgnoreCase);
+        if (isRoot)
+        {
+            return new ProcessRunRequest { FileName = InstallerConstants.BashExecutable, Arguments = [tempScriptPath] };
+        }
+
+        var hasGuiSession = !string.IsNullOrWhiteSpace(_platform.GetEnvironmentVariable(InstallerConstants.EnvDisplayUnix)) ||
+                            !string.IsNullOrWhiteSpace(_platform.GetEnvironmentVariable(InstallerConstants.EnvWaylandDisplayUnix));
+        if (hasGuiSession && _platform.IsCommandOnPath(InstallerConstants.PkexecExecutable))
+        {
+            return new ProcessRunRequest
+            {
+                FileName = InstallerConstants.PkexecExecutable,
+                Arguments = [InstallerConstants.BashExecutable, tempScriptPath]
+            };
+        }
+
+        return new ProcessRunRequest
+        {
+            FileName = InstallerConstants.SudoExecutable,
+            Arguments = ["-n", InstallerConstants.BashExecutable, tempScriptPath]
+        };
+    }
+
     private async Task ProvisionMacOsAsync(
         ProvisioningOptions options,
         EnvironmentProbeResult probe,
@@ -544,38 +644,54 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        Report(progress, StepMacOsPrerequisites, "Verifying macOS Docker runtime, Git, ripgrep, and .NET 10 SDK...", InstallerLogLevel.Info, 50);
-
-        if (!probe.HostRipgrepInstalled && _platform.IsCommandOnPath("brew"))
+        if (!options.ProvisionHostDotNet && !options.ProvisionLinuxOrWslToolchain)
         {
-            await _processRunner.RunAsync(new ProcessRunRequest { FileName = "brew", Arguments = ["install", "ripgrep"] }, cancellationToken)
-                .ConfigureAwait(false);
+            steps.Add(new ProvisioningStepResult(StepMacOsPrerequisites, ProvisioningStatus.Skipped, "macOS prerequisites check skipped by options."));
+            return;
         }
 
-        if (!probe.HostGitInstalled && _platform.IsCommandOnPath("brew"))
+        Report(progress, StepMacOsPrerequisites, "Verifying macOS Docker runtime, Git, ripgrep, and .NET 10 SDK...", InstallerLogLevel.Info, ProgressMacOsStart);
+
+        if (options.ProvisionLinuxOrWslToolchain && !probe.HostRipgrepInstalled && _platform.IsCommandOnPath(InstallerConstants.BrewExecutable))
         {
-            await _processRunner.RunAsync(new ProcessRunRequest { FileName = "brew", Arguments = ["install", "git"] }, cancellationToken)
-                .ConfigureAwait(false);
+            var brewRg = await _processRunner.RunAsync(
+                new ProcessRunRequest { FileName = InstallerConstants.BrewExecutable, Arguments = ["install", "ripgrep"] },
+                cancellationToken).ConfigureAwait(false);
+            if (brewRg.ExitCode != InstallerConstants.ExitCodeSuccess)
+            {
+                Report(progress, StepMacOsPrerequisites, $"Warning: 'brew install ripgrep' exited with code {brewRg.ExitCode}: {brewRg.StandardError}".Trim(), InstallerLogLevel.Warning, null);
+            }
+        }
+
+        if (options.ProvisionLinuxOrWslToolchain && !probe.HostGitInstalled && _platform.IsCommandOnPath(InstallerConstants.BrewExecutable))
+        {
+            var brewGit = await _processRunner.RunAsync(
+                new ProcessRunRequest { FileName = InstallerConstants.BrewExecutable, Arguments = ["install", InstallerConstants.GitExecutable] },
+                cancellationToken).ConfigureAwait(false);
+            if (brewGit.ExitCode != InstallerConstants.ExitCodeSuccess)
+            {
+                Report(progress, StepMacOsPrerequisites, $"Warning: 'brew install git' exited with code {brewGit.ExitCode}: {brewGit.StandardError}".Trim(), InstallerLogLevel.Warning, null);
+            }
         }
 
         var refreshed = await ProbeAsync(InstallerConstants.DefaultWslDistro, cancellationToken).ConfigureAwait(false);
         var missing = new List<string>();
-        if (!options.SkipDocker && !refreshed.HostDockerAvailable)
+        if (options.ProvisionLinuxOrWslToolchain && !options.SkipDocker && !refreshed.HostDockerAvailable)
         {
             missing.Add("Docker runtime (Docker Desktop, Colima, or OrbStack)");
         }
 
-        if (!refreshed.HostDotNet10Installed)
+        if (options.ProvisionHostDotNet && !refreshed.HostDotNet10Installed)
         {
             missing.Add(".NET 10 SDK");
         }
 
-        if (!refreshed.HostGitInstalled)
+        if (options.ProvisionLinuxOrWslToolchain && !refreshed.HostGitInstalled)
         {
-            missing.Add("git");
+            missing.Add(InstallerConstants.GitExecutable);
         }
 
-        if (!refreshed.HostRipgrepInstalled)
+        if (options.ProvisionLinuxOrWslToolchain && !refreshed.HostRipgrepInstalled)
         {
             missing.Add("ripgrep");
         }
@@ -605,7 +721,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 
             var forwardPath = tempScript.Replace('\\', '/');
             var pathResult = await _processRunner.RunAsync(
-                CreateWslRequest(["-d", distro, "-u", "root", "--", "wslpath", "-u", forwardPath]),
+                CreateWslRequest(["-d", distro, "-u", InstallerConstants.RootUserUnix, "--", "wslpath", "-u", forwardPath]),
                 cancellationToken).ConfigureAwait(false);
 
             if (pathResult.ExitCode != InstallerConstants.ExitCodeSuccess)
@@ -615,7 +731,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 
             var wslPath = StripNullCharacters(pathResult.StandardOutput).Trim();
             return await _processRunner.RunAsync(
-                CreateWslRequest(["-d", distro, "-u", "root", "--", "bash", wslPath]),
+                CreateWslRequest(["-d", distro, "-u", InstallerConstants.RootUserUnix, "--", InstallerConstants.BashExecutable, wslPath]),
                 cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -679,14 +795,8 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         string distro,
         CancellationToken cancellationToken)
     {
-        const string probeCommand =
-            "if [ -f /etc/profile.d/dotnet.sh ]; then . /etc/profile.d/dotnet.sh >/dev/null 2>&1 || true; fi; " +
-            "echo \"DOTNET=$(dotnet --list-sdks 2>/dev/null | grep -c '^10\\.' || true)\"; " +
-            "echo \"DOCKER=$(command -v docker >/dev/null 2>&1 && echo 1 || echo 0)\"; " +
-            "echo \"RG=$(command -v rg >/dev/null 2>&1 && echo 1 || echo 0)\"";
-
         var result = await _processRunner.RunAsync(
-            CreateWslRequest(["-d", distro, "--", "bash", "-lc", probeCommand]),
+            CreateWslRequest(["-d", distro, "--", InstallerConstants.BashExecutable, "-lc", WslProbeCommand]),
             cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode != InstallerConstants.ExitCodeSuccess)
@@ -730,19 +840,19 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 
     private async Task<bool> ProbeDockerRuntimeAsync(HostPlatformType platform, CancellationToken cancellationToken)
     {
-        if (await ProbeSimpleSuccessAsync("docker", ["info"], cancellationToken).ConfigureAwait(false))
+        if (await ProbeSimpleSuccessAsync(InstallerConstants.DockerExecutable, ["info"], cancellationToken).ConfigureAwait(false))
         {
             return true;
         }
 
         if (platform == HostPlatformType.MacOS)
         {
-            if (await ProbeSimpleSuccessAsync("colima", ["status"], cancellationToken).ConfigureAwait(false))
+            if (await ProbeSimpleSuccessAsync(InstallerConstants.ColimaExecutable, ["status"], cancellationToken).ConfigureAwait(false))
             {
                 return true;
             }
 
-            if (await ProbeSimpleSuccessAsync("orb", ["status"], cancellationToken).ConfigureAwait(false))
+            if (await ProbeSimpleSuccessAsync(InstallerConstants.OrbExecutable, ["status"], cancellationToken).ConfigureAwait(false))
             {
                 return true;
             }
@@ -809,6 +919,6 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         progress?.Report(new InstallerProgressEvent(step, message, level, percent));
     }
 
-    [GeneratedRegex(@"DOTNET=(\d+)", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"DOTNET=(\d+)")]
     private static partial Regex DotNetCountRegex();
 }

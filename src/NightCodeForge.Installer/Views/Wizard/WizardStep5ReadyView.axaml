@@ -42,8 +42,12 @@
               BorderThickness="1">
         <StackPanel Spacing="8">
           <TextBlock Text="Desktop &amp; Menu Shortcuts" FontSize="14" FontWeight="SemiBold" />
-          <CheckBox Content="Register Start Menu / Applications Launcher shortcut" IsChecked="{Binding CreateStartMenuShortcut}" />
-          <CheckBox Content="Create Desktop shortcut for NightCodeForge" IsChecked="{Binding CreateDesktopShortcut}" />
+          <CheckBox Content="Register Start Menu / Applications Launcher shortcut"
+                    IsChecked="{Binding CreateStartMenuShortcut}"
+                    IsEnabled="{Binding !IsBusy}" />
+          <CheckBox Content="Create Desktop shortcut for NightCodeForge"
+                    IsChecked="{Binding CreateDesktopShortcut}"
+                    IsEnabled="{Binding !IsBusy}" />
           <Button Content="Apply Shortcut Preferences"
                   Command="{Binding ApplyShortcutsCommand}"
                   IsEnabled="{Binding !IsBusy}"

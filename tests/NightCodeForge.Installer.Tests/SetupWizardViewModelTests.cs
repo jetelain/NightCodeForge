@@ -57,7 +57,7 @@ public sealed class SetupWizardViewModelTests
             .ReturnsAsync(bundleDir);
 
         var detector = new Mock<IInstallationDetector>();
-        detector.Setup(d => d.Detect(It.IsAny<string?>())).Returns(discovery);
+        detector.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(discovery);
 
         using var container = InstallerTestFactory.CreateContainer(
             platform: platform.Object,
@@ -158,12 +158,14 @@ public sealed class SetupWizardViewModelTests
 
         var uiHost = new Mock<IInstallerUiHost>();
         var detector = new Mock<IInstallationDetector>();
-        detector.Setup(d => d.Detect(It.IsAny<string?>())).Returns(discovery);
+        detector.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(discovery);
+        var osIntegration = new Mock<IOsIntegrationService>();
 
         using var container = InstallerTestFactory.CreateContainer(
             environmentProvisioner: envProvisioner.Object,
             nuGetProvisioner: nuGetProvisioner.Object,
             installationDetector: detector.Object,
+            osIntegration: osIntegration.Object,
             releaseManager: releaseManager.Object,
             setupHandoff: handoffService.Object,
             hostAppControl: hostAppControl.Object);
@@ -200,6 +202,13 @@ public sealed class SetupWizardViewModelTests
         Assert.True(wizard.CanFinish);
         Assert.Equal("v1.0.0", wizard.Step5.InstalledVersionDisplay);
 
+        wizard.Step5.CreateStartMenuShortcut = false;
+        wizard.Step5.CreateDesktopShortcut = true;
+        await wizard.Step5.ApplyShortcutsCommand.ExecuteAsync(null);
+        osIntegration.Verify(
+            o => o.ApplyShortcutPreferencesAsync(@"C:\LegacyNCF", false, true, It.IsAny<CancellationToken>()),
+            Times.Once);
+
         await wizard.Step5.LaunchNightCodeForgeWebCommand.ExecuteAsync(null);
         hostAppControl.Verify(c => c.StartWebServerAsync(@"C:\LegacyNCF", It.IsAny<CancellationToken>()), Times.Once);
         hostAppControl.Verify(c => c.OpenWebUiInBrowserAsync("http://localhost:5270", It.IsAny<CancellationToken>()), Times.Once);
@@ -224,7 +233,7 @@ public sealed class SetupWizardViewModelTests
             .ThrowsAsync(new OllamaRouterSyncException("Router unreachable"));
 
         using var container = InstallerTestFactory.CreateContainer(
-            installationDetector: Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>()) == discovery),
+            installationDetector: Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>()) == discovery),
             recommendationSync: syncService.Object);
 
         var plan = InstallerTestFactory.CreateStartupPlan(discovery);
@@ -233,6 +242,8 @@ public sealed class SetupWizardViewModelTests
         await mainVm.Wizard.GoToAsync(3);
         await mainVm.Wizard.Step4.SyncRecommendationsOnlyCommand.ExecuteAsync(null);
         Assert.Contains("Router unreachable", mainVm.Wizard.Step4.ErrorMessage, StringComparison.Ordinal);
+        Assert.True(mainVm.Wizard.Step4.HasError);
+        Assert.False(mainVm.Wizard.CanGoNext);
 
         mainVm.Wizard.Step4.SkipAiSetupCommand.Execute(null);
         Assert.True(mainVm.Wizard.Step4.IsSkipped);

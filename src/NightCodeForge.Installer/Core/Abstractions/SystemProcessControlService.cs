@@ -2,12 +2,15 @@ namespace NightCodeForge.Installer.Core.Abstractions;
 
 using System.ComponentModel;
 using System.Diagnostics;
+using NightCodeForge.Installer.Core.Constants;
 
 /// <summary>
 /// Live OS implementation of <see cref="IProcessControlService"/> using <see cref="Process"/>.
 /// </summary>
 public sealed class SystemProcessControlService : IProcessControlService
 {
+    private const int Win32ErrorAccessDenied = 5;
+
     public int CurrentProcessId => Environment.ProcessId;
 
     public string? CurrentProcessPath => Environment.ProcessPath;
@@ -50,38 +53,50 @@ public sealed class SystemProcessControlService : IProcessControlService
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(processNames);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var currentPid = CurrentProcessId;
+        var seenPids = new HashSet<int>();
         var targets = new List<Process>();
-
-        foreach (var rawName in processNames)
-        {
-            if (string.IsNullOrWhiteSpace(rawName))
-            {
-                continue;
-            }
-
-            var matches = Process.GetProcessesByName(NormalizeProcessName(rawName));
-            foreach (var process in matches)
-            {
-                if (process.Id == currentPid)
-                {
-                    process.Dispose();
-                    continue;
-                }
-
-                targets.Add(process);
-            }
-        }
-
-        if (targets.Count == 0)
-        {
-            return false;
-        }
 
         try
         {
-            var killedAny = false;
+            foreach (var rawName in processNames)
+            {
+                if (string.IsNullOrWhiteSpace(rawName))
+                {
+                    continue;
+                }
+
+                var matches = Process.GetProcessesByName(NormalizeProcessName(rawName));
+                foreach (var process in matches)
+                {
+                    var keepHandle = false;
+                    try
+                    {
+                        var pid = process.Id;
+                        if (pid != currentPid && seenPids.Add(pid))
+                        {
+                            targets.Add(process);
+                            keepHandle = true;
+                        }
+                    }
+                    finally
+                    {
+                        if (!keepHandle)
+                        {
+                            process.Dispose();
+                        }
+                    }
+                }
+            }
+
+            if (targets.Count == 0)
+            {
+                return false;
+            }
+
+            var killedTargets = new List<Process>();
             foreach (var target in targets)
             {
                 try
@@ -89,7 +104,7 @@ public sealed class SystemProcessControlService : IProcessControlService
                     if (!target.HasExited)
                     {
                         target.Kill(entireProcessTree: true);
-                        killedAny = true;
+                        killedTargets.Add(target);
                     }
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
@@ -99,16 +114,17 @@ public sealed class SystemProcessControlService : IProcessControlService
                 }
             }
 
-            if (killedAny && waitTimeout > TimeSpan.Zero)
+            if (killedTargets.Count > 0 && waitTimeout > TimeSpan.Zero)
             {
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeoutCts.CancelAfter(waitTimeout);
 
-                var waitTasks = targets.Select(target => WaitForExitBestEffortAsync(target, timeoutCts.Token));
+                var waitTasks = killedTargets.Select(target => WaitForExitBestEffortAsync(target, timeoutCts.Token, cancellationToken));
                 await Task.WhenAll(waitTasks).ConfigureAwait(false);
             }
 
-            return killedAny;
+            cancellationToken.ThrowIfCancellationRequested();
+            return killedTargets.Count > 0;
         }
         finally
         {
@@ -116,18 +132,25 @@ public sealed class SystemProcessControlService : IProcessControlService
         }
     }
 
-    private static async Task WaitForExitBestEffortAsync(Process process, CancellationToken cancellationToken)
+    private static async Task WaitForExitBestEffortAsync(
+        Process process,
+        CancellationToken linkedToken,
+        CancellationToken callerToken)
     {
         try
         {
             if (!process.HasExited)
             {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                await process.WaitForExitAsync(linkedToken).ConfigureAwait(false);
             }
         }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or OperationCanceledException)
+        catch (OperationCanceledException) when (!callerToken.IsCancellationRequested)
         {
-            // Justification: Bounded process-exit wait must not crash upgrades when OS wait times out or process already exited.
+            // Justification: Bounded process-exit wait must not crash upgrades when OS wait times out.
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            // Justification: Process may exit concurrently or deny wait handle during teardown.
             _ = ex;
         }
     }
@@ -138,6 +161,11 @@ public sealed class SystemProcessControlService : IProcessControlService
         {
             return process.HasExited;
         }
+        catch (Win32Exception ex) when (OperatingSystem.IsWindows() && ex.NativeErrorCode == Win32ErrorAccessDenied)
+        {
+            // Process is still active (e.g., elevated/system process), not exited.
+            return false;
+        }
         catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
         {
             // Justification: Process access may fail if process terminated between enumeration and inspection.
@@ -146,11 +174,11 @@ public sealed class SystemProcessControlService : IProcessControlService
         }
     }
 
-    private static string NormalizeProcessName(string rawName)
+    internal static string NormalizeProcessName(string rawName)
     {
         var trimmed = rawName.Trim();
-        return trimmed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
-            ? trimmed[..^4]
+        return trimmed.EndsWith(InstallerConstants.ExeExtension, StringComparison.OrdinalIgnoreCase)
+            ? trimmed[..^InstallerConstants.ExeExtension.Length]
             : trimmed;
     }
 

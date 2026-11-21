@@ -8,10 +8,15 @@ using NightCodeForge.Installer.Core.Models;
 /// </summary>
 public sealed class SetupWizardState
 {
-    public SetupWizardState(InstallerStartupPlan plan)
+    public SetupWizardState(
+        InstallerStartupPlan plan,
+        HostPlatformType platform,
+        CancellationToken lifetimeToken)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
+        Platform = platform;
+        LifetimeToken = lifetimeToken;
         SourceMode = plan.EffectiveSource.Mode;
         BundleDirectory = plan.EffectiveSource.BundleDirectory;
         InstallDirectory = plan.EffectiveInstallDirectory;
@@ -30,6 +35,8 @@ public sealed class SetupWizardState
         CompanionOutcomes = [];
     }
 
+    public HostPlatformType Platform { get; }
+    public CancellationToken LifetimeToken { get; }
     public InstallSourceMode SourceMode { get; set; }
     public string? BundleDirectory { get; set; }
     public string InstallDirectory { get; set; }
@@ -43,6 +50,8 @@ public sealed class SetupWizardState
     public bool InstallCompanionTools { get; set; }
     public bool CreateDesktopShortcut { get; set; }
     public bool CreateStartMenuShortcut { get; set; }
+    public bool AppliedDesktopShortcut { get; set; }
+    public bool AppliedStartMenuShortcut { get; set; }
     public EnvironmentProbeResult? LatestProbe { get; set; }
     public InstallationDiscoveryResult Discovery { get; set; }
     public ReleaseDeploymentResult? NightCodeForgeDeployment { get; set; }

@@ -29,6 +29,19 @@
     <ScrollViewer>
       <StackPanel Spacing="12">
 
+        <Border IsVisible="{Binding AutoFocusUpgradeBanner}"
+                Padding="12,10"
+                CornerRadius="8"
+                Background="{DynamicResource SemiColorInformationLight}"
+                BorderBrush="{DynamicResource SemiColorInformation}"
+                BorderThickness="1">
+          <TextBlock Text="Upgrade mode active: review available updates below and click Upgrade All Components to apply updates."
+                     FontSize="12"
+                     FontWeight="SemiBold"
+                     Foreground="{DynamicResource NightCodeAccentIndigoLightText}"
+                     TextWrapping="Wrap" />
+        </Border>
+
         <!-- Application Status Card -->
         <Border Padding="14"
                 CornerRadius="8"
@@ -55,7 +68,7 @@
                 <TextBlock Text="(Adopted legacy publish.ps1 install)"
                            IsVisible="{Binding IsLegacyPublishInstall}"
                            FontSize="11"
-                           Foreground="{DynamicResource NightCodeAccentAmberColor}"
+                           Foreground="{DynamicResource NightCodeAccentAmber}"
                            VerticalAlignment="Center" />
               </StackPanel>
 
@@ -69,8 +82,8 @@
             <StackPanel Orientation="Horizontal" Spacing="8">
               <Button Content="Start Server" Classes="Primary" Command="{Binding StartServerCommand}" IsEnabled="{Binding !IsBusy}" />
               <Button Content="Stop Server" Command="{Binding StopServerCommand}" IsEnabled="{Binding !IsBusy}" />
-              <Button Content="Open Web UI in Browser" Command="{Binding OpenWebUiCommand}" />
-              <Button Content="Open CLI Terminal" Command="{Binding OpenCliTerminalCommand}" />
+              <Button Content="Open Web UI in Browser" Command="{Binding OpenWebUiCommand}" IsEnabled="{Binding !IsBusy}" />
+              <Button Content="Open CLI Terminal" Command="{Binding OpenCliTerminalCommand}" IsEnabled="{Binding !IsBusy}" />
             </StackPanel>
           </StackPanel>
         </Border>
@@ -87,15 +100,17 @@
             <StackPanel Orientation="Horizontal" Spacing="20">
               <RadioButton GroupName="HubInstallSource"
                            Content="Online (GitHub Releases &amp; NuGet.org)"
-                           IsChecked="{Binding IsOnlineSource}" />
+                           IsChecked="{Binding IsOnlineSource}"
+                           IsEnabled="{Binding !IsBusy}" />
               <RadioButton GroupName="HubInstallSource"
                            Content="Air-Gapped / Local Bundle (bundle/)"
-                           IsChecked="{Binding IsAirGappedSource}" />
+                           IsChecked="{Binding IsAirGappedSource}"
+                           IsEnabled="{Binding !IsBusy}" />
             </StackPanel>
 
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding IsAirGappedSource}">
-              <TextBox Grid.Column="0" Text="{Binding BundleDirectory}" PlaceholderText="Path to local air-gapped bundle directory" />
-              <Button Grid.Column="1" Content="Browse Bundle..." Command="{Binding BrowseBundleFolderCommand}" />
+              <TextBox Grid.Column="0" Text="{Binding BundleDirectory}" PlaceholderText="Path to local air-gapped bundle directory" IsEnabled="{Binding !IsBusy}" />
+              <Button Grid.Column="1" Content="Browse Bundle..." Command="{Binding BrowseBundleFolderCommand}" IsEnabled="{Binding !IsBusy}" />
             </Grid>
 
             <TextBlock Text="{Binding DetectedBundleSummary}"
@@ -127,7 +142,7 @@
             <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
               <TextBlock Grid.Column="0" Text="Companion NuGet Global Tools" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
               <Button Grid.Column="1" Content="Reinstall / Update All Tools" Command="{Binding UpdateAllToolsCommand}" IsEnabled="{Binding !IsBusy}" />
-              <Button Grid.Column="2" Content="Launch NightCode Assay" Command="{Binding LaunchNightCodeAssayCommand}" />
+              <Button Grid.Column="2" Content="Launch NightCode Assay" Command="{Binding LaunchNightCodeAssayCommand}" IsEnabled="{Binding !IsBusy}" />
             </Grid>
 
             <ItemsControl ItemsSource="{Binding CompanionTools}">
@@ -163,11 +178,14 @@
                 BorderBrush="{DynamicResource SemiColorBorder}"
                 BorderThickness="1">
           <StackPanel Spacing="10">
-            <TextBlock Text="OllamaRouter &amp; AI Fleet" FontSize="14" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0" Text="OllamaRouter &amp; AI Fleet" FontSize="14" FontWeight="SemiBold" />
+              <TextBlock Grid.Column="1" Text="{Binding OllamaRouterVersionText}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" />
+            </Grid>
             <TextBlock Text="{Binding OllamaRouterStatusText}" FontSize="12" />
             <TextBlock Text="{Binding LastSyncedModelsSummary}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="Open OllamaRouter App" Command="{Binding OpenOllamaRouterAppCommand}" />
+              <Button Content="Open OllamaRouter App" Command="{Binding OpenOllamaRouterAppCommand}" IsEnabled="{Binding !IsBusy}" />
               <Button Content="Run OllamaRouter Setup Wizard" Command="{Binding RunOllamaRouterWizardCommand}" IsEnabled="{Binding !IsBusy}" />
               <Button Content="Sync Role Recommendations" Command="{Binding SyncRecommendationsCommand}" IsEnabled="{Binding !IsBusy}" />
             </StackPanel>
@@ -202,7 +220,11 @@
                                    Foreground="{Binding Status, Converter={x:Static conv:DoctorStatusToBrushConverter.Instance}}" />
                       </Grid>
                       <TextBlock Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap" />
-                      <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding Detail}"
+                                 IsVisible="{Binding Detail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                 FontSize="11"
+                                 Foreground="{DynamicResource SemiColorText2}"
+                                 TextWrapping="Wrap" />
                     </StackPanel>
                   </Border>
                 </DataTemplate>

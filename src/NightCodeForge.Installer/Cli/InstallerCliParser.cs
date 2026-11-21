@@ -41,12 +41,14 @@ public static class InstallerCliParser
     public const string FlagWslDistro = "--wsl-distro";
     public const string FlagHelp = "--help";
     public const string FlagHelpShort = "-h";
+    public const string FlagHelpWindows = "/?";
 
     public static InstallerCliOptions Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        var mode = InstallerLaunchMode.DefaultAuto;
+        InstallerLaunchMode? explicitMode = null;
+        var helpRequested = false;
         var keepData = false;
         var removeTools = false;
         var removeOllamaRouter = false;
@@ -64,21 +66,21 @@ public static class InstallerCliParser
                 continue;
             }
 
-            if (EqualsIgnoreCase(arg, FlagHelp) || EqualsIgnoreCase(arg, FlagHelpShort))
+            if (EqualsIgnoreCase(arg, FlagHelp) || EqualsIgnoreCase(arg, FlagHelpShort) || EqualsIgnoreCase(arg, FlagHelpWindows))
             {
-                mode = InstallerLaunchMode.Help;
+                helpRequested = true;
             }
             else if (EqualsIgnoreCase(arg, VerbUninstall) || EqualsIgnoreCase(arg, FlagUninstall))
             {
-                mode = InstallerLaunchMode.Uninstall;
+                SetExplicitMode(ref explicitMode, InstallerLaunchMode.Uninstall);
             }
             else if (EqualsIgnoreCase(arg, VerbUpgrade) || EqualsIgnoreCase(arg, FlagUpgrade))
             {
-                mode = InstallerLaunchMode.Upgrade;
+                SetExplicitMode(ref explicitMode, InstallerLaunchMode.Upgrade);
             }
             else if (EqualsIgnoreCase(arg, FlagWizard))
             {
-                mode = InstallerLaunchMode.Wizard;
+                SetExplicitMode(ref explicitMode, InstallerLaunchMode.Wizard);
             }
             else if (EqualsIgnoreCase(arg, FlagKeepData))
             {
@@ -132,6 +134,10 @@ public static class InstallerCliParser
             }
         }
 
+        var mode = helpRequested
+            ? InstallerLaunchMode.Help
+            : explicitMode ?? InstallerLaunchMode.DefaultAuto;
+
         return new InstallerCliOptions(
             Mode: mode,
             UninstallOptions: new UninstallOptions(keepData, removeTools, removeOllamaRouter, quiet),
@@ -141,9 +147,22 @@ public static class InstallerCliParser
             WslDistroName: string.IsNullOrWhiteSpace(wslDistro) ? InstallerConstants.DefaultWslDistro : wslDistro.Trim());
     }
 
+    private static void SetExplicitMode(ref InstallerLaunchMode? currentMode, InstallerLaunchMode requestedMode)
+    {
+        if (currentMode.HasValue && currentMode.Value != requestedMode)
+        {
+            throw new ArgumentException(
+                $"Conflicting mode arguments specified ('{currentMode.Value}' vs '{requestedMode}'). Specify only one mode.");
+        }
+
+        currentMode = requestedMode;
+    }
+
     private static string ReadOptionValue(string[] args, ref int index, string flagName)
     {
-        if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
+        if (index + 1 >= args.Length ||
+            string.IsNullOrWhiteSpace(args[index + 1]) ||
+            args[index + 1].TrimStart().StartsWith('-'))
         {
             throw new ArgumentException($"Option '{flagName}' requires a value.");
         }

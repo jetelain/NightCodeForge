@@ -31,6 +31,12 @@ public interface IOsIntegrationService
         bool createDesktopShortcut,
         CancellationToken cancellationToken = default);
 
+    Task ApplyShortcutPreferencesAsync(
+        string installDirectory,
+        bool createStartMenuShortcut,
+        bool createDesktopShortcut,
+        CancellationToken cancellationToken = default);
+
     Task UnregisterNightCodeForgeInstallationAsync(
         string installDirectory,
         CancellationToken cancellationToken = default);

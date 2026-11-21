@@ -2,6 +2,7 @@ namespace NightCodeForge.Installer.ViewModels;
 
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 
 /// <summary>
 /// Abstraction over native desktop window interactions (folder picker dialog and application shutdown).
@@ -26,30 +27,47 @@ public sealed class AvaloniaInstallerUiHost : IInstallerUiHost
         _shutdownAction = shutdownAction ?? throw new ArgumentNullException(nameof(shutdownAction));
     }
 
-    public async Task<string?> PickBundleFolderAsync(string? initialDirectory, CancellationToken cancellationToken = default)
+    public Task<string?> PickBundleFolderAsync(string? initialDirectory, CancellationToken cancellationToken = default)
     {
-        var window = _windowAccessor();
-        if (window?.StorageProvider is not { CanPickFolder: true } storageProvider)
-        {
-            return null;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
 
-        IStorageFolder? suggestedStart = null;
-        if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+        return Dispatcher.UIThread.InvokeAsync(async () =>
         {
-            suggestedStart = await storageProvider.TryGetFolderFromPathAsync(initialDirectory).ConfigureAwait(true);
-        }
+            cancellationToken.ThrowIfCancellationRequested();
 
-        var selected = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-        {
-            Title = "Select Air-Gapped Local Bundle Directory",
-            AllowMultiple = false,
-            SuggestedStartLocation = suggestedStart
-        }).ConfigureAwait(true);
+            var window = _windowAccessor();
+            if (window?.StorageProvider is not { CanPickFolder: true } storageProvider)
+            {
+                return null;
+            }
 
-        var folder = selected.FirstOrDefault();
-        return folder?.TryGetLocalPath();
+            IStorageFolder? suggestedStart = null;
+            if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+            {
+                suggestedStart = await storageProvider.TryGetFolderFromPathAsync(initialDirectory).ConfigureAwait(true);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var selected = await storageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select Air-Gapped Local Bundle Directory",
+                AllowMultiple = false,
+                SuggestedStartLocation = suggestedStart
+            }).ConfigureAwait(true);
+
+            var folder = selected.FirstOrDefault();
+            return folder?.TryGetLocalPath();
+        });
     }
 
-    public void RequestExit(int exitCode) => _shutdownAction(exitCode);
+    public void RequestExit(int exitCode)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            _shutdownAction(exitCode);
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() => _shutdownAction(exitCode));
+    }
 }

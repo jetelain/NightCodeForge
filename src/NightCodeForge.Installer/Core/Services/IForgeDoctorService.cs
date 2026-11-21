@@ -10,7 +10,7 @@ public interface IForgeDoctorService
 {
     Task<ForgeDoctorReport> RunDiagnosticsAsync(
         string? installDirectory,
-        string wslDistroName,
+        string? wslDistroName,
         string? routerBaseUrl,
         CancellationToken cancellationToken = default);
 }

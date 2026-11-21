@@ -11,8 +11,7 @@ on:
       - main
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   build-and-test:
@@ -63,9 +62,33 @@ jobs:
           path: ./artifacts/nuget/*.nupkg
           if-no-files-found: error
 
+  test-linux:
+    name: Test Linux (x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore NightCodeForge.slnx
+
+      - name: Build solution
+        run: dotnet build NightCodeForge.slnx -c Release --no-restore
+
+      - name: Run unit & integration tests (Linux)
+        run: dotnet test NightCodeForge.slnx -c Release --no-build --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
+
   publish:
     name: Publish (${{ matrix.rid }})
-    needs: build-and-test
+    needs:
+      - build-and-test
+      - test-linux
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -161,7 +184,8 @@ jobs:
             '}' \
             > ./dist/web/appsettings.Production.json
 
-          find ./dist/web -type f -name '*.pdb' -delete
+          find ./dist/web \( -name '*.pdb' -o -name '*.dbg' \) -type f -delete
+          find ./dist/web -type d -name '*.dSYM' -prune -exec rm -rf {} +
           if [[ -d ./skills ]]; then
             cp -r ./skills ./dist/web/skills
           fi
@@ -178,7 +202,8 @@ jobs:
             -p:Version="${VERSION}" \
             -o ./dist/setup
 
-          find ./dist/setup -type f -name '*.pdb' -delete
+          find ./dist/setup \( -name '*.pdb' -o -name '*.dbg' \) -type f -delete
+          find ./dist/setup -type d -name '*.dSYM' -prune -exec rm -rf {} +
           cp README.md LICENSE ./dist/setup/
 
       - name: Package zip archives & SHA256SUMS (Windows)
@@ -200,7 +225,8 @@ jobs:
             $name = [System.IO.Path]::GetFileName($_)
             "$hash  $name"
           }
-          [System.IO.File]::WriteAllLines("./artifacts/SHA256SUMS-$env:RID.txt", $sums, [System.Text.UTF8Encoding]::new($false))
+          $content = ($sums -join "`n") + "`n"
+          [System.IO.File]::WriteAllText("./artifacts/SHA256SUMS-$env:RID.txt", $content, [System.Text.UTF8Encoding]::new($false))
 
       - name: Package zip archives & SHA256SUMS (Linux / macOS)
         if: runner.os != 'Windows'
@@ -229,8 +255,12 @@ jobs:
 
   release:
     name: NuGet & GitHub Release
+    permissions:
+      contents: write
+      id-token: write
     needs:
       - build-and-test
+      - test-linux
       - publish
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -252,12 +282,13 @@ jobs:
         run: |
           set -euo pipefail
           cd ./release-artifacts
-          cat SHA256SUMS-*.txt > SHA256SUMS.txt
-          for pkg in NightCodeForge.Cli.*.nupkg; do
-            sha256sum "${pkg}" >> SHA256SUMS.txt
-          done
+          {
+            cat SHA256SUMS-*.txt
+            for pkg in NightCodeForge.Cli.*.nupkg; do
+              sha256sum "${pkg}"
+            done
+          } | tr -d '\r' | LC_ALL=C sort -k2 -u > SHA256SUMS.txt
           rm -f SHA256SUMS-*.txt
-          sort -k2 -o SHA256SUMS.txt SHA256SUMS.txt
 
       - name: NuGet login
         id: login

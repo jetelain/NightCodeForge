@@ -32,10 +32,11 @@ public sealed class OsIntegrationServiceTests : IDisposable
         Assert.Equal("1.2.3", plan.DisplayVersion);
         Assert.Equal("Pmad", plan.Publisher);
         Assert.Equal(installDir, plan.InstallLocation);
-        Assert.Equal($@"{installDir}\NightCodeForge.Installer.exe,0", plan.DisplayIcon);
-        Assert.Equal($"\"{installDir}\\NightCodeForge.Installer.exe\" uninstall", plan.UninstallString);
-        Assert.Equal($"\"{installDir}\\NightCodeForge.Installer.exe\" uninstall --quiet", plan.QuietUninstallString);
-        Assert.Equal($"\"{installDir}\\NightCodeForge.Installer.exe\"", plan.ModifyPath);
+        var expectedInstallerExe = $@"{installDir}\{InstallerConstants.InstallerSubDirectoryName}\{InstallerConstants.InstallerExeWindows}";
+        Assert.Equal($"{expectedInstallerExe},0", plan.DisplayIcon);
+        Assert.Equal($"\"{expectedInstallerExe}\" uninstall", plan.UninstallString);
+        Assert.Equal($"\"{expectedInstallerExe}\" uninstall --quiet", plan.QuietUninstallString);
+        Assert.Equal($"\"{expectedInstallerExe}\"", plan.ModifyPath);
         Assert.Equal(0, plan.NoModify);
         Assert.Equal(1, plan.NoRepair);
         Assert.Equal(42000, plan.EstimatedSizeKb);
@@ -77,7 +78,8 @@ public sealed class OsIntegrationServiceTests : IDisposable
     {
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var installDir = _workspace.CreateSubdirectory("ncf-win");
-        File.WriteAllText(Path.Combine(installDir, InstallerConstants.InstallerExeWindows), "exe");
+        var installerSubDir = Directory.CreateDirectory(Path.Combine(installDir, InstallerConstants.InstallerSubDirectoryName)).FullName;
+        File.WriteAllText(Path.Combine(installerSubDir, InstallerConstants.InstallerExeWindows), "exe");
 
         var registry = new Mock<IWindowsRegistryAccessor>();
         var runner = new Mock<IProcessRunner>();
@@ -153,9 +155,10 @@ public sealed class OsIntegrationServiceTests : IDisposable
             estimatedSizeKb: 100,
             new DateTimeOffset(2026, 11, 21, 0, 0, 0, TimeSpan.Zero));
 
+        var expectedInstallerExe = @"C:\Users\Dev\AppData\Local\NightCodeForge\installer\NightCodeForge.Installer.exe";
         Assert.Equal(@"C:\Users\Dev\AppData\Local\NightCodeForge", plan.InstallLocation);
-        Assert.Equal(@"C:\Users\Dev\AppData\Local\NightCodeForge\NightCodeForge.Installer.exe,0", plan.DisplayIcon);
-        Assert.Equal(@"""C:\Users\Dev\AppData\Local\NightCodeForge\NightCodeForge.Installer.exe"" uninstall", plan.UninstallString);
+        Assert.Equal($"{expectedInstallerExe},0", plan.DisplayIcon);
+        Assert.Equal($"\"{expectedInstallerExe}\" uninstall", plan.UninstallString);
     }
 
     [Fact]
@@ -176,7 +179,7 @@ public sealed class OsIntegrationServiceTests : IDisposable
         Assert.DoesNotContain('\\', linuxDesktop.WebAppDesktopContent);
 
         var macPlan = sut.CreateMacOsAppWrapperPlan(@"\Users\dev\Applications\NightCodeForge\", "/Users/dev");
-        Assert.Contains("exec \"/Users/dev/Applications/NightCodeForge/nightcodeforge-installer\" \"$@\"", macPlan.LauncherScriptContent, StringComparison.Ordinal);
+        Assert.Contains("exec \"/Users/dev/Applications/NightCodeForge/installer/nightcodeforge-installer\" \"$@\"", macPlan.LauncherScriptContent, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -234,5 +237,25 @@ public sealed class OsIntegrationServiceTests : IDisposable
 
         sut.RemoveDirectoryFromUserPath(customPath, InstallerConstants.PathBlockLabelNightCodeForge);
         Assert.Equal(@"C:\Other\Bin", userPath);
+    }
+
+    [Fact]
+    public async Task ApplyShortcutPreferencesAsync_CreatesAndRemovesWindowsShortcuts_AndRejectsNewlines()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var installDir = _workspace.CreateSubdirectory("ncf-prefs");
+        var registry = new Mock<IWindowsRegistryAccessor>();
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+
+        var sut = new OsIntegrationService(platform.Object, registry.Object, runner.Object, TimeProvider.System);
+
+        await sut.ApplyShortcutPreferencesAsync(installDir, createStartMenuShortcut: true, createDesktopShortcut: false);
+        runner.Verify(r => r.RunAsync(
+            It.Is<ProcessRunRequest>(q => q.FileName == InstallerConstants.PowerShellExecutable && q.Arguments.Contains("-EncodedCommand")),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        Assert.Throws<ArgumentException>(() => sut.CreateLinuxDesktopEntryPlans("/home/dev/.ncf\nEvil=true", "/home/dev"));
     }
 }

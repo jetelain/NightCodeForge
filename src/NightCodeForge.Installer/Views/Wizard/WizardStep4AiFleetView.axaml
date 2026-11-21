@@ -17,6 +17,18 @@
         <TextBlock Text="AI Fleet &amp; Model Setup (Delegated to OllamaRouter)" FontSize="14" FontWeight="SemiBold" />
         <TextBlock Text="{Binding StatusMessage}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
 
+        <Border IsVisible="{Binding HasError}"
+                Padding="10,8"
+                CornerRadius="6"
+                Background="{DynamicResource SemiColorDangerLight}"
+                BorderBrush="{DynamicResource SemiColorDanger}"
+                BorderThickness="1">
+          <TextBlock Text="{Binding ErrorMessage}"
+                     FontSize="12"
+                     Foreground="{DynamicResource NightCodeAccentCrimsonLightText}"
+                     TextWrapping="Wrap" />
+        </Border>
+
         <StackPanel Orientation="Horizontal" Spacing="8">
           <Button Content="{Binding PrimaryButtonLabel}"
                   Classes="Primary"
@@ -74,7 +86,7 @@
                     <StackPanel Spacing="4">
                       <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Grid.Column="0" Text="{Binding Role}" FontWeight="SemiBold" />
-                        <TextBlock Grid.Column="1" Text="{Binding Model}" Foreground="{DynamicResource NightCodeAccentIndigoLightTextColor}" FontWeight="SemiBold" />
+                        <TextBlock Grid.Column="1" Text="{Binding Model}" Foreground="{DynamicResource NightCodeAccentIndigoLightText}" FontWeight="SemiBold" />
                       </Grid>
                       <TextBlock Text="{Binding RecommendedContextWindow, StringFormat='Recommended Context: {0:N0} tokens'}"
                                  FontSize="11"

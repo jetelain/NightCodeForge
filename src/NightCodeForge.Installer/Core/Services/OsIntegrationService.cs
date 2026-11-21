@@ -12,6 +12,8 @@ using NightCodeForge.Installer.Core.Models;
 /// </summary>
 public sealed class OsIntegrationService : IOsIntegrationService
 {
+    private const string DateFormatCompact = "yyyyMMdd";
+
     private readonly IPlatformEnvironment _platform;
     private readonly IWindowsRegistryAccessor _registry;
     private readonly IProcessRunner _processRunner;
@@ -40,7 +42,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
 
         var normalizedInstallDir = NormalizeWindowsPath(installDirectory);
         var separator = normalizedInstallDir.EndsWith('\\') ? string.Empty : "\\";
-        var installerExePath = $"{normalizedInstallDir}{separator}{InstallerConstants.InstallerExeWindows}";
+        var installerExePath = $"{normalizedInstallDir}{separator}{InstallerConstants.InstallerSubDirectoryName}\\{InstallerConstants.InstallerExeWindows}";
 
         return new WindowsUninstallRegistryPlan(
             RegistryKeyPath: InstallerConstants.WindowsUninstallRegistrySubKey,
@@ -55,7 +57,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
             NoModify: 0,
             NoRepair: 1,
             EstimatedSizeKb: Math.Max(0, estimatedSizeKb),
-            InstallDate: installDate.ToString("yyyyMMdd", CultureInfo.InvariantCulture));
+            InstallDate: installDate.ToString(DateFormatCompact, CultureInfo.InvariantCulture));
     }
 
     public WindowsProtocolRegistrationPlan CreateWindowsOllamaRouterProtocolPlan(string appExecutablePath)
@@ -83,6 +85,8 @@ public sealed class OsIntegrationService : IOsIntegrationService
         ArgumentException.ThrowIfNullOrWhiteSpace(homeDirectory);
 
         var posixExePath = NormalizePosixPath(appExecutablePath);
+        RejectNewlines(posixExePath, nameof(appExecutablePath));
+
         var desktopEntryPath = Path.Combine(
             homeDirectory,
             ".local",
@@ -90,19 +94,20 @@ public sealed class OsIntegrationService : IOsIntegrationService
             "applications",
             InstallerConstants.OllamaRouterDesktopEntryFileName);
 
+        var escapedExec = EscapeDesktopExecPath(posixExePath);
         var content =
             $"[Desktop Entry]\n" +
             $"Version=1.0\n" +
             $"Type=Application\n" +
             $"Name=OllamaRouter\n" +
             $"Comment=OllamaRouter dashboard and setup wizard\n" +
-            $"Exec=\"{posixExePath}\" %u\n" +
+            $"Exec=\"{escapedExec}\" %u\n" +
             $"Terminal=false\n" +
             $"MimeType={InstallerConstants.OllamaRouterMimeType};\n" +
             $"StartupNotify=true\n";
 
         var xdgMimeCommand = xdgMimeAvailable
-            ? $"xdg-mime default {InstallerConstants.OllamaRouterDesktopEntryFileName} {InstallerConstants.OllamaRouterMimeType}"
+            ? $"{InstallerConstants.XdgMimeExecutable} default {InstallerConstants.OllamaRouterDesktopEntryFileName} {InstallerConstants.OllamaRouterMimeType}"
             : null;
 
         return new LinuxProtocolRegistrationPlan(
@@ -118,9 +123,11 @@ public sealed class OsIntegrationService : IOsIntegrationService
         ArgumentException.ThrowIfNullOrWhiteSpace(homeDirectory);
 
         var posixInstallDir = NormalizePosixPath(installDirectory);
+        RejectNewlines(posixInstallDir, nameof(installDirectory));
+
         var applicationsDir = Path.Combine(homeDirectory, ".local", "share", "applications");
         var webLauncherPath = $"{posixInstallDir}/{InstallerConstants.BinDirectoryName}/{InstallerConstants.LauncherShortUnix}";
-        var installerBinaryPath = $"{posixInstallDir}/{InstallerConstants.InstallerExeUnix}";
+        var installerBinaryPath = $"{posixInstallDir}/{InstallerConstants.InstallerSubDirectoryName}/{InstallerConstants.InstallerExeUnix}";
 
         var webDesktopContent =
             $"[Desktop Entry]\n" +
@@ -128,8 +135,8 @@ public sealed class OsIntegrationService : IOsIntegrationService
             $"Type=Application\n" +
             $"Name={InstallerConstants.ApplicationDisplayName}\n" +
             $"Comment=NightCodeForge Autonomous Coding Agent Server\n" +
-            $"Exec=\"{webLauncherPath}\"\n" +
-            $"Path={posixInstallDir}\n" +
+            $"Exec=\"{EscapeDesktopExecPath(webLauncherPath)}\"\n" +
+            $"Path={EscapeDesktopKeyValue(posixInstallDir)}\n" +
             $"Terminal=true\n" +
             $"Categories=Development;IDE;\n";
 
@@ -139,8 +146,8 @@ public sealed class OsIntegrationService : IOsIntegrationService
             $"Type=Application\n" +
             $"Name=NightCodeForge Maintenance & Setup\n" +
             $"Comment=Manage, update, or uninstall NightCodeForge\n" +
-            $"Exec=\"{installerBinaryPath}\"\n" +
-            $"Path={posixInstallDir}\n" +
+            $"Exec=\"{EscapeDesktopExecPath(installerBinaryPath)}\"\n" +
+            $"Path={EscapeDesktopKeyValue(posixInstallDir)}\n" +
             $"Terminal=false\n" +
             $"Categories=Development;Utility;\n";
 
@@ -157,10 +164,13 @@ public sealed class OsIntegrationService : IOsIntegrationService
         ArgumentException.ThrowIfNullOrWhiteSpace(homeDirectory);
 
         var posixInstallDir = NormalizePosixPath(installDirectory);
+        RejectNewlines(posixInstallDir, nameof(installDirectory));
+
         var appBundleDir = Path.Combine(homeDirectory, "Applications", InstallerConstants.MacOsAppBundleName);
         var contentsDir = Path.Combine(appBundleDir, "Contents");
         var macOsDir = Path.Combine(contentsDir, "MacOS");
-        var installerPath = $"{posixInstallDir}/{InstallerConstants.InstallerExeUnix}";
+        var installerPath = $"{posixInstallDir}/{InstallerConstants.InstallerSubDirectoryName}/{InstallerConstants.InstallerExeUnix}";
+        var escapedInstallerPath = EscapeDoubleQuotedShellValue(installerPath);
 
         var infoPlist =
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
@@ -168,11 +178,11 @@ public sealed class OsIntegrationService : IOsIntegrationService
             "<plist version=\"1.0\">\n" +
             "<dict>\n" +
             "  <key>CFBundleName</key>\n" +
-            "  <string>NightCodeForge</string>\n" +
+            $"  <string>{InstallerConstants.ApplicationDisplayName}</string>\n" +
             "  <key>CFBundleIdentifier</key>\n" +
-            "  <string>io.github.jetelain.nightcodeforge</string>\n" +
+            $"  <string>{InstallerConstants.MacOsBundleIdentifier}</string>\n" +
             "  <key>CFBundleExecutable</key>\n" +
-            "  <string>NightCodeForge</string>\n" +
+            $"  <string>{InstallerConstants.ApplicationDisplayName}</string>\n" +
             "  <key>CFBundlePackageType</key>\n" +
             "  <string>APPL</string>\n" +
             "</dict>\n" +
@@ -180,13 +190,13 @@ public sealed class OsIntegrationService : IOsIntegrationService
 
         var launcherScript =
             "#!/usr/bin/env bash\n" +
-            $"exec \"{installerPath}\" \"$@\"\n";
+            $"exec \"{escapedInstallerPath}\" \"$@\"\n";
 
         return new MacOsAppWrapperPlan(
             AppBundleDirectory: appBundleDir,
             InfoPlistPath: Path.Combine(contentsDir, "Info.plist"),
             InfoPlistContent: infoPlist,
-            LauncherScriptPath: Path.Combine(macOsDir, "NightCodeForge"),
+            LauncherScriptPath: Path.Combine(macOsDir, InstallerConstants.ApplicationDisplayName),
             LauncherScriptContent: launcherScript);
     }
 
@@ -202,8 +212,12 @@ public sealed class OsIntegrationService : IOsIntegrationService
         switch (_platform.Platform)
         {
             case HostPlatformType.Windows:
-                await RegisterWindowsNightCodeForgeAsync(installDirectory, version, createDesktopShortcut, cancellationToken)
-                    .ConfigureAwait(false);
+                await RegisterWindowsNightCodeForgeAsync(
+                    installDirectory,
+                    version,
+                    createStartMenuShortcut: true,
+                    createDesktopShortcut,
+                    cancellationToken).ConfigureAwait(false);
                 break;
 
             case HostPlatformType.Linux:
@@ -212,6 +226,91 @@ public sealed class OsIntegrationService : IOsIntegrationService
 
             case HostPlatformType.MacOS:
                 await RegisterMacOsNightCodeForgeAsync(installDirectory, cancellationToken).ConfigureAwait(false);
+                break;
+        }
+    }
+
+    public async Task ApplyShortcutPreferencesAsync(
+        string installDirectory,
+        bool createStartMenuShortcut,
+        bool createDesktopShortcut,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(installDirectory);
+
+        switch (_platform.Platform)
+        {
+            case HostPlatformType.Windows:
+            {
+                var normalizedInstallDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));
+                var installerExe = Path.Combine(
+                    normalizedInstallDir,
+                    InstallerConstants.InstallerSubDirectoryName,
+                    InstallerConstants.InstallerExeWindows);
+
+                var startMenuPath = GetWindowsStartMenuShortcutPath();
+                if (createStartMenuShortcut)
+                {
+                    await CreateWindowsShortcutAsync(
+                        startMenuPath,
+                        installerExe,
+                        normalizedInstallDir,
+                        InstallerConstants.ApplicationDisplayName,
+                        $"{installerExe},0",
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    DeleteFileIfExists(startMenuPath);
+                }
+
+                var desktopPath = GetWindowsDesktopShortcutPath();
+                if (createDesktopShortcut)
+                {
+                    await CreateWindowsShortcutAsync(
+                        desktopPath,
+                        installerExe,
+                        normalizedInstallDir,
+                        InstallerConstants.ApplicationDisplayName,
+                        $"{installerExe},0",
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    DeleteFileIfExists(desktopPath);
+                }
+
+                break;
+            }
+
+            case HostPlatformType.Linux:
+                if (createStartMenuShortcut)
+                {
+                    await RegisterLinuxNightCodeForgeAsync(installDirectory, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    var linuxPlan = CreateLinuxDesktopEntryPlans(installDirectory, _platform.UserHomeDirectory);
+                    DeleteFileIfExists(linuxPlan.WebAppDesktopPath);
+                    DeleteFileIfExists(linuxPlan.InstallerDesktopPath);
+                }
+
+                break;
+
+            case HostPlatformType.MacOS:
+                if (createStartMenuShortcut)
+                {
+                    await RegisterMacOsNightCodeForgeAsync(installDirectory, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    var macPlan = CreateMacOsAppWrapperPlan(installDirectory, _platform.UserHomeDirectory);
+                    if (Directory.Exists(macPlan.AppBundleDirectory))
+                    {
+                        Directory.Delete(macPlan.AppBundleDirectory, recursive: true);
+                    }
+                }
+
                 break;
         }
     }
@@ -282,7 +381,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
 
         if (_platform.Platform == HostPlatformType.Linux)
         {
-            var xdgMimeAvailable = _platform.IsCommandOnPath("xdg-mime");
+            var xdgMimeAvailable = _platform.IsCommandOnPath(InstallerConstants.XdgMimeExecutable);
             var plan = CreateLinuxOllamaRouterProtocolPlan(appExecutablePath, _platform.UserHomeDirectory, xdgMimeAvailable);
             var parent = Path.GetDirectoryName(plan.DesktopEntryPath);
             if (!string.IsNullOrWhiteSpace(parent))
@@ -295,14 +394,23 @@ public sealed class OsIntegrationService : IOsIntegrationService
 
             if (plan.XdgMimeCommand is not null)
             {
-                await _processRunner.RunAsync(
+                var xdgResult = await _processRunner.RunAsync(
                     new ProcessRunRequest
                     {
-                        FileName = "xdg-mime",
+                        FileName = InstallerConstants.XdgMimeExecutable,
                         Arguments = ["default", InstallerConstants.OllamaRouterDesktopEntryFileName, InstallerConstants.OllamaRouterMimeType],
                         Timeout = TimeSpan.FromMilliseconds(InstallerConstants.XdgMimeTimeoutMs)
                     },
                     cancellationToken).ConfigureAwait(false);
+
+                if (xdgResult.ExitCode != InstallerConstants.ExitCodeSuccess)
+                {
+                    var err = string.IsNullOrWhiteSpace(xdgResult.StandardError)
+                        ? xdgResult.StandardOutput
+                        : xdgResult.StandardError;
+                    throw new InstallerException(
+                        $"Failed to register '{InstallerConstants.OllamaRouterMimeType}' via xdg-mime (exit code {xdgResult.ExitCode}): {err}".Trim());
+                }
             }
         }
     }
@@ -357,6 +465,16 @@ public sealed class OsIntegrationService : IOsIntegrationService
         }
 
         UpdateUnixShellProfiles(normalizedDir, profileBlockLabel, removeOnly: false);
+
+        var currentUnixPath = _platform.GetUserPathVariable() ?? string.Empty;
+        var currentEntries = currentUnixPath.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        if (!currentEntries.Any(entry => string.Equals(entry.TrimEnd('/'), normalizedDir.TrimEnd('/'), StringComparison.Ordinal)))
+        {
+            var updatedUnixPath = string.IsNullOrWhiteSpace(currentUnixPath)
+                ? normalizedDir
+                : $"{currentUnixPath}:{normalizedDir}";
+            _platform.SetUserPathVariable(updatedUnixPath);
+        }
     }
 
     public void RemoveDirectoryFromUserPath(string directoryPath, string profileBlockLabel)
@@ -394,19 +512,26 @@ public sealed class OsIntegrationService : IOsIntegrationService
         string description,
         string iconLocation)
     {
-        static string Esc(string value) => value.Replace("'", "''", StringComparison.Ordinal);
+        static string ToUtf8Base64(string value) =>
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
 
         return
-            $"$ErrorActionPreference = 'Stop'\n" +
-            $"$parent = Split-Path -Parent '{Esc(shortcutPath)}'\n" +
-            $"if (-not (Test-Path $parent)) {{ New-Item -ItemType Directory -Path $parent -Force | Out-Null }}\n" +
-            $"$ws = New-Object -ComObject WScript.Shell\n" +
-            $"$sc = $ws.CreateShortcut('{Esc(shortcutPath)}')\n" +
-            $"$sc.TargetPath = '{Esc(targetPath)}'\n" +
-            $"$sc.WorkingDirectory = '{Esc(workingDirectory)}'\n" +
-            $"$sc.Description = '{Esc(description)}'\n" +
-            $"$sc.IconLocation = '{Esc(iconLocation)}'\n" +
-            $"$sc.Save()\n";
+            "$ErrorActionPreference = 'Stop'\n" +
+            "$dec = { param([string]$b64) [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($b64)) }\n" +
+            $"$shortcutPath = & $dec '{ToUtf8Base64(shortcutPath)}'\n" +
+            $"$targetPath = & $dec '{ToUtf8Base64(targetPath)}'\n" +
+            $"$workingDir = & $dec '{ToUtf8Base64(workingDirectory)}'\n" +
+            $"$description = & $dec '{ToUtf8Base64(description)}'\n" +
+            $"$iconLocation = & $dec '{ToUtf8Base64(iconLocation)}'\n" +
+            "$parent = Split-Path -Parent $shortcutPath\n" +
+            "if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -LiteralPath $parent -Force | Out-Null }\n" +
+            "$ws = New-Object -ComObject WScript.Shell\n" +
+            "$sc = $ws.CreateShortcut($shortcutPath)\n" +
+            "$sc.TargetPath = $targetPath\n" +
+            "$sc.WorkingDirectory = $workingDir\n" +
+            "$sc.Description = $description\n" +
+            "$sc.IconLocation = $iconLocation\n" +
+            "$sc.Save()\n";
     }
 
     internal static string ApplyManagedUnixPathBlock(
@@ -471,6 +596,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
     private async Task RegisterWindowsNightCodeForgeAsync(
         string installDirectory,
         string version,
+        bool createStartMenuShortcut,
         bool createDesktopShortcut,
         CancellationToken cancellationToken)
     {
@@ -488,7 +614,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
                 ["DisplayName"] = plan.DisplayName,
                 ["DisplayVersion"] = plan.DisplayVersion,
                 ["Publisher"] = plan.Publisher,
-                ["InstallLocation"] = plan.InstallLocation,
+                [InstallerConstants.WindowsUninstallInstallLocationValueName] = plan.InstallLocation,
                 ["DisplayIcon"] = plan.DisplayIcon,
                 ["UninstallString"] = plan.UninstallString,
                 ["QuietUninstallString"] = plan.QuietUninstallString,
@@ -499,27 +625,11 @@ public sealed class OsIntegrationService : IOsIntegrationService
                 ["InstallDate"] = plan.InstallDate
             });
 
-        var normalizedInstallDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(installDirectory));
-        var installerExe = Path.Combine(normalizedInstallDir, InstallerConstants.InstallerExeWindows);
-
-        await CreateWindowsShortcutAsync(
-            GetWindowsStartMenuShortcutPath(),
-            installerExe,
-            normalizedInstallDir,
-            InstallerConstants.ApplicationDisplayName,
-            $"{installerExe},0",
+        await ApplyShortcutPreferencesAsync(
+            installDirectory,
+            createStartMenuShortcut,
+            createDesktopShortcut,
             cancellationToken).ConfigureAwait(false);
-
-        if (createDesktopShortcut)
-        {
-            await CreateWindowsShortcutAsync(
-                GetWindowsDesktopShortcutPath(),
-                installerExe,
-                normalizedInstallDir,
-                InstallerConstants.ApplicationDisplayName,
-                $"{installerExe},0",
-                cancellationToken).ConfigureAwait(false);
-        }
     }
 
     private async Task CreateWindowsShortcutAsync(
@@ -596,12 +706,16 @@ public sealed class OsIntegrationService : IOsIntegrationService
                 Path.Combine(home, ".zprofile"),
                 Path.Combine(home, ".zshrc"),
                 Path.Combine(home, ".profile"),
-                Path.Combine(home, ".bashrc")
+                Path.Combine(home, ".bashrc"),
+                Path.Combine(home, ".bash_profile")
             }
             : new[]
             {
                 Path.Combine(home, ".profile"),
-                Path.Combine(home, ".bashrc")
+                Path.Combine(home, ".bashrc"),
+                Path.Combine(home, ".bash_profile"),
+                Path.Combine(home, ".zprofile"),
+                Path.Combine(home, ".zshrc")
             };
 
         var primaryProfile = profileCandidates[0];
@@ -639,7 +753,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
         _platform.DesktopDirectory,
         InstallerConstants.WindowsShortcutFileName);
 
-    private static int ComputeDirectorySizeKb(string directory)
+    internal static int ComputeDirectorySizeKb(string directory)
     {
         if (!Directory.Exists(directory))
         {
@@ -647,20 +761,35 @@ public sealed class OsIntegrationService : IOsIntegrationService
         }
 
         long totalBytes = 0;
-        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        var enumOptions = new EnumerationOptions
         {
-            try
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(directory, "*", enumOptions))
             {
-                totalBytes += new FileInfo(file).Length;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Justification: Transient locked file during size estimation should not block uninstall registry update.
-                _ = ex;
+                try
+                {
+                    totalBytes += new FileInfo(file).Length;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Justification: Transient locked file during size estimation should not block uninstall registry update.
+                    _ = ex;
+                }
             }
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Justification: Inaccessible subfolder (e.g. Docker/container mount inside wks/) should not abort install registration.
+            _ = ex;
+        }
 
-        return (int)Math.Min(int.MaxValue, totalBytes / 1024L);
+        return (int)Math.Min(int.MaxValue, totalBytes / InstallerConstants.BytesPerKilobyte);
     }
 
     private static void DeleteFileIfExists(string path)
@@ -674,7 +803,7 @@ public sealed class OsIntegrationService : IOsIntegrationService
     private static string NormalizeWindowsPath(string path)
     {
         var trimmed = path.Trim().Replace('/', '\\');
-        if (OperatingSystem.IsWindows() && !Path.IsPathRooted(trimmed))
+        if (OperatingSystem.IsWindows())
         {
             trimmed = Path.GetFullPath(trimmed);
         }
@@ -694,12 +823,40 @@ public sealed class OsIntegrationService : IOsIntegrationService
     }
 
     private static string NormalizeWindowsPathEntry(string entry) =>
-        Path.TrimEndingDirectorySeparator(entry.Trim().Trim('"'));
+        entry.Trim().Trim('"').TrimEnd('\\', '/');
 
-    private static string EscapeDoubleQuotedShellValue(string value) =>
-        value
+    private static void RejectNewlines(string value, string paramName)
+    {
+        if (value.IndexOfAny(['\r', '\n']) >= 0)
+        {
+            throw new ArgumentException("Path cannot contain newline characters.", paramName);
+        }
+    }
+
+    private static string EscapeDesktopExecPath(string value)
+    {
+        RejectNewlines(value, nameof(value));
+        return value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal)
+            .Replace("$", "\\$", StringComparison.Ordinal)
+            .Replace("%", "%%", StringComparison.Ordinal);
+    }
+
+    private static string EscapeDesktopKeyValue(string value)
+    {
+        RejectNewlines(value, nameof(value));
+        return value.Replace("\\", "\\\\", StringComparison.Ordinal);
+    }
+
+    internal static string EscapeDoubleQuotedShellValue(string value)
+    {
+        RejectNewlines(value, nameof(value));
+        return value
             .Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal)
             .Replace("$", "\\$", StringComparison.Ordinal)
             .Replace("`", "\\`", StringComparison.Ordinal);
+    }
 }

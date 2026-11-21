@@ -811,6 +811,19 @@
         _isSyncingRecommendations = true;
         try
         {
+            var endpointOverride = string.IsNullOrWhiteSpace(_ollamaEndpoint)
+                ? null
+                : OllamaRouterRecommendationMapper.NormalizeEndpoint(_ollamaEndpoint);
+
+            if (OllamaRouterGatewayUiHelper.RequiresEndpointRestart(endpointOverride, LlmOptions.Value.Endpoint))
+            {
+                ToastService.Show(
+                    "Restart Required",
+                    "Save settings and restart NightCodeForge to apply the updated OllamaRouter endpoint before syncing recommended models.",
+                    ToastLevel.Warning);
+                return;
+            }
+
             var dto = await GatewayService.GetRecommendationsAsync();
             if (dto is null)
             {
@@ -830,10 +843,6 @@
                     ToastLevel.Warning);
                 return;
             }
-
-            var endpointOverride = string.IsNullOrWhiteSpace(_ollamaEndpoint)
-                ? null
-                : OllamaRouterRecommendationMapper.NormalizeEndpoint(_ollamaEndpoint);
 
             await ConfigurationWriter.SaveProviderConfigurationAsync(
                 opts => OllamaRouterRecommendationMapper.ApplyToOptions(opts, mapped, endpointOverride));

@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using NightCodeForge.Installer.Core.Abstractions;
+using NightCodeForge.Installer.Core.Constants;
 using NightCodeForge.Installer.Core.Models;
 using NightCodeForge.Installer.Core.Services;
 
@@ -21,6 +22,7 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
     private readonly IInstallerUiHost _uiHost;
     private readonly IUiDispatcher _dispatcher;
     private bool _synchronizingSource;
+    private bool _suppressConfigChanged;
 
     public WizardStep1WelcomeViewModel(
         SetupWizardState state,
@@ -42,15 +44,14 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
         DetectedBundleAssets = [];
 
         _synchronizingSource = true;
+        _suppressConfigChanged = true;
         IsOnlineSource = _state.SourceMode == InstallSourceMode.Online;
         IsAirGappedSource = _state.SourceMode == InstallSourceMode.AirGappedBundle;
-        _synchronizingSource = false;
-
         BundleDirectory = _state.BundleDirectory ?? string.Empty;
         InstallDirectory = _state.InstallDirectory;
         WslDistroName = _state.WslDistroName;
         IsUpgradeMode = _state.IsUpgradeMode;
-        IsWindowsHost = false;
+        IsWindowsHost = _state.Platform == HostPlatformType.Windows;
         UpgradeBannerText = BuildUpgradeBannerText(_state.Discovery);
 
         ProvisionWsl = _state.ProvisionWsl;
@@ -59,6 +60,8 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
         IncludeDocker = _state.IncludeDocker;
         InstallOllamaRouter = _state.InstallOllamaRouter;
         InstallCompanionTools = _state.InstallCompanionTools;
+        _synchronizingSource = false;
+        _suppressConfigChanged = false;
 
         WslStatusText = "Pending host scan...";
         DockerStatusText = "Pending host scan...";
@@ -70,6 +73,8 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
 
         RefreshBundleAssets();
     }
+
+    public event EventHandler? ConfigurationChanged;
 
     public ObservableCollection<string> DetectedBundleAssets { get; }
 
@@ -139,6 +144,10 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
     [ObservableProperty]
     public partial string StatusMessage { get; set; }
 
+    public bool IsConfigurationValid =>
+        !string.IsNullOrWhiteSpace(InstallDirectory) &&
+        (!IsWindowsHost || !string.IsNullOrWhiteSpace(WslDistroName));
+
     public string BundleAssetSummary =>
         DetectedBundleAssets.Count == 0
             ? "No .zip, .tar.gz, or .nupkg bundle assets detected in selected folder."
@@ -169,6 +178,8 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
         {
             _synchronizingSource = false;
         }
+
+        NotifyConfigurationChanged();
     }
 
     partial void OnIsAirGappedSourceChanged(bool value)
@@ -196,36 +207,102 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
         {
             _synchronizingSource = false;
         }
+
+        NotifyConfigurationChanged();
     }
 
     partial void OnBundleDirectoryChanged(string value)
     {
         _state.BundleDirectory = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         RefreshBundleAssets();
+        NotifyConfigurationChanged();
     }
 
     partial void OnInstallDirectoryChanged(string value)
     {
-        if (!string.IsNullOrWhiteSpace(value))
+        _state.InstallDirectory = value.Trim();
+        OnPropertyChanged(nameof(IsConfigurationValid));
+        if (string.IsNullOrWhiteSpace(_state.InstallDirectory))
         {
-            _state.InstallDirectory = value.Trim();
+            StatusMessage = "Install directory cannot be empty.";
         }
+
+        NotifyConfigurationChanged();
     }
 
     partial void OnWslDistroNameChanged(string value)
     {
-        if (!string.IsNullOrWhiteSpace(value))
+        _state.WslDistroName = value.Trim();
+        OnPropertyChanged(nameof(IsConfigurationValid));
+        if (IsWindowsHost && string.IsNullOrWhiteSpace(_state.WslDistroName))
         {
-            _state.WslDistroName = value.Trim();
+            StatusMessage = "WSL2 distribution name cannot be empty on Windows hosts.";
         }
+
+        NotifyConfigurationChanged();
     }
 
-    partial void OnProvisionWslChanged(bool value) => _state.ProvisionWsl = value;
-    partial void OnProvisionHostDotNetChanged(bool value) => _state.ProvisionHostDotNet = value;
-    partial void OnProvisionLinuxOrWslToolchainChanged(bool value) => _state.ProvisionLinuxOrWslToolchain = value;
-    partial void OnIncludeDockerChanged(bool value) => _state.IncludeDocker = value;
-    partial void OnInstallOllamaRouterChanged(bool value) => _state.InstallOllamaRouter = value;
-    partial void OnInstallCompanionToolsChanged(bool value) => _state.InstallCompanionTools = value;
+    partial void OnIsWindowsHostChanged(bool value) => OnPropertyChanged(nameof(IsConfigurationValid));
+
+    partial void OnProvisionWslChanged(bool value)
+    {
+        _state.ProvisionWsl = value;
+        NotifyConfigurationChanged();
+    }
+
+    partial void OnProvisionHostDotNetChanged(bool value)
+    {
+        _state.ProvisionHostDotNet = value;
+        NotifyConfigurationChanged();
+    }
+
+    partial void OnProvisionLinuxOrWslToolchainChanged(bool value)
+    {
+        _state.ProvisionLinuxOrWslToolchain = value;
+        NotifyConfigurationChanged();
+    }
+
+    partial void OnIncludeDockerChanged(bool value)
+    {
+        _state.IncludeDocker = value;
+        NotifyConfigurationChanged();
+    }
+
+    partial void OnInstallOllamaRouterChanged(bool value)
+    {
+        _state.InstallOllamaRouter = value;
+        NotifyConfigurationChanged();
+    }
+
+    partial void OnInstallCompanionToolsChanged(bool value)
+    {
+        _state.InstallCompanionTools = value;
+        NotifyConfigurationChanged();
+    }
+
+    public void ApplyConfiguration(InstallSourceOptions source, string? installDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        _synchronizingSource = true;
+        _suppressConfigChanged = true;
+        try
+        {
+            _state.SourceMode = source.Mode;
+            IsOnlineSource = source.Mode == InstallSourceMode.Online;
+            IsAirGappedSource = source.Mode == InstallSourceMode.AirGappedBundle;
+            BundleDirectory = source.BundleDirectory ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(installDirectory))
+            {
+                InstallDirectory = installDirectory.Trim();
+            }
+        }
+        finally
+        {
+            _synchronizingSource = false;
+            _suppressConfigChanged = false;
+        }
+    }
 
     public void ApplyUpgradeMode(bool isUpgradeMode, InstallationDiscoveryResult discovery)
     {
@@ -241,21 +318,32 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
     [RelayCommand]
     public async Task BrowseBundleFolderAsync()
     {
-        var picked = await _uiHost.PickBundleFolderAsync(
-            string.IsNullOrWhiteSpace(BundleDirectory) ? null : BundleDirectory,
-            CancellationToken.None).ConfigureAwait(false);
-
-        if (string.IsNullOrWhiteSpace(picked))
+        try
         {
-            return;
+            var picked = await _uiHost.PickBundleFolderAsync(
+                string.IsNullOrWhiteSpace(BundleDirectory) ? null : BundleDirectory,
+                _state.LifetimeToken).ConfigureAwait(false);
+
+            if (string.IsNullOrWhiteSpace(picked))
+            {
+                return;
+            }
+
+            _dispatcher.Post(() =>
+            {
+                BundleDirectory = picked;
+                IsAirGappedSource = true;
+                StatusMessage = $"Selected air-gapped bundle folder: {picked}";
+            });
         }
-
-        _dispatcher.Post(() =>
+        catch (OperationCanceledException)
         {
-            BundleDirectory = picked;
-            IsAirGappedSource = true;
-            StatusMessage = $"Selected air-gapped bundle folder: {picked}";
-        });
+            // Justification: Folder picker cancelled or closed during teardown.
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Unable to browse bundle folder: {ex.Message}");
+        }
     }
 
     [RelayCommand]
@@ -274,13 +362,18 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
 
         try
         {
-            var probe = await _environmentProvisioner.ProbeAsync(_state.WslDistroName, CancellationToken.None)
+            var distroForProbe = string.IsNullOrWhiteSpace(_state.WslDistroName)
+                ? InstallerConstants.DefaultWslDistro
+                : _state.WslDistroName;
+            var probe = await _environmentProvisioner.ProbeAsync(distroForProbe, _state.LifetimeToken)
                 .ConfigureAwait(false);
-            var discovery = _installationDetector.Detect(_state.BundleDirectory);
+            var discovery = _installationDetector.Detect(
+                _state.BundleDirectory,
+                string.IsNullOrWhiteSpace(_state.InstallDirectory) ? null : _state.InstallDirectory);
             var wslDistro = probe.Platform == HostPlatformType.Windows && probe.WslInstalled && probe.WslDistroInstalled
-                ? probe.ResolvedWslDistroName ?? _state.WslDistroName
+                ? probe.ResolvedWslDistroName ?? distroForProbe
                 : null;
-            var tools = await _nuGetProvisioner.ProbeToolsAsync(wslDistro, CancellationToken.None)
+            var tools = await _nuGetProvisioner.ProbeToolsAsync(wslDistro, _state.LifetimeToken)
                 .ConfigureAwait(false);
 
             _state.LatestProbe = probe;
@@ -291,14 +384,28 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
                 IsWindowsHost = probe.Platform == HostPlatformType.Windows;
                 if (string.IsNullOrWhiteSpace(BundleDirectory) && !string.IsNullOrWhiteSpace(discovery.DetectedBundleDirectory))
                 {
-                    BundleDirectory = discovery.DetectedBundleDirectory;
+                    _suppressConfigChanged = true;
+                    try
+                    {
+                        BundleDirectory = discovery.DetectedBundleDirectory;
+                    }
+                    finally
+                    {
+                        _suppressConfigChanged = false;
+                    }
                 }
 
                 ApplyProbeSummary(probe, discovery, tools);
-                StatusMessage = "Host environment scan complete.";
+                StatusMessage = IsConfigurationValid
+                    ? "Host environment scan complete."
+                    : "Host scan complete. Fix invalid configuration fields above before continuing.";
             });
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            // Justification: Lifetime token cancellation on window shutdown.
+        }
+        catch (Exception ex)
         {
             _dispatcher.Post(() =>
             {
@@ -308,6 +415,14 @@ public sealed partial class WizardStep1WelcomeViewModel : ObservableObject
         finally
         {
             _dispatcher.Post(() => IsProbing = false);
+        }
+    }
+
+    private void NotifyConfigurationChanged()
+    {
+        if (!_suppressConfigChanged)
+        {
+            ConfigurationChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 

@@ -9,11 +9,12 @@ using NightCodeForge.Installer.ViewModels.Wizard;
 /// Root shell ViewModel hosting the 3 desktop UI modes:
 /// OOBE Setup Wizard, Maintenance &amp; Updater Hub, and Interactive Uninstaller.
 /// </summary>
-public sealed partial class MainWindowViewModel : ObservableObject
+public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 {
     private readonly InstallerServiceContainer _services;
-    private readonly InstallerStartupPlan _startupPlan;
     private readonly IUiDispatcher _dispatcher;
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private bool _disposed;
 
     public MainWindowViewModel(
         InstallerServiceContainer services,
@@ -22,11 +23,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IUiDispatcher dispatcher)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
-        _startupPlan = startupPlan ?? throw new ArgumentNullException(nameof(startupPlan));
+        ArgumentNullException.ThrowIfNull(startupPlan);
         ArgumentNullException.ThrowIfNull(uiHost);
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
 
-        var wizardState = new SetupWizardState(startupPlan);
+        var wizardState = new SetupWizardState(startupPlan, services.Platform.Platform, _lifetimeCts.Token);
         var step1 = new WizardStep1WelcomeViewModel(
             wizardState,
             services.EnvironmentProvisioner,
@@ -75,7 +76,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             uiHost,
             dispatcher,
             SwitchToUpgradeWizard,
-            SwitchToUninstaller);
+            SwitchToUninstaller,
+            _lifetimeCts.Token);
 
         Uninstaller = new UninstallerViewModel(
             services.UninstallService,
@@ -84,11 +86,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             uiHost,
             dispatcher,
             ReturnToMaintenanceHubFromUninstaller,
-            canReturnToHub: startupPlan.InitialUiMode != InstallerUiMode.InteractiveUninstaller);
+            canReturnToHub: startupPlan.InitialUiMode != InstallerUiMode.InteractiveUninstaller,
+            _lifetimeCts.Token);
 
         RuntimeBadge = $"{services.Platform.Platform} · {services.Platform.CurrentRuntimeIdentifier}";
         CurrentMode = startupPlan.InitialUiMode;
         WindowTitle = BuildWindowTitle(startupPlan.InitialUiMode);
+        InitializationErrorMessage = string.Empty;
     }
 
     public SetupWizardViewModel Wizard { get; }
@@ -96,11 +100,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public UninstallerViewModel Uninstaller { get; }
     public string RuntimeBadge { get; }
 
+    public bool HasActiveDestructiveOperation =>
+        Wizard.Step2.IsRunning ||
+        Wizard.Step3.IsRunning ||
+        Wizard.Step4.IsRunning ||
+        MaintenanceHub.IsBusy ||
+        Uninstaller.IsRunning;
+
     [ObservableProperty]
     public partial InstallerUiMode CurrentMode { get; set; }
 
     [ObservableProperty]
     public partial string WindowTitle { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasInitializationError))]
+    public partial string InitializationErrorMessage { get; set; }
+
+    public bool HasInitializationError => !string.IsNullOrWhiteSpace(InitializationErrorMessage);
 
     public Task InitializeAsync()
     {
@@ -113,12 +130,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
     }
 
+    public void ReportInitializationError(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        _dispatcher.Post(() => InitializationErrorMessage = message);
+    }
+
+    public void NotifyCloseBlockedDuringOperation()
+    {
+        ReportInitializationError(
+            "An installation, upgrade, provisioning, or uninstall operation is currently in progress. Wait for completion before closing.");
+    }
+
     public void SwitchToUpgradeWizard()
     {
-        var discovery = _services.InstallationDetector.Detect(MaintenanceHub.CurrentSourceOptions.BundleDirectory);
-        Wizard.EnterUpgradeMode(discovery);
+        var hubSource = MaintenanceHub.CurrentSourceOptions;
+        var hubInstallDir = MaintenanceHub.InstallDirectory;
+        var discovery = _services.InstallationDetector.Detect(hubSource.BundleDirectory, hubInstallDir);
+        Wizard.EnterUpgradeMode(discovery, hubSource, hubInstallDir);
         _dispatcher.Post(() =>
         {
+            InitializationErrorMessage = string.Empty;
             CurrentMode = InstallerUiMode.OobeWizard;
             WindowTitle = BuildWindowTitle(InstallerUiMode.OobeWizard);
         });
@@ -126,12 +162,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public void SwitchToMaintenanceHub()
     {
+        MaintenanceHub.ApplyWizardConfiguration(
+            Wizard.CurrentSourceOptions,
+            Wizard.CurrentInstallDirectory);
+
         _dispatcher.Post(() =>
         {
+            InitializationErrorMessage = string.Empty;
             CurrentMode = InstallerUiMode.MaintenanceHub;
             WindowTitle = BuildWindowTitle(InstallerUiMode.MaintenanceHub);
         });
-        _ = MaintenanceHub.RefreshAllAsync();
+
+        _ = RefreshMaintenanceHubSafelyAsync();
     }
 
     public void SwitchToUninstaller()
@@ -139,6 +181,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         Uninstaller.RefreshSummary();
         _dispatcher.Post(() =>
         {
+            InitializationErrorMessage = string.Empty;
             CurrentMode = InstallerUiMode.InteractiveUninstaller;
             WindowTitle = BuildWindowTitle(InstallerUiMode.InteractiveUninstaller);
         });
@@ -148,9 +191,46 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         _dispatcher.Post(() =>
         {
+            InitializationErrorMessage = string.Empty;
             CurrentMode = InstallerUiMode.MaintenanceHub;
             WindowTitle = BuildWindowTitle(InstallerUiMode.MaintenanceHub);
         });
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        try
+        {
+            _lifetimeCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Justification: Dispose may race with shutdown teardown.
+        }
+
+        _lifetimeCts.Dispose();
+    }
+
+    private async Task RefreshMaintenanceHubSafelyAsync()
+    {
+        try
+        {
+            await MaintenanceHub.RefreshAllAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Justification: Window teardown cancels background hub refresh cleanly.
+        }
+        catch (Exception ex)
+        {
+            ReportInitializationError($"Failed to refresh Maintenance Hub: {ex.Message}");
+        }
     }
 
     private Task RefreshUninstallerAsync()

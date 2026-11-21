@@ -56,6 +56,18 @@ public sealed partial class WizardStep2ProvisioningViewModel : ObservableObject
     [ObservableProperty]
     public partial string StatusMessage { get; set; }
 
+    public void ResetState()
+    {
+        IsRunning = false;
+        IsCompleted = false;
+        IsRebootRequired = false;
+        ProgressPercent = 0.0;
+        OverallStatus = ProvisioningStatus.NotStarted;
+        StatusMessage = "Ready to provision host and subsystem prerequisites.";
+        Steps.Clear();
+        LogLines.Clear();
+    }
+
     public Task OnStepEnteredAsync()
     {
         if (IsRunning || IsCompleted || IsRebootRequired)
@@ -113,7 +125,7 @@ public sealed partial class WizardStep2ProvisioningViewModel : ObservableObject
             var report = await _environmentProvisioner.ProvisionAsync(
                 _state.ToProvisioningOptions(),
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _state.LifetimeToken).ConfigureAwait(false);
 
             _state.LatestProbe = report.PostProbe;
 
@@ -137,7 +149,11 @@ public sealed partial class WizardStep2ProvisioningViewModel : ObservableObject
                 };
             });
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Provisioning cancelled.");
+        }
+        catch (Exception ex)
         {
             _dispatcher.Post(() =>
             {
@@ -190,11 +206,24 @@ public sealed partial class WizardStep2ProvisioningViewModel : ObservableObject
             return true;
         }
 
-        if (!probe.HostDotNet10Installed || !probe.HostGitInstalled || !probe.HostRipgrepInstalled)
+        if (options.ProvisionHostDotNet && !probe.HostDotNet10Installed)
         {
             return false;
         }
 
-        return options.SkipDocker || probe.HostDockerAvailable;
+        if (options.ProvisionLinuxOrWslToolchain)
+        {
+            if (!probe.HostGitInstalled || !probe.HostRipgrepInstalled)
+            {
+                return false;
+            }
+
+            if (!options.SkipDocker && !probe.HostDockerAvailable)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

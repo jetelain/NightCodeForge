@@ -3,6 +3,7 @@ namespace NightCodeForge.Installer.Cli;
 using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Constants;
 using NightCodeForge.Installer.Core.Models;
+using NightCodeForge.Installer.Core.Services;
 
 /// <summary>
 /// Resolved startup plan describing whether <c>NightCodeForge.Installer</c> runs headlessly or opens a specific Avalonia UI mode.
@@ -39,23 +40,35 @@ public static class InstallerStartupRouter
 
         var headlessAction = runHeadless ? cliOptions.Mode : InstallerLaunchMode.DefaultAuto;
 
+        var effectiveSource = ResolveSourceOptions(cliOptions, discovery, platform);
+        var effectiveInstallDir = string.IsNullOrWhiteSpace(cliOptions.InstallDirectory)
+            ? discovery.NightCodeForge.InstallDirectory
+            : NormalizeDirectoryPath(cliOptions.InstallDirectory);
+
+        var isInstalledAtTarget = discovery.NightCodeForge.IsInstalled;
+        if (!string.IsNullOrWhiteSpace(cliOptions.InstallDirectory))
+        {
+            var comparison = platform.Platform == HostPlatformType.Windows
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!string.Equals(effectiveInstallDir, discovery.NightCodeForge.InstallDirectory, comparison))
+            {
+                isInstalledAtTarget = InstallationDetector.FindNightCodeForgeBinary(effectiveInstallDir) is not null;
+            }
+        }
+
         var initialUiMode = cliOptions.Mode switch
         {
             InstallerLaunchMode.Uninstall => InstallerUiMode.InteractiveUninstaller,
             InstallerLaunchMode.Upgrade => InstallerUiMode.MaintenanceHub,
             InstallerLaunchMode.Wizard => InstallerUiMode.OobeWizard,
-            _ => discovery.NightCodeForge.IsInstalled
+            _ => isInstalledAtTarget
                 ? InstallerUiMode.MaintenanceHub
                 : InstallerUiMode.OobeWizard
         };
 
-        var isUpgradeWizardMode = cliOptions.Mode == InstallerLaunchMode.Wizard && discovery.NightCodeForge.IsInstalled;
+        var isUpgradeWizardMode = cliOptions.Mode == InstallerLaunchMode.Wizard && isInstalledAtTarget;
         var autoFocusUpgrade = cliOptions.Mode == InstallerLaunchMode.Upgrade;
-
-        var effectiveSource = ResolveSourceOptions(cliOptions, discovery, platform);
-        var effectiveInstallDir = string.IsNullOrWhiteSpace(cliOptions.InstallDirectory)
-            ? discovery.NightCodeForge.InstallDirectory
-            : Path.TrimEndingDirectorySeparator(Path.GetFullPath(cliOptions.InstallDirectory));
 
         var effectiveDistro = string.IsNullOrWhiteSpace(cliOptions.WslDistroName)
             ? InstallerConstants.DefaultWslDistro
@@ -81,13 +94,19 @@ public static class InstallerStartupRouter
     {
         if (cliOptions.AirGappedRequested || discovery.RecommendedSourceMode == InstallSourceMode.AirGappedBundle)
         {
-            var bundleDir = cliOptions.BundleDirectory
-                            ?? discovery.DetectedBundleDirectory
-                            ?? Path.Combine(platform.InstallerBaseDirectory, InstallerConstants.BundleDirectoryName);
+            var rawBundleDir = cliOptions.BundleDirectory
+                               ?? discovery.DetectedBundleDirectory
+                               ?? Path.Combine(platform.InstallerBaseDirectory, InstallerConstants.BundleDirectoryName);
 
-            return new InstallSourceOptions(InstallSourceMode.AirGappedBundle, bundleDir);
+            return new InstallSourceOptions(InstallSourceMode.AirGappedBundle, NormalizeDirectoryPath(rawBundleDir));
         }
 
-        return new InstallSourceOptions(InstallSourceMode.Online, discovery.DetectedBundleDirectory);
+        var detectedBundleDir = string.IsNullOrWhiteSpace(discovery.DetectedBundleDirectory)
+            ? null
+            : NormalizeDirectoryPath(discovery.DetectedBundleDirectory);
+        return new InstallSourceOptions(InstallSourceMode.Online, detectedBundleDir);
     }
+
+    private static string NormalizeDirectoryPath(string rawPath) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawPath.Trim()));
 }

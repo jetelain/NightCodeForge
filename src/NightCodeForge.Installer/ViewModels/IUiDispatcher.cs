@@ -8,6 +8,7 @@ using Avalonia.Threading;
 public interface IUiDispatcher
 {
     void Post(Action action);
+    Task InvokeAsync(Action action);
 }
 
 /// <summary>
@@ -27,6 +28,19 @@ public sealed class AvaloniaUiDispatcher : IUiDispatcher
 
         Dispatcher.UIThread.Post(action);
     }
+
+    public Task InvokeAsync(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        return Dispatcher.UIThread.InvokeAsync(action).GetTask();
+    }
 }
 
 /// <summary>
@@ -38,6 +52,13 @@ public sealed class ImmediateUiDispatcher : IUiDispatcher
     {
         ArgumentNullException.ThrowIfNull(action);
         action();
+    }
+
+    public Task InvokeAsync(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        action();
+        return Task.CompletedTask;
     }
 }
 

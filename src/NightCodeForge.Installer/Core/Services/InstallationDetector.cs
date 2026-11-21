@@ -11,8 +11,6 @@ using NightCodeForge.Installer.Core.Models;
 /// </summary>
 public sealed class InstallationDetector : IInstallationDetector
 {
-    private const string UninstallLocationValueName = "InstallLocation";
-
     private readonly IPlatformEnvironment _platform;
     private readonly IWindowsRegistryAccessor _registry;
 
@@ -43,13 +41,17 @@ public sealed class InstallationDetector : IInstallationDetector
         };
     }
 
-    public InstallationDiscoveryResult Detect(string? explicitBundleDirectory = null)
+    public InstallationDiscoveryResult Detect(
+        string? explicitBundleDirectory = null,
+        string? explicitInstallDirectory = null)
     {
         var registryInstallDir = _platform.Platform == HostPlatformType.Windows
-            ? _registry.ReadCurrentUserStringValue(InstallerConstants.WindowsUninstallRegistrySubKey, UninstallLocationValueName)
+            ? _registry.ReadCurrentUserStringValue(
+                InstallerConstants.WindowsUninstallRegistrySubKey,
+                InstallerConstants.WindowsUninstallInstallLocationValueName)
             : null;
 
-        var ncfInfo = DetectNightCodeForge(registryInstallDir);
+        var ncfInfo = DetectNightCodeForge(registryInstallDir, explicitInstallDirectory);
         var routerInfo = DetectOllamaRouter();
         var (bundleDir, bundleFiles) = DetectAirGappedBundle(explicitBundleDirectory);
         var recommendedSource = bundleDir is not null
@@ -64,10 +66,13 @@ public sealed class InstallationDetector : IInstallationDetector
             DetectedBundleFiles: bundleFiles);
     }
 
-    private InstalledComponentInfo DetectNightCodeForge(string? registryInstallDir)
+    private InstalledComponentInfo DetectNightCodeForge(string? registryInstallDir, string? explicitInstallDirectory)
     {
+        var normalizedExplicitDir = NormalizeOptionalDirectory(explicitInstallDirectory);
         var normalizedRegistryDir = NormalizeOptionalDirectory(registryInstallDir);
-        var candidates = BuildNightCodeForgeProbeCandidates(normalizedRegistryDir);
+        var pathComparer = GetPathComparer();
+        var candidates = BuildNightCodeForgeProbeCandidates(normalizedExplicitDir, normalizedRegistryDir, pathComparer);
+
         foreach (var candidate in candidates)
         {
             var binaryPath = FindNightCodeForgeBinary(candidate);
@@ -80,7 +85,7 @@ public sealed class InstallationDetector : IInstallationDetector
             var hasManifest = File.Exists(Path.Combine(candidate, InstallerConstants.UninstallManifestFileName));
             var hasRegistryMatch = _platform.Platform == HostPlatformType.Windows &&
                                    normalizedRegistryDir is not null &&
-                                   string.Equals(candidate, normalizedRegistryDir, StringComparison.OrdinalIgnoreCase);
+                                   pathComparer.Equals(candidate, normalizedRegistryDir);
             var isLegacy = !hasManifest && !hasRegistryMatch;
 
             return new InstalledComponentInfo(
@@ -94,7 +99,8 @@ public sealed class InstallationDetector : IInstallationDetector
                 PrimaryBinaryPath: binaryPath);
         }
 
-        var defaultDir = NormalizeOptionalDirectory(_platform.GetEnvironmentVariable(InstallerConstants.EnvNightCodeForgeHome))
+        var defaultDir = normalizedExplicitDir
+                         ?? NormalizeOptionalDirectory(_platform.GetEnvironmentVariable(InstallerConstants.EnvNightCodeForgeHome))
                          ?? GetDefaultNightCodeForgeInstallDirectory();
         return new InstalledComponentInfo(
             IsInstalled: false,
@@ -109,7 +115,7 @@ public sealed class InstallationDetector : IInstallationDetector
 
     private InstalledComponentInfo DetectOllamaRouter()
     {
-        var candidates = BuildOllamaRouterProbeCandidates();
+        var candidates = BuildOllamaRouterProbeCandidates(GetPathComparer());
         foreach (var candidate in candidates)
         {
             var binaryPath = FindOllamaRouterBinary(candidate);
@@ -143,73 +149,124 @@ public sealed class InstallationDetector : IInstallationDetector
             PrimaryBinaryPath: null);
     }
 
-    private List<string> BuildNightCodeForgeProbeCandidates(string? registryInstallDir)
+    private List<string> BuildNightCodeForgeProbeCandidates(
+        string? explicitInstallDir,
+        string? registryInstallDir,
+        StringComparer pathComparer)
     {
         var candidates = new List<string>();
-        AddCandidate(candidates, _platform.GetEnvironmentVariable(InstallerConstants.EnvNightCodeForgeHome));
+        AddCandidate(candidates, explicitInstallDir, pathComparer);
+        AddCandidate(candidates, _platform.GetEnvironmentVariable(InstallerConstants.EnvNightCodeForgeHome), pathComparer);
 
         switch (_platform.Platform)
         {
             case HostPlatformType.Windows:
-                AddCandidate(candidates, registryInstallDir);
-                AddCandidate(candidates, Path.Combine(_platform.LocalApplicationDataDirectory, InstallerConstants.ApplicationDisplayName));
-                AddCandidate(candidates, Path.Combine(_platform.LocalApplicationDataDirectory, "Programs", InstallerConstants.ApplicationDisplayName));
+                AddCandidate(candidates, registryInstallDir, pathComparer);
+                AddCandidate(candidates, Path.Combine(_platform.LocalApplicationDataDirectory, InstallerConstants.ApplicationDisplayName), pathComparer);
+                AddCandidate(candidates, Path.Combine(_platform.LocalApplicationDataDirectory, "Programs", InstallerConstants.ApplicationDisplayName), pathComparer);
                 break;
 
             case HostPlatformType.Linux:
-                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, InstallerConstants.UnixNightCodeForgeDirName));
-                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, ".local", "share", "nightcodeforge"));
+                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, InstallerConstants.UnixNightCodeForgeDirName), pathComparer);
+                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, ".local", "share", "nightcodeforge"), pathComparer);
                 break;
 
             case HostPlatformType.MacOS:
-                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, InstallerConstants.UnixNightCodeForgeDirName));
-                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, "Applications", InstallerConstants.ApplicationDisplayName));
+                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, InstallerConstants.UnixNightCodeForgeDirName), pathComparer);
+                AddCandidate(candidates, Path.Combine(_platform.UserHomeDirectory, "Applications", InstallerConstants.ApplicationDisplayName), pathComparer);
                 break;
         }
 
         return candidates;
     }
 
-    private List<string> BuildOllamaRouterProbeCandidates()
+    private List<string> BuildOllamaRouterProbeCandidates(StringComparer pathComparer)
     {
         var candidates = new List<string>();
-        AddCandidate(candidates, _platform.GetEnvironmentVariable(InstallerConstants.EnvOllamaRouterHome));
-        AddCandidate(candidates, GetDefaultOllamaRouterInstallDirectory());
+        AddCandidate(candidates, _platform.GetEnvironmentVariable(InstallerConstants.EnvOllamaRouterHome), pathComparer);
+        AddCandidate(candidates, GetDefaultOllamaRouterInstallDirectory(), pathComparer);
         return candidates;
     }
 
     private (string? BundleDirectory, IReadOnlyList<string> BundleFiles) DetectAirGappedBundle(string? explicitBundleDirectory)
     {
-        var candidates = new List<string>();
-        AddCandidate(candidates, explicitBundleDirectory);
-        AddCandidate(candidates, Path.Combine(_platform.InstallerBaseDirectory, InstallerConstants.BundleDirectoryName));
-        AddCandidate(candidates, _platform.InstallerBaseDirectory);
+        var pathComparer = GetPathComparer();
+        var fileComparer = _platform.Platform == HostPlatformType.Windows
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+        var candidates = new List<(string Path, bool RequireCompanionAssets)>();
+        var normalizedExplicit = NormalizeOptionalDirectory(explicitBundleDirectory);
+        if (normalizedExplicit is not null)
+        {
+            candidates.Add((normalizedExplicit, false));
+        }
+        else
+        {
+            var baseBundleSubdir = NormalizeOptionalDirectory(
+                Path.Combine(_platform.InstallerBaseDirectory, InstallerConstants.BundleDirectoryName));
+            if (baseBundleSubdir is not null)
+            {
+                candidates.Add((baseBundleSubdir, false));
+            }
+
+            var baseDir = NormalizeOptionalDirectory(_platform.InstallerBaseDirectory);
+            if (baseDir is not null && !pathComparer.Equals(baseDir, baseBundleSubdir))
+            {
+                candidates.Add((baseDir, true));
+            }
+        }
 
         var expectedNcfArchive = ReleaseManager.GetNightCodeForgeArchiveName(_platform.CurrentRuntimeIdentifier);
+        var expectedRouterArchive = ReleaseManager.GetOllamaRouterArchiveName(_platform.Platform, _platform.CurrentRuntimeIdentifier);
 
-        foreach (var candidate in candidates)
+        foreach (var (candidate, requireCompanionAssets) in candidates)
         {
             if (!Directory.Exists(candidate))
             {
                 continue;
             }
 
-            var matchingFiles = Directory.EnumerateFiles(candidate)
-                .Select(Path.GetFileName)
-                .Where(static name => !string.IsNullOrEmpty(name) && IsBundleAssetFile(name!))
-                .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (matchingFiles.Contains(expectedNcfArchive, StringComparer.OrdinalIgnoreCase))
+            List<string> matchingFiles;
+            try
             {
-                return (candidate, matchingFiles!);
+                matchingFiles = Directory.EnumerateFiles(candidate)
+                    .Select(Path.GetFileName)
+                    .Where(static name => !string.IsNullOrEmpty(name) && IsBundleAssetFile(name!))
+                    .Select(static name => name!)
+                    .OrderBy(static name => name, fileComparer)
+                    .ToList();
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Justification: Unreadable candidate folder cannot serve as an air-gapped bundle source.
+                _ = ex;
+                continue;
+            }
+
+            if (!matchingFiles.Contains(expectedNcfArchive, fileComparer))
+            {
+                continue;
+            }
+
+            if (requireCompanionAssets)
+            {
+                var hasRouter = matchingFiles.Contains(expectedRouterArchive, fileComparer);
+                var hasNupkg = matchingFiles.Any(static f =>
+                    f.EndsWith(InstallerConstants.NupkgExtension, StringComparison.OrdinalIgnoreCase));
+                if (!hasRouter && !hasNupkg)
+                {
+                    continue;
+                }
+            }
+
+            return (candidate, matchingFiles);
         }
 
         return (null, []);
     }
 
-    private static bool IsBundleAssetFile(string fileName)
+    internal static bool IsBundleAssetFile(string fileName)
     {
         if (fileName.StartsWith(InstallerConstants.ComponentNightCodeForgeWeb, StringComparison.OrdinalIgnoreCase) &&
             fileName.EndsWith(InstallerConstants.ZipExtension, StringComparison.OrdinalIgnoreCase))
@@ -285,21 +342,51 @@ public sealed class InstallationDetector : IInstallationDetector
         return null;
     }
 
+    private StringComparer GetPathComparer() =>
+        _platform.Platform == HostPlatformType.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
     private static string? ReadVersion(string installDirectory, string primaryBinaryPath)
     {
         var versionFilePath = Path.Combine(installDirectory, InstallerConstants.VersionFileName);
         if (File.Exists(versionFilePath))
         {
-            var raw = File.ReadAllText(versionFilePath).Trim();
-            if (!string.IsNullOrWhiteSpace(raw))
+            try
             {
-                return raw;
+                var raw = File.ReadAllText(versionFilePath).Trim();
+                if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    return raw;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Justification: Best-effort VERSION file read falls back to binary metadata inspection.
+                _ = ex;
             }
         }
 
+        var metadataVersion = TryReadFileVersion(primaryBinaryPath);
+        if (metadataVersion is not null)
+        {
+            return metadataVersion;
+        }
+
+        // On Linux/macOS, the native apphost binary does not carry Win32 PE version resources; probe NightCodeForge.Web.dll.
+        var webDllPath = Path.Combine(installDirectory, InstallerConstants.WebDll);
+        if (!string.Equals(primaryBinaryPath, webDllPath, StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(webDllPath))
+        {
+            return TryReadFileVersion(webDllPath);
+        }
+
+        return null;
+    }
+
+    private static string? TryReadFileVersion(string filePath)
+    {
         try
         {
-            var info = FileVersionInfo.GetVersionInfo(primaryBinaryPath);
+            var info = FileVersionInfo.GetVersionInfo(filePath);
             if (!string.IsNullOrWhiteSpace(info.ProductVersion))
             {
                 return info.ProductVersion.Trim();
@@ -326,10 +413,19 @@ public sealed class InstallationDetector : IInstallationDetector
             return null;
         }
 
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawPath.Trim()));
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawPath.Trim()));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Justification: Malformed optional environment/CLI candidate path is ignored during probe.
+            _ = ex;
+            return null;
+        }
     }
 
-    private static void AddCandidate(List<string> candidates, string? rawPath)
+    private static void AddCandidate(List<string> candidates, string? rawPath, StringComparer pathComparer)
     {
         var normalized = NormalizeOptionalDirectory(rawPath);
         if (normalized is null)
@@ -337,7 +433,7 @@ public sealed class InstallationDetector : IInstallationDetector
             return;
         }
 
-        if (!candidates.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+        if (!candidates.Contains(normalized, pathComparer))
         {
             candidates.Add(normalized);
         }

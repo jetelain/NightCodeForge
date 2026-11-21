@@ -63,7 +63,10 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
     public partial string StatusMessage { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasError))]
     public partial string ErrorMessage { get; set; }
+
+    public bool HasError => !string.IsNullOrWhiteSpace(ErrorMessage);
 
     [ObservableProperty]
     public partial string ArchitectModelDisplay { get; set; }
@@ -82,6 +85,27 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
 
     [ObservableProperty]
     public partial string PrimaryButtonLabel { get; set; }
+
+    public void ResetState()
+    {
+        IsRunning = false;
+        HasSyncedRecommendations = false;
+        IsSkipped = false;
+        ErrorMessage = string.Empty;
+        ArchitectModelDisplay = "(not synced yet)";
+        CoderModelDisplay = "(not synced yet)";
+        DefaultModelDisplay = "(not synced yet)";
+        ContextWindowDisplay = "-";
+        ConfigPathDisplay = "-";
+        PrimaryButtonLabel = "Launch OllamaRouter Setup Wizard";
+        StatusMessage = "Delegate local Ollama, fleet benchmarking, and role assignment to OllamaRouter's Setup Wizard.";
+        RoleAssignments.Clear();
+        LogLines.Clear();
+    }
+
+    partial void OnIsRunningChanged(bool value) => SkipAiSetupCommand.NotifyCanExecuteChanged();
+
+    private bool CanSkipAiSetup() => !IsRunning;
 
     [RelayCommand]
     public async Task LaunchOllamaRouterWizardAsync()
@@ -113,7 +137,7 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
                 _state.InstallDirectory,
                 InstallerConstants.DefaultOllamaRouterEndpoint,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _state.LifetimeToken).ConfigureAwait(false);
 
             _dispatcher.Post(() =>
             {
@@ -129,6 +153,19 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
                     ErrorMessage = result.ErrorMessage ?? $"OllamaRouter wizard exited with code {result.ExitCode}.";
                     StatusMessage = ErrorMessage;
                 }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "OllamaRouter wizard launch cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                ErrorMessage = ex.Message;
+                StatusMessage = ex.Message;
+                LogLines.Add($"[Error] {ex.Message}");
             });
         }
         finally
@@ -166,7 +203,7 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
                 _state.InstallDirectory,
                 InstallerConstants.DefaultOllamaRouterEndpoint,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _state.LifetimeToken).ConfigureAwait(false);
 
             _dispatcher.Post(() =>
             {
@@ -174,6 +211,10 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
                 PrimaryButtonLabel = "Re-run OllamaRouter Wizard";
                 StatusMessage = "Synced benchmark-calibrated role models into NightCodeForge config.json.";
             });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Role recommendation sync cancelled.");
         }
         catch (OllamaRouterSyncException ex)
         {
@@ -184,15 +225,29 @@ public sealed partial class WizardStep4AiFleetViewModel : ObservableObject
                 LogLines.Add($"[Error] {ex.Message}");
             });
         }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                ErrorMessage = ex.Message;
+                StatusMessage = $"Recommendation sync error: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
+            });
+        }
         finally
         {
             _dispatcher.Post(() => IsRunning = false);
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanSkipAiSetup))]
     public void SkipAiSetup()
     {
+        if (IsRunning)
+        {
+            return;
+        }
+
         IsSkipped = true;
         _state.AiFleetSkipped = true;
         ErrorMessage = string.Empty;

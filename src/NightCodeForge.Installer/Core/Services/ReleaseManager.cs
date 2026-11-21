@@ -24,15 +24,6 @@ public sealed class ReleaseManager : IReleaseManager
     private const string StepRelease = "Release Delivery";
     private const string StepSwap = "Atomic Swap";
     private const string StepConfigure = "Post-Extract Configuration";
-    private const string KeyUrls = "Urls";
-    private const string KeyConnectionStrings = "ConnectionStrings";
-    private const string KeyDefaultConnection = "DefaultConnection";
-    private const string KeyHangfireConnection = "HangfireConnection";
-    private const string KeyLogging = "Logging";
-    private const string KeyLogLevel = "LogLevel";
-    private const string KeyLogsDirectory = "LogsDirectory";
-    private const string KeyOllamaRouter = "OllamaRouter";
-    private const string KeyStateDirectory = "StateDirectory";
 
     private readonly HttpClient _httpClient;
     private readonly IPlatformEnvironment _platform;
@@ -130,7 +121,7 @@ public sealed class ReleaseManager : IReleaseManager
     {
         ArgumentNullException.ThrowIfNull(asset);
 
-        var discovery = _installationDetector.Detect();
+        var discovery = _installationDetector.Detect(explicitInstallDirectory: targetInstallDirectory);
         var installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(
             string.IsNullOrWhiteSpace(targetInstallDirectory)
                 ? discovery.NightCodeForge.InstallDirectory
@@ -138,7 +129,7 @@ public sealed class ReleaseManager : IReleaseManager
         var wasUpgrade = InstallationDetector.FindNightCodeForgeBinary(installDir) is not null;
 
         var archivePath = await AcquireAndVerifyAssetAsync(asset, progress, cancellationToken).ConfigureAwait(false);
-        var stagingRoot = CreateTempDirectory("ncf-web-stage-");
+        var stagingRoot = CreateTempDirectory(InstallerConstants.WebStageTempPrefix);
 
         try
         {
@@ -148,33 +139,40 @@ public sealed class ReleaseManager : IReleaseManager
             var wasRunning = _processControl.IsAnyProcessRunning(InstallerConstants.NightCodeForgeWebProcesses) ||
                              _processControl.IsAnyProcessRunning(InstallerConstants.NightCodeForgeLauncherProcesses);
 
-            if (wasRunning)
-            {
-                Report(progress, StepSwap, "Stopping running NightCodeForge launcher and web processes...", InstallerLogLevel.Info, 55);
-                await StopNightCodeForgeProcessesAsync(cancellationToken).ConfigureAwait(false);
-            }
+            Report(progress, StepSwap, "Stopping any active NightCodeForge launcher and web processes...", InstallerLogLevel.Info, 55);
+            await StopNightCodeForgeProcessesAsync(cancellationToken).ConfigureAwait(false);
 
+            var existingProdSettings = SnapshotProductionSettings(installDir);
             var preservedUrls = ReadPreservedWebUrls(installDir);
-            var preservedSet = new HashSet<string>(InstallerConstants.NightCodeForgePreservedInstallItems, StringComparer.OrdinalIgnoreCase);
+            var preservedSet = new HashSet<string>(InstallerConstants.NightCodeForgePreservedInstallItems, GetPathComparer());
 
             var selfCopied = false;
-            await ExecuteAtomicSwapAsync(
-                installDir,
-                payloadRoot,
-                preservedSet,
-                progress,
-                async () =>
-                {
-                    selfCopied = await ConfigureNightCodeForgeDeploymentAsync(
-                        installDir,
-                        asset.Version,
-                        preservedUrls,
-                        createDesktopShortcut,
-                        discovery.OllamaRouter.IsInstalled ? discovery.OllamaRouter.InstallDirectory : null,
-                        progress,
-                        cancellationToken).ConfigureAwait(false);
-                },
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ExecuteAtomicSwapAsync(
+                    installDir,
+                    payloadRoot,
+                    preservedSet,
+                    progress,
+                    async () =>
+                    {
+                        selfCopied = await ConfigureNightCodeForgeDeploymentAsync(
+                            installDir,
+                            asset.Version,
+                            existingProdSettings,
+                            preservedUrls,
+                            createDesktopShortcut,
+                            discovery.OllamaRouter.IsInstalled ? discovery.OllamaRouter.InstallDirectory : null,
+                            progress,
+                            cancellationToken).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (wasRunning && !cancellationToken.IsCancellationRequested)
+            {
+                await TryRestartBestEffortAsync(() => RestartNightCodeForgeAsync(installDir, CancellationToken.None)).ConfigureAwait(false);
+                throw;
+            }
 
             var restarted = false;
             if (wasRunning)
@@ -214,7 +212,7 @@ public sealed class ReleaseManager : IReleaseManager
         var wasUpgrade = InstallationDetector.FindOllamaRouterBinary(installDir) is not null;
 
         var archivePath = await AcquireAndVerifyAssetAsync(asset, progress, cancellationToken).ConfigureAwait(false);
-        var stagingRoot = CreateTempDirectory("ncf-or-stage-");
+        var stagingRoot = CreateTempDirectory(InstallerConstants.OllamaRouterStageTempPrefix);
 
         try
         {
@@ -222,22 +220,44 @@ public sealed class ReleaseManager : IReleaseManager
             var payloadRoot = await ExtractArchiveAsync(archivePath, stagingRoot, cancellationToken).ConfigureAwait(false);
 
             var wasRunning = _processControl.IsAnyProcessRunning(InstallerConstants.OllamaRouterProcesses);
-            if (wasRunning)
+            Report(progress, StepSwap, "Stopping any active OllamaRouter processes...", InstallerLogLevel.Info, 55);
+            await StopOllamaRouterProcessesAsync(installDir, _processRunner, _processControl, _platform.Platform, cancellationToken)
+                .ConfigureAwait(false);
+
+            var existingProdSettings = SnapshotProductionSettings(installDir);
+            var preservedSet = new HashSet<string>(InstallerConstants.OllamaRouterPreservedItems, GetPathComparer());
+
+            try
             {
-                Report(progress, StepSwap, "Stopping running OllamaRouter processes...", InstallerLogLevel.Info, 55);
-                await StopOllamaRouterProcessesAsync(installDir, _processRunner, _processControl, _platform.Platform, cancellationToken)
-                    .ConfigureAwait(false);
+                await ExecuteAtomicSwapAsync(
+                    installDir,
+                    payloadRoot,
+                    preservedSet,
+                    progress,
+                    async () =>
+                    {
+                        await ConfigureOllamaRouterDeploymentAsync(
+                            installDir,
+                            asset.Version,
+                            existingProdSettings,
+                            progress,
+                            cancellationToken).ConfigureAwait(false);
+
+                        if (discovery.NightCodeForge.IsInstalled)
+                        {
+                            await TryBackfillOllamaRouterDirectoryInManifestAsync(
+                                discovery.NightCodeForge.InstallDirectory,
+                                installDir,
+                                cancellationToken).ConfigureAwait(false);
+                        }
+                    },
+                    cancellationToken).ConfigureAwait(false);
             }
-
-            var preservedSet = new HashSet<string>(InstallerConstants.OllamaRouterPreservedItems, StringComparer.OrdinalIgnoreCase);
-
-            await ExecuteAtomicSwapAsync(
-                installDir,
-                payloadRoot,
-                preservedSet,
-                progress,
-                () => ConfigureOllamaRouterDeploymentAsync(installDir, asset.Version, progress, cancellationToken),
-                cancellationToken).ConfigureAwait(false);
+            catch (Exception) when (wasRunning && !cancellationToken.IsCancellationRequested)
+            {
+                await TryRestartBestEffortAsync(() => RestartOllamaRouterAsync(installDir, CancellationToken.None)).ConfigureAwait(false);
+                throw;
+            }
 
             var restarted = false;
             if (wasRunning)
@@ -281,7 +301,7 @@ public sealed class ReleaseManager : IReleaseManager
                     new ProcessRunRequest
                     {
                         FileName = cliPath,
-                        Arguments = ["stop"],
+                        Arguments = [InstallerConstants.OllamaRouterStopCommand],
                         WorkingDirectory = installDir,
                         Timeout = TimeSpan.FromSeconds(InstallerConstants.OllamaRouterStopTimeoutSeconds)
                     },
@@ -308,9 +328,10 @@ public sealed class ReleaseManager : IReleaseManager
             return map;
         }
 
-        foreach (var rawLine in content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+        var normalizedContent = content.TrimStart('\uFEFF');
+        foreach (var rawLine in normalizedContent.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
         {
-            var line = rawLine.Trim();
+            var line = rawLine.TrimStart('\uFEFF').Trim();
             if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
             {
                 continue;
@@ -345,6 +366,25 @@ public sealed class ReleaseManager : IReleaseManager
             ? $"{InstallerConstants.ComponentOllamaRouter}-{rid}{InstallerConstants.ZipExtension}"
             : $"{InstallerConstants.ComponentOllamaRouter}-{rid}{InstallerConstants.TarGzExtension}";
 
+    internal static string EscapeSqliteConnectionValue(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        if (path.Contains(';', StringComparison.Ordinal) ||
+            path.Contains('\'', StringComparison.Ordinal) ||
+            path.Contains('"', StringComparison.Ordinal) ||
+            char.IsWhiteSpace(path[0]) ||
+            char.IsWhiteSpace(path[^1]))
+        {
+            return $"\"{path.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+        }
+
+        return path;
+    }
+
     private async Task<ComponentReleaseAsset> ResolveLocalBundleAssetAsync(
         string componentName,
         string? bundleDirectory,
@@ -370,11 +410,15 @@ public sealed class ReleaseManager : IReleaseManager
         {
             var checksumsContent = await File.ReadAllTextAsync(checksumsPath, cancellationToken).ConfigureAwait(false);
             var parsed = ParseSha256Sums(checksumsContent);
-            parsed.TryGetValue(expectedArchiveName, out expectedChecksum);
+            if (!parsed.TryGetValue(expectedArchiveName, out expectedChecksum) || string.IsNullOrWhiteSpace(expectedChecksum))
+            {
+                throw new BundleValidationException(
+                    $"Checksums file '{checksumsPath}' does not contain a valid SHA-256 entry for '{expectedArchiveName}'.");
+            }
         }
 
         var version = await TryReadVersionFromArchiveAsync(archivePath, cancellationToken).ConfigureAwait(false)
-                      ?? InstallerConstants.DefaultFallbackVersion;
+                      ?? InstallerConstants.UnknownVersionPlaceholder;
         var fileInfo = new FileInfo(archivePath);
 
         return new ComponentReleaseAsset(
@@ -399,7 +443,7 @@ public sealed class ReleaseManager : IReleaseManager
 
         using var request = new HttpRequestMessage(HttpMethod.Get, apiUrl);
         request.Headers.UserAgent.ParseAdd(InstallerConstants.HttpUserAgent);
-        request.Headers.Accept.ParseAdd("application/vnd.github+json");
+        request.Headers.Accept.ParseAdd(InstallerConstants.GitHubApiAcceptHeader);
 
         using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
@@ -409,48 +453,64 @@ public sealed class ReleaseManager : IReleaseManager
         }
 
         await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        var release = await JsonSerializer.DeserializeAsync(
-            responseStream,
-            InstallerJsonContext.Default.GitHubReleaseDto,
-            cancellationToken).ConfigureAwait(false);
-
-        if (release is null)
+        GitHubReleaseDto? release;
+        try
         {
-            throw new ReleaseDownloadException($"GitHub release payload for '{repository}' was empty.");
+            release = await JsonSerializer.DeserializeAsync(
+                responseStream,
+                InstallerJsonContext.Default.GitHubReleaseDto,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (JsonException ex)
+        {
+            throw new ReleaseDownloadException(
+                $"GitHub release payload for '{repository}' was invalid JSON: {ex.Message}",
+                ex);
+        }
+
+        if (release is null || release.Assets is null || string.IsNullOrWhiteSpace(release.TagName))
+        {
+            throw new ReleaseDownloadException($"GitHub release payload for '{repository}' was empty or malformed.");
         }
 
         var matchingAsset = release.Assets.FirstOrDefault(a =>
-            string.Equals(a.Name, expectedArchiveName, StringComparison.OrdinalIgnoreCase));
+            a is not null && string.Equals(a.Name, expectedArchiveName, StringComparison.OrdinalIgnoreCase));
         if (matchingAsset is null)
         {
             throw new ReleaseDownloadException(
                 $"Release '{release.TagName}' in '{repository}' does not contain asset '{expectedArchiveName}'.");
         }
 
-        string? expectedChecksum = null;
         var shaAsset = release.Assets.FirstOrDefault(a =>
-            string.Equals(a.Name, InstallerConstants.Sha256SumsFileName, StringComparison.OrdinalIgnoreCase));
-
-        if (shaAsset is not null)
+            a is not null && string.Equals(a.Name, InstallerConstants.Sha256SumsFileName, StringComparison.OrdinalIgnoreCase));
+        if (shaAsset is null)
         {
-            using var shaRequest = new HttpRequestMessage(HttpMethod.Get, shaAsset.BrowserDownloadUrl);
-            shaRequest.Headers.UserAgent.ParseAdd(InstallerConstants.HttpUserAgent);
-            using var shaResponse = await _httpClient.SendAsync(shaRequest, cancellationToken).ConfigureAwait(false);
-            if (!shaResponse.IsSuccessStatusCode)
-            {
-                throw new ReleaseDownloadException(
-                    $"Failed to download '{InstallerConstants.Sha256SumsFileName}' for '{repository}': HTTP {(int)shaResponse.StatusCode} ({shaResponse.ReasonPhrase}).");
-            }
+            throw new ReleaseDownloadException(
+                $"Release '{release.TagName}' in '{repository}' does not include '{InstallerConstants.Sha256SumsFileName}' for integrity verification.");
+        }
 
-            var content = await shaResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            var parsed = ParseSha256Sums(content);
-            parsed.TryGetValue(matchingAsset.Name, out expectedChecksum);
+        using var shaRequest = new HttpRequestMessage(HttpMethod.Get, shaAsset.BrowserDownloadUrl);
+        shaRequest.Headers.UserAgent.ParseAdd(InstallerConstants.HttpUserAgent);
+        using var shaResponse = await _httpClient.SendAsync(shaRequest, cancellationToken).ConfigureAwait(false);
+        if (!shaResponse.IsSuccessStatusCode)
+        {
+            throw new ReleaseDownloadException(
+                $"Failed to download '{InstallerConstants.Sha256SumsFileName}' for '{repository}': HTTP {(int)shaResponse.StatusCode} ({shaResponse.ReasonPhrase}).");
+        }
+
+        var shaContent = await shaResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var parsedChecksums = ParseSha256Sums(shaContent);
+        if (!parsedChecksums.TryGetValue(matchingAsset.Name, out var expectedChecksum) ||
+            string.IsNullOrWhiteSpace(expectedChecksum))
+        {
+            throw new ReleaseDownloadException(
+                $"'{InstallerConstants.Sha256SumsFileName}' for release '{release.TagName}' in '{repository}' does not contain a valid SHA-256 entry for '{matchingAsset.Name}'.");
         }
 
         var normalizedVersion = release.TagName.Trim().TrimStart('v', 'V');
         if (string.IsNullOrWhiteSpace(normalizedVersion))
         {
-            normalizedVersion = InstallerConstants.DefaultFallbackVersion;
+            normalizedVersion = InstallerConstants.UnknownVersionPlaceholder;
         }
 
         return new ComponentReleaseAsset(
@@ -480,6 +540,12 @@ public sealed class ReleaseManager : IReleaseManager
         }
         else
         {
+            if (string.IsNullOrWhiteSpace(asset.Sha256Checksum))
+            {
+                throw new ReleaseDownloadException(
+                    $"Online release asset '{asset.ComponentName}' ({asset.Version}) is missing a required SHA-256 checksum.");
+            }
+
             localArchivePath = await DownloadWithResumeAsync(asset, progress, cancellationToken).ConfigureAwait(false);
         }
 
@@ -509,15 +575,14 @@ public sealed class ReleaseManager : IReleaseManager
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        var cacheDir = Path.Combine(Path.GetTempPath(), InstallerConstants.DownloadCacheDirectoryName);
+        var cacheDir = Path.Combine(_platform.LocalApplicationDataDirectory, InstallerConstants.DownloadCacheDirectoryName);
         Directory.CreateDirectory(cacheDir);
 
         var sanitizedVersion = SanitizeFileNameSegment(asset.Version);
-        var fileName = Path.GetFileName(new Uri(asset.SourceLocation).LocalPath);
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            fileName = $"{asset.ComponentName}-{sanitizedVersion}.archive";
-        }
+        var rawFileName = Path.GetFileName(new Uri(asset.SourceLocation).LocalPath);
+        var fileName = string.IsNullOrWhiteSpace(rawFileName)
+            ? $"{asset.ComponentName}-{sanitizedVersion}.archive"
+            : SanitizeFileNameSegment(rawFileName);
 
         var targetPath = Path.Combine(cacheDir, $"{sanitizedVersion}-{fileName}");
         var partPath = targetPath + InstallerConstants.PartFileExtension;
@@ -554,7 +619,7 @@ public sealed class ReleaseManager : IReleaseManager
         else if (response.StatusCode == HttpStatusCode.PartialContent && existingPartBytes > 0)
         {
             var rangeFrom = response.Content.Headers.ContentRange?.From;
-            if (rangeFrom is null || rangeFrom == existingPartBytes)
+            if (rangeFrom.HasValue && rangeFrom.Value == existingPartBytes)
             {
                 await WriteDownloadStreamAsync(
                     response,
@@ -647,6 +712,7 @@ public sealed class ReleaseManager : IReleaseManager
 
         var buffer = new byte[InstallerConstants.DownloadBufferSizeBytes];
         long totalWritten = initialBytes;
+        var lastReportedPercent = -InstallerConstants.DownloadProgressReportThresholdPercent;
         int read;
         while ((read = await sourceStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
         {
@@ -657,7 +723,17 @@ public sealed class ReleaseManager : IReleaseManager
                 var pct = Math.Min(
                     InstallerConstants.DownloadMaxProgressPercent,
                     (double)totalWritten / totalBytes * InstallerConstants.DownloadMaxProgressPercent);
-                Report(progress, StepRelease, $"Downloading {asset.ComponentName} ({totalWritten / 1024} KB)...", InstallerLogLevel.Info, pct);
+                if (pct - lastReportedPercent >= InstallerConstants.DownloadProgressReportThresholdPercent ||
+                    totalWritten >= totalBytes)
+                {
+                    lastReportedPercent = pct;
+                    Report(
+                        progress,
+                        StepRelease,
+                        $"Downloading {asset.ComponentName} ({totalWritten / InstallerConstants.BytesPerKilobyte} KB)...",
+                        InstallerLogLevel.Info,
+                        pct);
+                }
             }
         }
     }
@@ -670,12 +746,15 @@ public sealed class ReleaseManager : IReleaseManager
         Directory.CreateDirectory(stagingDirectory);
         var normalizedRoot = EnsureTrailingSeparator(Path.GetFullPath(stagingDirectory));
         var trimmedRoot = Path.TrimEndingDirectorySeparator(normalizedRoot);
+        var pathComparison = GetPathComparison();
 
         if (archivePath.EndsWith(InstallerConstants.ZipExtension, StringComparison.OrdinalIgnoreCase))
         {
             using var archive = ZipFile.OpenRead(archivePath);
             foreach (var entry in archive.Entries)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var destinationPath = ResolveSafeArchiveDestination(stagingDirectory, normalizedRoot, entry.FullName);
                 if (entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\'))
                 {
@@ -683,7 +762,7 @@ public sealed class ReleaseManager : IReleaseManager
                     continue;
                 }
 
-                if (string.Equals(Path.TrimEndingDirectorySeparator(destinationPath), trimmedRoot, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Path.TrimEndingDirectorySeparator(destinationPath), trimmedRoot, pathComparison))
                 {
                     continue;
                 }
@@ -719,7 +798,7 @@ public sealed class ReleaseManager : IReleaseManager
 
                 if (entry.EntryType is TarEntryType.RegularFile or TarEntryType.V7RegularFile)
                 {
-                    if (string.Equals(Path.TrimEndingDirectorySeparator(destinationPath), trimmedRoot, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(Path.TrimEndingDirectorySeparator(destinationPath), trimmedRoot, pathComparison))
                     {
                         continue;
                     }
@@ -763,9 +842,11 @@ public sealed class ReleaseManager : IReleaseManager
         var backupDir = Path.Combine(normalizedInstallDir, $"{InstallerConstants.BackupDirectoryPrefix}{Guid.NewGuid():N}");
         var backupDirName = Path.GetFileName(backupDir);
         var currentProcessFullPath = NormalizeOptionalPath(_processControl.CurrentProcessPath);
+        var pathComparison = GetPathComparison();
 
         Directory.CreateDirectory(backupDir);
         var movedEntries = new List<string>();
+        var payloadCopyStarted = false;
 
         try
         {
@@ -773,7 +854,7 @@ public sealed class ReleaseManager : IReleaseManager
             foreach (var entryPath in Directory.EnumerateFileSystemEntries(normalizedInstallDir))
             {
                 var entryName = Path.GetFileName(entryPath);
-                if (string.Equals(entryName, backupDirName, StringComparison.OrdinalIgnoreCase) ||
+                if (string.Equals(entryName, backupDirName, pathComparison) ||
                     entryName.StartsWith(InstallerConstants.BackupDirectoryPrefix, StringComparison.OrdinalIgnoreCase) ||
                     preservedItemNames.Contains(entryName))
                 {
@@ -781,7 +862,7 @@ public sealed class ReleaseManager : IReleaseManager
                 }
 
                 if (currentProcessFullPath is not null &&
-                    string.Equals(Path.GetFullPath(entryPath), currentProcessFullPath, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(Path.GetFullPath(entryPath), currentProcessFullPath, pathComparison))
                 {
                     continue;
                 }
@@ -800,7 +881,8 @@ public sealed class ReleaseManager : IReleaseManager
             }
 
             Report(progress, StepSwap, $"Copying new payload into '{normalizedInstallDir}'...", InstallerLogLevel.Info, 75);
-            CopyDirectoryContents(payloadRoot, normalizedInstallDir, preservedItemNames, currentProcessFullPath);
+            payloadCopyStarted = true;
+            CopyDirectoryContents(payloadRoot, normalizedInstallDir, preservedItemNames, currentProcessFullPath, pathComparison);
 
             cancellationToken.ThrowIfCancellationRequested();
             await postConfigureAsync().ConfigureAwait(false);
@@ -810,7 +892,14 @@ public sealed class ReleaseManager : IReleaseManager
         catch (Exception primaryEx)
         {
             Report(progress, StepSwap, "Deployment failed; restoring previous installation from .backup...", InstallerLogLevel.Warning, null);
-            var rollbackEx = RestoreFromBackup(normalizedInstallDir, backupDir, movedEntries, preservedItemNames, currentProcessFullPath);
+            var rollbackEx = RestoreFromBackup(
+                normalizedInstallDir,
+                backupDir,
+                movedEntries,
+                preservedItemNames,
+                currentProcessFullPath,
+                payloadCopyStarted,
+                pathComparison);
             if (rollbackEx is not null)
             {
                 throw new AggregateException("Deployment failed and rollback encountered errors.", primaryEx, rollbackEx);
@@ -823,6 +912,7 @@ public sealed class ReleaseManager : IReleaseManager
     private async Task<bool> ConfigureNightCodeForgeDeploymentAsync(
         string installDir,
         string version,
+        JsonObject? existingProductionSettings,
         string preservedUrls,
         bool createDesktopShortcut,
         string? detectedOllamaRouterDir,
@@ -850,8 +940,17 @@ public sealed class ReleaseManager : IReleaseManager
         foreach (var fileName in new[] { InstallerConstants.AppSettingsFileName, InstallerConstants.AppSettingsProductionFileName })
         {
             var filePath = Path.Combine(installDir, fileName);
-            await UpdateNightCodeForgeAppSettingsAsync(filePath, dbPath, hangfireDbPath, logsPath, preservedUrls, cancellationToken)
-                .ConfigureAwait(false);
+            var preservedOverlay = string.Equals(fileName, InstallerConstants.AppSettingsProductionFileName, StringComparison.OrdinalIgnoreCase)
+                ? existingProductionSettings
+                : null;
+            await UpdateNightCodeForgeAppSettingsAsync(
+                filePath,
+                preservedOverlay,
+                dbPath,
+                hangfireDbPath,
+                logsPath,
+                preservedUrls,
+                cancellationToken).ConfigureAwait(false);
         }
 
         if (_platform.Platform != HostPlatformType.Windows)
@@ -884,16 +983,14 @@ public sealed class ReleaseManager : IReleaseManager
             OllamaRouterDirectory: detectedOllamaRouterDir,
             Platform: _platform.Platform.ToString());
 
-        await using var manifestStream = File.Create(Path.Combine(installDir, InstallerConstants.UninstallManifestFileName));
-        await JsonSerializer.SerializeAsync(manifestStream, manifest, InstallerJsonContext.Default.UninstallManifest, cancellationToken)
-            .ConfigureAwait(false);
-
+        await WriteUninstallManifestAsync(installDir, manifest, cancellationToken).ConfigureAwait(false);
         return selfCopied;
     }
 
     private async Task ConfigureOllamaRouterDeploymentAsync(
         string installDir,
         string version,
+        JsonObject? existingProductionSettings,
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
@@ -912,6 +1009,7 @@ public sealed class ReleaseManager : IReleaseManager
         var prodConfigPath = Path.Combine(installDir, InstallerConstants.AppSettingsProductionFileName);
         await UpdateOllamaRouterAppSettingsAsync(
             prodConfigPath,
+            existingProductionSettings,
             stateDir.Replace('\\', '/'),
             logsDir.Replace('\\', '/'),
             cancellationToken).ConfigureAwait(false);
@@ -950,20 +1048,40 @@ public sealed class ReleaseManager : IReleaseManager
             return false;
         }
 
+        var pathComparison = GetPathComparison();
+        var currentExeFull = Path.GetFullPath(currentExe);
+        var currentExeDir = Path.GetDirectoryName(currentExeFull);
+        var installerSubDir = Path.Combine(installDir, InstallerConstants.InstallerSubDirectoryName);
+        Directory.CreateDirectory(installerSubDir);
+
+        if (!string.IsNullOrWhiteSpace(currentExeDir) && Directory.Exists(currentExeDir))
+        {
+            foreach (var nativeLib in InstallerConstants.InstallerNativeLibraryFileNames)
+            {
+                var srcLib = Path.Combine(currentExeDir, nativeLib);
+                var dstLib = Path.Combine(installerSubDir, nativeLib);
+                if (File.Exists(srcLib) && !string.Equals(Path.GetFullPath(srcLib), Path.GetFullPath(dstLib), pathComparison))
+                {
+                    File.Copy(srcLib, dstLib, overwrite: true);
+                }
+            }
+        }
+
         var targetName = _platform.Platform == HostPlatformType.Windows
             ? InstallerConstants.InstallerExeWindows
             : InstallerConstants.InstallerExeUnix;
-        var targetPath = Path.Combine(installDir, targetName);
+        var targetPath = Path.Combine(installerSubDir, targetName);
+        var targetFull = Path.GetFullPath(targetPath);
 
-        if (string.Equals(Path.GetFullPath(currentExe), Path.GetFullPath(targetPath), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(currentExeFull, targetFull, pathComparison))
         {
             return false;
         }
 
-        File.Copy(currentExe, targetPath, overwrite: true);
+        File.Copy(currentExeFull, targetFull, overwrite: true);
         if (_platform.Platform != HostPlatformType.Windows)
         {
-            _platform.SetUnixExecutablePermissions(targetPath);
+            _platform.SetUnixExecutablePermissions(targetFull);
         }
 
         return true;
@@ -1030,7 +1148,7 @@ public sealed class ReleaseManager : IReleaseManager
             new ProcessRunRequest
             {
                 FileName = cliPath,
-                Arguments = ["start"],
+                Arguments = [InstallerConstants.OllamaRouterStartCommand],
                 WorkingDirectory = installDir,
                 Detached = true
             },
@@ -1039,29 +1157,30 @@ public sealed class ReleaseManager : IReleaseManager
         return result.ExitCode == InstallerConstants.ExitCodeSuccess;
     }
 
+    private static JsonObject? SnapshotProductionSettings(string installDir)
+    {
+        var path = Path.Combine(installDir, InstallerConstants.AppSettingsProductionFileName);
+        var obj = InstalledAppConfigReader.TryReadJsonObject(path);
+        return obj?.DeepClone() as JsonObject;
+    }
+
     private static string ReadPreservedWebUrls(string installDir)
     {
         foreach (var fileName in new[] { InstallerConstants.AppSettingsProductionFileName, InstallerConstants.AppSettingsFileName })
         {
             var path = Path.Combine(installDir, fileName);
-            if (!File.Exists(path))
+            var root = InstalledAppConfigReader.TryReadJsonObject(path);
+            if (root is null)
             {
                 continue;
             }
 
-            try
+            if (InstalledAppConfigReader.TryGetPropertyIgnoreCase(root, InstallerConstants.KeyUrls, out var node) &&
+                node is JsonValue val &&
+                val.TryGetValue<string>(out var urls) &&
+                !string.IsNullOrWhiteSpace(urls))
             {
-                var root = ParseJsonObject(File.ReadAllText(path));
-                var urls = root[KeyUrls]?.GetValue<string>();
-                if (!string.IsNullOrWhiteSpace(urls))
-                {
-                    return urls.Trim();
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or IOException)
-            {
-                // Justification: Corrupt or non-string Urls in prior config falls back to default listening URL.
-                _ = ex;
+                return urls.Trim();
             }
         }
 
@@ -1070,6 +1189,7 @@ public sealed class ReleaseManager : IReleaseManager
 
     private static async Task UpdateNightCodeForgeAppSettingsAsync(
         string filePath,
+        JsonObject? preservedUserSettings,
         string dbPath,
         string hangfireDbPath,
         string logsPath,
@@ -1077,49 +1197,62 @@ public sealed class ReleaseManager : IReleaseManager
         CancellationToken cancellationToken)
     {
         var root = await LoadOrCreateJsonObjectAsync(filePath, cancellationToken).ConfigureAwait(false);
-
-        var connectionStrings = EnsureChildObject(root, KeyConnectionStrings);
-        connectionStrings[KeyDefaultConnection] = $"Data Source={dbPath};";
-        connectionStrings[KeyHangfireConnection] = $"Data Source={hangfireDbPath};";
-
-        var logging = EnsureChildObject(root, KeyLogging);
-        if (logging[KeyLogLevel] is not JsonObject)
+        if (preservedUserSettings is not null)
         {
-            logging[KeyLogLevel] = new JsonObject
+            MergeJsonObjectsCaseInsensitive(root, preservedUserSettings);
+        }
+
+        var connectionStrings = EnsureChildObjectCaseInsensitive(root, InstallerConstants.KeyConnectionStrings);
+        SetCaseInsensitiveProperty(connectionStrings, InstallerConstants.KeyDefaultConnection, $"Data Source={EscapeSqliteConnectionValue(dbPath)};");
+        SetCaseInsensitiveProperty(connectionStrings, InstallerConstants.KeyHangfireConnection, $"Data Source={EscapeSqliteConnectionValue(hangfireDbPath)};");
+
+        var logging = EnsureChildObjectCaseInsensitive(root, InstallerConstants.KeyLogging);
+        if (!InstalledAppConfigReader.TryGetPropertyIgnoreCase(logging, InstallerConstants.KeyLogLevel, out var existingLogLevel) ||
+            existingLogLevel is not JsonObject)
+        {
+            RemoveMatchingKeys(logging, InstallerConstants.KeyLogLevel);
+            logging[InstallerConstants.KeyLogLevel] = new JsonObject
             {
-                ["Default"] = "Warning",
-                ["NightCodeForge"] = "Information"
+                [InstallerConstants.LogLevelDefaultKey] = InstallerConstants.LogLevelDefaultValue,
+                [InstallerConstants.ApplicationDisplayName] = InstallerConstants.LogLevelAppValue
             };
         }
 
-        logging[KeyLogsDirectory] = logsPath;
-        root[KeyUrls] = urls;
+        SetCaseInsensitiveProperty(logging, InstallerConstants.KeyLogsDirectory, logsPath);
+        SetCaseInsensitiveProperty(root, InstallerConstants.KeyUrls, urls);
 
         await WriteJsonObjectAsync(filePath, root, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task UpdateOllamaRouterAppSettingsAsync(
         string filePath,
+        JsonObject? preservedUserSettings,
         string stateDirPath,
         string logsPath,
         CancellationToken cancellationToken)
     {
         var root = await LoadOrCreateJsonObjectAsync(filePath, cancellationToken).ConfigureAwait(false);
-
-        var router = EnsureChildObject(root, KeyOllamaRouter);
-        router[KeyStateDirectory] = stateDirPath;
-
-        var logging = EnsureChildObject(root, KeyLogging);
-        if (logging[KeyLogLevel] is not JsonObject)
+        if (preservedUserSettings is not null)
         {
-            logging[KeyLogLevel] = new JsonObject
+            MergeJsonObjectsCaseInsensitive(root, preservedUserSettings);
+        }
+
+        var router = EnsureChildObjectCaseInsensitive(root, InstallerConstants.KeyOllamaRouter);
+        SetCaseInsensitiveProperty(router, InstallerConstants.KeyStateDirectory, stateDirPath);
+
+        var logging = EnsureChildObjectCaseInsensitive(root, InstallerConstants.KeyLogging);
+        if (!InstalledAppConfigReader.TryGetPropertyIgnoreCase(logging, InstallerConstants.KeyLogLevel, out var existingLogLevel) ||
+            existingLogLevel is not JsonObject)
+        {
+            RemoveMatchingKeys(logging, InstallerConstants.KeyLogLevel);
+            logging[InstallerConstants.KeyLogLevel] = new JsonObject
             {
-                ["Default"] = "Warning",
-                ["OllamaRouter"] = "Information"
+                [InstallerConstants.LogLevelDefaultKey] = InstallerConstants.LogLevelDefaultValue,
+                [InstallerConstants.ComponentOllamaRouter] = InstallerConstants.LogLevelAppValue
             };
         }
 
-        logging[KeyLogsDirectory] = logsPath;
+        SetCaseInsensitiveProperty(logging, InstallerConstants.KeyLogsDirectory, logsPath);
 
         await WriteJsonObjectAsync(filePath, root, cancellationToken).ConfigureAwait(false);
     }
@@ -1137,30 +1270,65 @@ public sealed class ReleaseManager : IReleaseManager
             return new JsonObject();
         }
 
-        return ParseJsonObject(raw);
-    }
-
-    private static JsonObject ParseJsonObject(string json)
-    {
         var docOptions = new JsonDocumentOptions
         {
             CommentHandling = JsonCommentHandling.Skip,
             AllowTrailingCommas = true
         };
-        return JsonNode.Parse(json, nodeOptions: null, documentOptions: docOptions)?.AsObject()
+        return JsonNode.Parse(raw, nodeOptions: null, documentOptions: docOptions)?.AsObject()
                ?? new JsonObject();
     }
 
-    private static JsonObject EnsureChildObject(JsonObject parent, string key)
+    private static void MergeJsonObjectsCaseInsensitive(JsonObject target, JsonObject overlay)
     {
-        if (parent[key] is JsonObject existing)
+        foreach (var (key, value) in overlay)
         {
-            return existing;
+            if (value is JsonObject overlayChild &&
+                InstalledAppConfigReader.TryGetPropertyIgnoreCase(target, key, out var targetNode) &&
+                targetNode is JsonObject targetChild)
+            {
+                MergeJsonObjectsCaseInsensitive(targetChild, overlayChild);
+                continue;
+            }
+
+            RemoveMatchingKeys(target, key);
+            target[key] = value?.DeepClone();
+        }
+    }
+
+    private static JsonObject EnsureChildObjectCaseInsensitive(JsonObject parent, string canonicalKey)
+    {
+        if (InstalledAppConfigReader.TryGetPropertyIgnoreCase(parent, canonicalKey, out var existingNode) &&
+            existingNode is JsonObject existingObj)
+        {
+            RemoveMatchingKeys(parent, canonicalKey);
+            parent[canonicalKey] = existingObj;
+            return existingObj;
         }
 
+        RemoveMatchingKeys(parent, canonicalKey);
         var created = new JsonObject();
-        parent[key] = created;
+        parent[canonicalKey] = created;
         return created;
+    }
+
+    private static void SetCaseInsensitiveProperty(JsonObject parent, string canonicalKey, string value)
+    {
+        RemoveMatchingKeys(parent, canonicalKey);
+        parent[canonicalKey] = JsonValue.Create(value);
+    }
+
+    private static void RemoveMatchingKeys(JsonObject parent, string targetKey)
+    {
+        var keysToRemove = parent
+            .Select(static kvp => kvp.Key)
+            .Where(k => string.Equals(k, targetKey, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            parent.Remove(key);
+        }
     }
 
     private static async Task WriteJsonObjectAsync(string filePath, JsonObject root, CancellationToken cancellationToken)
@@ -1169,6 +1337,65 @@ public sealed class ReleaseManager : IReleaseManager
         await using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
         root.WriteTo(writer);
         await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task WriteUninstallManifestAsync(
+        string installDir,
+        UninstallManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(installDir, InstallerConstants.UninstallManifestFileName);
+        var tempPath = manifestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await using (var manifestStream = File.Create(tempPath))
+            {
+                await JsonSerializer.SerializeAsync(
+                    manifestStream,
+                    manifest,
+                    InstallerJsonContext.Default.UninstallManifest,
+                    cancellationToken).ConfigureAwait(false);
+                await manifestStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(tempPath, manifestPath, overwrite: true);
+        }
+        finally
+        {
+            DeleteFileIfExistsBestEffort(tempPath);
+        }
+    }
+
+    private static async Task TryBackfillOllamaRouterDirectoryInManifestAsync(
+        string ncfInstallDir,
+        string routerInstallDir,
+        CancellationToken cancellationToken)
+    {
+        var manifestPath = Path.Combine(ncfInstallDir, InstallerConstants.UninstallManifestFileName);
+        if (!File.Exists(manifestPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(manifestPath, cancellationToken).ConfigureAwait(false);
+            var existing = JsonSerializer.Deserialize(json, InstallerJsonContext.Default.UninstallManifest);
+            if (existing is null || !string.IsNullOrWhiteSpace(existing.OllamaRouterDirectory))
+            {
+                return;
+            }
+
+            await WriteUninstallManifestAsync(
+                ncfInstallDir,
+                existing with { OllamaRouterDirectory = routerInstallDir },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            // Justification: Best-effort manifest backfill when OllamaRouter installs after NightCodeForge.
+            _ = ex;
+        }
     }
 
     private static async Task<string?> TryReadVersionFromArchiveAsync(string archivePath, CancellationToken cancellationToken)
@@ -1253,7 +1480,7 @@ public sealed class ReleaseManager : IReleaseManager
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException)
         {
-            // Justification: Best-effort version probe from local archive falls back to default version when unreadable.
+            // Justification: Best-effort version probe from local archive falls back to placeholder when unreadable.
             _ = ex;
         }
 
@@ -1312,7 +1539,8 @@ public sealed class ReleaseManager : IReleaseManager
         string sourceDir,
         string destinationDir,
         HashSet<string> preservedTopLevelNames,
-        string? skipFileFullPath)
+        string? skipFileFullPath,
+        StringComparison pathComparison)
     {
         foreach (var entryPath in Directory.EnumerateFileSystemEntries(sourceDir))
         {
@@ -1330,7 +1558,7 @@ public sealed class ReleaseManager : IReleaseManager
             else
             {
                 if (skipFileFullPath is not null &&
-                    string.Equals(Path.GetFullPath(targetPath), skipFileFullPath, StringComparison.OrdinalIgnoreCase))
+                    string.Equals(Path.GetFullPath(targetPath), skipFileFullPath, pathComparison))
                 {
                     continue;
                 }
@@ -1359,36 +1587,41 @@ public sealed class ReleaseManager : IReleaseManager
         string backupDir,
         IReadOnlyList<string> movedEntries,
         HashSet<string> preservedNames,
-        string? currentProcessFullPath)
+        string? currentProcessFullPath,
+        bool payloadCopyStarted,
+        StringComparison pathComparison)
     {
         var backupDirName = Path.GetFileName(backupDir);
         var rollbackErrors = new List<Exception>();
 
-        foreach (var entryPath in Directory.EnumerateFileSystemEntries(installDir))
+        if (payloadCopyStarted)
         {
-            var entryName = Path.GetFileName(entryPath);
-            if (string.Equals(entryName, backupDirName, StringComparison.OrdinalIgnoreCase) ||
-                entryName.StartsWith(InstallerConstants.BackupDirectoryPrefix, StringComparison.OrdinalIgnoreCase) ||
-                preservedNames.Contains(entryName))
+            foreach (var entryPath in Directory.EnumerateFileSystemEntries(installDir))
             {
-                continue;
-            }
+                var entryName = Path.GetFileName(entryPath);
+                if (string.Equals(entryName, backupDirName, pathComparison) ||
+                    entryName.StartsWith(InstallerConstants.BackupDirectoryPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    preservedNames.Contains(entryName))
+                {
+                    continue;
+                }
 
-            if (currentProcessFullPath is not null &&
-                string.Equals(Path.GetFullPath(entryPath), currentProcessFullPath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
+                if (currentProcessFullPath is not null &&
+                    string.Equals(Path.GetFullPath(entryPath), currentProcessFullPath, pathComparison))
+                {
+                    continue;
+                }
 
-            if (Directory.Exists(entryPath))
-            {
-                DeleteDirectoryBestEffort(entryPath);
-            }
-            else
-            {
                 try
                 {
-                    DeleteFileIfExists(entryPath);
+                    if (Directory.Exists(entryPath))
+                    {
+                        Directory.Delete(entryPath, recursive: true);
+                    }
+                    else
+                    {
+                        DeleteFileIfExists(entryPath);
+                    }
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -1408,7 +1641,7 @@ public sealed class ReleaseManager : IReleaseManager
                     if (Directory.Exists(originalItem))
                     {
                         CopyDirectoryRecursive(backupItem, originalItem);
-                        DeleteDirectoryBestEffort(backupItem);
+                        Directory.Delete(backupItem, recursive: true);
                     }
                     else
                     {
@@ -1426,7 +1659,10 @@ public sealed class ReleaseManager : IReleaseManager
             }
         }
 
-        DeleteDirectoryBestEffort(backupDir);
+        if (rollbackErrors.Count == 0)
+        {
+            DeleteDirectoryBestEffort(backupDir);
+        }
 
         return rollbackErrors.Count switch
         {
@@ -1436,11 +1672,30 @@ public sealed class ReleaseManager : IReleaseManager
         };
     }
 
+    private StringComparer GetPathComparer() =>
+        _platform.Platform == HostPlatformType.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private StringComparison GetPathComparison() =>
+        _platform.Platform == HostPlatformType.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private static async Task TryRestartBestEffortAsync(Func<Task<bool>> restartAction)
+    {
+        try
+        {
+            await restartAction().ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            // Justification: Best-effort restart of previously running server after rollback must not mask original failure.
+            _ = ex;
+        }
+    }
+
     private static string SanitizeFileNameSegment(string segment)
     {
         if (string.IsNullOrWhiteSpace(segment))
         {
-            return InstallerConstants.DefaultFallbackVersion;
+            return InstallerConstants.UnknownVersionPlaceholder;
         }
 
         var invalidChars = Path.GetInvalidFileNameChars();
@@ -1477,6 +1732,24 @@ public sealed class ReleaseManager : IReleaseManager
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Justification: Best-effort staging/backup cleanup must not mask primary deployment result.
+            _ = ex;
+        }
+    }
+
+    private static void DeleteFileIfExistsBestEffort(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Justification: Best-effort temp file cleanup.
             _ = ex;
         }
     }

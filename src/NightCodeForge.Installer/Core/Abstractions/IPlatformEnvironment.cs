@@ -18,6 +18,7 @@ public interface IPlatformEnvironment
     string? GetEnvironmentVariable(string name);
     string? GetUserPathVariable();
     void SetUserPathVariable(string value);
+    void RefreshProcessPath();
     bool IsCommandOnPath(string commandName);
     void SetUnixExecutablePermissions(string filePath);
 }

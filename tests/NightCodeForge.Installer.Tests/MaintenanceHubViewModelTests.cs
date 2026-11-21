@@ -21,7 +21,7 @@ public sealed class MaintenanceHubViewModelTests
     {
         var discovery = CreateInstalledDiscovery(isLegacy: true);
         var detector = new Mock<IInstallationDetector>();
-        detector.Setup(d => d.Detect(It.IsAny<string?>())).Returns(discovery);
+        detector.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(discovery);
 
         var envProvisioner = new Mock<IEnvironmentProvisioner>();
         envProvisioner.Setup(e => e.ProbeAsync(InstallerConstants.DefaultWslDistro, It.IsAny<CancellationToken>()))
@@ -188,7 +188,7 @@ public sealed class MaintenanceHubViewModelTests
             .ReturnsAsync(bundleDir);
 
         using var container = InstallerTestFactory.CreateContainer(
-            installationDetector: Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>()) == discovery),
+            installationDetector: Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>()) == discovery),
             releaseManager: releaseManager.Object,
             hostAppControl: hostControl.Object);
 
@@ -200,5 +200,55 @@ public sealed class MaintenanceHubViewModelTests
         Assert.Equal(MaintenanceHubViewModel.LocalBundleUpgradeLabel, mainVm.MaintenanceHub.UpgradeButtonLabel);
         Assert.True(mainVm.MaintenanceHub.CanUpgradeFromBundle);
         Assert.True(mainVm.MaintenanceHub.CanExecuteUpgrade);
+    }
+
+    [Fact]
+    public async Task MaintenanceHub_ExplicitInstallDirPreserved_SourceSwitchClearsStaleUpdates_AndFailedStopKeepsRunningState()
+    {
+        const string explicitDir = @"C:\CustomNCF";
+        var discovery = CreateInstalledDiscovery(isLegacy: false);
+        var detector = new Mock<IInstallationDetector>();
+        detector.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(discovery);
+
+        var releaseManager = new Mock<IReleaseManager>();
+        releaseManager.Setup(r => r.ResolveLatestNightCodeForgeReleaseAsync(It.IsAny<InstallSourceOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ComponentReleaseAsset("NightCodeForge-Web", "2.0.0", "https://example.com/ncf.zip", null, 100, false));
+        releaseManager.Setup(r => r.ResolveLatestOllamaRouterReleaseAsync(It.IsAny<InstallSourceOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ComponentReleaseAsset("OllamaRouter", "2.0.0", "https://example.com/or.zip", null, 100, false));
+
+        var hostControl = new Mock<IHostAppControlService>();
+        hostControl.Setup(h => h.GetConfiguredWebUrl(It.IsAny<string>())).Returns("http://localhost:5270");
+        hostControl.Setup(h => h.IsWebServerRunning()).Returns(true);
+        hostControl.Setup(h => h.StopWebServerAsync(It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        using var container = InstallerTestFactory.CreateContainer(
+            installationDetector: detector.Object,
+            releaseManager: releaseManager.Object,
+            hostAppControl: hostControl.Object);
+
+        var plan = InstallerTestFactory.CreateStartupPlan(discovery, ["upgrade", "--install-dir", explicitDir]);
+        var mainVm = new MainWindowViewModel(container, plan, Mock.Of<IInstallerUiHost>(), new ImmediateUiDispatcher());
+        var hub = mainVm.MaintenanceHub;
+
+        await mainVm.InitializeAsync();
+        Assert.Equal(explicitDir, hub.InstallDirectory);
+        detector.Verify(d => d.Detect(null, explicitDir), Times.AtLeastOnce);
+        Assert.True(hub.IsNightCodeForgeUpdateAvailable);
+        Assert.True(hub.IsOllamaRouterUpdateAvailable);
+        Assert.Equal("v2.0.0", hub.AvailableVersion);
+        Assert.True(hub.UpgradeAllCommand.CanExecute(null));
+
+        // Switching Online -> Air-Gapped with empty bundle clears stale updates
+        hub.IsAirGappedSource = true;
+        Assert.False(hub.IsNightCodeForgeUpdateAvailable);
+        Assert.False(hub.IsOllamaRouterUpdateAvailable);
+        Assert.False(hub.CanUpgradeFromBundle);
+        Assert.Equal("Click Refresh Status to check", hub.AvailableVersion);
+        Assert.False(hub.UpgradeAllCommand.CanExecute(null));
+
+        // Failed stop keeps IsWebServerRunning true
+        await hub.StopServerCommand.ExecuteAsync(null);
+        Assert.True(hub.IsWebServerRunning);
+        Assert.Contains("could not be stopped", hub.StatusMessage, StringComparison.OrdinalIgnoreCase);
     }
 }

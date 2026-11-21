@@ -43,31 +43,20 @@ public sealed class OllamaRouterSetupHandoffService : IOllamaRouterSetupHandoffS
 
         foreach (var candidateDir in BuildCandidateDirectories())
         {
-            var candidatePath = Path.Combine(candidateDir, cliFileName);
-            if (File.Exists(candidatePath))
+            var directPath = Path.Combine(candidateDir, cliFileName);
+            if (File.Exists(directPath))
             {
-                return candidatePath;
+                return directPath;
+            }
+
+            var binPath = Path.Combine(candidateDir, InstallerConstants.BinDirectoryName, cliFileName);
+            if (File.Exists(binPath))
+            {
+                return binPath;
             }
         }
 
-        if (_platform.Platform == HostPlatformType.Windows)
-        {
-            if (_platform.IsCommandOnPath(InstallerConstants.OllamaRouterCliWindows))
-            {
-                return InstallerConstants.OllamaRouterCliWindows;
-            }
-
-            if (_platform.IsCommandOnPath(InstallerConstants.OllamaRouterCliUnix))
-            {
-                return InstallerConstants.OllamaRouterCliUnix;
-            }
-        }
-        else if (_platform.IsCommandOnPath(InstallerConstants.OllamaRouterCliUnix))
-        {
-            return InstallerConstants.OllamaRouterCliUnix;
-        }
-
-        return null;
+        return _platform.IsCommandOnPath(cliFileName) ? cliFileName : null;
     }
 
     public Task<OllamaRouterWizardHandoffResult> RunSetupWizardAndSyncAsync(
@@ -126,7 +115,7 @@ public sealed class OllamaRouterSetupHandoffService : IOllamaRouterSetupHandoffS
                 },
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException or UnauthorizedAccessException)
         {
             var launchError =
                 $"Failed to launch OllamaRouter Setup Wizard ('{cliPath}'): {ex.Message} You can retry the wizard or skip local LLM setup.";
@@ -166,29 +155,37 @@ public sealed class OllamaRouterSetupHandoffService : IOllamaRouterSetupHandoffS
             ? null
             : new RemappedProgress(progress, ProgressSyncStartPercent);
 
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            var summary = await _recommendationSyncService.SyncRecommendationsToConfigAsync(
-                installDirectory,
-                routerBaseUrl,
-                syncProgress,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var summary = await _recommendationSyncService.SyncRecommendationsToConfigAsync(
+                    installDirectory,
+                    routerBaseUrl,
+                    syncProgress,
+                    cancellationToken).ConfigureAwait(false);
 
-            return new OllamaRouterWizardHandoffResult(
-                Succeeded: true,
-                ExitCode: InstallerConstants.ExitCodeSuccess,
-                ErrorMessage: null,
-                SyncedRecommendations: summary);
-        }
-        catch (OllamaRouterSyncException ex)
-        {
-            var syncError = $"OllamaRouter Setup Wizard completed, but syncing recommendations failed: {ex.Message}";
-            Report(progress, syncError, InstallerLogLevel.Error, null);
-            return new OllamaRouterWizardHandoffResult(
-                Succeeded: false,
-                ExitCode: InstallerConstants.ExitCodeSuccess,
-                ErrorMessage: syncError,
-                SyncedRecommendations: null);
+                return new OllamaRouterWizardHandoffResult(
+                    Succeeded: true,
+                    ExitCode: InstallerConstants.ExitCodeSuccess,
+                    ErrorMessage: null,
+                    SyncedRecommendations: summary);
+            }
+            catch (OllamaRouterSyncException) when (attempt < InstallerConstants.RouterPostWizardSyncAttempts)
+            {
+                await Task.Delay(InstallerConstants.RouterPostWizardSyncDelayMs, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (OllamaRouterSyncException ex)
+            {
+                var syncError = $"OllamaRouter Setup Wizard completed, but syncing recommendations failed: {ex.Message}";
+                Report(progress, syncError, InstallerLogLevel.Error, null);
+                return new OllamaRouterWizardHandoffResult(
+                    Succeeded: false,
+                    ExitCode: InstallerConstants.ExitCodeSuccess,
+                    ErrorMessage: syncError,
+                    SyncedRecommendations: null);
+            }
         }
     }
 
@@ -214,10 +211,18 @@ public sealed class OllamaRouterSetupHandoffService : IOllamaRouterSetupHandoffS
             return;
         }
 
-        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawPath.Trim()));
-        if (!dirs.Contains(normalized, comparer))
+        try
         {
-            dirs.Add(normalized);
+            var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawPath.Trim()));
+            if (!dirs.Contains(normalized, comparer))
+            {
+                dirs.Add(normalized);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Justification: Malformed environment override path is ignored when probing candidate binaries.
+            _ = ex;
         }
     }
 

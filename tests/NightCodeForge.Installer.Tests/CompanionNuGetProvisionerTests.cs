@@ -62,7 +62,7 @@ public sealed class CompanionNuGetProvisionerTests : IDisposable
                     return new ProcessExecutionResult(0, "Package Id   Version   Commands\n---\nnightcodeforge.cli 0.9.0 ncf\n", string.Empty);
                 }
 
-                if (req.FileName == "wsl.exe" && joined.EndsWith("dotnet tool list -g", StringComparison.Ordinal))
+                if (req.FileName == "wsl.exe" && joined == "-d Ubuntu -- dotnet tool list -g")
                 {
                     return new ProcessExecutionResult(0, "Package Id   Version   Commands\n---\n", string.Empty);
                 }
@@ -79,13 +79,15 @@ public sealed class CompanionNuGetProvisionerTests : IDisposable
         Assert.Contains(commands, c => c.FileName == "dotnet" && c.Args == "tool install -g NightCodeForge.Assay");
         Assert.DoesNotContain(commands, c => c.FileName == "wsl.exe" && c.Args.Contains("NightCodeForge.Assay", StringComparison.Ordinal));
         Assert.Contains(commands, c => c.FileName == "wsl.exe" && c.Args == "-d Ubuntu -- dotnet tool install -g Pmad.CSharpNav");
+        Assert.DoesNotContain(commands, c => c.Args.Contains("/etc/profile.d/dotnet.sh", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task ProvisionAllAsync_AirGapped_ClearsCacheTranslatesWslPathAndReinstallsSameVersion()
+    public async Task ProvisionAllAsync_AirGapped_UsesIsolatedNuGetConfigSupportsPrereleaseAndTranslatesWslPath()
     {
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var bundleDir = _workspace.CreateSubdirectory("bundle");
+        await File.WriteAllTextAsync(Path.Combine(bundleDir, "NightCodeForge.Cli.1.0.0-preview.1.nupkg"), "nupkg");
         var homeCacheDir = Path.Combine(platform.Object.UserHomeDirectory, ".nuget", "packages", "nightcodeforge.cli");
         Directory.CreateDirectory(homeCacheDir);
         File.WriteAllText(Path.Combine(homeCacheDir, "stale.txt"), "old");
@@ -124,9 +126,20 @@ public sealed class CompanionNuGetProvisionerTests : IDisposable
         Assert.Equal(9, outcomes.Count);
         Assert.False(Directory.Exists(homeCacheDir));
         Assert.Contains(commands, c => c.FileName == "dotnet" && c.Args == "tool uninstall -g NightCodeForge.Cli");
-        Assert.Contains(commands, c => c.FileName == "dotnet" && c.Args == $"tool install -g NightCodeForge.Cli --add-source {Path.GetFullPath(bundleDir)} --no-cache");
+        Assert.Contains(commands, c =>
+            c.FileName == "dotnet" &&
+            c.Args.Contains("tool install -g NightCodeForge.Cli --configfile ", StringComparison.Ordinal) &&
+            c.Args.Contains("--no-cache", StringComparison.Ordinal) &&
+            c.Args.Contains("--prerelease", StringComparison.Ordinal));
         Assert.Contains(commands, c => c.FileName == "wsl.exe" && c.Args.Contains("rm -rf \"$HOME/.nuget/packages/nightcodeforge.cli\"", StringComparison.Ordinal));
-        Assert.Contains(commands, c => c.FileName == "wsl.exe" && c.Args == "-d Ubuntu -- dotnet tool update -g NightCodeForge.Cli --add-source /mnt/c/bundle --no-cache");
+        Assert.Contains(commands, c =>
+            c.FileName == "wsl.exe" &&
+            c.Args.Contains("-d Ubuntu -- dotnet tool update -g NightCodeForge.Cli --configfile ", StringComparison.Ordinal) &&
+            c.Args.Contains("--no-cache --prerelease", StringComparison.Ordinal));
+
+        var configXml = CompanionNuGetProvisioner.BuildIsolatedNuGetConfigXml(Path.GetFullPath(bundleDir));
+        Assert.Contains("<clear />", configXml, StringComparison.Ordinal);
+        Assert.Contains("<packageSourceMapping>", configXml, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -271,7 +284,8 @@ public sealed class CompanionNuGetProvisionerTests : IDisposable
                         string.Empty);
                 }
 
-                if (req.FileName == InstallerConstants.WslExecutable)
+                if (req.FileName == InstallerConstants.WslExecutable &&
+                    string.Join(' ', req.Arguments) == "-d Ubuntu -- dotnet tool list -g")
                 {
                     return new ProcessExecutionResult(
                         0,
@@ -295,5 +309,24 @@ public sealed class CompanionNuGetProvisionerTests : IDisposable
         var assay = Assert.Single(statuses, s => s.Spec.PackageId == CompanionToolCatalog.PackageNightCodeAssay);
         Assert.True(assay.InstalledOnHost);
         Assert.False(assay.InstalledInWsl);
+    }
+
+    [Fact]
+    public async Task UninstallAllAsync_WhenHostDotNetMissing_SkipsHostToolsGracefullyWithoutThrowing()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(1, string.Empty, "The system cannot find the file specified."));
+
+        var sut = new CompanionNuGetProvisioner(platform.Object, runner.Object);
+        var outcomes = await sut.UninstallAllAsync(wslDistroName: null);
+
+        Assert.Equal(5, outcomes.Count);
+        Assert.All(outcomes, o =>
+        {
+            Assert.Equal("Host", o.TargetEnvironment);
+            Assert.Equal(ProvisioningStatus.Skipped, o.Status);
+        });
     }
 }

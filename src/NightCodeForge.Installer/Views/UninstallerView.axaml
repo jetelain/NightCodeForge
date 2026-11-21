@@ -47,7 +47,8 @@
         <TextBlock Text="{Binding StatusMessage}" FontSize="12" TextWrapping="Wrap" />
         <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}" Height="8" />
         <TextBlock Text="{Binding ErrorMessage}"
-                   Foreground="{DynamicResource NightCodeAccentCrimsonLightTextColor}"
+                   IsVisible="{Binding HasError}"
+                   Foreground="{DynamicResource NightCodeAccentCrimsonLightText}"
                    TextWrapping="Wrap" />
       </StackPanel>
     </Border>
@@ -108,7 +109,7 @@
     <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
       <Button Content="Uninstall" Classes="Danger" Command="{Binding UninstallCommand}" IsEnabled="{Binding CanUninstall}" />
       <Button Content="Cancel" Command="{Binding CancelCommand}" IsEnabled="{Binding CanCancel}" />
-      <Button Content="Close" Classes="Primary" Command="{Binding CloseCommand}" IsVisible="{Binding IsCompleted}" IsEnabled="{Binding CanClose}" />
+      <Button Content="Close" Classes="Primary" Command="{Binding CloseCommand}" IsVisible="{Binding CanClose}" IsEnabled="{Binding CanClose}" />
     </StackPanel>
 
   </Grid>

@@ -1,8 +1,10 @@
 namespace NightCodeForge.Installer.Tests;
 
+using System.Text;
 using Moq;
 using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Constants;
+using NightCodeForge.Installer.Core.Exceptions;
 using NightCodeForge.Installer.Core.Models;
 using NightCodeForge.Installer.Core.Services;
 
@@ -17,19 +19,31 @@ public sealed class UninstallServiceTests : IDisposable
     {
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var installDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "NightCodeForge");
+        var installerSubDir = Path.Combine(installDir, InstallerConstants.InstallerSubDirectoryName);
         Directory.CreateDirectory(Path.Combine(installDir, "config"));
         Directory.CreateDirectory(Path.Combine(installDir, "data"));
         Directory.CreateDirectory(Path.Combine(installDir, "logs"));
         Directory.CreateDirectory(Path.Combine(installDir, "bin"));
+        Directory.CreateDirectory(installerSubDir);
         File.WriteAllText(Path.Combine(installDir, InstallerConstants.WebExeWindows), "web");
         File.WriteAllText(Path.Combine(installDir, "config", "config.json"), "{}");
         File.WriteAllText(Path.Combine(installDir, "data", "nightcodeforge.db"), "db");
         File.WriteAllText(Path.Combine(installDir, "logs", "app.log"), "log");
-        var selfExePath = Path.Combine(installDir, InstallerConstants.InstallerExeWindows);
+        var selfExePath = Path.Combine(installerSubDir, InstallerConstants.InstallerExeWindows);
+        var nativeDllPath = Path.Combine(installerSubDir, "av_libglesv2.dll");
         File.WriteAllText(selfExePath, "self-exe");
+        File.WriteAllText(nativeDllPath, "native-dll");
 
         var runner = new Mock<IProcessRunner>();
+        ProcessRunRequest? cleanupRequest = null;
         runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<ProcessRunRequest, CancellationToken>((req, _) =>
+            {
+                if (req.FileName == InstallerConstants.PowerShellExecutable)
+                {
+                    cleanupRequest = req;
+                }
+            })
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
 
         var processControl = new Mock<IProcessControlService>();
@@ -37,17 +51,8 @@ public sealed class UninstallServiceTests : IDisposable
         processControl.SetupGet(c => c.CurrentProcessPath).Returns(selfExePath);
 
         var registry = new Mock<IWindowsRegistryAccessor>();
-        var detector = new InstallationDetector(platform.Object, registry.Object);
         var nuGet = new Mock<ICompanionNuGetProvisioner>();
-        var osIntegration = new OsIntegrationService(platform.Object, registry.Object, runner.Object, TimeProvider.System);
-
-        var sut = new UninstallService(
-            platform.Object,
-            runner.Object,
-            processControl.Object,
-            detector,
-            nuGet.Object,
-            osIntegration);
+        var sut = CreateSut(platform.Object, runner.Object, processControl.Object, registry.Object, nuGet.Object);
 
         var result = await sut.UninstallAsync(
             new UninstallOptions(KeepData: true, RemoveCompanionTools: false, RemoveOllamaRouter: false, Quiet: true));
@@ -56,21 +61,18 @@ public sealed class UninstallServiceTests : IDisposable
         Assert.True(result.DeferredSelfCleanupScheduled);
         Assert.False(File.Exists(Path.Combine(installDir, InstallerConstants.WebExeWindows)));
         Assert.False(Directory.Exists(Path.Combine(installDir, "bin")));
+        Assert.True(File.Exists(selfExePath));
+        Assert.True(File.Exists(nativeDllPath));
         Assert.True(File.Exists(Path.Combine(installDir, "config", "config.json")));
         Assert.True(File.Exists(Path.Combine(installDir, "data", "nightcodeforge.db")));
         Assert.True(File.Exists(Path.Combine(installDir, "logs", "app.log")));
 
-        runner.Verify(
-            r => r.RunAsync(
-                It.Is<ProcessRunRequest>(q =>
-                    q.FileName == "cmd.exe" &&
-                    q.Detached &&
-                    q.Arguments.Count == 0 &&
-                    q.RawArguments != null &&
-                    q.RawArguments.StartsWith("/c \"", StringComparison.Ordinal) &&
-                    q.RawArguments.Contains("del /f /q", StringComparison.Ordinal)),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+        Assert.NotNull(cleanupRequest);
+        Assert.True(cleanupRequest!.Detached);
+        var encodedIdx = cleanupRequest.Arguments.ToList().IndexOf("-EncodedCommand");
+        Assert.True(encodedIdx >= 0 && encodedIdx + 1 < cleanupRequest.Arguments.Count);
+        var decodedScript = Encoding.Unicode.GetString(Convert.FromBase64String(cleanupRequest.Arguments[encodedIdx + 1]));
+        Assert.Contains("Wait-Process -Id 12345", decodedScript, StringComparison.Ordinal);
         nuGet.Verify(n => n.UninstallAllAsync(It.IsAny<string?>(), It.IsAny<IProgress<InstallerProgressEvent>?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -96,19 +98,10 @@ public sealed class UninstallServiceTests : IDisposable
         processControl.SetupGet(c => c.CurrentProcessPath).Returns(Path.Combine(_workspace.RootPath, "external", InstallerConstants.InstallerExeWindows));
 
         var registry = new Mock<IWindowsRegistryAccessor>();
-        var detector = new InstallationDetector(platform.Object, registry.Object);
         var nuGet = new Mock<ICompanionNuGetProvisioner>();
         nuGet.Setup(n => n.UninstallAllAsync(It.IsAny<string?>(), It.IsAny<IProgress<InstallerProgressEvent>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
-        var osIntegration = new OsIntegrationService(platform.Object, registry.Object, runner.Object, TimeProvider.System);
-
-        var sut = new UninstallService(
-            platform.Object,
-            runner.Object,
-            processControl.Object,
-            detector,
-            nuGet.Object,
-            osIntegration);
+        var sut = CreateSut(platform.Object, runner.Object, processControl.Object, registry.Object, nuGet.Object);
 
         var result = await sut.UninstallAsync(
             new UninstallOptions(KeepData: false, RemoveCompanionTools: true, RemoveOllamaRouter: true, Quiet: true),
@@ -130,19 +123,20 @@ public sealed class UninstallServiceTests : IDisposable
     }
 
     [Fact]
-    public void BuildWindowsDeferredSelfCleanupCommand_HandlesKeepDataToggle()
+    public void BuildWindowsDeferredSelfCleanupScript_EncodesTargetsSafelyAndWaitsForProcess()
     {
-        var keepCmd = UninstallService.BuildWindowsDeferredSelfCleanupCommand(
-            @"C:\App\NightCodeForge",
-            @"C:\App\NightCodeForge\NightCodeForge.Installer.exe",
-            keepData: true);
-        Assert.Contains("del /f /q \"C:\\App\\NightCodeForge\\NightCodeForge.Installer.exe\"", keepCmd, StringComparison.Ordinal);
+        var script = UninstallService.BuildWindowsDeferredSelfCleanupScript(
+            4242,
+            [
+                @"C:\App\NightCodeForge\installer",
+                @"C:\App\NightCodeForge\O'Brien.exe"
+            ]);
 
-        var fullCmd = UninstallService.BuildWindowsDeferredSelfCleanupCommand(
-            @"C:\App\NightCodeForge",
-            @"C:\App\NightCodeForge\NightCodeForge.Installer.exe",
-            keepData: false);
-        Assert.Contains("rmdir /s /q \"C:\\App\\NightCodeForge\"", fullCmd, StringComparison.Ordinal);
+        Assert.Contains("Wait-Process -Id 4242", script, StringComparison.Ordinal);
+        Assert.Contains("FromBase64String", script, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\App\NightCodeForge\O'Brien.exe", script, StringComparison.Ordinal);
+        Assert.Contains(Convert.ToBase64String(Encoding.UTF8.GetBytes(@"C:\App\NightCodeForge\installer")), script, StringComparison.Ordinal);
+        Assert.Contains(Convert.ToBase64String(Encoding.UTF8.GetBytes(@"C:\App\NightCodeForge\O'Brien.exe")), script, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -151,24 +145,22 @@ public sealed class UninstallServiceTests : IDisposable
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var installDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "NightCodeForge");
         Directory.CreateDirectory(installDir);
+        File.WriteAllText(Path.Combine(installDir, InstallerConstants.WebExeWindows), "web");
         var selfExePath = Path.Combine(installDir, InstallerConstants.InstallerExeWindows);
         File.WriteAllText(selfExePath, "self-exe");
 
         var runner = new Mock<IProcessRunner>();
-        runner.Setup(r => r.RunAsync(It.Is<ProcessRunRequest>(q => q.FileName == "cmd.exe"), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProcessExecutionResult(2, string.Empty, "cmd.exe not found"));
-        runner.Setup(r => r.RunAsync(It.Is<ProcessRunRequest>(q => q.FileName != "cmd.exe"), It.IsAny<CancellationToken>()))
+        runner.Setup(r => r.RunAsync(It.Is<ProcessRunRequest>(q => q.FileName == InstallerConstants.PowerShellExecutable), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(2, string.Empty, "powershell not found"));
+        runner.Setup(r => r.RunAsync(It.Is<ProcessRunRequest>(q => q.FileName != InstallerConstants.PowerShellExecutable), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
 
         var processControl = new Mock<IProcessControlService>();
         processControl.SetupGet(c => c.CurrentProcessPath).Returns(selfExePath);
 
         var registry = new Mock<IWindowsRegistryAccessor>();
-        var detector = new InstallationDetector(platform.Object, registry.Object);
         var nuGet = new Mock<ICompanionNuGetProvisioner>();
-        var osIntegration = new OsIntegrationService(platform.Object, registry.Object, runner.Object, TimeProvider.System);
-
-        var sut = new UninstallService(platform.Object, runner.Object, processControl.Object, detector, nuGet.Object, osIntegration);
+        var sut = CreateSut(platform.Object, runner.Object, processControl.Object, registry.Object, nuGet.Object);
         var result = await sut.UninstallAsync(new UninstallOptions(KeepData: false, RemoveCompanionTools: false, RemoveOllamaRouter: false, Quiet: true));
 
         Assert.False(result.Succeeded);
@@ -181,11 +173,11 @@ public sealed class UninstallServiceTests : IDisposable
     {
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var installDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "NightCodeForge");
-        var binDir = Path.Combine(installDir, "bin");
-        Directory.CreateDirectory(binDir);
-        var selfExeInBin = Path.Combine(binDir, InstallerConstants.InstallerExeWindows);
-        File.WriteAllText(selfExeInBin, "self-exe");
-        File.WriteAllText(Path.Combine(binDir, "sibling.exe"), "sibling");
+        var installerDir = Path.Combine(installDir, InstallerConstants.InstallerSubDirectoryName);
+        Directory.CreateDirectory(installerDir);
+        var selfExeInSubdir = Path.Combine(installerDir, InstallerConstants.InstallerExeWindows);
+        File.WriteAllText(selfExeInSubdir, "self-exe");
+        File.WriteAllText(Path.Combine(installerDir, "sibling.txt"), "sibling");
         File.WriteAllText(Path.Combine(installDir, InstallerConstants.WebExeWindows), "web");
 
         var runner = new Mock<IProcessRunner>();
@@ -193,21 +185,18 @@ public sealed class UninstallServiceTests : IDisposable
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
 
         var processControl = new Mock<IProcessControlService>();
-        processControl.SetupGet(c => c.CurrentProcessPath).Returns(selfExeInBin);
+        processControl.SetupGet(c => c.CurrentProcessPath).Returns(selfExeInSubdir);
 
         var registry = new Mock<IWindowsRegistryAccessor>();
-        var detector = new InstallationDetector(platform.Object, registry.Object);
         var nuGet = new Mock<ICompanionNuGetProvisioner>();
-        var osIntegration = new OsIntegrationService(platform.Object, registry.Object, runner.Object, TimeProvider.System);
-
-        var sut = new UninstallService(platform.Object, runner.Object, processControl.Object, detector, nuGet.Object, osIntegration);
+        var sut = CreateSut(platform.Object, runner.Object, processControl.Object, registry.Object, nuGet.Object);
         var result = await sut.UninstallAsync(new UninstallOptions(KeepData: false, RemoveCompanionTools: false, RemoveOllamaRouter: false, Quiet: true));
 
         Assert.True(result.Succeeded);
         Assert.True(result.DeferredSelfCleanupScheduled);
         Assert.False(File.Exists(Path.Combine(installDir, InstallerConstants.WebExeWindows)));
-        Assert.False(File.Exists(Path.Combine(binDir, "sibling.exe")));
-        Assert.True(File.Exists(selfExeInBin));
+        Assert.False(File.Exists(Path.Combine(installerDir, "sibling.txt")));
+        Assert.True(File.Exists(selfExeInSubdir));
     }
 
     [Fact]
@@ -216,7 +205,7 @@ public sealed class UninstallServiceTests : IDisposable
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, _workspace.RootPath);
         var installDir = _workspace.CreateSubdirectory("ncf-manifest");
         var customRouterDir = _workspace.CreateSubdirectory("custom-router-from-manifest");
-        File.WriteAllText(Path.Combine(customRouterDir, "marker.txt"), "router-file");
+        File.WriteAllText(Path.Combine(customRouterDir, InstallerConstants.OllamaRouterServerUnix), "router-file");
 
         var manifestJson = System.Text.Json.JsonSerializer.Serialize(
             new UninstallManifest("1.0.0", installDir, DateTimeOffset.UtcNow, customRouterDir, "Linux"),
@@ -228,11 +217,9 @@ public sealed class UninstallServiceTests : IDisposable
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
         var processControl = new Mock<IProcessControlService>();
         var registry = new Mock<IWindowsRegistryAccessor>();
-        var detector = new InstallationDetector(platform.Object, registry.Object);
         var nuGet = new Mock<ICompanionNuGetProvisioner>();
-        var osIntegration = new OsIntegrationService(platform.Object, registry.Object, runner.Object, TimeProvider.System);
+        var sut = CreateSut(platform.Object, runner.Object, processControl.Object, registry.Object, nuGet.Object);
 
-        var sut = new UninstallService(platform.Object, runner.Object, processControl.Object, detector, nuGet.Object, osIntegration);
         var result = await sut.UninstallAsync(
             new UninstallOptions(KeepData: false, RemoveCompanionTools: false, RemoveOllamaRouter: true, Quiet: true),
             targetInstallDirectory: installDir);
@@ -253,5 +240,55 @@ public sealed class UninstallServiceTests : IDisposable
         {
             Assert.True(UninstallService.IsPathInsideDirectory("/tmp/installer", "/"));
         }
+    }
+
+    [Fact]
+    public async Task UninstallAsync_ProtectedHomeOrUnmarkedDirectory_FailsSafetyValidation()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, _workspace.RootPath);
+        var unmarkedDir = _workspace.CreateSubdirectory("unmarked-folder");
+        File.WriteAllText(Path.Combine(unmarkedDir, "important-notes.txt"), "keep me");
+
+        var sut = CreateSut(
+            platform.Object,
+            Mock.Of<IProcessRunner>(),
+            Mock.Of<IProcessControlService>(),
+            Mock.Of<IWindowsRegistryAccessor>(),
+            Mock.Of<ICompanionNuGetProvisioner>());
+
+        var homeResult = await sut.UninstallAsync(
+            new UninstallOptions(false, false, false, true),
+            targetInstallDirectory: platform.Object.UserHomeDirectory);
+        Assert.False(homeResult.Succeeded);
+        Assert.True(Directory.Exists(platform.Object.UserHomeDirectory));
+
+        var unmarkedResult = await sut.UninstallAsync(
+            new UninstallOptions(false, false, false, true),
+            targetInstallDirectory: unmarkedDir);
+        Assert.False(unmarkedResult.Succeeded);
+        Assert.True(File.Exists(Path.Combine(unmarkedDir, "important-notes.txt")));
+    }
+
+    private static UninstallService CreateSut(
+        IPlatformEnvironment platform,
+        IProcessRunner runner,
+        IProcessControlService processControl,
+        IWindowsRegistryAccessor registry,
+        ICompanionNuGetProvisioner nuGet)
+    {
+        var detector = new InstallationDetector(platform, registry);
+        var osIntegration = new OsIntegrationService(platform, registry, runner, TimeProvider.System);
+        var envProvisioner = new Mock<IEnvironmentProvisioner>();
+        envProvisioner.Setup(e => e.ProbeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(InstallerTestFactory.CreateHealthyWindowsProbe());
+
+        return new UninstallService(
+            platform,
+            runner,
+            processControl,
+            detector,
+            nuGet,
+            osIntegration,
+            envProvisioner.Object);
     }
 }

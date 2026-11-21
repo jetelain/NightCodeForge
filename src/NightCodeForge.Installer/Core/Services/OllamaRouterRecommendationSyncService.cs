@@ -18,6 +18,9 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
 {
     private const string StepSync = "OllamaRouter Sync";
     private const string JsonMediaType = "application/json";
+    private const double ProgressFetchPercent = 20.0;
+    private const double ProgressPersistPercent = 70.0;
+    private const double ProgressCompletePercent = 100.0;
 
     private static readonly SemaphoreSlim ConfigFileLock = new(1, 1);
 
@@ -89,8 +92,9 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
         IProgress<InstallerProgressEvent>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var effectiveBaseUrl = NormalizeBaseUrl(routerBaseUrl);
-        Report(progress, $"Fetching role recommendations from {effectiveBaseUrl}...", InstallerLogLevel.Info, 20);
+        var candidateInstallDir = TryResolveInstallDirectory(installDirectory);
+        var effectiveBaseUrl = ResolveEffectiveBaseUrl(routerBaseUrl, candidateInstallDir);
+        Report(progress, $"Fetching role recommendations from {effectiveBaseUrl}...", InstallerLogLevel.Info, ProgressFetchPercent);
 
         var dto = await FetchRecommendationsAsync(effectiveBaseUrl, cancellationToken).ConfigureAwait(false);
         if (dto is null)
@@ -101,11 +105,11 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
 
         var mapped = MapRecommendations(dto);
 
-        var resolvedInstallDir = ResolveInstallDirectory(installDirectory);
+        var resolvedInstallDir = candidateInstallDir ?? ResolveInstallDirectory(installDirectory);
         var configDir = Path.Combine(resolvedInstallDir, InstallerConstants.ConfigDirectoryName);
         var configFilePath = Path.Combine(configDir, InstallerConstants.UserConfigFileName);
 
-        Report(progress, $"Updating '{configFilePath}' with calibrated OllamaRouter models...", InstallerLogLevel.Info, 70);
+        Report(progress, $"Updating '{configFilePath}' with calibrated OllamaRouter models...", InstallerLogLevel.Info, ProgressPersistPercent);
         await PersistConfigOverlayAsync(configDir, configFilePath, effectiveBaseUrl, mapped, cancellationToken)
             .ConfigureAwait(false);
 
@@ -131,7 +135,7 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
                 summary.ContextWindowTokens,
                 configFilePath),
             InstallerLogLevel.Info,
-            100);
+            ProgressCompletePercent);
 
         return summary;
     }
@@ -183,6 +187,60 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
             DefaultModelId: defaultModelId,
             ContextWindowTokens: contextWindowTokens,
             Roles: roleSummaries);
+    }
+
+    private string? TryResolveInstallDirectory(string? explicitInstallDirectory)
+    {
+        var raw = string.IsNullOrWhiteSpace(explicitInstallDirectory)
+            ? _installationDetector.Detect().NightCodeForge.InstallDirectory
+            : explicitInstallDirectory;
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(raw.Trim()));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Justification: Invalid directory path is re-validated loudly in ResolveInstallDirectory after endpoint resolution.
+            _ = ex;
+            return null;
+        }
+    }
+
+    private static string ResolveEffectiveBaseUrl(string? explicitRouterBaseUrl, string? installDirectory)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitRouterBaseUrl))
+        {
+            return NormalizeBaseUrl(explicitRouterBaseUrl);
+        }
+
+        if (!string.IsNullOrWhiteSpace(installDirectory))
+        {
+            var userConfigPath = Path.Combine(
+                installDirectory,
+                InstallerConstants.ConfigDirectoryName,
+                InstallerConstants.UserConfigFileName);
+
+            var root = InstalledAppConfigReader.TryReadJsonObject(userConfigPath);
+            if (root is not null &&
+                InstalledAppConfigReader.TryGetPropertyIgnoreCase(root, InstallerConstants.LlmProviderSectionName, out var providerNode) &&
+                providerNode is JsonObject providerObj &&
+                InstalledAppConfigReader.TryGetPropertyIgnoreCase(providerObj, InstallerConstants.LlmEndpointKey, out var endpointNode) &&
+                endpointNode is JsonValue endpointVal &&
+                endpointVal.TryGetValue<string>(out var configuredEndpoint) &&
+                !string.IsNullOrWhiteSpace(configuredEndpoint) &&
+                TryNormalizeHttpBaseUrl(configuredEndpoint, out var normalizedExisting))
+            {
+                return normalizedExisting;
+            }
+        }
+
+        return InstallerConstants.DefaultOllamaRouterEndpoint;
     }
 
     private string ResolveInstallDirectory(string? explicitInstallDirectory)
@@ -252,7 +310,7 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
                         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                     }
 
-                    File.Move(tempFilePath, configFilePath, overwrite: true);
+                    await MoveConfigWithRetryAsync(tempFilePath, configFilePath, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -270,7 +328,7 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
                     }
                 }
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 throw new OllamaRouterSyncException(
                     $"Failed to read or update configuration file '{configFilePath}': {ex.Message}",
@@ -280,6 +338,26 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
         finally
         {
             ConfigFileLock.Release();
+        }
+    }
+
+    private static async Task MoveConfigWithRetryAsync(
+        string tempFilePath,
+        string configFilePath,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(tempFilePath, configFilePath, overwrite: true);
+                return;
+            }
+            catch (IOException) when (attempt < InstallerConstants.ConfigFileMoveRetryAttempts)
+            {
+                await Task.Delay(InstallerConstants.ConfigFileMoveRetryDelayMs, cancellationToken)
+                    .ConfigureAwait(false);
+            }
         }
     }
 
@@ -315,7 +393,7 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
 
             return root;
         }
-        catch (JsonException ex)
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
         {
             throw new OllamaRouterSyncException(
                 $"Configuration file '{configFilePath}' contains invalid JSON and cannot be safely updated.",
@@ -403,21 +481,35 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
 
     private static string NormalizeBaseUrl(string? routerBaseUrl)
     {
-        var trimmed = string.IsNullOrWhiteSpace(routerBaseUrl)
-            ? InstallerConstants.DefaultOllamaRouterEndpoint
-            : routerBaseUrl.Trim().TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(routerBaseUrl))
+        {
+            return InstallerConstants.DefaultOllamaRouterEndpoint;
+        }
 
+        if (!TryNormalizeHttpBaseUrl(routerBaseUrl, out var normalized))
+        {
+            throw new OllamaRouterSyncException(
+                $"Invalid OllamaRouter base URL '{routerBaseUrl}'. Expected an absolute HTTP or HTTPS URL without query or fragment.");
+        }
+
+        return normalized;
+    }
+
+    private static bool TryNormalizeHttpBaseUrl(string rawUrl, out string normalized)
+    {
+        var trimmed = rawUrl.Trim().TrimEnd('/');
         if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
             string.IsNullOrWhiteSpace(uri.Host) ||
             !string.IsNullOrEmpty(uri.Query) ||
             !string.IsNullOrEmpty(uri.Fragment))
         {
-            throw new OllamaRouterSyncException(
-                $"Invalid OllamaRouter base URL '{routerBaseUrl}'. Expected an absolute HTTP or HTTPS URL without query or fragment.");
+            normalized = string.Empty;
+            return false;
         }
 
-        return trimmed;
+        normalized = trimmed;
+        return true;
     }
 
     private static RouterRoleRecommendationDto? FindRole(

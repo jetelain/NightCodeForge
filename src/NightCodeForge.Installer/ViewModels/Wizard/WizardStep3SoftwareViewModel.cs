@@ -70,6 +70,18 @@ public sealed partial class WizardStep3SoftwareViewModel : ObservableObject
 
     partial void OnCreateDesktopShortcutChanged(bool value) => _state.CreateDesktopShortcut = value;
 
+    public void ResetState()
+    {
+        IsRunning = false;
+        IsCompleted = false;
+        HasError = false;
+        ErrorMessage = string.Empty;
+        ProgressPercent = 0.0;
+        StatusMessage = "Ready to install NightCodeForge, OllamaRouter, and companion tools.";
+        SummaryLines.Clear();
+        LogLines.Clear();
+    }
+
     public Task OnStepEnteredAsync()
     {
         if (IsRunning || IsCompleted)
@@ -113,29 +125,32 @@ public sealed partial class WizardStep3SoftwareViewModel : ObservableObject
 
         try
         {
-            var ncfAsset = await _releaseManager.ResolveLatestNightCodeForgeReleaseAsync(source, CancellationToken.None)
+            var cancellationToken = _state.LifetimeToken;
+            var ncfAsset = await _releaseManager.ResolveLatestNightCodeForgeReleaseAsync(source, cancellationToken)
                 .ConfigureAwait(false);
             var ncfDeployment = await _releaseManager.DeployNightCodeForgeAsync(
                 ncfAsset,
                 _state.InstallDirectory,
                 CreateDesktopShortcut,
                 CreateBandProgress(progress, 5.0, 45.0),
-                CancellationToken.None).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
 
             _state.NightCodeForgeDeployment = ncfDeployment;
             _state.InstallDirectory = ncfDeployment.InstallDirectory;
+            _state.AppliedStartMenuShortcut = _state.CreateStartMenuShortcut;
+            _state.AppliedDesktopShortcut = CreateDesktopShortcut;
             _dispatcher.Post(() =>
                 SummaryLines.Add($"NightCodeForge Web v{ncfDeployment.Version} deployed to '{ncfDeployment.InstallDirectory}'."));
 
             if (_state.InstallOllamaRouter)
             {
-                var routerAsset = await _releaseManager.ResolveLatestOllamaRouterReleaseAsync(source, CancellationToken.None)
+                var routerAsset = await _releaseManager.ResolveLatestOllamaRouterReleaseAsync(source, cancellationToken)
                     .ConfigureAwait(false);
                 var routerDeployment = await _releaseManager.DeployOllamaRouterAsync(
                     routerAsset,
                     targetInstallDirectory: null,
                     CreateBandProgress(progress, 45.0, 72.0),
-                    CancellationToken.None).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
 
                 _state.OllamaRouterDeployment = routerDeployment;
                 _dispatcher.Post(() =>
@@ -144,12 +159,12 @@ public sealed partial class WizardStep3SoftwareViewModel : ObservableObject
 
             if (_state.InstallCompanionTools)
             {
-                var wslDistro = await ResolveWslDistroAsync().ConfigureAwait(false);
+                var wslDistro = await ResolveWslDistroAsync(cancellationToken).ConfigureAwait(false);
                 var outcomes = await _nuGetProvisioner.ProvisionAllAsync(
                     source,
                     wslDistro,
                     CreateBandProgress(progress, 72.0, 98.0),
-                    CancellationToken.None).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
 
                 _state.CompanionOutcomes = outcomes;
                 _dispatcher.Post(() =>
@@ -163,7 +178,11 @@ public sealed partial class WizardStep3SoftwareViewModel : ObservableObject
                 StatusMessage = "Software, companion tools, and OS integration installed successfully.";
             });
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Software installation cancelled.");
+        }
+        catch (Exception ex)
         {
             _dispatcher.Post(() =>
             {
@@ -179,7 +198,7 @@ public sealed partial class WizardStep3SoftwareViewModel : ObservableObject
         }
     }
 
-    private async Task<string?> ResolveWslDistroAsync()
+    private async Task<string?> ResolveWslDistroAsync(CancellationToken cancellationToken)
     {
         if (_platform.Platform != HostPlatformType.Windows)
         {
@@ -187,7 +206,7 @@ public sealed partial class WizardStep3SoftwareViewModel : ObservableObject
         }
 
         var probe = _state.LatestProbe
-                    ?? await _environmentProvisioner.ProbeAsync(_state.WslDistroName, CancellationToken.None).ConfigureAwait(false);
+                    ?? await _environmentProvisioner.ProbeAsync(_state.WslDistroName, cancellationToken).ConfigureAwait(false);
         _state.LatestProbe = probe;
 
         return probe.WslInstalled && probe.WslDistroInstalled

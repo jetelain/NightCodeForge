@@ -1,4 +1,5 @@
 using System.Globalization;
+using NightCodeForge.Agents.Inference;
 using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 
@@ -23,5 +24,29 @@ public static class OllamaRouterGatewayUiHelper
         var contextText = mapped.ContextWindowTokens.ToString("N0", CultureInfo.InvariantCulture);
 
         return $"Architect: {architect} | Coder: {coder} | Default: {defaultModel} | Context: {contextText} tokens. Saved to config/config.json.";
+    }
+
+    public static bool RequiresEndpointRestart(string? draftEndpoint, string? configuredEndpoint)
+    {
+        var draft = NormalizeEndpointOrRaw(draftEndpoint);
+        var configured = NormalizeEndpointOrRaw(configuredEndpoint);
+        return !string.Equals(draft, configured, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeEndpointOrRaw(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return LlmProviderOptions.DefaultEndpoint;
+        }
+
+        try
+        {
+            return OllamaRouterRecommendationMapper.NormalizeEndpoint(endpoint);
+        }
+        catch (ArgumentException)
+        {
+            return endpoint.Trim().TrimEnd('/');
+        }
     }
 }

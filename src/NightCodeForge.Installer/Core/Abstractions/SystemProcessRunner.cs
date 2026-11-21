@@ -3,6 +3,7 @@ namespace NightCodeForge.Installer.Core.Abstractions;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using NightCodeForge.Installer.Core.Constants;
 
 /// <summary>
 /// Real OS process runner backed by <see cref="Process"/>.
@@ -12,6 +13,8 @@ public sealed class SystemProcessRunner : IProcessRunner
     private const int Win32ErrorCancelled = 1223;
     private const int Win32ErrorFileNotFound = 2;
     private const int Win32ErrorPathNotFound = 3;
+    private const int UnixErrnoNoEnt = 2;
+    private const int UnixErrnoNotDir = 20;
 
     public async Task<ProcessExecutionResult> RunAsync(
         ProcessRunRequest request,
@@ -20,8 +23,26 @@ public sealed class SystemProcessRunner : IProcessRunner
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.FileName);
 
+        if (request.Timeout.HasValue && request.Timeout.Value <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Process timeout must be positive when specified.");
+        }
+
+        if (request.RunAsAdmin && !OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("RunAsAdmin elevation via ShellExecute 'runas' is only supported on Windows.");
+        }
+
+        if ((request.UseShellExecute || request.RunAsAdmin) && request.EnvironmentVariables is { Count: > 0 })
+        {
+            throw new ArgumentException(
+                "ProcessRunRequest cannot specify EnvironmentVariables when UseShellExecute or RunAsAdmin is enabled.",
+                nameof(request));
+        }
+
         if (request.Detached)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return StartDetached(request);
         }
 
@@ -36,20 +57,32 @@ public sealed class SystemProcessRunner : IProcessRunner
     private static ProcessExecutionResult StartDetached(ProcessRunRequest request)
     {
         var startInfo = CreateBaseStartInfo(request);
-        startInfo.UseShellExecute = request.UseShellExecute;
-        startInfo.CreateNoWindow = !request.UseShellExecute;
+        var useShellExecute = request.UseShellExecute || request.RunAsAdmin;
+        startInfo.UseShellExecute = useShellExecute;
+        startInfo.CreateNoWindow = !useShellExecute;
+        if (request.RunAsAdmin)
+        {
+            startInfo.Verb = InstallerConstants.RunAsVerb;
+        }
 
         try
         {
             using var process = Process.Start(startInfo);
             if (process is null)
             {
-                return new ProcessExecutionResult(1, string.Empty, $"Failed to start detached process '{request.FileName}'.");
+                // Windows ShellExecuteEx legitimately returns a null Process handle (hProcess == 0)
+                // when handing a URI or file to an already-running browser/protocol handler via DDE/COM.
+                return useShellExecute && !request.RunAsAdmin
+                    ? new ProcessExecutionResult(InstallerConstants.ExitCodeSuccess, string.Empty, string.Empty)
+                    : new ProcessExecutionResult(
+                        InstallerConstants.ExitCodeError,
+                        string.Empty,
+                        $"Failed to start detached process '{request.FileName}'.");
             }
 
-            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+            return new ProcessExecutionResult(InstallerConstants.ExitCodeSuccess, string.Empty, string.Empty);
         }
-        catch (Win32Exception ex) when (ex.NativeErrorCode is Win32ErrorFileNotFound or Win32ErrorPathNotFound)
+        catch (Win32Exception ex) when ((useShellExecute && ex.NativeErrorCode == Win32ErrorCancelled) || IsFileOrPathNotFound(ex))
         {
             return new ProcessExecutionResult(ex.NativeErrorCode, string.Empty, ex.Message);
         }
@@ -64,7 +97,7 @@ public sealed class SystemProcessRunner : IProcessRunner
         startInfo.CreateNoWindow = false;
         if (request.RunAsAdmin)
         {
-            startInfo.Verb = "runas";
+            startInfo.Verb = InstallerConstants.RunAsVerb;
         }
 
         using var process = new Process { StartInfo = startInfo };
@@ -72,14 +105,15 @@ public sealed class SystemProcessRunner : IProcessRunner
         {
             if (!process.Start())
             {
-                return new ProcessExecutionResult(1, string.Empty, $"Failed to start '{request.FileName}'.");
+                return !request.RunAsAdmin
+                    ? new ProcessExecutionResult(InstallerConstants.ExitCodeSuccess, string.Empty, string.Empty)
+                    : new ProcessExecutionResult(
+                        InstallerConstants.ExitCodeError,
+                        string.Empty,
+                        $"Failed to start '{request.FileName}'.");
             }
         }
-        catch (Win32Exception ex) when (ex.NativeErrorCode == Win32ErrorCancelled)
-        {
-            return new ProcessExecutionResult(Win32ErrorCancelled, string.Empty, ex.Message);
-        }
-        catch (Win32Exception ex) when (ex.NativeErrorCode is Win32ErrorFileNotFound or Win32ErrorPathNotFound)
+        catch (Win32Exception ex) when (ex.NativeErrorCode == Win32ErrorCancelled || IsFileOrPathNotFound(ex))
         {
             return new ProcessExecutionResult(ex.NativeErrorCode, string.Empty, ex.Message);
         }
@@ -89,10 +123,18 @@ public sealed class SystemProcessRunner : IProcessRunner
         {
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && request.Timeout.HasValue)
+        catch (OperationCanceledException)
         {
             TryKillProcessTree(process);
-            return new ProcessExecutionResult(-1, string.Empty, $"Process '{request.FileName}' timed out after {request.Timeout.Value.TotalSeconds:F0}s.");
+            if (!cancellationToken.IsCancellationRequested && request.Timeout.HasValue)
+            {
+                return new ProcessExecutionResult(
+                    InstallerConstants.ExitCodeTimeout,
+                    string.Empty,
+                    $"Process '{request.FileName}' timed out after {request.Timeout.Value.TotalSeconds:F0}s.");
+            }
+
+            throw;
         }
 
         return new ProcessExecutionResult(process.ExitCode, string.Empty, string.Empty);
@@ -115,16 +157,20 @@ public sealed class SystemProcessRunner : IProcessRunner
         {
             if (!process.Start())
             {
-                return new ProcessExecutionResult(1, string.Empty, $"Failed to start '{request.FileName}'.");
+                return new ProcessExecutionResult(
+                    InstallerConstants.ExitCodeError,
+                    string.Empty,
+                    $"Failed to start '{request.FileName}'.");
             }
         }
-        catch (Win32Exception ex) when (ex.NativeErrorCode is Win32ErrorFileNotFound or Win32ErrorPathNotFound)
+        catch (Win32Exception ex) when (IsFileOrPathNotFound(ex))
         {
             return new ProcessExecutionResult(ex.NativeErrorCode, string.Empty, ex.Message);
         }
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        var drainTimeout = TimeSpan.FromMilliseconds(InstallerConstants.ProcessPostExitDrainTimeoutMs);
 
         using var linkedCts = CreateLinkedTimeoutCts(request.Timeout, cancellationToken);
         try
@@ -136,23 +182,91 @@ public sealed class SystemProcessRunner : IProcessRunner
             TryKillProcessTree(process);
             if (!cancellationToken.IsCancellationRequested && request.Timeout.HasValue)
             {
-                var partialOut = await SafeReadStreamAsync(stdoutTask).ConfigureAwait(false);
-                var partialErr = await SafeReadStreamAsync(stderrTask).ConfigureAwait(false);
+                var partialOut = await DrainStreamWithTimeoutAsync(stdoutTask, process.StandardOutput, drainTimeout).ConfigureAwait(false);
+                var partialErr = await DrainStreamWithTimeoutAsync(stderrTask, process.StandardError, drainTimeout).ConfigureAwait(false);
                 var timeoutMessage = $"Process '{request.FileName}' timed out after {request.Timeout.Value.TotalSeconds:F0}s.";
                 var combinedErr = string.IsNullOrWhiteSpace(partialErr)
                     ? timeoutMessage
                     : $"{partialErr}{Environment.NewLine}{timeoutMessage}";
-                return new ProcessExecutionResult(-1, partialOut, combinedErr);
+                return new ProcessExecutionResult(InstallerConstants.ExitCodeTimeout, partialOut, combinedErr);
             }
 
-            _ = SafeReadStreamAsync(stdoutTask);
-            _ = SafeReadStreamAsync(stderrTask);
+            CloseStreamBestEffort(process.StandardOutput);
+            CloseStreamBestEffort(process.StandardError);
+            ObserveFaultedReadTask(stdoutTask);
+            ObserveFaultedReadTask(stderrTask);
             throw;
         }
 
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
+        var stdout = await DrainStreamWithTimeoutAsync(stdoutTask, process.StandardOutput, drainTimeout).ConfigureAwait(false);
+        var stderr = await DrainStreamWithTimeoutAsync(stderrTask, process.StandardError, drainTimeout).ConfigureAwait(false);
         return new ProcessExecutionResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static async Task<string> DrainStreamWithTimeoutAsync(
+        Task<string> streamTask,
+        StreamReader reader,
+        TimeSpan drainTimeout)
+    {
+        if (!streamTask.IsCompleted)
+        {
+            try
+            {
+                await streamTask.WaitAsync(drainTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                // Justification: A detached grandchild inherited the pipe write handle; close reader to unblock and proceed.
+                CloseStreamBestEffort(reader);
+                ObserveFaultedReadTask(streamTask);
+                return string.Empty;
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+            {
+                // Justification: Stream reader aborted when process tree was killed or disposed.
+                _ = ex;
+                return string.Empty;
+            }
+        }
+
+        try
+        {
+            return await streamTask.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
+        {
+            // Justification: Stream reader aborted when process tree was killed or disposed.
+            _ = ex;
+            return string.Empty;
+        }
+    }
+
+    private static void ObserveFaultedReadTask(Task<string> task)
+    {
+        if (task.IsCompleted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        _ = task.ContinueWith(
+            static completed => _ = completed.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private static void CloseStreamBestEffort(StreamReader reader)
+    {
+        try
+        {
+            reader.Close();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Justification: Best-effort pipe closure during teardown/timeout.
+            _ = ex;
+        }
     }
 
     private static ProcessStartInfo CreateBaseStartInfo(ProcessRunRequest request)
@@ -198,13 +312,18 @@ public sealed class SystemProcessRunner : IProcessRunner
     private static CancellationTokenSource CreateLinkedTimeoutCts(TimeSpan? timeout, CancellationToken cancellationToken)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (timeout.HasValue && timeout.Value > TimeSpan.Zero)
+        if (timeout.HasValue)
         {
             cts.CancelAfter(timeout.Value);
         }
 
         return cts;
     }
+
+    private static bool IsFileOrPathNotFound(Win32Exception ex) =>
+        OperatingSystem.IsWindows()
+            ? ex.NativeErrorCode is Win32ErrorFileNotFound or Win32ErrorPathNotFound
+            : ex.NativeErrorCode is UnixErrnoNoEnt or UnixErrnoNotDir;
 
     private static void TryKillProcessTree(Process process)
     {
@@ -219,20 +338,6 @@ public sealed class SystemProcessRunner : IProcessRunner
         {
             // Justification: Process may exit concurrently before Kill completes.
             _ = ex;
-        }
-    }
-
-    private static async Task<string> SafeReadStreamAsync(Task<string> streamTask)
-    {
-        try
-        {
-            return await streamTask.ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
-        {
-            // Justification: Stream readers may abort when process tree is killed or disposed after timeout/cancellation.
-            _ = ex;
-            return string.Empty;
         }
     }
 }

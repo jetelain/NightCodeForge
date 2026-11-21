@@ -1,5 +1,7 @@
 namespace NightCodeForge.Installer.Core.Services;
 
+using System.Security;
+using System.Text;
 using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Constants;
 using NightCodeForge.Installer.Core.Exceptions;
@@ -14,6 +16,18 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
     private const string StepTools = "Companion NuGet Tools";
     private const string EnvHost = "Host";
     private const string EnvWsl = "WSL2";
+    private const string CmdTool = "tool";
+    private const string CmdList = "list";
+    private const string CmdInstall = "install";
+    private const string CmdUpdate = "update";
+    private const string CmdUninstall = "uninstall";
+    private const string FlagGlobal = "-g";
+    private const string FlagConfigFile = "--configfile";
+    private const string FlagNoCache = "--no-cache";
+    private const string FlagPrerelease = "--prerelease";
+    private const int TableSeparatorMinLength = 3;
+    private const double ProgressRangeMax = 100.0;
+    private const double WslProgressStepOffset = 5.0;
 
     private readonly IPlatformEnvironment _platform;
     private readonly IProcessRunner _processRunner;
@@ -68,6 +82,9 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
 
         string? hostBundleDir = null;
         string? wslBundleDir = null;
+        string? hostNuGetConfigPath = null;
+        string? wslNuGetConfigHostPath = null;
+        string? wslNuGetConfigPath = null;
 
         if (source.Mode == InstallSourceMode.AirGappedBundle)
         {
@@ -80,75 +97,96 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
             hostBundleDir = Path.GetFullPath(source.BundleDirectory);
         }
 
-        var existingHostTools = await ListGlobalToolsAsync(wslDistro: null, cancellationToken).ConfigureAwait(false);
-        Dictionary<string, string> existingWslTools = new(StringComparer.OrdinalIgnoreCase);
-
         var provisionWsl = _platform.Platform == HostPlatformType.Windows &&
                            !string.IsNullOrWhiteSpace(wslDistroName);
 
-        if (provisionWsl)
+        try
         {
-            existingWslTools = await ListGlobalToolsAsync(wslDistroName, cancellationToken).ConfigureAwait(false);
-
-            if (source.Mode == InstallSourceMode.AirGappedBundle && hostBundleDir is not null)
+            if (hostBundleDir is not null)
             {
-                wslBundleDir = await TranslateToWslPathAsync(wslDistroName!, hostBundleDir, cancellationToken).ConfigureAwait(false);
+                hostNuGetConfigPath = await WriteIsolatedBundleNuGetConfigAsync(hostBundleDir, cancellationToken).ConfigureAwait(false);
             }
+
+            var existingHostTools = await ListGlobalToolsAsync(wslDistro: null, cancellationToken).ConfigureAwait(false);
+            Dictionary<string, string> existingWslTools = new(StringComparer.OrdinalIgnoreCase);
+
+            if (provisionWsl)
+            {
+                existingWslTools = await ListGlobalToolsAsync(wslDistroName, cancellationToken).ConfigureAwait(false);
+
+                if (source.Mode == InstallSourceMode.AirGappedBundle && hostBundleDir is not null)
+                {
+                    wslBundleDir = await TranslateToWslPathAsync(wslDistroName!, hostBundleDir, cancellationToken).ConfigureAwait(false);
+                    wslNuGetConfigHostPath = await WriteIsolatedBundleNuGetConfigAsync(wslBundleDir, cancellationToken).ConfigureAwait(false);
+                    wslNuGetConfigPath = await TranslateToWslPathAsync(wslDistroName!, wslNuGetConfigHostPath, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
+
+            var outcomes = new List<CompanionToolInstallOutcome>();
+
+            for (var i = 0; i < Catalog.Count; i++)
+            {
+                var spec = Catalog[i];
+                var basePercent = (double)i / Catalog.Count * ProgressRangeMax;
+                var isPrereleaseBundle = hostBundleDir is not null && HasPrereleaseBundlePackage(hostBundleDir, spec.PackageId);
+
+                if (spec.InstallOnHost)
+                {
+                    progress?.Report(new InstallerProgressEvent(
+                        StepTools,
+                        $"Provisioning {spec.PackageId} ({spec.ToolCommand}) on Host...",
+                        InstallerLogLevel.Info,
+                        basePercent));
+
+                    var isInstalled = existingHostTools.ContainsKey(spec.PackageId);
+                    var outcome = await InstallOrUpgradeToolAsync(
+                        spec,
+                        source.Mode,
+                        hostBundleDir,
+                        hostNuGetConfigPath,
+                        isPrereleaseBundle,
+                        wslDistro: null,
+                        isInstalled,
+                        cancellationToken).ConfigureAwait(false);
+                    outcomes.Add(outcome);
+                }
+
+                if (provisionWsl && spec.InstallInWsl)
+                {
+                    progress?.Report(new InstallerProgressEvent(
+                        StepTools,
+                        $"Provisioning {spec.PackageId} ({spec.ToolCommand}) inside WSL2 '{wslDistroName}'...",
+                        InstallerLogLevel.Info,
+                        basePercent + WslProgressStepOffset));
+
+                    var isInstalledInWsl = existingWslTools.ContainsKey(spec.PackageId);
+                    var outcome = await InstallOrUpgradeToolAsync(
+                        spec,
+                        source.Mode,
+                        wslBundleDir,
+                        wslNuGetConfigPath,
+                        isPrereleaseBundle,
+                        wslDistro: wslDistroName,
+                        isInstalledInWsl,
+                        cancellationToken).ConfigureAwait(false);
+                    outcomes.Add(outcome);
+                }
+            }
+
+            progress?.Report(new InstallerProgressEvent(
+                StepTools,
+                "All companion NuGet global tools provisioned.",
+                InstallerLogLevel.Info,
+                ProgressRangeMax));
+
+            return outcomes;
         }
-
-        var outcomes = new List<CompanionToolInstallOutcome>();
-
-        for (var i = 0; i < Catalog.Count; i++)
+        finally
         {
-            var spec = Catalog[i];
-            var basePercent = (double)i / Catalog.Count * 100.0;
-
-            if (spec.InstallOnHost)
-            {
-                progress?.Report(new InstallerProgressEvent(
-                    StepTools,
-                    $"Provisioning {spec.PackageId} ({spec.ToolCommand}) on Host...",
-                    InstallerLogLevel.Info,
-                    basePercent));
-
-                var isInstalled = existingHostTools.ContainsKey(spec.PackageId);
-                var outcome = await InstallOrUpgradeToolAsync(
-                    spec,
-                    source.Mode,
-                    hostBundleDir,
-                    wslDistro: null,
-                    isInstalled,
-                    cancellationToken).ConfigureAwait(false);
-                outcomes.Add(outcome);
-            }
-
-            if (provisionWsl && spec.InstallInWsl)
-            {
-                progress?.Report(new InstallerProgressEvent(
-                    StepTools,
-                    $"Provisioning {spec.PackageId} ({spec.ToolCommand}) inside WSL2 '{wslDistroName}'...",
-                    InstallerLogLevel.Info,
-                    basePercent + 5));
-
-                var isInstalledInWsl = existingWslTools.ContainsKey(spec.PackageId);
-                var outcome = await InstallOrUpgradeToolAsync(
-                    spec,
-                    source.Mode,
-                    wslBundleDir,
-                    wslDistro: wslDistroName,
-                    isInstalledInWsl,
-                    cancellationToken).ConfigureAwait(false);
-                outcomes.Add(outcome);
-            }
+            DeleteTempFileBestEffort(hostNuGetConfigPath);
+            DeleteTempFileBestEffort(wslNuGetConfigHostPath);
         }
-
-        progress?.Report(new InstallerProgressEvent(
-            StepTools,
-            "All companion NuGet global tools provisioned.",
-            InstallerLogLevel.Info,
-            100));
-
-        return outcomes;
     }
 
     public async Task<IReadOnlyList<CompanionToolInstallOutcome>> UninstallAllAsync(
@@ -204,7 +242,7 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (line.Length >= 3 && line.All(static c => c == '-'))
+            if (line.Length >= TableSeparatorMinLength && line.All(static c => c == '-'))
             {
                 lastSeparatorIndex = i;
             }
@@ -214,7 +252,7 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         for (var i = startIndex; i < lines.Length; i++)
         {
             var line = lines[i];
-            if (lastSeparatorIndex < 0 && line.StartsWith("Package Id", StringComparison.OrdinalIgnoreCase))
+            if (lastSeparatorIndex < 0 && line.StartsWith(InstallerConstants.NuGetPackageIdHeaderPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -229,23 +267,68 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         return tools;
     }
 
+    internal static bool HasPrereleaseBundlePackage(string bundleDir, string packageId)
+    {
+        if (string.IsNullOrWhiteSpace(bundleDir) || !Directory.Exists(bundleDir))
+        {
+            return false;
+        }
+
+        var prefix = packageId + ".";
+        foreach (var filePath in Directory.EnumerateFiles(bundleDir, "*" + InstallerConstants.NupkgExtension))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(filePath);
+            if (!fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var versionPart = fileName[prefix.Length..];
+            if (versionPart.Length > 0 && char.IsAsciiDigit(versionPart[0]) && versionPart.Contains('-', StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    internal static string BuildIsolatedNuGetConfigXml(string bundleSourcePath)
+    {
+        var escaped = SecurityElement.Escape(bundleSourcePath) ?? bundleSourcePath;
+        return
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n" +
+            "<configuration>\n" +
+            "  <packageSources>\n" +
+            "    <clear />\n" +
+            $"    <add key=\"AirGappedBundle\" value=\"{escaped}\" />\n" +
+            "  </packageSources>\n" +
+            "  <packageSourceMapping>\n" +
+            "    <clear />\n" +
+            "  </packageSourceMapping>\n" +
+            "</configuration>\n";
+    }
+
     private async Task<Dictionary<string, string>> ListGlobalToolsAsync(
         string? wslDistro,
         CancellationToken cancellationToken)
     {
-        var result = await RunDotNetCommandAsync(wslDistro, ["tool", "list", "-g"], cancellationToken).ConfigureAwait(false);
+        var result = await RunDotNetCommandAsync(wslDistro, [CmdTool, CmdList, FlagGlobal], cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != InstallerConstants.ExitCodeSuccess)
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
-        return ParseToolListOutput(result.StandardOutput);
+        var cleaned = EnvironmentProvisioner.StripNullCharacters(result.StandardOutput);
+        return ParseToolListOutput(cleaned);
     }
 
     private async Task<CompanionToolInstallOutcome> InstallOrUpgradeToolAsync(
         CompanionNuGetToolSpec spec,
         InstallSourceMode mode,
         string? bundleSourceDir,
+        string? isolatedConfigPath,
+        bool allowPrerelease,
         string? wslDistro,
         bool currentlyInstalled,
         CancellationToken cancellationToken)
@@ -255,27 +338,23 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         if (mode == InstallSourceMode.AirGappedBundle)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(bundleSourceDir);
+            ArgumentException.ThrowIfNullOrWhiteSpace(isolatedConfigPath);
             await ClearNuGetPackageCacheAsync(spec.PackageId, wslDistro, cancellationToken).ConfigureAwait(false);
 
-            var primaryVerb = currentlyInstalled ? "update" : "install";
-            var primaryArgs = new[]
-            {
-                "tool", primaryVerb, "-g", spec.PackageId, "--add-source", bundleSourceDir, "--no-cache"
-            };
+            var primaryVerb = currentlyInstalled ? CmdUpdate : CmdInstall;
+            var primaryArgs = BuildAirGappedToolArgs(primaryVerb, spec.PackageId, isolatedConfigPath, allowPrerelease);
             var result = await RunDotNetCommandAsync(wslDistro, primaryArgs, cancellationToken).ConfigureAwait(false);
 
             // Air-gapped local rebuilds may retain an identical package version; uninstall + install handles same-version swaps cleanly.
             var combinedOutput = result.StandardOutput + "\n" + result.StandardError;
-            if (result.ExitCode != InstallerConstants.ExitCodeSuccess ||
+            if ((result.ExitCode != InstallerConstants.ExitCodeSuccess && currentlyInstalled) ||
                 combinedOutput.Contains(InstallerConstants.AlreadyInstalledMarker, StringComparison.OrdinalIgnoreCase))
             {
-                await RunDotNetCommandAsync(wslDistro, ["tool", "uninstall", "-g", spec.PackageId], cancellationToken)
+                await RunDotNetCommandAsync(wslDistro, [CmdTool, CmdUninstall, FlagGlobal, spec.PackageId], cancellationToken)
                     .ConfigureAwait(false);
 
-                result = await RunDotNetCommandAsync(
-                    wslDistro,
-                    ["tool", "install", "-g", spec.PackageId, "--add-source", bundleSourceDir, "--no-cache"],
-                    cancellationToken).ConfigureAwait(false);
+                var installArgs = BuildAirGappedToolArgs(CmdInstall, spec.PackageId, isolatedConfigPath, allowPrerelease);
+                result = await RunDotNetCommandAsync(wslDistro, installArgs, cancellationToken).ConfigureAwait(false);
             }
 
             if (result.ExitCode != InstallerConstants.ExitCodeSuccess)
@@ -292,10 +371,10 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
                 Message: $"Installed/updated '{spec.PackageId}' from local bundle.");
         }
 
-        var onlineVerb = currentlyInstalled ? "update" : "install";
+        var onlineVerb = currentlyInstalled ? CmdUpdate : CmdInstall;
         var onlineResult = await RunDotNetCommandAsync(
             wslDistro,
-            ["tool", onlineVerb, "-g", spec.PackageId],
+            [CmdTool, onlineVerb, FlagGlobal, spec.PackageId],
             cancellationToken).ConfigureAwait(false);
 
         if (onlineResult.ExitCode != InstallerConstants.ExitCodeSuccess &&
@@ -306,7 +385,7 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         {
             onlineResult = await RunDotNetCommandAsync(
                 wslDistro,
-                ["tool", "update", "-g", spec.PackageId],
+                [CmdTool, CmdUpdate, FlagGlobal, spec.PackageId],
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -332,7 +411,7 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         var targetEnv = wslDistro is null ? EnvHost : $"{EnvWsl}:{wslDistro}";
         var result = await RunDotNetCommandAsync(
             wslDistro,
-            ["tool", "uninstall", "-g", spec.PackageId],
+            [CmdTool, CmdUninstall, FlagGlobal, spec.PackageId],
             cancellationToken).ConfigureAwait(false);
 
         if (result.ExitCode == InstallerConstants.ExitCodeSuccess)
@@ -351,6 +430,8 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
 
         if (combined.Contains(InstallerConstants.NotInstalledMarker, StringComparison.OrdinalIgnoreCase) ||
             combined.Contains(InstallerConstants.NotFoundMarker, StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains(InstallerConstants.CannotFindFileMarker, StringComparison.OrdinalIgnoreCase) ||
+            combined.Contains(InstallerConstants.NoSuchFileMarker, StringComparison.OrdinalIgnoreCase) ||
             (wslDistro is not null && IsWslUnavailableError(combined)))
         {
             return new CompanionToolInstallOutcome(
@@ -373,7 +454,11 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         var packageIdLower = packageId.ToLowerInvariant();
         if (wslDistro is null)
         {
-            var hostCachePath = Path.Combine(_platform.UserHomeDirectory, ".nuget", "packages", packageIdLower);
+            var hostCachePath = Path.Combine(
+                _platform.UserHomeDirectory,
+                InstallerConstants.NuGetDirectoryName,
+                InstallerConstants.NuGetPackagesDirectoryName,
+                packageIdLower);
             if (Directory.Exists(hostCachePath))
             {
                 Directory.Delete(hostCachePath, recursive: true);
@@ -386,7 +471,7 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
             new ProcessRunRequest
             {
                 FileName = InstallerConstants.WslExecutable,
-                Arguments = ["-d", wslDistro, "--", "bash", "-c", $"rm -rf \"$HOME/.nuget/packages/{packageIdLower}\""],
+                Arguments = ["-d", wslDistro, "--", InstallerConstants.BashExecutable, "-c", $"rm -rf \"$HOME/.nuget/packages/{packageIdLower}\""],
                 EnvironmentVariables = new Dictionary<string, string>
                 {
                     [InstallerConstants.WslUtf8EnvVar] = "1"
@@ -442,7 +527,13 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
                 cancellationToken);
         }
 
-        var wslArgs = new List<string>(dotnetArguments.Count + 4) { "-d", wslDistro, "--", InstallerConstants.DotNetExecutable };
+        var wslArgs = new List<string>(dotnetArguments.Count + 4)
+        {
+            "-d",
+            wslDistro,
+            "--",
+            InstallerConstants.DotNetExecutable
+        };
         wslArgs.AddRange(dotnetArguments);
 
         return _processRunner.RunAsync(
@@ -481,11 +572,65 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
         return $"{existing}:{InstallerConstants.DotNetCliUiLanguageEnvVar}";
     }
 
+    private static IReadOnlyList<string> BuildAirGappedToolArgs(
+        string verb,
+        string packageId,
+        string isolatedConfigPath,
+        bool allowPrerelease)
+    {
+        var args = new List<string>(9)
+        {
+            CmdTool,
+            verb,
+            FlagGlobal,
+            packageId,
+            FlagConfigFile,
+            isolatedConfigPath,
+            FlagNoCache
+        };
+
+        if (allowPrerelease)
+        {
+            args.Add(FlagPrerelease);
+        }
+
+        return args;
+    }
+
+    private static async Task<string> WriteIsolatedBundleNuGetConfigAsync(
+        string bundleSourcePath,
+        CancellationToken cancellationToken)
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"ncf-nuget-{Guid.NewGuid():N}.config");
+        var xml = BuildIsolatedNuGetConfigXml(bundleSourcePath);
+        await File.WriteAllTextAsync(configPath, xml, new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+        return configPath;
+    }
+
+    private static void DeleteTempFileBestEffort(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return;
+        }
+
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Justification: Best-effort temp nuget.config cleanup must not mask provisioning result.
+            _ = ex;
+        }
+    }
+
     private static bool IsWslUnavailableError(string combinedOutput) =>
         combinedOutput.Contains(InstallerConstants.WslDistroNotFoundMarker, StringComparison.OrdinalIgnoreCase) ||
         combinedOutput.Contains(InstallerConstants.WslNoDistrosMarker, StringComparison.OrdinalIgnoreCase) ||
         combinedOutput.Contains(InstallerConstants.WslDistroNotFoundErrorCode, StringComparison.OrdinalIgnoreCase) ||
-        combinedOutput.Contains(InstallerConstants.DotNetCommandNotFoundMarker, StringComparison.OrdinalIgnoreCase);
+        combinedOutput.Contains(InstallerConstants.DotNetCommandNotFoundMarker, StringComparison.OrdinalIgnoreCase) ||
+        combinedOutput.Contains("execvpe dotnet failed", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatError(ProcessExecutionResult result)
     {

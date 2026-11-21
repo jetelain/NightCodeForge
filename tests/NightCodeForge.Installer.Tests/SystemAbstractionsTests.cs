@@ -80,4 +80,58 @@ public sealed class SystemAbstractionsTests
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(quotedPayload, result.StandardOutput.Trim());
     }
+
+    [Fact]
+    public void BuildEffectiveWindowsProcessPath_ThreeArgOverloadPreservesProcessPathAndNormalizesSlashes()
+    {
+        var combined = SystemPlatformEnvironment.BuildEffectiveWindowsProcessPath(
+            machinePath: @"C:\Tools\Git\;",
+            userPath: @"C:/Tools/Git/;C:\UserTools\",
+            currentProcessPath: @"C:\ProcessOnly;""C:\UserTools""");
+
+        var segments = combined.Split(';');
+        Assert.Equal(3, segments.Length);
+        Assert.Equal(@"C:\Tools\Git\", segments[0]);
+        Assert.Equal(@"C:\UserTools\", segments[1]);
+        Assert.Equal(@"C:\ProcessOnly", segments[2]);
+    }
+
+    [Fact]
+    public void IsCommandOnPath_RejectsTraversalHandlesWindowsExtensionsAndDottedCommands()
+    {
+        using var workspace = new TempTestWorkspace();
+        var binDir = workspace.CreateSubdirectory("bin");
+        File.WriteAllText(Path.Combine(binDir, "ollamarouter"), "#!/usr/bin/env bash");
+        File.WriteAllText(Path.Combine(binDir, "NightCodeForge.Web.exe"), "pe");
+
+        // Traversal/path-separator commands are never allowed.
+        Assert.False(SystemPlatformEnvironment.IsCommandOnPath(@"..\ollamarouter", binDir, isWindows: true, [".exe"]));
+        Assert.False(SystemPlatformEnvironment.IsCommandOnPath("sub/tool", binDir, isWindows: false, []));
+
+        // Windows ignores extensionless bash shims when looking up "ollamarouter" or "ollamarouter.exe",
+        // while still resolving dotted executable names like "NightCodeForge.Web.exe".
+        Assert.False(SystemPlatformEnvironment.IsCommandOnPath("ollamarouter", binDir, isWindows: true, [".exe", ".cmd"]));
+        Assert.False(SystemPlatformEnvironment.IsCommandOnPath("ollamarouter.exe", binDir, isWindows: true, [".exe", ".cmd"]));
+        Assert.True(SystemPlatformEnvironment.IsCommandOnPath("NightCodeForge.Web", binDir, isWindows: true, [".exe", ".cmd"]));
+        Assert.True(SystemPlatformEnvironment.IsCommandOnPath("NightCodeForge.Web.exe", binDir, isWindows: true, [".exe", ".cmd"]));
+    }
+
+    [Fact]
+    public async Task SystemProcessRunner_InvalidTimeoutOrShellExecuteWithEnvVars_ThrowsArgumentException()
+    {
+        var runner = new SystemProcessRunner();
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => runner.RunAsync(new ProcessRunRequest
+        {
+            FileName = "dotnet",
+            Timeout = TimeSpan.Zero
+        }));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => runner.RunAsync(new ProcessRunRequest
+        {
+            FileName = "cmd.exe",
+            UseShellExecute = true,
+            EnvironmentVariables = new Dictionary<string, string> { ["FOO"] = "bar" }
+        }));
+    }
 }

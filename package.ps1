@@ -89,7 +89,11 @@ try {
     New-Item -ItemType Directory -Path $webBinDir -Force | Out-Null
     New-Item -ItemType Directory -Path $launcherStagingDir -Force | Out-Null
 
+    Get-ChildItem -Path $resolvedOutputDir -Filter "NightCodeForge.Cli.*.nupkg" -File -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+
     Write-Host "Packing NightCodeForge.Cli ($Version) -> $resolvedOutputDir..." -ForegroundColor Cyan
+    $global:LASTEXITCODE = 0
     & dotnet pack $cliProjectPath -c $Configuration "-p:Version=$Version" -o $resolvedOutputDir --nologo
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet pack for NightCodeForge.Cli failed with exit code $LASTEXITCODE."
@@ -151,7 +155,11 @@ exec "`$DIR/$launcherBinaryName" "`$@"
             (Join-Path $webBinDir $launcherBinaryName)
         )) {
             if (Test-Path $exePath) {
+                $global:LASTEXITCODE = 0
                 & chmod +x $exePath
+                if ($LASTEXITCODE -ne 0) {
+                    throw "chmod +x failed for '$exePath' with exit code $LASTEXITCODE."
+                }
             }
         }
     }
@@ -176,8 +184,12 @@ exec "`$DIR/$launcherBinaryName" "`$@"
     $prodAppSettings = ($prodAppSettings -replace "`r`n", "`n").TrimEnd("`n") + "`n"
     [System.IO.File]::WriteAllText((Join-Path $webStagingDir "appsettings.Production.json"), $prodAppSettings, $utf8NoBom)
 
-    # Strip PDBs and copy skills/ + metadata
-    Get-ChildItem -Path $webStagingDir -Filter "*.pdb" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    # Strip debug symbols (.pdb, .dbg, *.dSYM) and copy skills/ + metadata
+    Get-ChildItem -Path $webStagingDir -File -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @('.pdb', '.dbg') } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path $webStagingDir -Directory -Filter "*.dSYM" -Recurse -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     $skillsSource = Join-Path $repoRoot "skills"
     if (Test-Path $skillsSource) {
@@ -223,9 +235,15 @@ exec "`$DIR/$launcherBinaryName" "`$@"
         Get-ChildItem -Path $installerStagingDir -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.Extension -in @('.pdb', '.dbg') } |
             Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -Path $installerStagingDir -Directory -Filter "*.dSYM" -Recurse -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
         if (-not $isWindowsRid -and -not [System.OperatingSystem]::IsWindows()) {
+            $global:LASTEXITCODE = 0
             & chmod +x $stagedInstaller
+            if ($LASTEXITCODE -ne 0) {
+                throw "chmod +x failed for '$stagedInstaller' with exit code $LASTEXITCODE."
+            }
         }
 
         Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination $installerStagingDir -Force
@@ -253,16 +271,32 @@ exec "`$DIR/$launcherBinaryName" "`$@"
         }
         [Net.ServicePointManager]::SecurityProtocol = $tlsProtocol
         foreach ($pkg in @("Pmad.CSharpNav", "Pmad.MarkdownFetch", "Pmad.CodeCondenser")) {
+            Get-ChildItem -Path $resolvedOutputDir -Filter "$pkg.*.nupkg" -File -ErrorAction SilentlyContinue |
+                Remove-Item -Force -ErrorAction SilentlyContinue
             $idLower = $pkg.ToLowerInvariant()
             Write-Host "Downloading latest $pkg from nuget.org..." -ForegroundColor Cyan
             $index = Invoke-RestMethod "https://api.nuget.org/v3-flatcontainer/$idLower/index.json"
             $stableVersions = @($index.versions | Where-Object { $_ -notlike "*-*" })
             $latest = if ($stableVersions.Count -gt 0) { $stableVersions[-1] } else { $index.versions[-1] }
+            if ([string]::IsNullOrWhiteSpace($latest)) {
+                throw "Unable to determine a published NuGet version for '$pkg'."
+            }
             $url = "https://api.nuget.org/v3-flatcontainer/$idLower/$latest/$idLower.$latest.nupkg"
             $outFile = Join-Path $resolvedOutputDir "$pkg.$latest.nupkg"
             Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
         }
     }
+
+    $sumLines = @()
+    Get-ChildItem -Path $resolvedOutputDir -File | Where-Object {
+        $_.Name -like "*.zip" -or $_.Name -like "*.tar.gz" -or $_.Name -like "*.nupkg"
+    } | Sort-Object Name | ForEach-Object {
+        $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        $sumLines += "$hash  $($_.Name)"
+    }
+    $sumsPath = Join-Path $resolvedOutputDir "SHA256SUMS.txt"
+    $sumsContent = if ($sumLines.Count -gt 0) { ($sumLines -join "`n") + "`n" } else { "" }
+    [System.IO.File]::WriteAllText($sumsPath, $sumsContent, $utf8NoBom)
 
     Write-Host "NightCodeForge packaging complete in: $resolvedOutputDir" -ForegroundColor Green
 }

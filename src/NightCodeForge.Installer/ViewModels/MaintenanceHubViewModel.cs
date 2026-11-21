@@ -66,6 +66,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
     private readonly IUiDispatcher _dispatcher;
     private readonly Action _openWizardInUpgradeMode;
     private readonly Action _openUninstaller;
+    private readonly CancellationToken _lifetimeToken;
     private bool _synchronizingSource;
     private InstallationDiscoveryResult _latestDiscovery;
 
@@ -75,7 +76,8 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
         IInstallerUiHost uiHost,
         IUiDispatcher dispatcher,
         Action openWizardInUpgradeMode,
-        Action openUninstaller)
+        Action openUninstaller,
+        CancellationToken lifetimeToken)
     {
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _startupPlan = startupPlan ?? throw new ArgumentNullException(nameof(startupPlan));
@@ -83,6 +85,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _openWizardInUpgradeMode = openWizardInUpgradeMode ?? throw new ArgumentNullException(nameof(openWizardInUpgradeMode));
         _openUninstaller = openUninstaller ?? throw new ArgumentNullException(nameof(openUninstaller));
+        _lifetimeToken = lifetimeToken;
 
         _latestDiscovery = startupPlan.Discovery;
         CompanionTools = [];
@@ -228,6 +231,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
             _synchronizingSource = false;
         }
 
+        ResetStaleUpdateAvailability();
         UpdateSourceState();
     }
 
@@ -255,15 +259,48 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
             _synchronizingSource = false;
         }
 
+        ResetStaleUpdateAvailability();
         UpdateSourceState();
     }
 
-    partial void OnBundleDirectoryChanged(string value) => UpdateSourceState();
+    partial void OnBundleDirectoryChanged(string value)
+    {
+        if (!_synchronizingSource)
+        {
+            ResetStaleUpdateAvailability();
+        }
+
+        UpdateSourceState();
+    }
 
     partial void OnIsBusyChanged(bool value) => NotifyUpgradeStateChanged();
     partial void OnIsNightCodeForgeUpdateAvailableChanged(bool value) => NotifyUpgradeStateChanged();
     partial void OnIsOllamaRouterUpdateAvailableChanged(bool value) => NotifyUpgradeStateChanged();
     partial void OnCanUpgradeFromBundleChanged(bool value) => NotifyUpgradeStateChanged();
+
+    public void ApplyWizardConfiguration(InstallSourceOptions source, string? installDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        _synchronizingSource = true;
+        try
+        {
+            IsOnlineSource = source.Mode == InstallSourceMode.Online;
+            IsAirGappedSource = source.Mode == InstallSourceMode.AirGappedBundle;
+            BundleDirectory = source.BundleDirectory ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(installDirectory))
+            {
+                InstallDirectory = installDirectory.Trim();
+            }
+        }
+        finally
+        {
+            _synchronizingSource = false;
+        }
+
+        ResetStaleUpdateAvailability();
+        UpdateSourceState();
+    }
 
     [RelayCommand]
     public async Task RefreshAllAsync()
@@ -283,6 +320,18 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
         {
             await RefreshStatusAndUpdatesCoreAsync().ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Status refresh cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                StatusMessage = $"Status refresh failed: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
+            });
+        }
         finally
         {
             _dispatcher.Post(() => IsBusy = false);
@@ -292,96 +341,180 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
     [RelayCommand]
     public async Task BrowseBundleFolderAsync()
     {
-        var picked = await _uiHost.PickBundleFolderAsync(
-            string.IsNullOrWhiteSpace(BundleDirectory) ? null : BundleDirectory,
-            CancellationToken.None).ConfigureAwait(false);
-
-        if (string.IsNullOrWhiteSpace(picked))
+        if (IsBusy)
         {
             return;
         }
 
-        _dispatcher.Post(() =>
+        try
         {
-            BundleDirectory = picked;
-            IsAirGappedSource = true;
-            StatusMessage = $"Selected local bundle folder: {picked}";
-        });
+            var picked = await _uiHost.PickBundleFolderAsync(
+                string.IsNullOrWhiteSpace(BundleDirectory) ? null : BundleDirectory,
+                _lifetimeToken).ConfigureAwait(false);
 
-        if (!IsBusy)
-        {
+            if (string.IsNullOrWhiteSpace(picked))
+            {
+                return;
+            }
+
+            await _dispatcher.InvokeAsync(() =>
+            {
+                BundleDirectory = picked;
+                IsAirGappedSource = true;
+                StatusMessage = $"Selected local bundle folder: {picked}";
+            }).ConfigureAwait(false);
+
             await RefreshAllAsync().ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Bundle selection cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Unable to browse bundle folder: {ex.Message}");
         }
     }
 
     [RelayCommand]
     public async Task StartServerAsync()
     {
-        var started = await _services.HostAppControl.StartWebServerAsync(InstallDirectory, CancellationToken.None)
-            .ConfigureAwait(false);
-
-        _dispatcher.Post(() =>
+        if (IsBusy)
         {
-            RefreshRunningState();
-            if (started)
+            return;
+        }
+
+        try
+        {
+            var started = await _services.HostAppControl.StartWebServerAsync(InstallDirectory, _lifetimeToken)
+                .ConfigureAwait(false);
+
+            _dispatcher.Post(() =>
             {
-                IsWebServerRunning = true;
-                ServerStatusText = InstallerConstants.UiStatusWebRunning;
-                StatusMessage = $"Started NightCodeForge Web ({WebUrl}).";
-            }
-            else
-            {
-                StatusMessage = $"Could not locate NightCodeForge launcher in '{InstallDirectory}'.";
-            }
-        });
+                RefreshRunningState();
+                if (started)
+                {
+                    IsWebServerRunning = true;
+                    ServerStatusText = InstallerConstants.UiStatusWebRunning;
+                    StatusMessage = $"Started NightCodeForge Web ({WebUrl}).";
+                }
+                else
+                {
+                    StatusMessage = $"Could not locate NightCodeForge launcher in '{InstallDirectory}'.";
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Start server cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to start server: {ex.Message}");
+        }
     }
 
     [RelayCommand]
     public async Task StopServerAsync()
     {
-        var stopped = await _services.HostAppControl.StopWebServerAsync(CancellationToken.None)
-            .ConfigureAwait(false);
-
-        _dispatcher.Post(() =>
+        if (IsBusy)
         {
-            RefreshRunningState();
-            IsWebServerRunning = false;
-            ServerStatusText = InstallerConstants.UiStatusWebStopped;
-            StatusMessage = stopped
-                ? "Stopped NightCodeForge Web server."
-                : "NightCodeForge Web server was not running.";
-        });
+            return;
+        }
+
+        try
+        {
+            var stopped = await _services.HostAppControl.StopWebServerAsync(_lifetimeToken)
+                .ConfigureAwait(false);
+
+            _dispatcher.Post(() =>
+            {
+                RefreshRunningState();
+                if (stopped && !IsWebServerRunning)
+                {
+                    StatusMessage = "Stopped NightCodeForge Web server.";
+                }
+                else if (IsWebServerRunning)
+                {
+                    StatusMessage = "NightCodeForge Web process could not be stopped. Check permissions or close manually.";
+                }
+                else
+                {
+                    StatusMessage = "NightCodeForge Web server was not running.";
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Stop server cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to stop server: {ex.Message}");
+        }
     }
 
     [RelayCommand]
     public async Task OpenWebUiAsync()
     {
-        var url = _services.HostAppControl.GetConfiguredWebUrl(InstallDirectory);
-        var opened = await _services.HostAppControl.OpenWebUiInBrowserAsync(url, CancellationToken.None)
-            .ConfigureAwait(false);
-
-        _dispatcher.Post(() =>
+        if (IsBusy)
         {
-            WebUrl = url;
-            StatusMessage = opened
-                ? $"Opened {url} in browser."
-                : $"Failed to open browser for {url}.";
-        });
+            return;
+        }
+
+        try
+        {
+            var url = _services.HostAppControl.GetConfiguredWebUrl(InstallDirectory);
+            var opened = await _services.HostAppControl.OpenWebUiInBrowserAsync(url, _lifetimeToken)
+                .ConfigureAwait(false);
+
+            _dispatcher.Post(() =>
+            {
+                WebUrl = url;
+                StatusMessage = opened
+                    ? $"Opened {url} in browser."
+                    : $"Failed to open browser for {url}.";
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Open browser cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to open Web UI: {ex.Message}");
+        }
     }
 
     [RelayCommand]
     public async Task OpenCliTerminalAsync()
     {
-        var opened = await _services.HostAppControl.OpenCliTerminalAsync(InstallDirectory, CancellationToken.None)
-            .ConfigureAwait(false);
+        if (IsBusy)
+        {
+            return;
+        }
 
-        _dispatcher.Post(() =>
-            StatusMessage = opened
-                ? $"Opened CLI terminal in '{InstallDirectory}'."
-                : "Failed to open CLI terminal.");
+        try
+        {
+            var opened = await _services.HostAppControl.OpenCliTerminalAsync(InstallDirectory, _lifetimeToken)
+                .ConfigureAwait(false);
+
+            _dispatcher.Post(() =>
+                StatusMessage = opened
+                    ? $"Opened CLI terminal in '{InstallDirectory}'."
+                    : "Failed to open CLI terminal.");
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Open CLI terminal cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to open CLI terminal: {ex.Message}");
+        }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanExecuteUpgrade))]
     public async Task UpgradeAllAsync()
     {
         if (IsBusy)
@@ -415,7 +548,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 _startupPlan.EffectiveWslDistroName,
                 createDesktopShortcut: false,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _lifetimeToken).ConfigureAwait(false);
 
             if (result.Succeeded)
             {
@@ -431,6 +564,18 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 _dispatcher.Post(() =>
                     StatusMessage = $"Upgrade failed: {result.ErrorMessage}");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Upgrade cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                StatusMessage = $"Upgrade failed: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
+            });
         }
         finally
         {
@@ -473,7 +618,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 CurrentSourceOptions,
                 wslDistro,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _lifetimeToken).ConfigureAwait(false);
 
             await RefreshCompanionToolsCoreAsync(wslDistro).ConfigureAwait(false);
             _dispatcher.Post(() =>
@@ -481,6 +626,10 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 ProgressPercent = 100.0;
                 StatusMessage = $"Updated {outcomes.Count} companion tool target(s).";
             });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Companion tool update cancelled.");
         }
         catch (NuGetToolProvisioningException ex)
         {
@@ -498,6 +647,14 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 LogLines.Add($"[Error] {ex.Message}");
             });
         }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                StatusMessage = $"Companion tool update failed: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
+            });
+        }
         finally
         {
             _dispatcher.Post(() => IsBusy = false);
@@ -507,23 +664,55 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
     [RelayCommand]
     public async Task LaunchNightCodeAssayAsync()
     {
-        var launched = await _services.HostAppControl.LaunchNightCodeAssayAsync(CancellationToken.None)
-            .ConfigureAwait(false);
-        _dispatcher.Post(() =>
-            StatusMessage = launched
-                ? "Launched NightCode Assay (nightcodeassay)."
-                : "Could not launch 'nightcodeassay'. Update Companion Tools first.");
+        if (IsBusy)
+        {
+            return;
+        }
+
+        try
+        {
+            var launched = await _services.HostAppControl.LaunchNightCodeAssayAsync(_lifetimeToken)
+                .ConfigureAwait(false);
+            _dispatcher.Post(() =>
+                StatusMessage = launched
+                    ? "Launched NightCode Assay (nightcodeassay)."
+                    : "Could not launch 'nightcodeassay'. Update Companion Tools first.");
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "NightCode Assay launch cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to launch NightCode Assay: {ex.Message}");
+        }
     }
 
     [RelayCommand]
     public async Task OpenOllamaRouterAppAsync()
     {
-        var opened = await _services.HostAppControl.OpenOllamaRouterAppAsync(CancellationToken.None)
-            .ConfigureAwait(false);
-        _dispatcher.Post(() =>
-            StatusMessage = opened
-                ? "Opened OllamaRouter App."
-                : "Could not launch OllamaRouter App or ollamarouter://open handler.");
+        if (IsBusy)
+        {
+            return;
+        }
+
+        try
+        {
+            var opened = await _services.HostAppControl.OpenOllamaRouterAppAsync(_lifetimeToken)
+                .ConfigureAwait(false);
+            _dispatcher.Post(() =>
+                StatusMessage = opened
+                    ? "Opened OllamaRouter App."
+                    : "Could not launch OllamaRouter App or ollamarouter://open handler.");
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Open OllamaRouter App cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to open OllamaRouter App: {ex.Message}");
+        }
     }
 
     [RelayCommand]
@@ -553,7 +742,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 InstallDirectory,
                 InstallerConstants.DefaultOllamaRouterEndpoint,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _lifetimeToken).ConfigureAwait(false);
 
             _dispatcher.Post(() =>
             {
@@ -566,6 +755,18 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 {
                     StatusMessage = result.ErrorMessage ?? $"OllamaRouter wizard exited with code {result.ExitCode}.";
                 }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "OllamaRouter Setup Wizard cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                StatusMessage = $"OllamaRouter Setup Wizard failed: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
             });
         }
         finally
@@ -600,7 +801,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 InstallDirectory,
                 InstallerConstants.DefaultOllamaRouterEndpoint,
                 progress,
-                CancellationToken.None).ConfigureAwait(false);
+                _lifetimeToken).ConfigureAwait(false);
 
             _dispatcher.Post(() =>
             {
@@ -608,11 +809,23 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 StatusMessage = "Role recommendations synced into config/config.json.";
             });
         }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Recommendation sync cancelled.");
+        }
         catch (OllamaRouterSyncException ex)
         {
             _dispatcher.Post(() =>
             {
                 StatusMessage = ex.Message;
+                LogLines.Add($"[Error] {ex.Message}");
+            });
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                StatusMessage = $"Recommendation sync failed: {ex.Message}";
                 LogLines.Add($"[Error] {ex.Message}");
             });
         }
@@ -642,7 +855,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 InstallDirectory,
                 _startupPlan.EffectiveWslDistroName,
                 InstallerConstants.DefaultOllamaRouterEndpoint,
-                CancellationToken.None).ConfigureAwait(false);
+                _lifetimeToken).ConfigureAwait(false);
 
             _dispatcher.Post(() =>
             {
@@ -656,6 +869,18 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
                 DoctorSummaryText =
                     $"{report.PassedCount} passed, {report.WarningCount} warning(s), {report.FailedCount} failed (checked {report.CheckedAtUtc:HH:mm:ss} UTC).";
                 StatusMessage = $"Forge Doctor complete: {DoctorSummaryText}";
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Forge Doctor diagnostics cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() =>
+            {
+                StatusMessage = $"Forge Doctor failed: {ex.Message}";
+                LogLines.Add($"[Error] {ex.Message}");
             });
         }
         finally
@@ -673,7 +898,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
         var availability = await _services.UpgradeService.CheckAvailableUpdatesAsync(
             source,
             InstallDirectory,
-            CancellationToken.None).ConfigureAwait(false);
+            _lifetimeToken).ConfigureAwait(false);
 
         _latestDiscovery = availability.Discovery;
         var wslDistro = await ResolveActiveWslDistroAsync().ConfigureAwait(false);
@@ -682,7 +907,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
         _dispatcher.Post(() =>
         {
             var ncf = availability.Discovery.NightCodeForge;
-            if (ncf.IsInstalled)
+            if (string.IsNullOrWhiteSpace(_startupPlan.CliOptions.InstallDirectory) && ncf.IsInstalled)
             {
                 InstallDirectory = ncf.InstallDirectory;
             }
@@ -709,7 +934,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
 
     private async Task RefreshCompanionToolsCoreAsync(string? wslDistro)
     {
-        var statuses = await _services.NuGetProvisioner.ProbeToolsAsync(wslDistro, CancellationToken.None)
+        var statuses = await _services.NuGetProvisioner.ProbeToolsAsync(wslDistro, _lifetimeToken)
             .ConfigureAwait(false);
 
         _dispatcher.Post(() =>
@@ -740,7 +965,7 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
 
         var probe = await _services.EnvironmentProvisioner.ProbeAsync(
             _startupPlan.EffectiveWslDistroName,
-            CancellationToken.None).ConfigureAwait(false);
+            _lifetimeToken).ConfigureAwait(false);
 
         return probe.WslInstalled && probe.WslDistroInstalled
             ? probe.ResolvedWslDistroName ?? _startupPlan.EffectiveWslDistroName
@@ -756,13 +981,24 @@ public sealed partial class MaintenanceHubViewModel : ObservableObject
             : InstallerConstants.UiStatusWebStopped;
     }
 
+    private void ResetStaleUpdateAvailability()
+    {
+        IsNightCodeForgeUpdateAvailable = false;
+        IsOllamaRouterUpdateAvailable = false;
+        AvailableVersion = "Click Refresh Status to check";
+        UpgradeSummaryText = "Source changed. Click Refresh Status to resolve available packages.";
+    }
+
     private void UpdateSourceState()
     {
         var assets = _services.HostAppControl.ScanBundleDirectoryAssets(BundleDirectory) ?? [];
+        var hasInstallArchive = assets.Any(static name =>
+            name.EndsWith(InstallerConstants.ZipExtension, StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(InstallerConstants.TarGzExtension, StringComparison.OrdinalIgnoreCase));
         DetectedBundleSummary = assets.Count == 0
             ? "No bundle assets detected."
             : $"{assets.Count} local bundle asset(s) detected.";
-        CanUpgradeFromBundle = IsAirGappedSource && assets.Count > 0;
+        CanUpgradeFromBundle = IsAirGappedSource && hasInstallArchive;
         OnPropertyChanged(nameof(UpgradeButtonLabel));
         NotifyUpgradeStateChanged();
     }

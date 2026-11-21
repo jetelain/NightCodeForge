@@ -67,9 +67,11 @@ public sealed class ReleaseManagerTests : IDisposable
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
         var installDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "NightCodeForge");
         var bundleDir = _workspace.CreateSubdirectory("bundle");
-        var runningInstallerSource = Path.Combine(_workspace.RootPath, "download-src", InstallerConstants.InstallerExeWindows);
-        Directory.CreateDirectory(Path.GetDirectoryName(runningInstallerSource)!);
+        var runningInstallerSourceDir = Path.Combine(_workspace.RootPath, "download-src");
+        var runningInstallerSource = Path.Combine(runningInstallerSourceDir, InstallerConstants.InstallerExeWindows);
+        Directory.CreateDirectory(runningInstallerSourceDir);
         File.WriteAllText(runningInstallerSource, "new-installer-binary");
+        File.WriteAllText(Path.Combine(runningInstallerSourceDir, "av_libglesv2.dll"), "angle-dll");
 
         // Pre-populate legacy publish.ps1 installation.
         Directory.CreateDirectory(Path.Combine(installDir, "config"));
@@ -133,7 +135,10 @@ public sealed class ReleaseManagerTests : IDisposable
         Assert.Equal("new-launcher-v2", File.ReadAllText(Path.Combine(installDir, "bin", "nightcodeforge-web.exe")));
         Assert.Equal("new-launcher-v2", File.ReadAllText(Path.Combine(installDir, "bin", "ncf-web.exe")));
         Assert.True(File.Exists(Path.Combine(installDir, "bin", "nightcodeforge-web")));
-        Assert.True(File.Exists(Path.Combine(installDir, InstallerConstants.InstallerExeWindows)));
+        var copiedInstallerDir = Path.Combine(installDir, InstallerConstants.InstallerSubDirectoryName);
+        Assert.True(File.Exists(Path.Combine(copiedInstallerDir, InstallerConstants.InstallerExeWindows)));
+        Assert.True(File.Exists(Path.Combine(copiedInstallerDir, "av_libglesv2.dll")));
+        Assert.False(File.Exists(Path.Combine(installDir, InstallerConstants.InstallerExeWindows)));
 
         // Preserved Urls & adapted connection strings
         using var prodDoc = JsonDocument.Parse(File.ReadAllText(Path.Combine(installDir, "appsettings.Production.json")));
@@ -200,9 +205,12 @@ public sealed class ReleaseManagerTests : IDisposable
         Assert.True(File.Exists(desktopEntry));
         Assert.Contains("x-scheme-handler/ollamarouter", File.ReadAllText(desktopEntry), StringComparison.Ordinal);
 
+        Assert.False(deployment.WasUpgrade);
+        Assert.False(deployment.WasPreviouslyRunning);
+        Assert.False(deployment.RestartedAfterSwap);
         processControl.Verify(
-            c => c.StopProcessesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+            c => c.StopProcessesAsync(InstallerConstants.OllamaRouterProcesses, It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -367,7 +375,7 @@ public sealed class ReleaseManagerTests : IDisposable
         var splitOffset = fullBytes.Length / 2;
 
         // Seed partial download cache file.
-        var cacheDir = Path.Combine(Path.GetTempPath(), "ncf-installer-downloads");
+        var cacheDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, InstallerConstants.DownloadCacheDirectoryName);
         Directory.CreateDirectory(cacheDir);
         var partPath = Path.Combine(cacheDir, "3.0.0-NightCodeForge-Web-win-x64.zip.part");
         var finalCachedPath = Path.Combine(cacheDir, "3.0.0-NightCodeForge-Web-win-x64.zip");
@@ -559,7 +567,7 @@ public sealed class ReleaseManagerTests : IDisposable
 
         var uniqueTag = $"release/4.1.{Guid.NewGuid():N}"[..20];
         var sanitizedVersion = uniqueTag.Replace('/', '_');
-        var cacheDir = Path.Combine(Path.GetTempPath(), InstallerConstants.DownloadCacheDirectoryName);
+        var cacheDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, InstallerConstants.DownloadCacheDirectoryName);
         Directory.CreateDirectory(cacheDir);
         var partPath = Path.Combine(cacheDir, $"{sanitizedVersion}-NightCodeForge-Web-win-x64.zip.part");
         var finalCachedPath = Path.Combine(cacheDir, $"{sanitizedVersion}-NightCodeForge-Web-win-x64.zip");
@@ -679,6 +687,60 @@ public sealed class ReleaseManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task ParseSha256Sums_StripsUtf8Bom_AndMissingOnlineChecksumsFailClosed()
+    {
+        var validHash = new string('b', 64);
+        var bomParsed = ReleaseManager.ParseSha256Sums($"\uFEFF{validHash}  NightCodeForge-Web-win-x64.zip\n");
+        Assert.Equal(validHash, bomParsed["NightCodeForge-Web-win-x64.zip"]);
+
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var handler = new StubHttpMessageHandler((_, _) => Task.FromResult(TestArchiveHelper.JsonResponse("""
+        {
+          "tag_name": "v1.4.0",
+          "assets": [
+            { "name": "NightCodeForge-Web-win-x64.zip", "browser_download_url": "https://dl.test/web.zip", "size": 9001 }
+          ]
+        }
+        """)));
+        using var httpClient = new HttpClient(handler);
+        var sut = CreateSut(httpClient, platform.Object, out _, out _, out _);
+
+        await Assert.ThrowsAsync<ReleaseDownloadException>(() =>
+            sut.ResolveLatestNightCodeForgeReleaseAsync(new InstallSourceOptions(InstallSourceMode.Online, null)));
+    }
+
+    [Fact]
+    public async Task DeployOllamaRouterAsync_BackfillsRouterDirIntoExistingNightCodeForgeManifest()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var ncfDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, "NightCodeForge");
+        Directory.CreateDirectory(ncfDir);
+        File.WriteAllText(Path.Combine(ncfDir, InstallerConstants.WebExeWindows), "web");
+
+        var initialManifest = new UninstallManifest("1.0.0", ncfDir, DateTimeOffset.UtcNow, OllamaRouterDirectory: null, Platform: "Windows");
+        var manifestPath = Path.Combine(ncfDir, InstallerConstants.UninstallManifestFileName);
+        File.WriteAllText(manifestPath, JsonSerializer.Serialize(initialManifest, NightCodeForge.Installer.Core.Serialization.InstallerJsonContext.Default.UninstallManifest));
+
+        var bundleDir = _workspace.CreateSubdirectory("or-backfill-bundle");
+        TestArchiveHelper.CreateZipArchive(Path.Combine(bundleDir, "OllamaRouter-win-x64.zip"), new Dictionary<string, string>
+        {
+            [InstallerConstants.OllamaRouterServerWindows] = "srv",
+            [InstallerConstants.VersionFileName] = "1.2.0"
+        });
+
+        using var httpClient = new HttpClient(new StubHttpMessageHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound))));
+        var sut = CreateSut(httpClient, platform.Object, out _, out _, out _);
+        var asset = await sut.ResolveLatestOllamaRouterReleaseAsync(new InstallSourceOptions(InstallSourceMode.AirGappedBundle, bundleDir));
+        var deployment = await sut.DeployOllamaRouterAsync(asset, targetInstallDirectory: null);
+
+        var updated = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(manifestPath),
+            NightCodeForge.Installer.Core.Serialization.InstallerJsonContext.Default.UninstallManifest);
+        Assert.NotNull(updated);
+        Assert.Equal(deployment.InstallDirectory, updated!.OllamaRouterDirectory);
+    }
+
+    [Fact]
     public async Task DeployNightCodeForgeAsync_OnlineDownload_MismatchedPartialContentRangeFallsBackToFreshDownload()
     {
         var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
@@ -694,7 +756,7 @@ public sealed class ReleaseManagerTests : IDisposable
         var fullBytes = await File.ReadAllBytesAsync(sourceZip);
 
         var uniqueVersion = $"5.0.{Guid.NewGuid():N}"[..12];
-        var cacheDir = Path.Combine(Path.GetTempPath(), InstallerConstants.DownloadCacheDirectoryName);
+        var cacheDir = Path.Combine(platform.Object.LocalApplicationDataDirectory, InstallerConstants.DownloadCacheDirectoryName);
         Directory.CreateDirectory(cacheDir);
         var partPath = Path.Combine(cacheDir, $"{uniqueVersion}-NightCodeForge-Web-win-x64.zip.part");
         var finalCachedPath = Path.Combine(cacheDir, $"{uniqueVersion}-NightCodeForge-Web-win-x64.zip");

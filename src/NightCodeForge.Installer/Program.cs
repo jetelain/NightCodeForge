@@ -1,5 +1,6 @@
 namespace NightCodeForge.Installer;
 
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Win32;
 using Avalonia.X11;
@@ -11,8 +12,10 @@ using NightCodeForge.Installer.Core.Constants;
 /// Configures strict pure software rendering (<see cref="Win32RenderingMode.Software"/> and
 /// <see cref="X11RenderingMode.Software"/>) so 0 MB of GPU VRAM is allocated.
 /// </summary>
-public static class Program
+public static partial class Program
 {
+    private const uint AttachParentProcess = 0xFFFFFFFF;
+
     internal static InstallerCliOptions LaunchOptions { get; private set; } = InstallerCliParser.Parse([]);
 
     [STAThread]
@@ -25,6 +28,7 @@ public static class Program
         }
         catch (ArgumentException ex)
         {
+            TryAttachParentConsole();
             Console.Error.WriteLine($"Error: {ex.Message}");
             return InstallerConstants.ExitCodeError;
         }
@@ -33,6 +37,7 @@ public static class Program
 
         if (cliOptions.Mode == InstallerLaunchMode.Help)
         {
+            TryAttachParentConsole();
             InstallerCliRunner.WriteUsage(Console.Out);
             return InstallerConstants.ExitCodeSuccess;
         }
@@ -40,8 +45,9 @@ public static class Program
         if (cliOptions.Mode is InstallerLaunchMode.Uninstall or InstallerLaunchMode.Upgrade &&
             cliOptions.UninstallOptions.Quiet)
         {
+            TryAttachParentConsole();
             using var services = InstallerServiceContainer.CreateDefault();
-            var discovery = services.InstallationDetector.Detect(cliOptions.BundleDirectory);
+            var discovery = services.InstallationDetector.Detect(cliOptions.BundleDirectory, cliOptions.InstallDirectory);
             var startupPlan = InstallerStartupRouter.Resolve(cliOptions, discovery, services.Platform);
             return InstallerCliRunner.RunHeadlessAsync(
                 startupPlan,
@@ -57,6 +63,25 @@ public static class Program
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<App>()
             .UsePlatformDetect()
-            .With(new Win32PlatformOptions { RenderingMode = [Win32RenderingMode.Software] })
-            .With(new X11PlatformOptions { RenderingMode = [X11RenderingMode.Software] });
+            .WithInterFont()
+            .With(CreateWin32PlatformOptions())
+            .With(CreateX11PlatformOptions());
+
+    private static Win32PlatformOptions CreateWin32PlatformOptions() =>
+        new() { RenderingMode = [Win32RenderingMode.Software] };
+
+    private static X11PlatformOptions CreateX11PlatformOptions() =>
+        new() { RenderingMode = [X11RenderingMode.Software] };
+
+    private static void TryAttachParentConsole()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            _ = AttachConsole(AttachParentProcess);
+        }
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AttachConsole(uint dwProcessId);
 }

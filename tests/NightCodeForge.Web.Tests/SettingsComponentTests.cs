@@ -862,6 +862,51 @@ public class SettingsComponentTests : BunitContext, IDisposable
     }
 
     [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenEndpointChangedWithoutRestart_ShowsRestartRequiredToast()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.Endpoint = "http://localhost:11434";
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", [])
+            });
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#ollama-endpoint-input").Change("http://127.0.0.1:22434");
+
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "Restart Required");
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenEndpointMatchesModuloTrailingSlash_SyncsNormally()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.Endpoint = "http://localhost:11434";
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", [])
+            });
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#ollama-endpoint-input").Change(" http://localhost:11434/ ");
+
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.True(_configWriter.SaveProviderCalled);
+        Assert.Equal("http://localhost:11434", _configWriter.LastSavedOptions.Endpoint);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Success && t.Title == "Recommended Models Synced");
+    }
+
+    [Fact]
     public void OllamaRouterGatewayCard_RoleDifferentiation_SavesAndClearsForOllamaRouterAndOllama()
     {
         _llmOptions.ProviderType = LlmProviderType.OllamaRouter;

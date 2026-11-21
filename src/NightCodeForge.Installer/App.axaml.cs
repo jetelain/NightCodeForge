@@ -15,6 +15,7 @@ using NightCodeForge.Installer.Views;
 public partial class App : Application
 {
     private InstallerServiceContainer? _services;
+    private MainWindowViewModel? _viewModel;
     private MainWindow? _mainWindow;
 
     public override void Initialize()
@@ -27,7 +28,9 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             _services = InstallerServiceContainer.CreateDefault();
-            var discovery = _services.InstallationDetector.Detect(Program.LaunchOptions.BundleDirectory);
+            var discovery = _services.InstallationDetector.Detect(
+                Program.LaunchOptions.BundleDirectory,
+                Program.LaunchOptions.InstallDirectory);
             var startupPlan = InstallerStartupRouter.Resolve(Program.LaunchOptions, discovery, _services.Platform);
 
             var dispatcher = new AvaloniaUiDispatcher();
@@ -35,17 +38,17 @@ public partial class App : Application
                 () => _mainWindow,
                 exitCode => desktop.TryShutdown(exitCode));
 
-            var viewModel = new MainWindowViewModel(_services, startupPlan, uiHost, dispatcher);
+            _viewModel = new MainWindowViewModel(_services, startupPlan, uiHost, dispatcher);
             _mainWindow = new MainWindow
             {
-                DataContext = viewModel
+                DataContext = _viewModel
             };
 
             desktop.MainWindow = _mainWindow;
             desktop.ShutdownMode = ShutdownMode.OnMainWindowClose;
             desktop.Exit += OnDesktopExit;
 
-            _ = InitializeViewModelAsync(viewModel);
+            _ = InitializeViewModelAsync(_viewModel);
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -60,11 +63,14 @@ public partial class App : Application
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             await Console.Error.WriteLineAsync($"Installer initialization error: {ex.Message}").ConfigureAwait(false);
+            viewModel.ReportInitializationError($"Installer initialization error: {ex.Message}");
         }
     }
 
     private void OnDesktopExit(object? sender, ControlledApplicationLifetimeExitEventArgs e)
     {
+        _viewModel?.Dispose();
+        _viewModel = null;
         _services?.Dispose();
         _services = null;
     }

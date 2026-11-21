@@ -14,6 +14,9 @@ public sealed record GitHubReleaseAssetDto(
     [property: JsonPropertyName("browser_download_url")] string BrowserDownloadUrl,
     [property: JsonPropertyName("size")] long Size);
 
+public sealed record RouterInfoProbeDto(
+    [property: JsonPropertyName("isRouter")] bool IsRouter);
+
 public sealed record RouterRecommendationsDto(
     [property: JsonPropertyName("generatedAt")] DateTimeOffset? GeneratedAt,
     [property: JsonPropertyName("roles")] Dictionary<string, RouterRoleRecommendationDto>? Roles);
@@ -36,9 +39,11 @@ public sealed record RouterNodeRoleProfileDto(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     PropertyNameCaseInsensitive = true,
     WriteIndented = true,
-    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    RespectNullableAnnotations = true)]
 [JsonSerializable(typeof(GitHubReleaseDto))]
 [JsonSerializable(typeof(UninstallManifest))]
+[JsonSerializable(typeof(RouterInfoProbeDto))]
 [JsonSerializable(typeof(RouterRecommendationsDto))]
 [JsonSerializable(typeof(JsonObject))]
 [JsonSerializable(typeof(JsonNode))]

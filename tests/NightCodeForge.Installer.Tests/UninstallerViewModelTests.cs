@@ -40,7 +40,7 @@ public sealed class UninstallerViewModelTests
 
         var uiHost = new Mock<IInstallerUiHost>();
         using var container = InstallerTestFactory.CreateContainer(
-            installationDetector: Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>()) == discovery),
+            installationDetector: Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>()) == discovery),
             uninstallService: uninstallService.Object);
 
         var plan = InstallerTestFactory.CreateStartupPlan(discovery, ["uninstall"]);
@@ -91,12 +91,13 @@ public sealed class UninstallerViewModelTests
 
         var vm = new UninstallerViewModel(
             uninstallService.Object,
-            Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>()) == discovery),
+            Mock.Of<IInstallationDetector>(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>()) == discovery),
             plan,
             uiHost.Object,
             new ImmediateUiDispatcher(),
             () => { },
-            canReturnToHub: false);
+            canReturnToHub: false,
+            CancellationToken.None);
 
         Assert.True(vm.RemoveCompanionTools);
         Assert.True(vm.RemoveOllamaRouter);
@@ -106,7 +107,12 @@ public sealed class UninstallerViewModelTests
 
         await vm.UninstallCommand.ExecuteAsync(null);
         Assert.False(vm.Succeeded);
+        Assert.False(vm.IsCompleted);
+        Assert.True(vm.HasError);
         Assert.Equal("Access denied", vm.ErrorMessage);
+        Assert.True(vm.CanUninstall);
+        Assert.True(vm.CanCancel);
+        Assert.True(vm.CanClose);
 
         vm.CloseCommand.Execute(null);
         uiHost.Verify(h => h.RequestExit(InstallerConstants.ExitCodeError), Times.Once);

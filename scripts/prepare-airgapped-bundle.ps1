@@ -73,6 +73,12 @@ foreach ($script in @($assayScript, $routerScript, $ncfScript)) {
 }
 
 Write-Host "Assembling air-gapped bundle in: $resolvedBundleDir" -ForegroundColor Cyan
+Get-ChildItem -Path $resolvedBundleDir -File -ErrorAction SilentlyContinue | Where-Object {
+    $_.Name -like "*.zip" -or
+    $_.Name -like "*.tar.gz" -or
+    $_.Name -like "*.nupkg" -or
+    $_.Name -eq "SHA256SUMS.txt"
+} | Remove-Item -Force -ErrorAction SilentlyContinue
 
 $global:LASTEXITCODE = 0
 & $assayScript -Configuration $Configuration -Runtime $Runtime -OutputDir $resolvedBundleDir
@@ -100,7 +106,7 @@ if ($LASTEXITCODE -ne 0) { throw "NightCodeForge packaging failed with exit code
 
 $sumLines = @()
 Get-ChildItem -Path $resolvedBundleDir -File | Where-Object {
-    $_.Name -like "*.zip" -or $_.Name -like "*.tar.gz"
+    $_.Name -like "*.zip" -or $_.Name -like "*.tar.gz" -or $_.Name -like "*.nupkg"
 } | Sort-Object Name | ForEach-Object {
     $hash = (Get-FileHash -Path $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     $sumLines += "$hash  $($_.Name)"

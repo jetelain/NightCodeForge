@@ -1,5 +1,6 @@
 namespace NightCodeForge.Installer.ViewModels.Wizard;
 
+using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using NightCodeForge.Installer.Core.Constants;
@@ -11,7 +12,7 @@ using NightCodeForge.Installer.Core.Models;
 /// </summary>
 public sealed partial class SetupWizardViewModel : ObservableObject
 {
-    public const int LastStepIndex = InstallerConstants.WizardStepCount - 1;
+    public const int LastStepIndex = (int)WizardStep.Ready;
 
     private readonly SetupWizardState _state;
     private readonly IUiDispatcher _dispatcher;
@@ -33,13 +34,19 @@ public sealed partial class SetupWizardViewModel : ObservableObject
         Step5 = step5 ?? throw new ArgumentNullException(nameof(step5));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
 
-        SelectedStep = 0;
+        SelectedStep = (int)WizardStep.Welcome;
 
         BackCommand = new AsyncRelayCommand(() => GoToAsync(SelectedStep - 1), () => CanGoBack);
         NextCommand = new AsyncRelayCommand(() => GoToAsync(SelectedStep + 1), () => CanGoNext);
         FinishCommand = new RelayCommand(() => Step5.FinishCommand.Execute(null), () => CanFinish);
 
-        Step4.SkipRequested += (_, _) => _ = GoToAsync(LastStepIndex);
+        Step1.PropertyChanged += OnStepStatePropertyChanged;
+        Step2.PropertyChanged += OnStepStatePropertyChanged;
+        Step3.PropertyChanged += OnStepStatePropertyChanged;
+        Step4.PropertyChanged += OnStepStatePropertyChanged;
+        Step5.PropertyChanged += OnStepStatePropertyChanged;
+        Step1.ConfigurationChanged += (_, _) => ResetDownstreamStepsOnConfigurationChange();
+        Step4.SkipRequested += (_, _) => _ = ObserveTaskAsync(GoToAsync(LastStepIndex));
     }
 
     public WizardStep1WelcomeViewModel Step1 { get; }
@@ -48,12 +55,38 @@ public sealed partial class SetupWizardViewModel : ObservableObject
     public WizardStep4AiFleetViewModel Step4 { get; }
     public WizardStep5ReadyViewModel Step5 { get; }
 
+    public InstallSourceOptions CurrentSourceOptions => _state.ToInstallSourceOptions();
+    public string CurrentInstallDirectory => _state.InstallDirectory;
+
     [ObservableProperty]
     public partial int SelectedStep { get; set; }
 
-    public bool CanGoBack => SelectedStep > 0;
-    public bool CanGoNext => SelectedStep < LastStepIndex;
-    public bool CanFinish => SelectedStep == LastStepIndex;
+    public bool IsAnyStepBusy =>
+        Step1.IsProbing ||
+        Step2.IsRunning ||
+        Step3.IsRunning ||
+        Step4.IsRunning ||
+        Step5.IsBusy;
+
+    public bool CanGoBack =>
+        SelectedStep > (int)WizardStep.Welcome &&
+        !IsAnyStepBusy &&
+        !Step2.IsRebootRequired;
+
+    public bool CanGoNext =>
+        SelectedStep < LastStepIndex &&
+        !IsAnyStepBusy &&
+        !Step2.IsRebootRequired &&
+        (SelectedStep != (int)WizardStep.Welcome || Step1.IsConfigurationValid) &&
+        (SelectedStep != (int)WizardStep.Provisioning || Step2.IsCompleted) &&
+        (SelectedStep != (int)WizardStep.Software || (Step3.IsCompleted && !Step3.HasError)) &&
+        (SelectedStep != (int)WizardStep.AiFleet || !Step4.HasError);
+
+    public bool CanFinish =>
+        SelectedStep == LastStepIndex &&
+        !IsAnyStepBusy &&
+        !Step2.IsRebootRequired &&
+        !Step3.HasError;
 
     public IAsyncRelayCommand BackCommand { get; }
     public IAsyncRelayCommand NextCommand { get; }
@@ -61,54 +94,131 @@ public sealed partial class SetupWizardViewModel : ObservableObject
 
     public Task InitializeAsync() => Step1.RescanEnvironmentAsync();
 
-    public void EnterUpgradeMode(InstallationDiscoveryResult discovery)
+    public void EnterUpgradeMode(
+        InstallationDiscoveryResult discovery,
+        InstallSourceOptions? sourceOptions = null,
+        string? installDirectory = null)
     {
         ArgumentNullException.ThrowIfNull(discovery);
 
         _dispatcher.Post(() =>
         {
+            if (sourceOptions is not null)
+            {
+                Step1.ApplyConfiguration(sourceOptions, installDirectory);
+            }
+            else if (!string.IsNullOrWhiteSpace(installDirectory))
+            {
+                Step1.InstallDirectory = installDirectory.Trim();
+            }
+
             Step1.ApplyUpgradeMode(isUpgradeMode: true, discovery);
-            Step2.IsCompleted = false;
-            Step2.IsRebootRequired = false;
-            Step2.OverallStatus = ProvisioningStatus.NotStarted;
-            Step3.IsCompleted = false;
-            Step3.HasError = false;
-            SelectedStep = 0;
+            ResetDownstreamSteps();
+            SelectedStep = (int)WizardStep.Welcome;
+            NotifyNavigationStateChanged();
         });
 
-        _ = InitializeAsync();
+        _ = ObserveTaskAsync(InitializeAsync());
     }
 
     public async Task GoToAsync(int stepIndex)
     {
-        if (stepIndex < 0 || stepIndex > LastStepIndex || stepIndex == SelectedStep)
+        if (stepIndex < (int)WizardStep.Welcome ||
+            stepIndex > LastStepIndex ||
+            stepIndex == SelectedStep ||
+            IsAnyStepBusy ||
+            Step2.IsRebootRequired)
         {
             return;
         }
 
         _dispatcher.Post(() => SelectedStep = stepIndex);
 
-        switch (stepIndex)
+        switch ((WizardStep)stepIndex)
         {
-            case 1:
+            case WizardStep.Provisioning:
                 await Step2.OnStepEnteredAsync().ConfigureAwait(false);
                 break;
-            case 2:
+            case WizardStep.Software:
                 await Step3.OnStepEnteredAsync().ConfigureAwait(false);
                 break;
-            case 4:
+            case WizardStep.Ready:
                 _dispatcher.Post(() => Step5.RefreshSummary());
                 break;
         }
     }
 
-    partial void OnSelectedStepChanged(int value)
+    partial void OnSelectedStepChanged(int value) => NotifyNavigationStateChanged();
+
+    private void OnStepStatePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName is
+            nameof(WizardStep1WelcomeViewModel.IsProbing) or
+            nameof(WizardStep1WelcomeViewModel.IsConfigurationValid) or
+            nameof(WizardStep2ProvisioningViewModel.IsRunning) or
+            nameof(WizardStep2ProvisioningViewModel.IsCompleted) or
+            nameof(WizardStep2ProvisioningViewModel.IsRebootRequired) or
+            nameof(WizardStep2ProvisioningViewModel.OverallStatus) or
+            nameof(WizardStep3SoftwareViewModel.IsRunning) or
+            nameof(WizardStep3SoftwareViewModel.IsCompleted) or
+            nameof(WizardStep3SoftwareViewModel.HasError) or
+            nameof(WizardStep4AiFleetViewModel.IsRunning) or
+            nameof(WizardStep4AiFleetViewModel.HasError) or
+            nameof(WizardStep4AiFleetViewModel.IsSkipped) or
+            nameof(WizardStep5ReadyViewModel.IsBusy))
+        {
+            NotifyNavigationStateChanged();
+        }
+    }
+
+    private void ResetDownstreamStepsOnConfigurationChange()
+    {
+        if (SelectedStep == (int)WizardStep.Welcome)
+        {
+            ResetDownstreamSteps();
+        }
+    }
+
+    private void ResetDownstreamSteps()
+    {
+        _state.NightCodeForgeDeployment = null;
+        _state.OllamaRouterDeployment = null;
+        _state.CompanionOutcomes = [];
+        _state.SyncedRecommendations = null;
+        _state.AiFleetSkipped = false;
+        _state.AppliedStartMenuShortcut = false;
+        _state.AppliedDesktopShortcut = false;
+
+        Step2.ResetState();
+        Step3.ResetState();
+        Step4.ResetState();
+        NotifyNavigationStateChanged();
+    }
+
+    private void NotifyNavigationStateChanged()
+    {
+        OnPropertyChanged(nameof(IsAnyStepBusy));
         OnPropertyChanged(nameof(CanGoBack));
         OnPropertyChanged(nameof(CanGoNext));
         OnPropertyChanged(nameof(CanFinish));
         BackCommand.NotifyCanExecuteChanged();
         NextCommand.NotifyCanExecuteChanged();
         FinishCommand.NotifyCanExecuteChanged();
+    }
+
+    private async Task ObserveTaskAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Justification: Lifetime cancellation during shutdown is expected.
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => Step1.StatusMessage = $"Wizard navigation warning: {ex.Message}");
+        }
     }
 }

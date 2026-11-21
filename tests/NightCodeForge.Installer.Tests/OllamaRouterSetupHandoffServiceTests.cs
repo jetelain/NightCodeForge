@@ -30,10 +30,10 @@ public sealed class OllamaRouterSetupHandoffServiceTests
         Assert.False(service.IsOllamaRouterInstalled());
         Assert.Null(service.ResolveOllamaRouterCliPath());
 
-        // Present on PATH
-        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliUnix)).Returns(true);
+        // Present on PATH (.exe on Windows)
+        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliWindows)).Returns(true);
         Assert.True(service.IsOllamaRouterInstalled());
-        Assert.Equal(InstallerConstants.OllamaRouterCliUnix, service.ResolveOllamaRouterCliPath());
+        Assert.Equal(InstallerConstants.OllamaRouterCliWindows, service.ResolveOllamaRouterCliPath());
 
         // Present in default Windows install dir (%LOCALAPPDATA%\OllamaRouter\ollamarouter.exe)
         Directory.CreateDirectory(defaultRouterDir);
@@ -158,7 +158,7 @@ public sealed class OllamaRouterSetupHandoffServiceTests
     {
         using var workspace = new TempTestWorkspace();
         var platformMock = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, workspace.RootPath);
-        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliUnix)).Returns(true);
+        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliWindows)).Returns(true);
 
         var processRunner = new Mock<IProcessRunner>();
         processRunner
@@ -223,12 +223,11 @@ public sealed class OllamaRouterSetupHandoffServiceTests
     }
 
     [Fact]
-    public void ResolveOllamaRouterCliPath_OnWindows_PrefersWindowsExeOverExtensionlessOnPath()
+    public void ResolveOllamaRouterCliPath_OnWindows_IgnoresExtensionlessAndPrefersWindowsExeOnPath()
     {
         using var workspace = new TempTestWorkspace();
         var platformMock = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, workspace.RootPath);
         platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliUnix)).Returns(true);
-        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliWindows)).Returns(true);
 
         var missingRouterDir = Path.Combine(workspace.RootPath, "missing-router");
         var service = new OllamaRouterSetupHandoffService(
@@ -237,7 +236,31 @@ public sealed class OllamaRouterSetupHandoffServiceTests
             CreateDetectorMock(missingRouterDir).Object,
             Mock.Of<IOllamaRouterRecommendationSyncService>());
 
+        Assert.False(service.IsOllamaRouterInstalled());
+        Assert.Null(service.ResolveOllamaRouterCliPath());
+
+        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliWindows)).Returns(true);
         Assert.Equal(InstallerConstants.OllamaRouterCliWindows, service.ResolveOllamaRouterCliPath());
+    }
+
+    [Fact]
+    public void ResolveOllamaRouterCliPath_ProbesBinSubdirectoryInInstallDirectory()
+    {
+        using var workspace = new TempTestWorkspace();
+        var platformMock = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, workspace.RootPath);
+        var routerDir = Path.Combine(workspace.RootPath, "router-root");
+        var binExe = Path.Combine(routerDir, "bin", InstallerConstants.OllamaRouterCliWindows);
+        Directory.CreateDirectory(Path.GetDirectoryName(binExe)!);
+        File.WriteAllText(binExe, "stub");
+
+        var service = new OllamaRouterSetupHandoffService(
+            platformMock.Object,
+            Mock.Of<IProcessRunner>(),
+            CreateDetectorMock(routerDir).Object,
+            Mock.Of<IOllamaRouterRecommendationSyncService>());
+
+        Assert.True(service.IsOllamaRouterInstalled());
+        Assert.Equal(binExe, service.ResolveOllamaRouterCliPath());
     }
 
     [Fact]
@@ -381,6 +404,58 @@ public sealed class OllamaRouterSetupHandoffServiceTests
         Assert.Equal([10d, 60d, 68d, 88d, 100d], recordedPercents);
     }
 
+    [Fact]
+    public async Task RunSetupWizardAndSyncAsync_RetriesSyncAfterTransientFailureAndSucceeds()
+    {
+        using var workspace = new TempTestWorkspace();
+        var platformMock = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, workspace.RootPath);
+        platformMock.Setup(p => p.IsCommandOnPath(InstallerConstants.OllamaRouterCliUnix)).Returns(true);
+
+        var processRunner = new Mock<IProcessRunner>();
+        processRunner
+            .Setup(p => p.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+
+        var expectedSummary = new RouterRoleRecommendationsSummary(
+            ProviderType: "OllamaRouter",
+            Endpoint: "http://localhost:11434",
+            ArchitectModelId: "qwen3.8:27b",
+            CoderModelId: "qwen3.8:27b",
+            DefaultModelId: "qwen3.8:27b",
+            ContextWindowTokens: 262144,
+            GeneratedAt: DateTimeOffset.UtcNow,
+            ConfigFilePath: Path.Combine(workspace.RootPath, "config", "config.json"),
+            Roles: []);
+
+        var syncService = new Mock<IOllamaRouterRecommendationSyncService>();
+        syncService
+            .SetupSequence(s => s.SyncRecommendationsToConfigAsync(
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<IProgress<InstallerProgressEvent>?>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OllamaRouterSyncException("Router booting"))
+            .ReturnsAsync(expectedSummary);
+
+        var service = new OllamaRouterSetupHandoffService(
+            platformMock.Object,
+            processRunner.Object,
+            CreateDetectorMock(Path.Combine(workspace.RootPath, "missing-router")).Object,
+            syncService.Object);
+
+        var result = await service.RunSetupWizardAndSyncAsync();
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expectedSummary, result.SyncedRecommendations);
+        syncService.Verify(
+            s => s.SyncRecommendationsToConfigAsync(
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<IProgress<InstallerProgressEvent>?>(),
+                It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
     private sealed class SynchronousTestProgress<T>(Action<T> handler) : IProgress<T>
     {
         public void Report(T value) => handler(value);
@@ -390,7 +465,7 @@ public sealed class OllamaRouterSetupHandoffServiceTests
     {
         var mock = new Mock<IInstallationDetector>();
         mock.Setup(d => d.GetDefaultOllamaRouterInstallDirectory()).Returns(ollamaRouterDir);
-        mock.Setup(d => d.Detect(null)).Returns(new InstallationDiscoveryResult(
+        mock.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(new InstallationDiscoveryResult(
             NightCodeForge: new InstalledComponentInfo(false, Path.GetDirectoryName(ollamaRouterDir)!, null, false, false, false, false, null),
             OllamaRouter: new InstalledComponentInfo(false, ollamaRouterDir, null, false, false, false, false, null),
             RecommendedSourceMode: InstallSourceMode.Online,

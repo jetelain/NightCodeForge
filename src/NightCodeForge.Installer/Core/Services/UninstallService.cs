@@ -1,8 +1,10 @@
 namespace NightCodeForge.Installer.Core.Services;
 
+using System.Text;
 using System.Text.Json;
 using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Constants;
+using NightCodeForge.Installer.Core.Exceptions;
 using NightCodeForge.Installer.Core.Models;
 using NightCodeForge.Installer.Core.Serialization;
 
@@ -25,6 +27,7 @@ public sealed class UninstallService : IUninstallService
     private readonly IInstallationDetector _installationDetector;
     private readonly ICompanionNuGetProvisioner _nuGetProvisioner;
     private readonly IOsIntegrationService _osIntegration;
+    private readonly IEnvironmentProvisioner _environmentProvisioner;
 
     public UninstallService(
         IPlatformEnvironment platform,
@@ -32,7 +35,8 @@ public sealed class UninstallService : IUninstallService
         IProcessControlService processControl,
         IInstallationDetector installationDetector,
         ICompanionNuGetProvisioner nuGetProvisioner,
-        IOsIntegrationService osIntegration)
+        IOsIntegrationService osIntegration,
+        IEnvironmentProvisioner environmentProvisioner)
     {
         _platform = platform ?? throw new ArgumentNullException(nameof(platform));
         _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
@@ -40,6 +44,7 @@ public sealed class UninstallService : IUninstallService
         _installationDetector = installationDetector ?? throw new ArgumentNullException(nameof(installationDetector));
         _nuGetProvisioner = nuGetProvisioner ?? throw new ArgumentNullException(nameof(nuGetProvisioner));
         _osIntegration = osIntegration ?? throw new ArgumentNullException(nameof(osIntegration));
+        _environmentProvisioner = environmentProvisioner ?? throw new ArgumentNullException(nameof(environmentProvisioner));
     }
 
     public async Task<UninstallResult> UninstallAsync(
@@ -52,18 +57,32 @@ public sealed class UninstallService : IUninstallService
         ArgumentNullException.ThrowIfNull(options);
 
         var steps = new List<UninstallStepResult>();
-        var discovery = _installationDetector.Detect();
-        var installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(
-            string.IsNullOrWhiteSpace(targetInstallDirectory)
-                ? discovery.NightCodeForge.InstallDirectory
-                : targetInstallDirectory));
-        var binDir = Path.Combine(installDir, InstallerConstants.BinDirectoryName);
-        var effectiveDistro = string.IsNullOrWhiteSpace(wslDistroName)
-            ? InstallerConstants.DefaultWslDistro
-            : wslDistroName.Trim();
 
         try
         {
+            var discovery = _installationDetector.Detect(explicitInstallDirectory: targetInstallDirectory);
+            var installDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(
+                string.IsNullOrWhiteSpace(targetInstallDirectory)
+                    ? discovery.NightCodeForge.InstallDirectory
+                    : targetInstallDirectory.Trim()));
+
+            ValidateSafeDeletionDirectory(installDir, isOllamaRouter: false);
+
+            var binDir = Path.Combine(installDir, InstallerConstants.BinDirectoryName);
+            var requestedDistro = string.IsNullOrWhiteSpace(wslDistroName)
+                ? InstallerConstants.DefaultWslDistro
+                : wslDistroName.Trim();
+
+            string? resolvedWslDistro = null;
+            if (_platform.Platform == HostPlatformType.Windows && options.RemoveCompanionTools)
+            {
+                var probe = await _environmentProvisioner.ProbeAsync(requestedDistro, cancellationToken).ConfigureAwait(false);
+                if (probe.WslInstalled && probe.WslDistroInstalled)
+                {
+                    resolvedWslDistro = probe.ResolvedWslDistroName ?? requestedDistro;
+                }
+            }
+
             // 1. Stop running ncf-web, nightcodeforge-web, and NightCodeForge.Web processes.
             Report(progress, StepStopProcesses, "Stopping NightCodeForge launcher and web processes...", InstallerLogLevel.Info, 10);
             var stoppedWatchdogs = await _processControl.StopProcessesAsync(
@@ -100,7 +119,7 @@ public sealed class UninstallService : IUninstallService
             if (options.RemoveCompanionTools)
             {
                 Report(progress, StepRemoveTools, "Uninstalling companion .NET global tools...", InstallerLogLevel.Info, 55);
-                var outcomes = await _nuGetProvisioner.UninstallAllAsync(effectiveDistro, progress, cancellationToken)
+                var outcomes = await _nuGetProvisioner.UninstallAllAsync(resolvedWslDistro, progress, cancellationToken)
                     .ConfigureAwait(false);
                 steps.Add(new UninstallStepResult(StepRemoveTools, ProvisioningStatus.Completed, $"Processed {outcomes.Count} companion tool removal(s)."));
             }
@@ -114,6 +133,8 @@ public sealed class UninstallService : IUninstallService
             {
                 Report(progress, StepRemoveOllamaRouter, "Removing OllamaRouter...", InstallerLogLevel.Info, 70);
                 var routerDir = ResolveOllamaRouterDirectory(discovery, installDir);
+                ValidateSafeDeletionDirectory(routerDir, isOllamaRouter: true);
+
                 var routerBinDir = Path.Combine(routerDir, InstallerConstants.BinDirectoryName);
 
                 await ReleaseManager.StopOllamaRouterProcessesAsync(
@@ -131,7 +152,7 @@ public sealed class UninstallService : IUninstallService
                     await DeleteDirectoryContentsWithPreservationAsync(
                         routerDir,
                         options.KeepData ? InstallerConstants.OllamaRouterPreservedItems : [],
-                        runningExecutablePath: null,
+                        protectedPaths: [],
                         cancellationToken).ConfigureAwait(false);
                 }
 
@@ -142,17 +163,24 @@ public sealed class UninstallService : IUninstallService
                 steps.Add(new UninstallStepResult(StepRemoveOllamaRouter, ProvisioningStatus.Skipped, "OllamaRouter preserved."));
             }
 
-            // 6. Delete <InstallDir> files (preserving config/, data/, logs/ when KeepData == true).
+            // 6. Delete <InstallDir> files (preserving config/, data/, logs/, wks/, launcher.conf when KeepData == true).
             Report(progress, StepDeleteFiles, $"Cleaning NightCodeForge files in '{installDir}'...", InstallerLogLevel.Info, 85);
             var runningInstallerPath = _processControl.CurrentProcessPath;
             var isSelfInsideInstallDir = IsPathInsideDirectory(runningInstallerPath, installDir);
+            var isWindowsSelfInside = isSelfInsideInstallDir &&
+                                      _platform.Platform == HostPlatformType.Windows &&
+                                      !string.IsNullOrWhiteSpace(runningInstallerPath);
+
+            var protectedPaths = isWindowsSelfInside
+                ? CollectRunningInstallerFiles(runningInstallerPath!)
+                : [];
 
             if (Directory.Exists(installDir))
             {
                 await DeleteDirectoryContentsWithPreservationAsync(
                     installDir,
                     options.KeepData ? InstallerConstants.NightCodeForgeKeepDataItems : [],
-                    isSelfInsideInstallDir && _platform.Platform == HostPlatformType.Windows ? runningInstallerPath : null,
+                    protectedPaths,
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -160,22 +188,32 @@ public sealed class UninstallService : IUninstallService
                 StepDeleteFiles,
                 ProvisioningStatus.Completed,
                 options.KeepData
-                    ? $"Removed binaries while keeping config/data/logs in '{installDir}'."
+                    ? $"Removed binaries while keeping config/data/logs/wks in '{installDir}'."
                     : $"Removed '{installDir}'."));
 
-            // 7. On Windows, schedule deferred self-cleanup if the running binary resides inside <InstallDir>.
+            // 7. On Windows, schedule PID-aware deferred self-cleanup if the running binary resides inside <InstallDir>.
             var deferredScheduled = false;
-            var deferredRequired = _platform.Platform == HostPlatformType.Windows &&
-                                   isSelfInsideInstallDir &&
-                                   !string.IsNullOrWhiteSpace(runningInstallerPath);
-            if (deferredRequired)
+            if (isWindowsSelfInside)
             {
-                var command = BuildWindowsDeferredSelfCleanupCommand(installDir, runningInstallerPath!, options.KeepData);
+                var deferredTargets = ResolveDeferredCleanupTargets(installDir, runningInstallerPath!, options.KeepData);
+                var script = BuildWindowsDeferredSelfCleanupScript(_processControl.CurrentProcessId, deferredTargets);
+                var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+
                 var spawnResult = await _processRunner.RunAsync(
                     new ProcessRunRequest
                     {
-                        FileName = InstallerConstants.CmdExecutable,
-                        RawArguments = $"/c \"{command}\"",
+                        FileName = InstallerConstants.PowerShellExecutable,
+                        Arguments =
+                        [
+                            "-NoProfile",
+                            "-NonInteractive",
+                            "-WindowStyle",
+                            "Hidden",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-EncodedCommand",
+                            encodedCommand
+                        ],
                         WorkingDirectory = _platform.UserHomeDirectory,
                         Detached = true
                     },
@@ -223,18 +261,40 @@ public sealed class UninstallService : IUninstallService
         }
     }
 
-    internal static string BuildWindowsDeferredSelfCleanupCommand(
-        string installDirectory,
-        string runningInstallerExecutablePath,
-        bool keepData)
+    internal static string BuildWindowsDeferredSelfCleanupScript(
+        int processId,
+        IReadOnlyList<string> targetPaths)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(installDirectory);
-        ArgumentException.ThrowIfNullOrWhiteSpace(runningInstallerExecutablePath);
+        ArgumentNullException.ThrowIfNull(targetPaths);
+        if (targetPaths.Count == 0)
+        {
+            throw new ArgumentException("At least one deferred cleanup target path is required.", nameof(targetPaths));
+        }
 
-        var pingDelay = $"ping 127.0.0.1 -n {InstallerConstants.DeferredCleanupPingCount} > nul";
-        return keepData
-            ? $"{pingDelay} & del /f /q \"{runningInstallerExecutablePath}\""
-            : $"{pingDelay} & rmdir /s /q \"{installDirectory}\"";
+        var sb = new StringBuilder();
+        sb.Append("$ErrorActionPreference = 'SilentlyContinue'\n");
+        sb.Append($"Wait-Process -Id {processId} -Timeout {InstallerConstants.DeferredCleanupWaitTimeoutSeconds} -ErrorAction SilentlyContinue\n");
+        sb.Append("$targets = @(\n");
+        for (var i = 0; i < targetPaths.Count; i++)
+        {
+            var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(targetPaths[i]));
+            var suffix = i + 1 < targetPaths.Count ? "," : string.Empty;
+            sb.Append($"  ([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64}'))){suffix}\n");
+        }
+
+        sb.Append(")\n");
+        sb.Append($"for ($attempt = 0; $attempt -lt {InstallerConstants.DeferredCleanupRetryAttempts}; $attempt++) {{\n");
+        sb.Append("  $remaining = $false\n");
+        sb.Append("  foreach ($path in $targets) {\n");
+        sb.Append("    if (Test-Path -LiteralPath $path) {\n");
+        sb.Append("      Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue\n");
+        sb.Append("      if (Test-Path -LiteralPath $path) { $remaining = $true }\n");
+        sb.Append("    }\n");
+        sb.Append("  }\n");
+        sb.Append("  if (-not $remaining) { break }\n");
+        sb.Append($"  Start-Sleep -Milliseconds {InstallerConstants.DeferredCleanupRetryDelayMs}\n");
+        sb.Append("}\n");
+        return sb.ToString();
     }
 
     internal static bool IsPathInsideDirectory(string? filePath, string directoryPath)
@@ -244,7 +304,7 @@ public sealed class UninstallService : IUninstallService
             return false;
         }
 
-        var fullFile = Path.GetFullPath(filePath);
+        var fullFile = Path.TrimEndingDirectorySeparator(Path.GetFullPath(filePath));
         var fullDir = Path.GetFullPath(directoryPath);
         if (!fullDir.EndsWith(Path.DirectorySeparatorChar))
         {
@@ -252,7 +312,128 @@ public sealed class UninstallService : IUninstallService
         }
 
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return fullFile.StartsWith(fullDir, comparison);
+        return fullFile.StartsWith(fullDir, comparison) ||
+               string.Equals(fullFile, Path.TrimEndingDirectorySeparator(fullDir), comparison);
+    }
+
+    private void ValidateSafeDeletionDirectory(string directoryPath, bool isOllamaRouter)
+    {
+        var fullTarget = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directoryPath));
+        var root = Path.TrimEndingDirectorySeparator(Path.GetPathRoot(fullTarget) ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(fullTarget) ||
+            string.Equals(fullTarget, root, GetPathComparison()))
+        {
+            throw new UninstallException($"Refusing to uninstall filesystem root '{directoryPath}'.");
+        }
+
+        var forbiddenDirs = new[]
+        {
+            _platform.UserHomeDirectory,
+            _platform.LocalApplicationDataDirectory,
+            _platform.ApplicationDataDirectory,
+            _platform.DesktopDirectory,
+            Path.GetTempPath(),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            "/usr",
+            "/etc",
+            "/var",
+            "/bin",
+            "/sbin",
+            "/lib",
+            "/opt",
+            "/home",
+            "/Users",
+            "/Applications",
+            "/tmp"
+        };
+
+        var comparer = GetPathComparer();
+        foreach (var rawForbidden in forbiddenDirs)
+        {
+            if (string.IsNullOrWhiteSpace(rawForbidden))
+            {
+                continue;
+            }
+
+            var forbidden = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rawForbidden));
+            if (comparer.Equals(fullTarget, forbidden) || IsPathInsideDirectory(forbidden, fullTarget))
+            {
+                throw new UninstallException(
+                    $"Refusing to uninstall protected or ancestor system/user directory '{fullTarget}'.");
+            }
+        }
+
+        if (Directory.Exists(fullTarget) && !HasExpectedProductMarkers(fullTarget, isOllamaRouter))
+        {
+            var componentLabel = isOllamaRouter ? "OllamaRouter" : "NightCodeForge";
+            throw new UninstallException(
+                $"Directory '{fullTarget}' does not appear to contain a {componentLabel} installation; aborting destructive cleanup.");
+        }
+    }
+
+    private static bool HasExpectedProductMarkers(string directory, bool isOllamaRouter)
+    {
+        if (isOllamaRouter)
+        {
+            return InstallationDetector.FindOllamaRouterBinary(directory) is not null ||
+                   File.Exists(Path.Combine(directory, InstallerConstants.OllamaRouterCliWindows)) ||
+                   File.Exists(Path.Combine(directory, InstallerConstants.OllamaRouterCliUnix)) ||
+                   File.Exists(Path.Combine(directory, InstallerConstants.OllamaRouterAppWindows)) ||
+                   File.Exists(Path.Combine(directory, InstallerConstants.OllamaRouterAppUnix));
+        }
+
+        return InstallationDetector.FindNightCodeForgeBinary(directory) is not null ||
+               File.Exists(Path.Combine(directory, InstallerConstants.UninstallManifestFileName)) ||
+               File.Exists(Path.Combine(directory, InstallerConstants.InstallerExeWindows)) ||
+               File.Exists(Path.Combine(directory, InstallerConstants.InstallerExeUnix)) ||
+               File.Exists(Path.Combine(directory, InstallerConstants.InstallerSubDirectoryName, InstallerConstants.InstallerExeWindows)) ||
+               File.Exists(Path.Combine(directory, InstallerConstants.InstallerSubDirectoryName, InstallerConstants.InstallerExeUnix)) ||
+               File.Exists(Path.Combine(directory, InstallerConstants.LauncherLongWindows)) ||
+               File.Exists(Path.Combine(directory, InstallerConstants.LauncherLongUnix));
+    }
+
+    private static IReadOnlyList<string> CollectRunningInstallerFiles(string runningInstallerPath)
+    {
+        var files = new List<string> { Path.GetFullPath(runningInstallerPath) };
+        var dir = Path.GetDirectoryName(Path.GetFullPath(runningInstallerPath));
+        if (!string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir))
+        {
+            foreach (var lib in InstallerConstants.InstallerNativeLibraryFileNames)
+            {
+                var libPath = Path.Combine(dir, lib);
+                if (File.Exists(libPath))
+                {
+                    files.Add(Path.GetFullPath(libPath));
+                }
+            }
+        }
+
+        return files;
+    }
+
+    private static IReadOnlyList<string> ResolveDeferredCleanupTargets(
+        string installDir,
+        string runningInstallerPath,
+        bool keepData)
+    {
+        if (!keepData)
+        {
+            return [installDir];
+        }
+
+        var fullExe = Path.GetFullPath(runningInstallerPath);
+        var exeDir = Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(fullExe) ?? string.Empty);
+        var installerSubDir = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(Path.Combine(installDir, InstallerConstants.InstallerSubDirectoryName)));
+
+        if (string.Equals(exeDir, installerSubDir, StringComparison.OrdinalIgnoreCase))
+        {
+            return [installerSubDir];
+        }
+
+        return CollectRunningInstallerFiles(fullExe);
     }
 
     private static string ResolveOllamaRouterDirectory(InstallationDiscoveryResult discovery, string installDir)
@@ -285,18 +466,19 @@ public sealed class UninstallService : IUninstallService
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(discovery.OllamaRouter.InstallDirectory));
     }
 
-    private static async Task DeleteDirectoryContentsWithPreservationAsync(
+    private async Task DeleteDirectoryContentsWithPreservationAsync(
         string directory,
         IReadOnlyList<string> preservedNames,
-        string? runningExecutablePath,
+        IReadOnlyList<string> protectedPaths,
         CancellationToken cancellationToken)
     {
-        var preservedSet = new HashSet<string>(preservedNames, StringComparer.OrdinalIgnoreCase);
-        var normalizedRunningPath = string.IsNullOrWhiteSpace(runningExecutablePath)
-            ? null
-            : Path.GetFullPath(runningExecutablePath);
+        var comparer = GetPathComparer();
+        var preservedSet = new HashSet<string>(preservedNames, comparer);
+        var protectedSet = new HashSet<string>(
+            protectedPaths.Select(static p => Path.TrimEndingDirectorySeparator(Path.GetFullPath(p))),
+            comparer);
 
-        if (preservedSet.Count == 0 && normalizedRunningPath is null)
+        if (preservedSet.Count == 0 && protectedSet.Count == 0)
         {
             await DeleteDirectoryWithRetriesAsync(directory, cancellationToken).ConfigureAwait(false);
             return;
@@ -310,20 +492,20 @@ public sealed class UninstallService : IUninstallService
                 continue;
             }
 
-            if (normalizedRunningPath is not null &&
-                string.Equals(Path.GetFullPath(entryPath), normalizedRunningPath, StringComparison.OrdinalIgnoreCase))
+            var fullEntry = Path.TrimEndingDirectorySeparator(Path.GetFullPath(entryPath));
+            if (protectedSet.Contains(fullEntry))
             {
                 continue;
             }
 
             if (Directory.Exists(entryPath))
             {
-                if (normalizedRunningPath is not null && IsPathInsideDirectory(normalizedRunningPath, entryPath))
+                if (protectedSet.Any(p => IsPathInsideDirectory(p, fullEntry)))
                 {
                     await DeleteDirectoryContentsWithPreservationAsync(
                         entryPath,
                         [],
-                        normalizedRunningPath,
+                        protectedPaths,
                         cancellationToken).ConfigureAwait(false);
                 }
                 else
@@ -358,11 +540,6 @@ public sealed class UninstallService : IUninstallService
                 await Task.Delay(InstallerConstants.DeleteRetryDelayMs, cancellationToken).ConfigureAwait(false);
             }
         }
-
-        if (Directory.Exists(path))
-        {
-            Directory.Delete(path, recursive: true);
-        }
     }
 
     private static async Task DeleteFileWithRetriesAsync(string path, CancellationToken cancellationToken)
@@ -385,12 +562,13 @@ public sealed class UninstallService : IUninstallService
                 await Task.Delay(InstallerConstants.DeleteRetryDelayMs, cancellationToken).ConfigureAwait(false);
             }
         }
-
-        if (File.Exists(path))
-        {
-            File.Delete(path);
-        }
     }
+
+    private StringComparer GetPathComparer() =>
+        _platform.Platform == HostPlatformType.Windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private StringComparison GetPathComparison() =>
+        _platform.Platform == HostPlatformType.Windows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     private static void Report(
         IProgress<InstallerProgressEvent>? progress,

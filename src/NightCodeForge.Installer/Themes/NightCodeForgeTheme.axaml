@@ -60,6 +60,9 @@
   <SolidColorBrush x:Key="NightCodeBgElevated" Color="{StaticResource NightCodeBgElevatedColor}" />
   <SolidColorBrush x:Key="NightCodeBgInput" Color="{StaticResource NightCodeBgInputColor}" />
   <SolidColorBrush x:Key="NightCodeBorderAccent" Color="{StaticResource NightCodeBorderAccentColor}" />
+  <SolidColorBrush x:Key="NightCodeAccentIndigoLightText" Color="{StaticResource NightCodeAccentIndigoLightTextColor}" />
+  <SolidColorBrush x:Key="NightCodeAccentAmber" Color="{StaticResource NightCodeAccentAmberColor}" />
+  <SolidColorBrush x:Key="NightCodeAccentCrimsonLightText" Color="{StaticResource NightCodeAccentCrimsonLightTextColor}" />
 
   <!-- ======================================================================
        Semi.Avalonia Semantic Token Overrides

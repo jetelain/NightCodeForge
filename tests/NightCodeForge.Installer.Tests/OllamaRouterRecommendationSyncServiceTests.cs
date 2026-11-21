@@ -318,7 +318,7 @@ public sealed class OllamaRouterRecommendationSyncServiceTests
 
         // 3. Unresolvable install directory throws OllamaRouterSyncException
         var emptyDetector = new Mock<IInstallationDetector>();
-        emptyDetector.Setup(d => d.Detect(null)).Returns(new InstallationDiscoveryResult(
+        emptyDetector.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(new InstallationDiscoveryResult(
             NightCodeForge: new InstalledComponentInfo(false, "   ", null, false, false, false, false, null),
             OllamaRouter: new InstalledComponentInfo(false, "router", null, false, false, false, false, null),
             RecommendedSourceMode: InstallSourceMode.Online,
@@ -334,10 +334,55 @@ public sealed class OllamaRouterRecommendationSyncServiceTests
         await Assert.ThrowsAsync<OllamaRouterSyncException>(() => ioService.SyncRecommendationsToConfigAsync(blockedInstallDir));
     }
 
+    [Fact]
+    public async Task SyncRecommendationsToConfigAsync_WhenConfigHasDuplicateJsonKeys_ThrowsOllamaRouterSyncExceptionWithoutOverwriting()
+    {
+        using var workspace = new TempTestWorkspace();
+        var installDir = workspace.CreateSubdirectory("ncf-dup");
+        var configDir = Directory.CreateDirectory(Path.Combine(installDir, "config")).FullName;
+        var configPath = Path.Combine(configDir, "config.json");
+        const string duplicateKeyJson = """{"LlmProvider": {"Endpoint": "http://localhost:11434"}, "LlmProvider": {"Endpoint": "http://localhost:22435"}}""";
+        await File.WriteAllTextAsync(configPath, duplicateKeyJson);
+
+        using var okClient = new HttpClient(new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(TestArchiveHelper.JsonResponse(FullRecommendationsJson))));
+        var service = new OllamaRouterRecommendationSyncService(okClient, CreateDetectorMock(installDir).Object);
+
+        await Assert.ThrowsAsync<OllamaRouterSyncException>(() => service.SyncRecommendationsToConfigAsync(installDir));
+        Assert.Equal(duplicateKeyJson, await File.ReadAllTextAsync(configPath));
+    }
+
+    [Fact]
+    public async Task SyncRecommendationsToConfigAsync_WhenRouterBaseUrlNull_PreservesAndQueriesConfiguredEndpoint()
+    {
+        using var workspace = new TempTestWorkspace();
+        var installDir = workspace.CreateSubdirectory("ncf-custom-endpoint");
+        var configDir = Directory.CreateDirectory(Path.Combine(installDir, "config")).FullName;
+        var configPath = Path.Combine(configDir, "config.json");
+        await File.WriteAllTextAsync(configPath, """{"LlmProvider": {"Endpoint": "http://127.0.0.1:22435/"}}""");
+
+        Uri? requestedUri = null;
+        using var client = new HttpClient(new StubHttpMessageHandler((req, _) =>
+        {
+            requestedUri = req.RequestUri;
+            return Task.FromResult(TestArchiveHelper.JsonResponse(FullRecommendationsJson));
+        }));
+
+        var service = new OllamaRouterRecommendationSyncService(client, CreateDetectorMock(installDir).Object);
+        var summary = await service.SyncRecommendationsToConfigAsync(installDir, routerBaseUrl: null);
+
+        Assert.Equal("http://127.0.0.1:22435/api/router/recommendations", requestedUri?.ToString());
+        Assert.Equal("http://127.0.0.1:22435", summary.Endpoint);
+
+        var savedJson = await File.ReadAllTextAsync(configPath);
+        var root = JsonNode.Parse(savedJson)!.AsObject();
+        Assert.Equal("http://127.0.0.1:22435", root["LlmProvider"]?["Endpoint"]?.GetValue<string>());
+    }
+
     private static Mock<IInstallationDetector> CreateDetectorMock(string installDir)
     {
         var mock = new Mock<IInstallationDetector>();
-        mock.Setup(d => d.Detect(null)).Returns(new InstallationDiscoveryResult(
+        mock.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(new InstallationDiscoveryResult(
             NightCodeForge: new InstalledComponentInfo(true, installDir, "1.0.0", false, true, true, true, null),
             OllamaRouter: new InstalledComponentInfo(true, Path.Combine(installDir, "router"), "1.0.0", false, true, true, true, null),
             RecommendedSourceMode: InstallSourceMode.Online,

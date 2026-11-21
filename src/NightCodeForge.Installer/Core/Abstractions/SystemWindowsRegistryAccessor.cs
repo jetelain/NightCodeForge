@@ -28,7 +28,7 @@ public sealed class SystemWindowsRegistryAccessor : IWindowsRegistryAccessor
 
         if (!OperatingSystem.IsWindows())
         {
-            return;
+            throw new PlatformNotSupportedException("Windows registry writes are only supported on Windows hosts.");
         }
 
         WriteCurrentUserValuesWindows(subKeyPath, values);
@@ -40,7 +40,7 @@ public sealed class SystemWindowsRegistryAccessor : IWindowsRegistryAccessor
 
         if (!OperatingSystem.IsWindows())
         {
-            return;
+            throw new PlatformNotSupportedException("Windows registry deletions are only supported on Windows hosts.");
         }
 
         DeleteCurrentUserSubKeyTreeWindows(subKeyPath);
@@ -61,13 +61,18 @@ public sealed class SystemWindowsRegistryAccessor : IWindowsRegistryAccessor
 
         foreach (var (name, value) in values)
         {
-            if (value is int intValue)
+            switch (value)
             {
-                key.SetValue(name, intValue, RegistryValueKind.DWord);
-            }
-            else
-            {
-                key.SetValue(name, value?.ToString() ?? string.Empty, RegistryValueKind.String);
+                case int intValue:
+                    key.SetValue(name, intValue, RegistryValueKind.DWord);
+                    break;
+                case string stringValue:
+                    key.SetValue(name, stringValue, RegistryValueKind.String);
+                    break;
+                default:
+                    throw new ArgumentException(
+                        $"Unsupported registry value type '{value?.GetType().Name ?? "null"}' for value '{name}'. Expected int or string.",
+                        nameof(values));
             }
         }
     }

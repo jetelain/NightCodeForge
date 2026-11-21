@@ -75,10 +75,11 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
     {
         var version = _state.NightCodeForgeDeployment?.Version
                       ?? _state.Discovery.NightCodeForge.Version
-                      ?? InstallerConstants.DefaultFallbackVersion;
+                      ?? InstallerConstants.UnknownVersionPlaceholder;
 
         InstalledVersionDisplay = $"v{version}";
         InstallDirectoryDisplay = _state.NightCodeForgeDeployment?.InstallDirectory ?? _state.InstallDirectory;
+        CreateStartMenuShortcut = _state.CreateStartMenuShortcut;
         CreateDesktopShortcut = _state.CreateDesktopShortcut;
 
         OllamaRouterSummary = _state.OllamaRouterDeployment is not null
@@ -114,19 +115,28 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
 
         try
         {
+            _state.CreateStartMenuShortcut = CreateStartMenuShortcut;
             _state.CreateDesktopShortcut = CreateDesktopShortcut;
-            var version = _state.NightCodeForgeDeployment?.Version
-                          ?? _state.Discovery.NightCodeForge.Version
-                          ?? InstallerConstants.DefaultFallbackVersion;
             var installDir = _state.NightCodeForgeDeployment?.InstallDirectory ?? _state.InstallDirectory;
 
-            await _osIntegration.RegisterNightCodeForgeInstallationAsync(
+            await _osIntegration.ApplyShortcutPreferencesAsync(
                 installDir,
-                version,
+                CreateStartMenuShortcut,
                 CreateDesktopShortcut,
-                CancellationToken.None).ConfigureAwait(false);
+                _state.LifetimeToken).ConfigureAwait(false);
 
-            _dispatcher.Post(() => StatusMessage = "OS shortcuts and uninstall registration updated.");
+            _state.AppliedStartMenuShortcut = CreateStartMenuShortcut;
+            _state.AppliedDesktopShortcut = CreateDesktopShortcut;
+
+            _dispatcher.Post(() => StatusMessage = "OS shortcuts and launcher preferences updated.");
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Shortcut update cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to update OS shortcuts: {ex.Message}");
         }
         finally
         {
@@ -150,23 +160,25 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
 
         try
         {
+            var cancellationToken = _state.LifetimeToken;
             var installDir = _state.NightCodeForgeDeployment?.InstallDirectory ?? _state.InstallDirectory;
-            if (CreateDesktopShortcut != _state.CreateDesktopShortcut)
+            if (CreateDesktopShortcut != _state.AppliedDesktopShortcut ||
+                CreateStartMenuShortcut != _state.AppliedStartMenuShortcut)
             {
+                _state.CreateStartMenuShortcut = CreateStartMenuShortcut;
                 _state.CreateDesktopShortcut = CreateDesktopShortcut;
-                var version = _state.NightCodeForgeDeployment?.Version
-                              ?? _state.Discovery.NightCodeForge.Version
-                              ?? InstallerConstants.DefaultFallbackVersion;
-                await _osIntegration.RegisterNightCodeForgeInstallationAsync(
+                await _osIntegration.ApplyShortcutPreferencesAsync(
                     installDir,
-                    version,
+                    CreateStartMenuShortcut,
                     CreateDesktopShortcut,
-                    CancellationToken.None).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
+                _state.AppliedStartMenuShortcut = CreateStartMenuShortcut;
+                _state.AppliedDesktopShortcut = CreateDesktopShortcut;
             }
 
             if (!_hostAppControl.IsWebServerRunning())
             {
-                var started = await _hostAppControl.StartWebServerAsync(installDir, CancellationToken.None)
+                var started = await _hostAppControl.StartWebServerAsync(installDir, cancellationToken)
                     .ConfigureAwait(false);
                 if (!started)
                 {
@@ -176,13 +188,21 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
             }
 
             var webUrl = _hostAppControl.GetConfiguredWebUrl(installDir);
-            var opened = await _hostAppControl.OpenWebUiInBrowserAsync(webUrl, CancellationToken.None)
+            var opened = await _hostAppControl.OpenWebUiInBrowserAsync(webUrl, cancellationToken)
                 .ConfigureAwait(false);
 
             _dispatcher.Post(() =>
                 StatusMessage = opened
                     ? $"Opened NightCodeForge Web UI at {webUrl}."
                     : $"Server started; open {webUrl} in your browser.");
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "Launch cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Unable to launch NightCodeForge Web: {ex.Message}");
         }
         finally
         {
@@ -193,11 +213,37 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
     [RelayCommand]
     public async Task LaunchNightCodeAssayAsync()
     {
-        var launched = await _hostAppControl.LaunchNightCodeAssayAsync(CancellationToken.None).ConfigureAwait(false);
+        if (IsBusy)
+        {
+            return;
+        }
+
         _dispatcher.Post(() =>
-            StatusMessage = launched
-                ? "Launched NightCode Assay (nightcodeassay)."
-                : "Could not start 'nightcodeassay'. Ensure global tools are on PATH.");
+        {
+            IsBusy = true;
+            StatusMessage = "Launching NightCode Assay...";
+        });
+
+        try
+        {
+            var launched = await _hostAppControl.LaunchNightCodeAssayAsync(_state.LifetimeToken).ConfigureAwait(false);
+            _dispatcher.Post(() =>
+                StatusMessage = launched
+                    ? "Launched NightCode Assay (nightcodeassay)."
+                    : "Could not start 'nightcodeassay'. Ensure global tools are on PATH.");
+        }
+        catch (OperationCanceledException)
+        {
+            _dispatcher.Post(() => StatusMessage = "NightCode Assay launch cancelled.");
+        }
+        catch (Exception ex)
+        {
+            _dispatcher.Post(() => StatusMessage = $"Failed to launch NightCode Assay: {ex.Message}");
+        }
+        finally
+        {
+            _dispatcher.Post(() => IsBusy = false);
+        }
     }
 
     [RelayCommand]

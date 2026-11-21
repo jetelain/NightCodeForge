@@ -38,12 +38,15 @@ public sealed class InstallerStartupRouterAndCliRunnerTests
             DetectedBundleFiles: detectedBundleDir is null ? [] : ["NightCodeForge-Web-win-x64.zip"]);
     }
 
+    private static readonly string TempSetupBaseDir = Path.Combine(Path.GetTempPath(), "ncf-installer-router-tests");
+    private static readonly string TempBundleDir = Path.Combine(TempSetupBaseDir, "bundle");
+
     private static Mock<IPlatformEnvironment> CreatePlatformMock()
     {
         var mock = new Mock<IPlatformEnvironment>();
         mock.SetupGet(p => p.Platform).Returns(HostPlatformType.Windows);
         mock.SetupGet(p => p.CurrentRuntimeIdentifier).Returns("win-x64");
-        mock.SetupGet(p => p.InstallerBaseDirectory).Returns(@"C:\Downloads\Setup");
+        mock.SetupGet(p => p.InstallerBaseDirectory).Returns(TempSetupBaseDir);
         return mock;
     }
 
@@ -97,7 +100,7 @@ public sealed class InstallerStartupRouterAndCliRunnerTests
         Assert.Equal(InstallerUiMode.OobeWizard, wizardPlan.InitialUiMode);
         Assert.True(wizardPlan.IsUpgradeWizardMode);
         Assert.Equal(InstallSourceMode.AirGappedBundle, wizardPlan.EffectiveSource.Mode);
-        Assert.Equal(@"C:\Downloads\Setup\bundle", wizardPlan.EffectiveSource.BundleDirectory);
+        Assert.Equal(Path.GetFullPath(TempBundleDir), wizardPlan.EffectiveSource.BundleDirectory);
     }
 
     [Fact]
@@ -177,11 +180,78 @@ public sealed class InstallerStartupRouterAndCliRunnerTests
                 null));
 
         var upgradePlan = InstallerStartupRouter.Resolve(
-            InstallerCliParser.Parse(["upgrade", "--quiet", "--bundle", @"D:\bundle"]),
+            InstallerCliParser.Parse(["upgrade", "--quiet", "--bundle", TempBundleDir]),
             CreateDiscovery(ncfInstalled: true),
             platform);
         var upgradeExit = await InstallerCliRunner.RunHeadlessAsync(upgradePlan, services, outWriter, errWriter, CancellationToken.None);
         Assert.Equal(InstallerConstants.ExitCodeSuccess, upgradeExit);
         Assert.Contains("1.2.0", outWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunHeadlessAsync_NonHeadlessPlanThrows_AndQuietUpgradeSuppressesInfoLogs()
+    {
+        var platform = CreatePlatformMock().Object;
+        var upgradeService = new Mock<IAllComponentUpgradeService>();
+        upgradeService
+            .Setup(s => s.UpgradeAllAsync(
+                It.IsAny<InstallSourceOptions>(),
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                false,
+                It.IsAny<IProgress<InstallerProgressEvent>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<InstallSourceOptions, string?, string?, bool, IProgress<InstallerProgressEvent>?, CancellationToken>((_, _, _, _, p, _) =>
+            {
+                p?.Report(new InstallerProgressEvent("Upgrade", "Verbose step info", InstallerLogLevel.Info, 50));
+                p?.Report(new InstallerProgressEvent("Upgrade", "Visible error", InstallerLogLevel.Error, 50));
+            })
+            .ReturnsAsync(new AllComponentUpgradeResult(
+                true,
+                new ReleaseDeploymentResult("NightCodeForge-Web", "1.3.0", @"C:\Apps\NightCodeForge", true, false, false, false),
+                null,
+                [],
+                null));
+
+        using var services = InstallerTestFactory.CreateContainer(
+            platform: platform,
+            upgradeService: upgradeService.Object);
+
+        var guiPlan = InstallerStartupRouter.Resolve(
+            InstallerCliParser.Parse([]),
+            CreateDiscovery(ncfInstalled: false),
+            platform);
+
+        using var outWriter = new StringWriter();
+        using var errWriter = new StringWriter();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            InstallerCliRunner.RunHeadlessAsync(guiPlan, services, outWriter, errWriter, CancellationToken.None));
+
+        var quietUpgradePlan = InstallerStartupRouter.Resolve(
+            InstallerCliParser.Parse(["upgrade", "--quiet"]),
+            CreateDiscovery(ncfInstalled: true),
+            platform);
+        var exitCode = await InstallerCliRunner.RunHeadlessAsync(quietUpgradePlan, services, outWriter, errWriter, CancellationToken.None);
+        Assert.Equal(InstallerConstants.ExitCodeSuccess, exitCode);
+        Assert.DoesNotContain("Verbose step info", outWriter.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Visible error", errWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitInstallDirWithBinary_OverridesFreshDiscoveryToMaintenanceHub()
+    {
+        using var workspace = new TempTestWorkspace();
+        var customInstallDir = workspace.CreateSubdirectory("custom-ncf");
+        var webBinary = OperatingSystem.IsWindows()
+            ? InstallerConstants.WebExeWindows
+            : InstallerConstants.WebExeUnix;
+        File.WriteAllText(Path.Combine(customInstallDir, webBinary), "binary");
+
+        var platform = CreatePlatformMock().Object;
+        var cli = InstallerCliParser.Parse(["--install-dir", customInstallDir]);
+        var plan = InstallerStartupRouter.Resolve(cli, CreateDiscovery(ncfInstalled: false), platform);
+
+        Assert.Equal(InstallerUiMode.MaintenanceHub, plan.InitialUiMode);
+        Assert.Equal(Path.TrimEndingDirectorySeparator(Path.GetFullPath(customInstallDir)), plan.EffectiveInstallDirectory);
     }
 }

@@ -128,7 +128,8 @@ public sealed class InstallerServiceContainer : IDisposable
             processControl,
             installationDetector,
             nuGetProvisioner,
-            osIntegration);
+            osIntegration,
+            environmentProvisioner);
         var provisioning = new InstallerProvisioningServices(
             environmentProvisioner,
             nuGetProvisioner,

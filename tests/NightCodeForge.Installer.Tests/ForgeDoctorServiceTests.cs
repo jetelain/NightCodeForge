@@ -30,6 +30,11 @@ public sealed class ForgeDoctorServiceTests
 
         using var httpClient = new HttpClient(new StubHttpMessageHandler((req, _) =>
         {
+            if (req.RequestUri!.AbsoluteUri.Contains(InstallerConstants.OllamaRouterInfoApiPath, StringComparison.Ordinal))
+            {
+                return Task.FromResult(TestArchiveHelper.JsonResponse("""{"isRouter":true}"""));
+            }
+
             if (req.RequestUri!.AbsoluteUri.Contains("/api/router/recommendations", StringComparison.Ordinal))
             {
                 return Task.FromResult(TestArchiveHelper.JsonResponse("{}"));
@@ -83,6 +88,11 @@ public sealed class ForgeDoctorServiceTests
 
         using var httpClient = new HttpClient(new StubHttpMessageHandler((req, _) =>
         {
+            if (req.RequestUri!.AbsoluteUri.Contains(InstallerConstants.OllamaRouterInfoApiPath, StringComparison.Ordinal))
+            {
+                return Task.FromResult(TestArchiveHelper.JsonResponse("""{"isRouter":true}"""));
+            }
+
             if (req.RequestUri!.AbsoluteUri.Contains("/api/router/recommendations", StringComparison.Ordinal))
             {
                 // 404 from OllamaRouter -> Warning ("run Setup Wizard")
@@ -146,8 +156,15 @@ public sealed class ForgeDoctorServiceTests
         Directory.CreateDirectory(dataDir);
         await File.WriteAllTextAsync(Path.Combine(dataDir, InstallerConstants.MainDatabaseFileName), "not a sqlite file");
 
-        using var httpClient = new HttpClient(new StubHttpMessageHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
+        using var httpClient = new HttpClient(new StubHttpMessageHandler((req, _) =>
+        {
+            if (req.RequestUri!.AbsoluteUri.Contains(InstallerConstants.OllamaRouterInfoApiPath, StringComparison.Ordinal))
+            {
+                return Task.FromResult(TestArchiveHelper.JsonResponse("""{"isRouter":true}"""));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }));
 
         var envProvisioner = new Mock<IEnvironmentProvisioner>();
         envProvisioner.Setup(e => e.ProbeAsync(InstallerConstants.DefaultWslDistro, It.IsAny<CancellationToken>()))
@@ -176,5 +193,72 @@ public sealed class ForgeDoctorServiceTests
         var dbCheck = Assert.Single(report.Checks, c => c.Name == InstallerConstants.DoctorCheckDatabase);
         Assert.Equal(DoctorCheckStatus.Fail, dbCheck.Status);
         Assert.Contains("invalid", dbCheck.Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunDiagnosticsAsync_StandaloneOllamaStoppedWebAndMissingWslDotNet_EmitExpectedFailuresAndWarnings()
+    {
+        using var workspace = new TempTestWorkspace();
+        var installDir = workspace.CreateSubdirectory("ncf-warns");
+        Directory.CreateDirectory(Path.Combine(installDir, InstallerConstants.DataDirectoryName));
+
+        // Simulate standalone Ollama (404 on /api/router/info) while Web port answers 200 without NightCodeForge.Web running.
+        using var httpClient = new HttpClient(new StubHttpMessageHandler((req, _) =>
+        {
+            if (req.RequestUri!.AbsoluteUri.Contains(InstallerConstants.OllamaRouterInfoApiPath, StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        }));
+
+        var probeWithoutDotNetInWsl = new EnvironmentProbeResult(
+            HostPlatformType.Windows,
+            "win-x64",
+            WslInstalled: true,
+            WslDistroInstalled: true,
+            ResolvedWslDistroName: InstallerConstants.DefaultWslDistro,
+            HostDotNet10Installed: true,
+            HostGitInstalled: true,
+            HostDockerAvailable: false,
+            HostRipgrepInstalled: true,
+            WslDotNet10Installed: false,
+            WslDockerInstalled: true,
+            WslRipgrepInstalled: true,
+            DiagnosticNotes: []);
+
+        var envProvisioner = new Mock<IEnvironmentProvisioner>();
+        envProvisioner.Setup(e => e.ProbeAsync(InstallerConstants.DefaultWslDistro, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(probeWithoutDotNetInWsl);
+
+        var nuGetProvisioner = new Mock<ICompanionNuGetProvisioner>();
+        nuGetProvisioner.Setup(n => n.ProbeToolsAsync(InstallerConstants.DefaultWslDistro, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CompanionToolCatalog.All
+                .Select(s => new CompanionToolStatus(s, true, "1.0.0", s.InstallInWsl, s.InstallInWsl ? "1.0.0" : null))
+                .ToList());
+
+        var sut = new ForgeDoctorService(
+            httpClient,
+            TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, "win-x64", workspace.RootPath).Object,
+            envProvisioner.Object,
+            nuGetProvisioner.Object,
+            Mock.Of<IInstallationDetector>(),
+            Mock.Of<IProcessControlService>());
+
+        var report = await sut.RunDiagnosticsAsync(
+            installDir,
+            wslDistroName: null,
+            routerBaseUrl: InstallerConstants.DefaultOllamaRouterEndpoint,
+            CancellationToken.None);
+
+        var routerCheck = Assert.Single(report.Checks, c => c.Name == InstallerConstants.DoctorCheckOllamaRouter);
+        Assert.Equal(DoctorCheckStatus.Fail, routerCheck.Status);
+
+        var wslCheck = Assert.Single(report.Checks, c => c.Name == InstallerConstants.DoctorCheckWsl2);
+        Assert.Equal(DoctorCheckStatus.Warning, wslCheck.Status);
+
+        var webCheck = Assert.Single(report.Checks, c => c.Name == InstallerConstants.DoctorCheckWebPort);
+        Assert.Equal(DoctorCheckStatus.Warning, webCheck.Status);
     }
 }

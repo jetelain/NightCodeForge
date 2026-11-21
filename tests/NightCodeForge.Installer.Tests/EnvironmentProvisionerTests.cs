@@ -173,7 +173,7 @@ public sealed class EnvironmentProvisionerTests : IDisposable
         Assert.Contains("systemd=true", wslScript, StringComparison.Ordinal);
         Assert.Contains("/etc/wsl.conf", wslScript, StringComparison.Ordinal);
         Assert.Contains("usermod -aG docker", wslScript, StringComparison.Ordinal);
-        Assert.Contains("git config --system --add safe.directory '*'", wslScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("safe.directory '*'", wslScript, StringComparison.Ordinal);
 
         var nativeLinuxNoDocker = EnvironmentProvisioner.BuildLinuxToolchainScript(isWsl: false, skipDocker: true);
         Assert.DoesNotContain("/etc/wsl.conf", nativeLinuxNoDocker, StringComparison.Ordinal);
@@ -329,6 +329,11 @@ public sealed class EnvironmentProvisionerTests : IDisposable
             .ReturnsAsync((ProcessRunRequest req, CancellationToken _) =>
             {
                 executedCommands.Add((req.FileName, req.Arguments));
+                if (req.FileName is InstallerConstants.GitExecutable or InstallerConstants.RipgrepExecutable or InstallerConstants.DockerExecutable)
+                {
+                    return new ProcessExecutionResult(1, string.Empty, "missing");
+                }
+
                 return new ProcessExecutionResult(0, "ok", string.Empty);
             });
 
@@ -337,7 +342,18 @@ public sealed class EnvironmentProvisionerTests : IDisposable
         var nonRootSut = new EnvironmentProvisioner(nonRootPlatform.Object, runner.Object);
         var nonRootReport = await nonRootSut.ProvisionAsync(new ProvisioningOptions("Ubuntu", false, false, true, SkipDocker: false));
         Assert.Equal(ProvisioningStatus.Completed, nonRootReport.OverallStatus);
-        Assert.Contains(executedCommands, c => c.FileName == "sudo" && c.Args.FirstOrDefault() == "bash");
+        Assert.Contains(executedCommands, c =>
+            c.FileName == InstallerConstants.SudoExecutable &&
+            c.Args.Count >= 2 &&
+            c.Args[0] == "-n" &&
+            c.Args[1] == InstallerConstants.BashExecutable);
+
+        executedCommands.Clear();
+        nonRootPlatform.Setup(p => p.GetEnvironmentVariable(InstallerConstants.EnvDisplayUnix)).Returns(":0");
+        nonRootPlatform.Setup(p => p.IsCommandOnPath(InstallerConstants.PkexecExecutable)).Returns(true);
+        var guiReport = await nonRootSut.ProvisionAsync(new ProvisioningOptions("Ubuntu", false, false, true, SkipDocker: false));
+        Assert.Equal(ProvisioningStatus.Completed, guiReport.OverallStatus);
+        Assert.Contains(executedCommands, c => c.FileName == InstallerConstants.PkexecExecutable);
 
         executedCommands.Clear();
         var rootPlatform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, _workspace.RootPath);
@@ -385,5 +401,6 @@ public sealed class EnvironmentProvisionerTests : IDisposable
         Assert.NotNull(capturedPowerShellCommand);
         Assert.Contains(@"Microsoft\dotnet", capturedPowerShellCommand, StringComparison.Ordinal);
         Assert.Contains("SetEnvironmentVariable('Path'", capturedPowerShellCommand, StringComparison.Ordinal);
+        platform.Verify(p => p.RefreshProcessPath(), Times.AtLeastOnce);
     }
 }

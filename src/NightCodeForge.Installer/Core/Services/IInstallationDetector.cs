@@ -10,5 +10,5 @@ public interface IInstallationDetector
 {
     string GetDefaultNightCodeForgeInstallDirectory();
     string GetDefaultOllamaRouterInstallDirectory();
-    InstallationDiscoveryResult Detect(string? explicitBundleDirectory = null);
+    InstallationDiscoveryResult Detect(string? explicitBundleDirectory = null, string? explicitInstallDirectory = null);
 }
