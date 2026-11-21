@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Packages NightCodeForge Web archive and NightCodeForge.Cli NuGet tool into an output directory.
+    Packages NightCodeForge Web archive, Native AOT Installer, and NightCodeForge.Cli NuGet tool into an output directory.
 .DESCRIPTION
     Builds and packages the unreleased NightCodeForge release artifacts for local air-gapped bundles or offline testing:
       1. Packs src/NightCodeForge.Cli/NightCodeForge.Cli.csproj as NightCodeForge.Cli.<version>.nupkg.
@@ -9,7 +9,10 @@
          bin/nightcodeforge-web(.exe), plus bin/nightcodeforge-web bash shim on Windows), portable
          appsettings.Production.json, skills/, VERSION, README.md, and LICENSE, and compresses into
          NightCodeForge-Web-<Runtime>.zip.
-      3. Optionally (-IncludeReleasedCompanionTools) downloads published Pmad.CSharpNav, Pmad.MarkdownFetch, and Pmad.CodeCondenser
+      3. Unless -SkipInstaller is specified, publishes Native AOT NightCodeForge.Installer into
+         NightCodeForge-Setup-<Runtime>.zip in -OutputDir (or unpacks the executable and native runtime
+         libraries directly into -InstallerOutputDir when specified).
+      4. Optionally (-IncludeReleasedCompanionTools) downloads published Pmad.CSharpNav, Pmad.MarkdownFetch, and Pmad.CodeCondenser
          .nupkg files from nuget.org into -OutputDir.
 
     Full Air-Gapped Bundle Assembly Example:
@@ -17,7 +20,7 @@
       New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
       & ..\NightCodeAssay\package.ps1 -OutputDir $bundleDir
       & ..\OllamaRouter\package.ps1 -OutputDir $bundleDir
-      & .\package.ps1 -OutputDir $bundleDir -IncludeReleasedCompanionTools
+      & .\package.ps1 -OutputDir $bundleDir -InstallerOutputDir (Split-Path -Parent $bundleDir) -IncludeReleasedCompanionTools
 .PARAMETER Configuration
     Build configuration (default: Release).
 .PARAMETER Runtime
@@ -26,6 +29,10 @@
     Optional explicit package/archive version override. Defaults to <Version> in NightCodeForge.Web.csproj.
 .PARAMETER OutputDir
     Destination directory for generated artifacts (default: ./artifacts).
+.PARAMETER InstallerOutputDir
+    Optional directory to receive the unpacked Native AOT NightCodeForge.Installer executable and runtime libraries instead of creating NightCodeForge-Setup-<Runtime>.zip in -OutputDir.
+.PARAMETER SkipInstaller
+    Skips publishing Native AOT NightCodeForge.Installer.
 .PARAMETER IncludeReleasedCompanionTools
     Downloads Pmad.CSharpNav, Pmad.MarkdownFetch, and Pmad.CodeCondenser .nupkg files from nuget.org into OutputDir.
 .EXAMPLE
@@ -39,6 +46,8 @@ param(
     [string]$Runtime = "win-x64",
     [string]$Version = "",
     [string]$OutputDir = "./artifacts",
+    [string]$InstallerOutputDir = "",
+    [switch]$SkipInstaller,
     [switch]$IncludeReleasedCompanionTools
 )
 
@@ -48,10 +57,12 @@ $repoRoot = $PSScriptRoot
 $webProjectPath = Join-Path $repoRoot "src\NightCodeForge.Web\NightCodeForge.Web.csproj"
 $launcherProjectPath = Join-Path $repoRoot "src\NightCodeForge.Launcher\NightCodeForge.Launcher.csproj"
 $cliProjectPath = Join-Path $repoRoot "src\NightCodeForge.Cli\NightCodeForge.Cli.csproj"
+$installerProjectPath = Join-Path $repoRoot "src\NightCodeForge.Installer\NightCodeForge.Installer.csproj"
 
 if (-not (Test-Path $webProjectPath)) { throw "NightCodeForge.Web project not found: $webProjectPath" }
 if (-not (Test-Path $launcherProjectPath)) { throw "NightCodeForge.Launcher project not found: $launcherProjectPath" }
 if (-not (Test-Path $cliProjectPath)) { throw "NightCodeForge.Cli project not found: $cliProjectPath" }
+if (-not $SkipInstaller -and -not (Test-Path $installerProjectPath)) { throw "NightCodeForge.Installer project not found: $installerProjectPath" }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
     [xml]$webXml = Get-Content $webProjectPath
@@ -66,10 +77,12 @@ $isWindowsRid = $Runtime -like "win-*"
 $webBinaryName = if ($isWindowsRid) { "NightCodeForge.Web.exe" } else { "NightCodeForge.Web" }
 $launcherBinaryName = if ($isWindowsRid) { "ncf-web.exe" } else { "ncf-web" }
 $longLauncherBinaryName = if ($isWindowsRid) { "nightcodeforge-web.exe" } else { "nightcodeforge-web" }
+$installerBinaryName = if ($isWindowsRid) { "NightCodeForge.Installer.exe" } else { "NightCodeForge.Installer" }
 $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ncf-pkg-" + [System.Guid]::NewGuid().ToString("N"))
 $webStagingDir = Join-Path $stagingRoot "web"
 $webBinDir = Join-Path $webStagingDir "bin"
 $launcherStagingDir = Join-Path $stagingRoot "launcher"
+$installerStagingDir = Join-Path $stagingRoot "setup"
 
 try {
     New-Item -ItemType Directory -Path $webStagingDir -Force | Out-Null
@@ -184,6 +197,54 @@ exec "`$DIR/$launcherBinaryName" "`$@"
 
     Write-Host "Creating archive $archivePath..." -ForegroundColor Cyan
     Compress-Archive -Path (Join-Path $webStagingDir "*") -DestinationPath $archivePath -Force
+
+    if (-not $SkipInstaller) {
+        New-Item -ItemType Directory -Path $installerStagingDir -Force | Out-Null
+
+        Write-Host "Publishing Native AOT NightCodeForge.Installer ($Runtime, $Version)..." -ForegroundColor Cyan
+        & dotnet publish $installerProjectPath `
+            -c $Configuration `
+            -r $Runtime `
+            -p:PublishAot=true `
+            -p:StripSymbols=true `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
+            "-p:Version=$Version" `
+            -o $installerStagingDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish for NightCodeForge.Installer failed with exit code $LASTEXITCODE."
+        }
+
+        $stagedInstaller = Join-Path $installerStagingDir $installerBinaryName
+        if (-not (Test-Path $stagedInstaller)) {
+            throw "Published installer binary was not found at: $stagedInstaller"
+        }
+
+        Get-ChildItem -Path $installerStagingDir -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in @('.pdb', '.dbg') } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+        if (-not $isWindowsRid -and -not [System.OperatingSystem]::IsWindows()) {
+            & chmod +x $stagedInstaller
+        }
+
+        Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination $installerStagingDir -Force
+        Copy-Item -Path (Join-Path $repoRoot "LICENSE") -Destination $installerStagingDir -Force
+
+        if (-not [string]::IsNullOrWhiteSpace($InstallerOutputDir)) {
+            $resolvedInstallerOutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($InstallerOutputDir)
+            New-Item -ItemType Directory -Path $resolvedInstallerOutputDir -Force | Out-Null
+            Write-Host "Copying NightCodeForge.Installer ($Runtime) -> $resolvedInstallerOutputDir..." -ForegroundColor Cyan
+            Copy-Item -Path (Join-Path $installerStagingDir "*") -Destination $resolvedInstallerOutputDir -Recurse -Force
+        } else {
+            $setupArchivePath = Join-Path $resolvedOutputDir "NightCodeForge-Setup-$Runtime.zip"
+            if (Test-Path $setupArchivePath) {
+                Remove-Item -Path $setupArchivePath -Force
+            }
+            Write-Host "Creating archive $setupArchivePath..." -ForegroundColor Cyan
+            Compress-Archive -Path (Join-Path $installerStagingDir "*") -DestinationPath $setupArchivePath -Force
+        }
+    }
 
     if ($IncludeReleasedCompanionTools) {
         $tlsProtocol = [Net.SecurityProtocolType]::Tls12
