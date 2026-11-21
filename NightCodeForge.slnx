@@ -4,6 +4,7 @@
     <Project Path="src/NightCodeForge.Cli/NightCodeForge.Cli.csproj" />
     <Project Path="src/NightCodeForge.Core/NightCodeForge.Core.csproj" />
     <Project Path="src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj" />
+    <Project Path="src/NightCodeForge.Installer/NightCodeForge.Installer.csproj" />
     <Project Path="src/NightCodeForge.Launcher/NightCodeForge.Launcher.csproj" />
     <Project Path="src/NightCodeForge.Web/NightCodeForge.Web.csproj" />
   </Folder>
@@ -12,6 +13,7 @@
     <Project Path="tests/NightCodeForge.Cli.Tests/NightCodeForge.Cli.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Core.Tests/NightCodeForge.Core.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Infrastructure.Tests/NightCodeForge.Infrastructure.Tests.csproj" />
+    <Project Path="tests/NightCodeForge.Installer.Tests/NightCodeForge.Installer.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Web.Tests/NightCodeForge.Web.Tests.csproj" />
   </Folder>
 </Solution>

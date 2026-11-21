@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>NightCodeForge.Installer</AssemblyName>
+    <RootNamespace>NightCodeForge.Installer</RootNamespace>
+    <Version>1.0.0</Version>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Exclude global Newtonsoft.Json from Directory.Build.props to keep Native AOT trim-clean and dependency-free. -->
+    <PackageReference Remove="Newtonsoft.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NightCodeForge.Installer.Tests" />
+  </ItemGroup>
+
+</Project>
