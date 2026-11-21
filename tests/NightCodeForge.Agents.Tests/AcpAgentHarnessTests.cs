@@ -948,6 +948,9 @@ public class AcpAgentHarnessTests
         Assert.Contains("/workspace/task-42", argList);
         Assert.Contains("/opt/ncf-acp/agy", argList);
         Assert.Contains($"HOME={ContainerExecutorOptions.ContainerHomePath}", argList);
+        var expectedVsTestEnv = $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}";
+        var vsTestEnvIdx = argList.IndexOf(expectedVsTestEnv);
+        Assert.True(vsTestEnvIdx > 0 && argList[vsTestEnvIdx - 1] == "-e", "Expected -e immediately preceding VSTEST_ARTIFACTS_BASE_DIRECTORY");
         Assert.Contains(argList, a => a.StartsWith("PATH=/opt/ncf-acp:", StringComparison.Ordinal));
         Assert.Equal("/workspace/task-42", containerPlan.SessionWorkingDirectory);
 
@@ -1006,6 +1009,101 @@ public class AcpAgentHarnessTests
             "C:\\dummy",
             600);
         Assert.Equal("-d Ubuntu -- /home/dev/.local/bin/agy acp --dangerously-skip-permissions", wslExeFallbackPlan.ProcessSpec.Arguments);
+    }
+
+    [Fact]
+    public async Task AcpProcessLauncher_ContainerSandbox_FallbackAndRestrictedReadOnly_PassVsTestArtifactsEnvVar()
+    {
+        var pathResolverMock = new Mock<IWorkspacePathResolver>();
+        var containerWs = new Workspace
+        {
+            Id = 9,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            UseWslForContainers = true,
+            WslDistribution = "Ubuntu"
+        };
+        var expectedVsTestEnv = $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}";
+
+        // 1. Fallback container branch (when IExecutionEnvironment is not NightCodeForgeContainerExecutor)
+        var fallbackEnvMock = new Mock<IExecutionEnvironment>();
+        fallbackEnvMock.Setup(e => e.Tier).Returns(ExecutionTier.ContainerSandbox);
+        var fallbackLauncher = new AcpProcessLauncher(
+            new SingleExecutionEnvironmentProvider(fallbackEnvMock.Object),
+            pathResolverMock.Object,
+            NullLogger<AcpProcessLauncher>.Instance);
+
+        var fallbackContext = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 17, Title = "Fallback Container", Description = "Desc" },
+            StageId = StandardStageIds.Implementation,
+            Profile = new AgentProfile { Name = "Agy", HarnessId = StandardHarnessIds.Acp, Mode = AgentMode.Full },
+            Workspace = containerWs
+        };
+
+        var fallbackPlan = await fallbackLauncher.PrepareLaunchAsync(
+            fallbackContext,
+            "agy",
+            "acp",
+            "/host/wks/9/task-17",
+            "/workspace",
+            "/host/wks/9/task-17",
+            600);
+
+        var fallbackArgs = fallbackPlan.ProcessSpec.ArgumentList!.ToList();
+        var fallbackIdx = fallbackArgs.IndexOf(expectedVsTestEnv);
+        Assert.True(fallbackIdx > 0 && fallbackArgs[fallbackIdx - 1] == "-e", "Expected -e immediately preceding VSTEST_ARTIFACTS_BASE_DIRECTORY in fallback launch");
+
+        // 2. RestrictedReadOnly container launch
+        var runnerMock = new Mock<IProcessRunner>();
+        runnerMock.Setup(r => r.Run(It.IsAny<ProcessStartSpec>()))
+            .Returns(new ProcessExecutionResult(0, "true\n", string.Empty));
+        var identityMock = new Mock<IHostUserIdentityResolver>();
+        identityMock.Setup(i => i.ResolveUserIdentity(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<string>())).Returns("2000:2000");
+
+        using var roExecutor = new NightCodeForgeContainerExecutor(
+            new ContainerExecutorOptions
+            {
+                ContainerNameOrId = "ncf-sandbox-9-ro",
+                DefaultWorkingDirectory = "/workspace/clone",
+                UserUidGid = "2000:2000",
+                IsRestrictedReadOnly = true,
+                UseWsl = true,
+                WslDistribution = "Ubuntu",
+                AutoStartContainer = false
+            },
+            runnerMock.Object,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            identityMock.Object,
+            new Mock<IOperationsTelemetryService>().Object);
+
+        var roLauncher = new AcpProcessLauncher(
+            new SingleExecutionEnvironmentProvider(roExecutor),
+            pathResolverMock.Object,
+            NullLogger<AcpProcessLauncher>.Instance);
+
+        var roContext = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "RO Container", Description = "Desc" },
+            StageId = StandardStageIds.TaskReview,
+            Profile = new AgentProfile { Name = "AgyRO", HarnessId = StandardHarnessIds.Acp, Mode = AgentMode.ReadOnly, SecurityTier = SandboxSecurityTier.RestrictedReadOnly },
+            RequiredMode = AgentMode.ReadOnly,
+            Workspace = containerWs
+        };
+
+        var roPlan = await roLauncher.PrepareLaunchAsync(
+            roContext,
+            "agy",
+            "acp --dangerously-skip-permissions",
+            "/host/wks/9/clone",
+            "/workspace",
+            "/host/wks/9/clone",
+            600);
+
+        var roArgs = roPlan.ProcessSpec.ArgumentList!.ToList();
+        var userIdx = roArgs.IndexOf("-u");
+        Assert.True(userIdx >= 0 && roArgs[userIdx + 1] == ContainerExecutorOptions.RestrictedReadOnlyUserUidGid);
+        var roVsTestIdx = roArgs.IndexOf(expectedVsTestEnv);
+        Assert.True(roVsTestIdx > 0 && roArgs[roVsTestIdx - 1] == "-e", "Expected -e immediately preceding VSTEST_ARTIFACTS_BASE_DIRECTORY in RestrictedReadOnly launch");
     }
 
     [Fact]

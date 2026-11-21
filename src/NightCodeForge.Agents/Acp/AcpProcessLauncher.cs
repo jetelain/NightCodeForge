@@ -285,6 +285,7 @@ public class AcpProcessLauncher : IAcpProcessLauncher
 
         args.AddRange(["-e", $"HOME={ContainerExecutorOptions.ContainerHomePath}"]);
         args.AddRange(["-e", $"PATH={computedPath}"]);
+        args.AddRange(["-e", $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}"]);
         args.AddRange(["-w", workingDirectory]);
         args.Add(containerName);
         args.Add(executablePath);

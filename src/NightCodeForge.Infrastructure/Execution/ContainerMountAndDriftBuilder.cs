@@ -896,6 +896,7 @@ public class ContainerMountAndDriftBuilder
         args.AddRange(["-e", $"HOME={ContainerExecutorOptions.ContainerHomePath}"]);
         args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
         args.AddRange(["-e", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"]);
+        args.AddRange(["-e", $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}"]);
         args.AddRange(["-e", "LANG=en_US.UTF-8"]);
         args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
 

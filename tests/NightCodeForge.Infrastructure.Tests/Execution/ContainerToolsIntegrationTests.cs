@@ -88,6 +88,11 @@ public class ContainerToolsIntegrationTests : IDisposable
             identityResolver,
             telemetryMock.Object);
 
+        executor.EnsureContainerRunning();
+
+        // 0. Verify container-level ENV and pre-created directory exist before PersistentContainerShellSession preamble
+        AssertDirectDockerExecVsTestArtifactsEnv(processRunner, options);
+
         // 1. Verify git is present and functional
         var gitResult = await executor.ExecuteAsync("git --version");
         Assert.Equal(0, gitResult.ExitCode);
@@ -255,6 +260,21 @@ public class ContainerToolsIntegrationTests : IDisposable
         Assert.Equal(0, homeWritableResult.ExitCode);
         Assert.Contains("home-dotnet-writable", homeWritableResult.StandardOutput);
 
+        // 2b-vstest. Verify container-level ENV and shell VSTEST_ARTIFACTS_BASE_DIRECTORY support 0700 subdirectories
+        var containerExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(env);
+        AssertDirectDockerExecVsTestArtifactsEnv(processRunner, containerExecutor.Options);
+
+        var vsTestArtifactsCheck = await env.ExecuteAsync(
+            $"test \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" = \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" && " +
+            $"test -d \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" && " +
+            $"test -w \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" && " +
+            $"d=\"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}/probe-$$\" && " +
+            "mkdir -m 700 \"$d\" && " +
+            "{ mode=\"$(stat -c %a \"$d\" 2>/dev/null || true)\"; rmdir \"$d\" 2>/dev/null || true; test \"$mode\" = \"700\"; } && " +
+            "echo vstest-artifacts-ok");
+        Assert.Equal(0, vsTestArtifactsCheck.ExitCode);
+        Assert.Contains("vstest-artifacts-ok", vsTestArtifactsCheck.StandardOutput);
+
         // 2b-playwright-shm. Verify PLAYWRIGHT_BROWSERS_PATH is mounted at /cache/ms-playwright and /dev/shm is >= 1G
         var playwrightShmCheck = await env.ExecuteAsync(
             "test \"$PLAYWRIGHT_BROWSERS_PATH\" = \"/cache/ms-playwright\" && test -d /cache/ms-playwright && test $(df -k /dev/shm | awk 'NR==2 {print $2}') -ge 1048576 && echo playwright-and-shm-ok");
@@ -314,6 +334,197 @@ public class ContainerToolsIntegrationTests : IDisposable
             var mdfetchHelp = await env.ExecuteAsync("mdfetch --help");
             Assert.Equal(0, mdfetchHelp.ExitCode);
         }
+    }
+
+    [Fact]
+    public async Task ContainerExecutor_VsTestArtifactsDirectory_DecouplesFromDotnetWritabilityAndFallsBackWhenReadOnly()
+    {
+        if (!IsDockerAccessible(_useWsl))
+        {
+            _output.WriteLine("Docker is not accessible in this environment. Skipping test.");
+            return;
+        }
+
+        var roDotnetDir = Path.Combine(_testRoot, "ro-dotnet");
+        var roArtifactsDir = Path.Combine(_testRoot, "ro-vstest-artifacts");
+        Directory.CreateDirectory(roDotnetDir);
+        Directory.CreateDirectory(roArtifactsDir);
+
+        var processRunner = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
+        var identityResolver = new HostUserIdentityResolver(processRunner, NullLogger<HostUserIdentityResolver>.Instance);
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+
+        // Subcase A: read-only /ncf-home/.dotnet triggers HOME fallback, while VSTEST_ARTIFACTS_BASE_DIRECTORY stays in /ncf-home/.vstest-artifacts
+        var containerA = $"ncf-vstest-ro-dotnet-{Guid.NewGuid():N}";
+        _containersToCleanup.Add(containerA);
+        var optionsA = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = containerA,
+            ContainerImage = ContainerExecutorOptions.DefaultAgentBaseImage,
+            HostWorkspacePath = _testRoot,
+            ContainerWorkspacePath = "/workspace",
+            DefaultWorkingDirectory = "/workspace",
+            AutoStartContainer = true,
+            MountPackageCaches = false,
+            MountHostSdks = false,
+            UseWsl = _useWsl,
+            DefaultTimeoutSeconds = 60,
+            AdditionalVolumeMounts =
+            [
+                new(roDotnetDir, $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet", isReadOnly: true)
+            ]
+        };
+
+        await using (var executorA = new NightCodeForgeContainerExecutor(
+            Options.Create(optionsA),
+            processRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            identityResolver,
+            telemetryMock.Object))
+        {
+            var resA = await executorA.ExecuteAsync(
+                "case \"$HOME\" in /tmp/ncf-home-*) ;; *) echo \"unexpected-home:$HOME\"; exit 1;; esac && " +
+                $"test \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" = \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" && " +
+                $"d=\"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}/probe-$$\" && " +
+                "mkdir -m 700 \"$d\" && " +
+                "{ mode=\"$(stat -c %a \"$d\" 2>/dev/null || true)\"; rmdir \"$d\" 2>/dev/null || true; test \"$mode\" = \"700\"; } && " +
+                "echo decoupled-ok");
+            Assert.Equal(0, resA.ExitCode);
+            Assert.Contains("decoupled-ok", resA.StandardOutput);
+        }
+
+        // Subcase B: read-only /ncf-home/.vstest-artifacts falls back to /tmp/ncf-home-$(id -u)/.vstest-artifacts
+        var containerB = $"ncf-vstest-ro-dir-{Guid.NewGuid():N}";
+        _containersToCleanup.Add(containerB);
+        var optionsB = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = containerB,
+            ContainerImage = ContainerExecutorOptions.DefaultAgentBaseImage,
+            HostWorkspacePath = _testRoot,
+            ContainerWorkspacePath = "/workspace",
+            DefaultWorkingDirectory = "/workspace",
+            AutoStartContainer = true,
+            MountPackageCaches = false,
+            MountHostSdks = false,
+            UseWsl = _useWsl,
+            DefaultTimeoutSeconds = 60,
+            AdditionalVolumeMounts =
+            [
+                new(roArtifactsDir, ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory, isReadOnly: true)
+            ]
+        };
+
+        await using (var executorB = new NightCodeForgeContainerExecutor(
+            Options.Create(optionsB),
+            processRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            identityResolver,
+            telemetryMock.Object))
+        {
+            var resB = await executorB.ExecuteAsync(
+                $"expected=\"/tmp/ncf-home-$(id -u)/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\" && " +
+                $"test \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" = \"$expected\" && " +
+                $"test -d \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" && " +
+                $"test -w \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" && " +
+                "echo fallback-ok");
+            Assert.Equal(0, resB.ExitCode);
+            Assert.Contains("fallback-ok", resB.StandardOutput);
+        }
+    }
+
+    [Fact]
+    public async Task ContainerExecutor_RestrictedReadOnly_SupportsWritableVsTestArtifactsDirectoryWhenTmpIsReadOnly()
+    {
+        if (!IsDockerAccessible(_useWsl))
+        {
+            _output.WriteLine("Docker is not accessible in this environment. Skipping test.");
+            return;
+        }
+
+        var roTmpDir = Path.Combine(_testRoot, "ro-tmp");
+        Directory.CreateDirectory(roTmpDir);
+
+        var containerName = $"ncf-vstest-ro-tier-{Guid.NewGuid():N}";
+        _containersToCleanup.Add(containerName);
+
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = containerName,
+            ContainerImage = ContainerExecutorOptions.DefaultAgentBaseImage,
+            HostWorkspacePath = _testRoot,
+            ContainerWorkspacePath = "/workspace",
+            DefaultWorkingDirectory = "/workspace",
+            AutoStartContainer = true,
+            IsRestrictedReadOnly = true,
+            MountPackageCaches = false,
+            MountHostSdks = false,
+            UseWsl = _useWsl,
+            DefaultTimeoutSeconds = 60,
+            AdditionalVolumeMounts =
+            [
+                new(roTmpDir, "/tmp", isReadOnly: true)
+            ]
+        };
+
+        var processRunner = new SystemProcessRunner(NullLogger<SystemProcessRunner>.Instance);
+        var identityResolver = new HostUserIdentityResolver(processRunner, NullLogger<HostUserIdentityResolver>.Instance);
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+
+        await using var executor = new NightCodeForgeContainerExecutor(
+            Options.Create(options),
+            processRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            identityResolver,
+            telemetryMock.Object);
+
+        var res = await executor.ExecuteAsync(
+            "! test -w /tmp && " +
+            $"test \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" = \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" && " +
+            $"test -d \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" && " +
+            $"test -w \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" && " +
+            $"d=\"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}/probe-$$\" && " +
+            "mkdir -m 700 \"$d\" && " +
+            "{ mode=\"$(stat -c %a \"$d\" 2>/dev/null || true)\"; rmdir \"$d\" 2>/dev/null || true; test \"$mode\" = \"700\"; } && " +
+            "echo ro-tier-vstest-ok");
+        Assert.Equal(0, res.ExitCode);
+        Assert.Contains("ro-tier-vstest-ok", res.StandardOutput);
+    }
+
+    private static void AssertDirectDockerExecVsTestArtifactsEnv(IProcessRunner processRunner, ContainerExecutorOptions options)
+    {
+        var effectiveUser = options.IsRestrictedReadOnly
+            ? ContainerExecutorOptions.RestrictedReadOnlyUserUidGid
+            : options.UserUidGid;
+
+        List<string> BuildExecArgs(params string[] commandArgs)
+        {
+            var args = new List<string> { "exec" };
+            if (!string.IsNullOrWhiteSpace(effectiveUser))
+            {
+                args.AddRange(["--user", effectiveUser]);
+            }
+            args.Add(options.ContainerNameOrId);
+            args.AddRange(commandArgs);
+            return args;
+        }
+
+        var printEnvResult = processRunner.Run(NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
+            options,
+            BuildExecArgs("printenv", ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar),
+            timeoutSeconds: 15));
+        Assert.Equal(0, printEnvResult.ExitCode);
+        Assert.Equal(ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory, printEnvResult.StandardOutput.Trim());
+
+        var dirCheckResult = processRunner.Run(NightCodeForgeContainerExecutor.BuildDockerProcessSpec(
+            options,
+            BuildExecArgs(
+                "sh",
+                "-c",
+                $"test -d {ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory} && " +
+                $"test -w {ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory} && echo container-env-vstest-ok"),
+            timeoutSeconds: 15));
+        Assert.Equal(0, dirCheckResult.ExitCode);
+        Assert.Contains("container-env-vstest-ok", dirCheckResult.StandardOutput);
     }
 
     private static bool IsDockerAccessible(bool useWsl)

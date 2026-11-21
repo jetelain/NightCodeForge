@@ -217,9 +217,11 @@ public class ExecutionEnvironmentTests
     [InlineData("ncf-agent-base:v1", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("ncf-agent-base:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("ncf-agent-base:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("ncf-agent-base:v4", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:latest", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("nightcodeforge-agent:v4", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("alpine:3.19", "alpine:3.19")]
     public async Task ExecutionEnvironmentProvider_ContainerMode_UpgradesLegacyManagedBaseImages(string configuredImage, string expectedImage)
     {
@@ -607,6 +609,40 @@ public class ExecutionEnvironmentTests
 
         Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
         Assert.Contains(executed, c => c.Contains("run "));
+    }
+
+    [Fact]
+    public void EnsureContainerRunning_WhenExistingContainerUsesLegacyV4Image_RemovesAndRecreatesWithDefaultImage()
+    {
+        var executed = new List<string>();
+        var options = StoppedTestOptions();
+        options.ContainerImage = ContainerExecutorOptions.DefaultAgentBaseImage;
+        var runner = new MockProcessRunner((exe, args) =>
+        {
+            executed.Add($"{exe} {args}".Trim());
+            if (args.Contains("image inspect") && args.Contains(ContainerExecutorOptions.DefaultAgentBaseImage))
+            {
+                return new ProcessExecutionResult(0, DateTime.UtcNow.ToString("O"), string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".State.Running"))
+            {
+                return new ProcessExecutionResult(0, "true\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Mounts"))
+            {
+                return new ProcessExecutionResult(0, MountInspectOutput(options), string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Config.Image"))
+            {
+                return new ProcessExecutionResult(0, "ncf-agent-base:v4\n", string.Empty);
+            }
+            return new ProcessExecutionResult(0, string.Empty, string.Empty);
+        });
+
+        CreateExecutor(options, runner).EnsureContainerRunning();
+
+        Assert.Contains(executed, c => c.Contains("rm -f ncf-sandbox-1"));
+        Assert.Contains(executed, c => c.Contains("run ") && c.Contains(ContainerExecutorOptions.DefaultAgentBaseImage));
     }
 
     [Fact]

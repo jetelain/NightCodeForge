@@ -23,6 +23,11 @@ public class Step1121ContainerIcuAndUserIdentityTests
         Assert.Contains("/cache/nuget", dockerfile);
         Assert.Contains("chmod -R 777 /cache", dockerfile);
         Assert.Contains("ENV NUGET_PACKAGES=/cache/nuget", dockerfile);
+        var mkdirLine = dockerfile
+            .Split('\n')
+            .Single(l => l.TrimStart().StartsWith("RUN mkdir -p ", StringComparison.Ordinal));
+        Assert.Contains(ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory, mkdirLine);
+        Assert.Contains($"ENV {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}", dockerfile);
     }
 
     [Fact]
@@ -73,11 +78,34 @@ public class Step1121ContainerIcuAndUserIdentityTests
         var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
 
         Assert.Contains("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0", args);
+        var expectedVsTestEnv = $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}";
+        var vsTestEnvIdx = args.IndexOf(expectedVsTestEnv);
+        Assert.True(vsTestEnvIdx > 0 && args[vsTestEnvIdx - 1] == "-e", "Expected -e immediately preceding VSTEST_ARTIFACTS_BASE_DIRECTORY");
         Assert.Contains("LANG=en_US.UTF-8", args);
         Assert.Contains("LC_ALL=en_US.UTF-8", args);
         Assert.Contains("NUGET_PACKAGES=/cache/nuget", args);
         Assert.Contains("npm_config_cache=/cache/npm", args);
         Assert.Contains("UV_CACHE_DIR=/cache/uv", args);
+    }
+
+    [Fact]
+    public void BuildDockerRunArgs_RestrictedReadOnly_PassesVsTestArtifactsEnvWithWritableHomeTmpfs()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-triage-sandbox",
+            IsRestrictedReadOnly = true
+        };
+
+        var args = NightCodeForgeContainerExecutor.BuildDockerRunArgs(options);
+
+        var expectedVsTestEnv = $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}";
+        var vsTestEnvIdx = args.IndexOf(expectedVsTestEnv);
+        Assert.True(vsTestEnvIdx > 0 && args[vsTestEnvIdx - 1] == "-e", "Expected -e immediately preceding VSTEST_ARTIFACTS_BASE_DIRECTORY");
+
+        var expectedHomeTmpfs = $"{ContainerExecutorOptions.ContainerHomePath}:rw,noexec,nosuid,size=16m";
+        var homeTmpfsIdx = args.IndexOf(expectedHomeTmpfs);
+        Assert.True(homeTmpfsIdx > 0 && args[homeTmpfsIdx - 1] == "--tmpfs", "Expected --tmpfs immediately preceding writable /ncf-home mount");
     }
 
     [Fact]

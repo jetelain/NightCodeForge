@@ -136,6 +136,58 @@ public class ContainerReplExecutorTests
     }
 
     [Fact]
+    public async Task ContainerExecutor_ExecuteAsync_SetsAndAllowsOverridingVsTestArtifactsBaseDirectory()
+    {
+        var inputs = new List<string>();
+        var mockRunner = new MockProcessRunner(onInput: text => inputs.Add(text));
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "mock-sandbox",
+            DefaultWorkingDirectory = "/workspace/task-35",
+            DefaultTimeoutSeconds = 5
+        };
+
+        using var executor = new NightCodeForgeContainerExecutor(
+            options,
+            mockRunner,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            new Mock<IHostUserIdentityResolver>().Object,
+            new Mock<IOperationsTelemetryService>().Object);
+
+        await executor.ExecuteAsync("echo hello");
+
+        var defaultMkdir = $"mkdir -p \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" 2>/dev/null || true";
+        var defaultExport = $"if [ -d \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ] && [ -w \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ]; then export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\"; else export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"/tmp/ncf-home-$(id -u)/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\"; mkdir -p \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" 2>/dev/null || true; fi";
+
+        var defaultScript = string.Concat(inputs);
+        Assert.Contains(defaultMkdir, defaultScript);
+        Assert.Contains(defaultExport, defaultScript);
+        Assert.DoesNotContain($"export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"$HOME/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\"", defaultScript);
+
+        inputs.Clear();
+        await executor.ExecuteAsync(
+            "echo override",
+            environmentVariables: new Dictionary<string, string>
+            {
+                [ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar] = "/custom/vstest-artifacts"
+            });
+
+        var overrideScript = string.Concat(inputs);
+        var customExport = $"export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ShellQuoting.QuotePosix("/custom/vstest-artifacts")}";
+        var defaultIdx = overrideScript.IndexOf(defaultExport, StringComparison.Ordinal);
+        var customIdx = overrideScript.IndexOf(customExport, StringComparison.Ordinal);
+        Assert.True(defaultIdx >= 0, "Expected default VSTEST_ARTIFACTS_BASE_DIRECTORY export");
+        Assert.True(customIdx > defaultIdx, "Expected caller override export after default export");
+
+        inputs.Clear();
+        await executor.ExecuteAsync("echo reset");
+
+        var resetScript = string.Concat(inputs);
+        Assert.Contains(defaultExport, resetScript);
+        Assert.DoesNotContain(customExport, resetScript);
+    }
+
+    [Fact]
     public async Task ContainerExecutor_ExecuteAsync_RecordsShellCommandTelemetry()
     {
         var mockRunner = new MockProcessRunner();

@@ -21,6 +21,7 @@ public sealed partial class PersistentContainerShellSession : IDisposable
     private static partial Regex StaleSentinelLineRegex();
 
     public const int SigIntExitCode = 130;
+    private const string FallbackHomePathExpression = "/tmp/ncf-home-$(id -u)";
 
     private readonly ContainerExecutorOptions _options;
     private readonly IProcessRunner _processRunner;
@@ -163,7 +164,9 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         await _stdin.WriteLineAsync("export LANG=en_US.UTF-8");
         await _stdin.WriteLineAsync("export LC_ALL=en_US.UTF-8");
         await _stdin.WriteLineAsync($"mkdir -p {ContainerExecutorOptions.ContainerHomePath}/.dotnet 2>/dev/null || true");
-        await _stdin.WriteLineAsync($"if [ ! -w {ContainerExecutorOptions.ContainerHomePath} ] || [ ! -w {ContainerExecutorOptions.ContainerHomePath}/.dotnet ]; then export HOME=\"/tmp/ncf-home-$(id -u)\"; mkdir -p \"$HOME/.dotnet\" 2>/dev/null || true; else export HOME=\"{ContainerExecutorOptions.ContainerHomePath}\"; fi");
+        await _stdin.WriteLineAsync($"if [ ! -w {ContainerExecutorOptions.ContainerHomePath} ] || [ ! -w {ContainerExecutorOptions.ContainerHomePath}/.dotnet ]; then export HOME=\"{FallbackHomePathExpression}\"; mkdir -p \"$HOME/.dotnet\" 2>/dev/null || true; else export HOME=\"{ContainerExecutorOptions.ContainerHomePath}\"; fi");
+        await _stdin.WriteLineAsync($"mkdir -p \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" 2>/dev/null || true");
+        await _stdin.WriteLineAsync($"if [ -d \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ] && [ -w \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ]; then export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\"; else export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{FallbackHomePathExpression}/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\"; mkdir -p \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" 2>/dev/null || true; fi");
         await _stdin.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
 
         if (_options.MountPackageCaches)

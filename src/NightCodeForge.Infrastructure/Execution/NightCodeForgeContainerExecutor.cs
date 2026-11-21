@@ -36,13 +36,16 @@ public class ContainerVolumeMount
 
 public class ContainerExecutorOptions
 {
-    public const string DefaultAgentBaseImage = "ncf-agent-base:v4";
-    public const string AlternateAgentBaseImage = "nightcodeforge-agent:v4";
+    public const string DefaultAgentBaseImage = "ncf-agent-base:v5";
+    public const string AlternateAgentBaseImage = "nightcodeforge-agent:v5";
     public const string ContainerHomePath = "/ncf-home";
     public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
     public const string HostAgyContainerDirectory = "/opt/ncf-acp";
     public const string HostAgyContainerBinaryPath = "/opt/ncf-acp/agy";
     public const string ContainerGeminiConfigPath = "/ncf-home/.gemini";
+    public const string VsTestArtifactsBaseDirectoryEnvVar = "VSTEST_ARTIFACTS_BASE_DIRECTORY";
+    public const string VsTestArtifactsSubDirectoryName = ".vstest-artifacts";
+    public const string ContainerVsTestArtifactsBaseDirectory = $"{ContainerHomePath}/{VsTestArtifactsSubDirectoryName}";
 
     public const string DefaultAgentBaseDockerfile = """
 FROM ubuntu:24.04
@@ -72,11 +75,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /cache/ms-playwright /ncf-home/.dotnet /ncf-home/.local/bin /opt/ncf-dotnet-tools \
+RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /cache/ms-playwright /ncf-home/.dotnet /ncf-home/.local/bin /ncf-home/.vstest-artifacts /opt/ncf-dotnet-tools \
     && chmod -R 777 /cache /ncf-home
 
 ENV HOME=/ncf-home
 ENV DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
+ENV VSTEST_ARTIFACTS_BASE_DIRECTORY=/ncf-home/.vstest-artifacts
 ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
