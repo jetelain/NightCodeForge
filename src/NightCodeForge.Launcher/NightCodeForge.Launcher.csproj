@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ncf-web</AssemblyName>
+    <RootNamespace>NightCodeForge.Launcher</RootNamespace>
+    <Version>1.0.0</Version>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <TrimMode>full</TrimMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Exclude global Newtonsoft.Json from Directory.Build.props to keep Native AOT trim-clean and dependency-free. -->
+    <PackageReference Remove="Newtonsoft.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NightCodeForge.Web.Tests" />
+  </ItemGroup>
+
+</Project>

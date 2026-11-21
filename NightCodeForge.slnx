@@ -4,6 +4,7 @@
     <Project Path="src/NightCodeForge.Cli/NightCodeForge.Cli.csproj" />
     <Project Path="src/NightCodeForge.Core/NightCodeForge.Core.csproj" />
     <Project Path="src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj" />
+    <Project Path="src/NightCodeForge.Launcher/NightCodeForge.Launcher.csproj" />
     <Project Path="src/NightCodeForge.Web/NightCodeForge.Web.csproj" />
   </Folder>
   <Folder Name="/tests/">

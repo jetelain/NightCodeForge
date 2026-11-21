@@ -27,4 +27,8 @@
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="NightCodeForge.Web.Tests" />
+  </ItemGroup>
+
 </Project>

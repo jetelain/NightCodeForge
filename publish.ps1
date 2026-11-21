@@ -81,10 +81,27 @@ if ([string]::IsNullOrWhiteSpace($LogsDir)) {
     $LogsDir = [System.IO.Path]::GetFullPath($LogsDir)
 }
 
-if ([string]::IsNullOrWhiteSpace($BinDir)) {
-    $BinDir = Join-Path $InstallDir "bin"
+$BinDir = if ([string]::IsNullOrWhiteSpace($BinDir)) {
+    Join-Path $InstallDir "bin"
 } else {
-    $BinDir = [System.IO.Path]::GetFullPath($BinDir)
+    [System.IO.Path]::GetFullPath($BinDir)
+}
+
+function Stop-NightCodeForgeProcesses {
+    # Stop launcher processes first so the watchdog does not immediately respawn NightCodeForge.Web.
+    $runningLaunchers = Get-Process -Name "ncf-web", "nightcodeforge-web" -ErrorAction SilentlyContinue
+    if ($runningLaunchers) {
+        Write-Host "Stopping running NightCodeForge launcher processes..." -ForegroundColor Yellow
+        $runningLaunchers | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300
+    }
+
+    $runningProcesses = Get-Process -Name "NightCodeForge.Web" -ErrorAction SilentlyContinue
+    if ($runningProcesses) {
+        Write-Host "Stopping running NightCodeForge.Web processes..." -ForegroundColor Yellow
+        $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
 }
 
 # 1. Uninstall path
@@ -93,13 +110,7 @@ if ($Uninstall) {
     Write-Host " Uninstalling NightCodeForge Web Application              " -ForegroundColor Cyan
     Write-Host "==========================================================" -ForegroundColor Cyan
 
-    # Stop any running instances of NightCodeForge.Web
-    $runningProcesses = Get-Process -Name "NightCodeForge.Web" -ErrorAction SilentlyContinue
-    if ($runningProcesses) {
-        Write-Host "Stopping running NightCodeForge.Web processes..." -ForegroundColor Yellow
-        $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 500
-    }
+    Stop-NightCodeForgeProcesses
 
     if (Test-Path $InstallDir) {
         try {
@@ -173,9 +184,13 @@ if ($Uninstall) {
 # 2. Project check & version reading
 $repoRoot = $PSScriptRoot
 $webProjectPath = Join-Path $repoRoot "src\NightCodeForge.Web\NightCodeForge.Web.csproj"
+$launcherProjectPath = Join-Path $repoRoot "src\NightCodeForge.Launcher\NightCodeForge.Launcher.csproj"
 
 if (-not (Test-Path $webProjectPath)) {
     throw "NightCodeForge.Web project not found: $webProjectPath"
+}
+if (-not (Test-Path $launcherProjectPath)) {
+    throw "NightCodeForge.Launcher project not found: $launcherProjectPath"
 }
 
 [xml]$projXml = Get-Content $webProjectPath
@@ -199,12 +214,7 @@ Write-Host " Default URLs    : $Urls"
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 3. Stop running process to avoid publish file locks
-$runningProcesses = Get-Process -Name "NightCodeForge.Web" -ErrorAction SilentlyContinue
-if ($runningProcesses) {
-    Write-Warning "NightCodeForge.Web is currently running. Stopping process to allow file updates..."
-    $runningProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
-}
+Stop-NightCodeForgeProcesses
 
 # 4. Ensure directories exist
 if (-not (Test-Path $InstallDir)) {
@@ -252,8 +262,8 @@ if (-not (Test-Path $publishedBinary)) {
     if (-not (Test-Path $candidate)) {
         throw "Published binary not found in $InstallDir."
     }
-    $publishedBinary = $candidate
-    Rename-Item -Path $publishedBinary -NewName "NightCodeForge.Web.exe"
+    Rename-Item -Path $candidate -NewName "NightCodeForge.Web.exe"
+    $publishedBinary = Join-Path $InstallDir "NightCodeForge.Web.exe"
 }
 Set-Content -Path (Join-Path $InstallDir "VERSION") -Value "$version`n"
 
@@ -291,7 +301,7 @@ foreach ($configFilePath in $configFiles) {
     if (-not $settings.Logging.PSObject.Properties['LogLevel']) {
         $settings.Logging | Add-Member -MemberType NoteProperty -Name 'LogLevel' -Value ([PSCustomObject]@{
             "Default" = "Warning"
-            "NighCodeForge" = "Information"
+            "NightCodeForge" = "Information"
         })
     }
     $settings.Logging | Add-Member -MemberType NoteProperty -Name 'LogsDirectory' -Value $logsDirPath -Force
@@ -310,52 +320,114 @@ Write-Host "  - HangfireConnection: Data Source=$hangfireDbPath;" -ForegroundCol
 Write-Host "Configured logs directory:" -ForegroundColor Green
 Write-Host "  - LogsDirectory     : $logsDirPath" -ForegroundColor Gray
 
-# 8. Web Launcher Commands & PATH configuration
-Write-Host "`nSetting up web launcher commands..." -ForegroundColor Yellow
+# 8. Web Launcher Native AOT Shim & PATH configuration
+Write-Host "`nBuilding and installing Native AOT web launcher shim..." -ForegroundColor Yellow
 
-# In InstallDir:
-$installCmd = Join-Path $InstallDir "nightcodeforge-web.cmd"
-$installCmdContent = @"
-@echo off
-setlocal
-cd /d "%~dp0"
-"%~dp0NightCodeForge.Web.exe" --contentRoot "%~dp0" %*
-"@
-Set-Content -Path $installCmd -Value $installCmdContent -Encoding ASCII
+$isWindowsRuntime = $Runtime -like "win-*"
+$launcherBinaryName = if ($isWindowsRuntime) { "ncf-web.exe" } else { "ncf-web" }
+$longLauncherBinaryName = if ($isWindowsRuntime) { "nightcodeforge-web.exe" } else { "nightcodeforge-web" }
+$launcherStagingDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ncf-launcher-publish-" + [System.Guid]::NewGuid().ToString("N"))
 
-# In BinDir:
-$binCmd = Join-Path $BinDir "nightcodeforge-web.cmd"
-$binCmdContent = @"
-@echo off
-setlocal
-cd /d "%~dp0.."
-"%~dp0..\NightCodeForge.Web.exe" --contentRoot "%~dp0.." %*
-"@
-Set-Content -Path $binCmd -Value $binCmdContent -Encoding ASCII
+try {
+    $launcherPublishArgs = @(
+        "publish", $launcherProjectPath,
+        "-c", $Configuration,
+        "-r", $Runtime,
+        "-p:PublishAot=true",
+        "-p:DebugType=none",
+        "-p:Version=$version",
+        "-o", $launcherStagingDir
+    )
 
-# Short alias ncf-web.cmd in BinDir
-$binShortCmd = Join-Path $BinDir "ncf-web.cmd"
-$binShortCmdContent = @"
-@echo off
-setlocal
-cd /d "%~dp0.."
-"%~dp0..\NightCodeForge.Web.exe" --contentRoot "%~dp0.." %*
-"@
-Set-Content -Path $binShortCmd -Value $binShortCmdContent -Encoding ASCII
+    & dotnet @launcherPublishArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish for NightCodeForge.Launcher failed with exit code $LASTEXITCODE."
+    }
 
-# Bash launcher in BinDir for WSL / Git Bash
-$binBash = Join-Path $BinDir "nightcodeforge-web"
-$binBashContent = @"
+    $stagedLauncher = Join-Path $launcherStagingDir $launcherBinaryName
+    if (-not (Test-Path $stagedLauncher)) {
+        throw "Published Native AOT launcher binary not found at: $stagedLauncher"
+    }
+
+    $launcherTargets = @(
+        (Join-Path $InstallDir $longLauncherBinaryName),
+        (Join-Path $BinDir $longLauncherBinaryName),
+        (Join-Path $BinDir $launcherBinaryName)
+    )
+
+    $deployedPaths = @{}
+    foreach ($targetPath in $launcherTargets) {
+        $fullTargetPath = [System.IO.Path]::GetFullPath($targetPath)
+        $key = $fullTargetPath.ToLowerInvariant()
+        if ($deployedPaths.ContainsKey($key)) {
+            continue
+        }
+        $deployedPaths[$key] = $true
+        Copy-Item -Path $stagedLauncher -Destination $fullTargetPath -Force
+    }
+}
+finally {
+    if (Test-Path $launcherStagingDir) {
+        Remove-Item -Path $launcherStagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Remove legacy .cmd launchers superseded by Native AOT executables
+$legacyCmdPaths = @(
+    (Join-Path $InstallDir "nightcodeforge-web.cmd"),
+    (Join-Path $BinDir "nightcodeforge-web.cmd"),
+    (Join-Path $BinDir "ncf-web.cmd")
+)
+foreach ($legacyCmdPath in $legacyCmdPaths) {
+    if (Test-Path $legacyCmdPath) {
+        Remove-Item -Path $legacyCmdPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Persist custom LogsDir and/or custom BinDir target_exe overrides for the Native AOT launcher
+$normalizedInstallDir = $InstallDir.TrimEnd('\', '/')
+$normalizedBinDir = $BinDir.TrimEnd('\', '/')
+$binParentDir = [System.IO.Path]::GetDirectoryName($normalizedBinDir)
+$normalizedBinParentDir = if ([string]::IsNullOrWhiteSpace($binParentDir)) { "" } else { $binParentDir.TrimEnd('\', '/') }
+$isCustomExternalBinDir =
+    -not [string]::Equals($normalizedBinDir, $normalizedInstallDir, [System.StringComparison]::OrdinalIgnoreCase) -and
+    -not [string]::Equals($normalizedBinParentDir, $normalizedInstallDir, [System.StringComparison]::OrdinalIgnoreCase)
+
+$defaultLogsDir = [System.IO.Path]::GetFullPath((Join-Path $InstallDir "logs")).TrimEnd('\', '/')
+$normalizedLogsDir = $LogsDir.TrimEnd('\', '/')
+$hasCustomLogsDir = -not [string]::Equals($normalizedLogsDir, $defaultLogsDir, [System.StringComparison]::OrdinalIgnoreCase)
+
+$launcherConfPath = Join-Path $InstallDir "launcher.conf"
+if ($hasCustomLogsDir) {
+    [System.IO.File]::WriteAllText($launcherConfPath, "logs_dir=$LogsDir`n", [System.Text.UTF8Encoding]::new($false))
+} elseif (Test-Path $launcherConfPath) {
+    Remove-Item -Path $launcherConfPath -Force -ErrorAction SilentlyContinue
+}
+
+if (-not [string]::Equals($normalizedBinDir, $normalizedInstallDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $binLauncherConfPath = Join-Path $BinDir "launcher.conf"
+    if ($isCustomExternalBinDir) {
+        $binConfLines = @("target_exe=$publishedBinary")
+        if ($hasCustomLogsDir) {
+            $binConfLines += "logs_dir=$LogsDir"
+        }
+        [System.IO.File]::WriteAllText($binLauncherConfPath, ($binConfLines -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+    } elseif (Test-Path $binLauncherConfPath) {
+        Remove-Item -Path $binLauncherConfPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Bash companion shim in BinDir for WSL / Git Bash on Windows
+if ($isWindowsRuntime) {
+    $binBash = Join-Path $BinDir "nightcodeforge-web"
+    $binBashContent = @"
 #!/usr/bin/env bash
 DIR="`$( cd "`$( dirname "`${BASH_SOURCE[0]}" )" && pwd )"
-cd "`$DIR/.."
-if [ -f "`$DIR/../NightCodeForge.Web.exe" ]; then
-    "`$DIR/../NightCodeForge.Web.exe" --contentRoot "`$DIR/.." "`$@"
-elif [ -f "`$DIR/../NightCodeForge.Web" ]; then
-    "`$DIR/../NightCodeForge.Web" --contentRoot "`$DIR/.." "`$@"
-fi
+exec "`$DIR/$launcherBinaryName" "`$@"
 "@
-Set-Content -Path $binBash -Value $binBashContent -Encoding UTF8 -NoNewline
+    $binBashContent = $binBashContent -replace "`r`n", "`n"
+    [System.IO.File]::WriteAllText($binBash, $binBashContent, [System.Text.UTF8Encoding]::new($false))
+}
 
 # Idempotent User PATH update for BinDir
 $pathAdded = $false
@@ -431,7 +503,7 @@ Write-Host "Config Folder   : $ConfigDir" -ForegroundColor Green
 Write-Host "Database Folder : $DataDir" -ForegroundColor Green
 Write-Host "Logs Folder     : $LogsDir" -ForegroundColor Green
 Write-Host "Hosting URL     : $Urls" -ForegroundColor Green
-Write-Host "Launch Command  : 'nightcodeforge-web' or 'ncf-web'" -ForegroundColor Green
+Write-Host "Launch Command  : 'nightcodeforge-web' or 'ncf-web' (Native AOT watchdog; use --no-auto-restart or NCF_NO_AUTO_RESTART=1 to disable auto-restart)" -ForegroundColor Green
 
 if ($pathAdded) {
     Write-Host "`nNote: Added '$BinDir' to your user PATH." -ForegroundColor Yellow
