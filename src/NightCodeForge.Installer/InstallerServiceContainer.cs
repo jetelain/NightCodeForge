@@ -12,7 +12,8 @@ public sealed record InstallerCoreAbstractions(
     IPlatformEnvironment Platform,
     IProcessRunner ProcessRunner,
     IProcessControlService ProcessControl,
-    IWindowsRegistryAccessor Registry);
+    IWindowsRegistryAccessor Registry,
+    IInstallerSecretStore SecretStore);
 
 /// <summary>
 /// Cohesive group of host provisioning, release delivery, and OS integration services.
@@ -26,11 +27,12 @@ public sealed record InstallerProvisioningServices(
     IUninstallService UninstallService);
 
 /// <summary>
-/// Cohesive group of OllamaRouter handoff and recommendation sync services.
+/// Cohesive group of AI provider setup services (OllamaRouter handoff/sync and OpenAI-compatible configuration).
 /// </summary>
-public sealed record InstallerOllamaRouterServices(
+public sealed record InstallerAiProviderServices(
     IOllamaRouterRecommendationSyncService RecommendationSync,
-    IOllamaRouterSetupHandoffService SetupHandoff);
+    IOllamaRouterSetupHandoffService SetupHandoff,
+    IOpenAiProviderConfigurationService OpenAiProviderConfiguration);
 
 /// <summary>
 /// Cohesive group of Maintenance Hub upgrade, host process control, and Forge Doctor services.
@@ -48,12 +50,12 @@ public sealed class InstallerServiceContainer : IDisposable
     public InstallerServiceContainer(
         InstallerCoreAbstractions abstractions,
         InstallerProvisioningServices provisioning,
-        InstallerOllamaRouterServices ollamaRouter,
+        InstallerAiProviderServices aiProviders,
         InstallerMaintenanceServices maintenance)
     {
         ArgumentNullException.ThrowIfNull(abstractions);
         ArgumentNullException.ThrowIfNull(provisioning);
-        ArgumentNullException.ThrowIfNull(ollamaRouter);
+        ArgumentNullException.ThrowIfNull(aiProviders);
         ArgumentNullException.ThrowIfNull(maintenance);
 
         HttpClient = abstractions.HttpClient;
@@ -61,6 +63,7 @@ public sealed class InstallerServiceContainer : IDisposable
         ProcessRunner = abstractions.ProcessRunner;
         ProcessControl = abstractions.ProcessControl;
         Registry = abstractions.Registry;
+        SecretStore = abstractions.SecretStore;
 
         EnvironmentProvisioner = provisioning.EnvironmentProvisioner;
         NuGetProvisioner = provisioning.NuGetProvisioner;
@@ -69,8 +72,9 @@ public sealed class InstallerServiceContainer : IDisposable
         ReleaseManager = provisioning.ReleaseManager;
         UninstallService = provisioning.UninstallService;
 
-        OllamaRouterRecommendationSync = ollamaRouter.RecommendationSync;
-        OllamaRouterSetupHandoff = ollamaRouter.SetupHandoff;
+        OllamaRouterRecommendationSync = aiProviders.RecommendationSync;
+        OllamaRouterSetupHandoff = aiProviders.SetupHandoff;
+        OpenAiProviderConfiguration = aiProviders.OpenAiProviderConfiguration;
 
         UpgradeService = maintenance.UpgradeService;
         HostAppControl = maintenance.HostAppControl;
@@ -82,6 +86,7 @@ public sealed class InstallerServiceContainer : IDisposable
     public IProcessRunner ProcessRunner { get; }
     public IProcessControlService ProcessControl { get; }
     public IWindowsRegistryAccessor Registry { get; }
+    public IInstallerSecretStore SecretStore { get; }
     public IEnvironmentProvisioner EnvironmentProvisioner { get; }
     public ICompanionNuGetProvisioner NuGetProvisioner { get; }
     public IInstallationDetector InstallationDetector { get; }
@@ -90,6 +95,7 @@ public sealed class InstallerServiceContainer : IDisposable
     public IUninstallService UninstallService { get; }
     public IOllamaRouterRecommendationSyncService OllamaRouterRecommendationSync { get; }
     public IOllamaRouterSetupHandoffService OllamaRouterSetupHandoff { get; }
+    public IOpenAiProviderConfigurationService OpenAiProviderConfiguration { get; }
     public IAllComponentUpgradeService UpgradeService { get; }
     public IHostAppControlService HostAppControl { get; }
     public IForgeDoctorService ForgeDoctor { get; }
@@ -104,12 +110,14 @@ public sealed class InstallerServiceContainer : IDisposable
         var processRunner = new SystemProcessRunner();
         var processControl = new SystemProcessControlService();
         var registry = new SystemWindowsRegistryAccessor();
+        var secretStore = new KeySharpInstallerSecretStore(platform);
         var abstractions = new InstallerCoreAbstractions(
             httpClient,
             platform,
             processRunner,
             processControl,
-            registry);
+            registry,
+            secretStore);
 
         var environmentProvisioner = new EnvironmentProvisioner(platform, processRunner);
         var nuGetProvisioner = new CompanionNuGetProvisioner(platform, processRunner);
@@ -144,7 +152,8 @@ public sealed class InstallerServiceContainer : IDisposable
             processRunner,
             installationDetector,
             recommendationSync);
-        var ollamaRouter = new InstallerOllamaRouterServices(recommendationSync, setupHandoff);
+        var openAiProviderConfig = new OpenAiProviderConfigurationService(httpClient, installationDetector, secretStore);
+        var aiProviders = new InstallerAiProviderServices(recommendationSync, setupHandoff, openAiProviderConfig);
 
         var upgradeService = new AllComponentUpgradeService(
             installationDetector,
@@ -166,7 +175,7 @@ public sealed class InstallerServiceContainer : IDisposable
             processControl);
         var maintenance = new InstallerMaintenanceServices(upgradeService, hostAppControl, forgeDoctor);
 
-        return new InstallerServiceContainer(abstractions, provisioning, ollamaRouter, maintenance);
+        return new InstallerServiceContainer(abstractions, provisioning, aiProviders, maintenance);
     }
 
     public void Dispose()

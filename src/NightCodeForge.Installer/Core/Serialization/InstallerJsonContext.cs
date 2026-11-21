@@ -46,6 +46,7 @@ public sealed record RouterNodeRoleProfileDto(
 [JsonSerializable(typeof(RouterInfoProbeDto))]
 [JsonSerializable(typeof(RouterRecommendationsDto))]
 [JsonSerializable(typeof(JsonObject))]
+[JsonSerializable(typeof(JsonArray))]
 [JsonSerializable(typeof(JsonNode))]
 public partial class InstallerJsonContext : JsonSerializerContext
 {

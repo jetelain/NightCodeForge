@@ -11,11 +11,14 @@ using NightCodeForge.Installer.Core.Models;
 /// </summary>
 public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 {
-    private const string StepWsl = "WSL2";
-    private const string StepWslDistro = "WSL2 Distro";
-    private const string StepHostDotNet = "Host .NET 10 SDK";
-    private const string StepToolchain = "Subsystem Toolchain";
-    private const string StepMacOsPrerequisites = "macOS Prerequisites";
+    private const string StepWsl = ProvisioningStepNames.Wsl2;
+    private const string StepWslDistro = ProvisioningStepNames.Wsl2Distro;
+    private const string StepHostDotNet = ProvisioningStepNames.HostDotNet;
+    private const string StepToolchain = ProvisioningStepNames.SubsystemToolchain;
+    private const string StepDockerEngine = ProvisioningStepNames.DockerEngine;
+    private const string StepGit = ProvisioningStepNames.Git;
+    private const string StepRipgrep = ProvisioningStepNames.Ripgrep;
+    private const string StepDockerRuntime = ProvisioningStepNames.DockerRuntime;
     private const string WslProbeCommand =
         "if [ -f /etc/profile.d/dotnet.sh ]; then . /etc/profile.d/dotnet.sh >/dev/null 2>&1 || true; fi; " +
         "echo \"DOTNET=$(dotnet --list-sdks 2>/dev/null | grep -c '^10\\.' || true)\"; " +
@@ -27,7 +30,10 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
     private const double ProgressDistroRetry = 28.0;
     private const double ProgressHostDotNetStart = 40.0;
     private const double ProgressHostDotNetFallback = 48.0;
-    private const double ProgressMacOsStart = 50.0;
+    private const double ProgressMacOsGitStart = 55.0;
+    private const double ProgressMacOsGitComplete = 65.0;
+    private const double ProgressMacOsRipgrepStart = 75.0;
+    private const double ProgressMacOsRipgrepComplete = 85.0;
     private const double ProgressToolchainStart = 60.0;
     private const double ProgressComplete = 100.0;
 
@@ -319,7 +325,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         {
             if (!initialProbe.WslInstalled)
             {
-                Report(progress, StepWsl, "WSL2 not detected. Requesting elevated installation (wsl --install --no-launch)...", InstallerLogLevel.Info, ProgressWslStart);
+                ReportItem(progress, StepWsl, "WSL2 not detected. Requesting elevated installation (wsl --install --no-launch)...", InstallerLogLevel.Info, ProgressWslStart, ProvisioningStatus.InProgress);
                 var wslInstallResult = await _processRunner.RunAsync(
                     CreateWslRequest(["--install", "--no-launch"], useShellExecute: true, runAsAdmin: true),
                     cancellationToken).ConfigureAwait(false);
@@ -327,20 +333,18 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 if (wslInstallResult.ExitCode == InstallerConstants.ExitCodeRebootRequired)
                 {
                     var rebootMessage = "WSL2 feature was enabled and requires a Windows reboot (exit code 3010). Please reboot and re-run the installer.";
-                    steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.RebootRequired, rebootMessage));
-                    Report(progress, StepWsl, rebootMessage, InstallerLogLevel.Warning, ProgressComplete);
+                    RecordStep(steps, progress, StepWsl, ProvisioningStatus.RebootRequired, rebootMessage, InstallerLogLevel.Warning, ProgressComplete);
                     return ProvisioningStatus.RebootRequired;
                 }
 
                 if (wslInstallResult.ExitCode != InstallerConstants.ExitCodeSuccess)
                 {
                     var failMessage = $"WSL2 installation failed with exit code {wslInstallResult.ExitCode}. {wslInstallResult.StandardError}".Trim();
-                    steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.Failed, failMessage));
-                    Report(progress, StepWsl, failMessage, InstallerLogLevel.Error, null);
+                    RecordStep(steps, progress, StepWsl, ProvisioningStatus.Failed, failMessage, InstallerLogLevel.Error, null);
                     return ProvisioningStatus.Failed;
                 }
 
-                steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.Completed, "WSL2 installed successfully."));
+                RecordStep(steps, progress, StepWsl, ProvisioningStatus.Completed, "WSL2 installed successfully.", InstallerLogLevel.Info, ProgressWslStart);
 
                 var (_, refreshedDistros) = await ProbeWindowsWslAsync(cancellationToken).ConfigureAwait(false);
                 var resolvedAfterInstall = ResolveWslDistroName(refreshedDistros, distro);
@@ -352,7 +356,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             }
             else
             {
-                steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.Skipped, "WSL2 is already installed."));
+                RecordStep(steps, progress, StepWsl, ProvisioningStatus.Verified, "WSL2 is already installed.", InstallerLogLevel.Info, ProgressWslStart);
             }
 
             var setDefaultVersionResult = await _processRunner.RunAsync(
@@ -370,7 +374,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
 
             if (!distroInstalled)
             {
-                Report(progress, StepWslDistro, $"Installing WSL2 distribution '{distro}'...", InstallerLogLevel.Info, ProgressDistroStart);
+                ReportItem(progress, StepWslDistro, $"Installing WSL2 distribution '{distro}'...", InstallerLogLevel.Info, ProgressDistroStart, ProvisioningStatus.InProgress);
                 var distroResult = await _processRunner.RunAsync(
                     CreateWslRequest(["--install", "-d", distro, "--web-download", "--no-launch"]),
                     cancellationToken).ConfigureAwait(false);
@@ -378,13 +382,13 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 if (distroResult.ExitCode == InstallerConstants.ExitCodeRebootRequired)
                 {
                     var rebootMessage = $"WSL2 distribution '{distro}' requires a Windows reboot (exit code 3010).";
-                    steps.Add(new ProvisioningStepResult(StepWslDistro, ProvisioningStatus.RebootRequired, rebootMessage));
+                    RecordStep(steps, progress, StepWslDistro, ProvisioningStatus.RebootRequired, rebootMessage, InstallerLogLevel.Warning, ProgressComplete);
                     return ProvisioningStatus.RebootRequired;
                 }
 
                 if (distroResult.ExitCode != InstallerConstants.ExitCodeSuccess)
                 {
-                    Report(progress, StepWslDistro, $"Retrying installation of '{distro}' without --web-download...", InstallerLogLevel.Warning, ProgressDistroRetry);
+                    ReportItem(progress, StepWslDistro, $"Retrying installation of '{distro}' without --web-download...", InstallerLogLevel.Warning, ProgressDistroRetry, ProvisioningStatus.InProgress);
                     distroResult = await _processRunner.RunAsync(
                         CreateWslRequest(["--install", "-d", distro, "--no-launch"]),
                         cancellationToken).ConfigureAwait(false);
@@ -392,7 +396,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                     if (distroResult.ExitCode == InstallerConstants.ExitCodeRebootRequired)
                     {
                         var rebootMessage = $"WSL2 distribution '{distro}' requires a Windows reboot (exit code 3010).";
-                        steps.Add(new ProvisioningStepResult(StepWslDistro, ProvisioningStatus.RebootRequired, rebootMessage));
+                        RecordStep(steps, progress, StepWslDistro, ProvisioningStatus.RebootRequired, rebootMessage, InstallerLogLevel.Warning, ProgressComplete);
                         return ProvisioningStatus.RebootRequired;
                     }
                 }
@@ -400,7 +404,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 if (distroResult.ExitCode != InstallerConstants.ExitCodeSuccess)
                 {
                     var failMessage = $"Failed to install WSL2 distribution '{distro}' (exit code {distroResult.ExitCode}): {distroResult.StandardError}".Trim();
-                    steps.Add(new ProvisioningStepResult(StepWslDistro, ProvisioningStatus.Failed, failMessage));
+                    RecordStep(steps, progress, StepWslDistro, ProvisioningStatus.Failed, failMessage, InstallerLogLevel.Error, null);
                     return ProvisioningStatus.Failed;
                 }
 
@@ -417,29 +421,37 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                         null);
                 }
 
-                steps.Add(new ProvisioningStepResult(StepWslDistro, ProvisioningStatus.Completed, $"Installed WSL2 distribution '{distro}'."));
+                RecordStep(steps, progress, StepWslDistro, ProvisioningStatus.Completed, $"Installed WSL2 distribution '{distro}'.", InstallerLogLevel.Info, ProgressDistroStart);
                 activeDistro = distro;
             }
             else
             {
-                steps.Add(new ProvisioningStepResult(StepWslDistro, ProvisioningStatus.Skipped, $"WSL2 distribution '{activeDistro}' is already installed."));
+                RecordStep(steps, progress, StepWslDistro, ProvisioningStatus.Verified, $"WSL2 distribution '{activeDistro}' is already installed.", InstallerLogLevel.Info, ProgressDistroStart);
             }
         }
         else
         {
-            steps.Add(new ProvisioningStepResult(StepWsl, ProvisioningStatus.Skipped, "WSL2 provisioning skipped by options."));
+            RecordStep(steps, progress, StepWsl, ProvisioningStatus.Skipped, "WSL2 provisioning skipped by options.", InstallerLogLevel.Info, null);
+            RecordStep(steps, progress, StepWslDistro, ProvisioningStatus.Skipped, "WSL2 distribution provisioning skipped by options.", InstallerLogLevel.Info, null);
         }
 
         if (options.ProvisionHostDotNet)
         {
             if (initialProbe.HostDotNet10Installed)
             {
-                steps.Add(new ProvisioningStepResult(StepHostDotNet, ProvisioningStatus.Skipped, ".NET 10 SDK is already installed on Windows host."));
+                RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Verified, ".NET 10 SDK is already installed on Windows host.", InstallerLogLevel.Info, ProgressHostDotNetStart);
             }
             else
             {
                 var dotNetStep = await ProvisionWindowsHostDotNet10Async(progress, cancellationToken).ConfigureAwait(false);
-                steps.Add(dotNetStep);
+                RecordStep(
+                    steps,
+                    progress,
+                    dotNetStep.StepName,
+                    dotNetStep.Status,
+                    dotNetStep.Message,
+                    dotNetStep.Status == ProvisioningStatus.Failed ? InstallerLogLevel.Error : InstallerLogLevel.Info,
+                    null);
                 if (dotNetStep.Status == ProvisioningStatus.Failed)
                 {
                     return ProvisioningStatus.Failed;
@@ -448,24 +460,47 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         }
         else
         {
-            steps.Add(new ProvisioningStepResult(StepHostDotNet, ProvisioningStatus.Skipped, "Host .NET 10 SDK provisioning skipped by options."));
+            RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Skipped, "Host .NET 10 SDK provisioning skipped by options.", InstallerLogLevel.Info, null);
         }
 
         if (options.ProvisionLinuxOrWslToolchain)
         {
-            var wslAlreadyReady = initialProbe.WslInstalled &&
-                                  initialProbe.WslDistroInstalled &&
-                                  initialProbe.WslDotNet10Installed &&
-                                  initialProbe.WslRipgrepInstalled &&
-                                  (options.SkipDocker || initialProbe.WslDockerInstalled);
+            var toolchainReady = initialProbe.WslInstalled &&
+                                 initialProbe.WslDistroInstalled &&
+                                 initialProbe.WslDotNet10Installed &&
+                                 initialProbe.WslRipgrepInstalled;
+            var dockerEnabled = !options.SkipDocker;
+            var dockerReady = !dockerEnabled ||
+                              (initialProbe.WslInstalled &&
+                               initialProbe.WslDistroInstalled &&
+                               initialProbe.WslDockerInstalled);
 
-            if (wslAlreadyReady)
+            if (toolchainReady)
             {
-                steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, $"WSL2 toolchain in '{activeDistro}' is already installed."));
+                RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Verified, $"WSL2 toolchain in '{activeDistro}' is already installed.", InstallerLogLevel.Info, ProgressToolchainStart);
             }
-            else
+
+            if (!dockerEnabled)
             {
-                Report(progress, StepToolchain, $"Provisioning .NET 10, Docker, ripgrep, and toolchain inside WSL2 '{activeDistro}'...", InstallerLogLevel.Info, ProgressToolchainStart);
+                RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Skipped, "Docker Engine provisioning skipped by options.", InstallerLogLevel.Info, null);
+            }
+            else if (dockerReady)
+            {
+                RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Verified, $"Docker Engine inside WSL2 '{activeDistro}' is already running.", InstallerLogLevel.Info, ProgressToolchainStart);
+            }
+
+            if (!toolchainReady || (dockerEnabled && !dockerReady))
+            {
+                if (!toolchainReady)
+                {
+                    ReportItem(progress, StepToolchain, $"Provisioning .NET 10, ripgrep, and toolchain inside WSL2 '{activeDistro}'...", InstallerLogLevel.Info, ProgressToolchainStart, ProvisioningStatus.InProgress);
+                }
+
+                if (dockerEnabled && !dockerReady)
+                {
+                    ReportItem(progress, StepDockerEngine, $"Provisioning Docker Engine inside WSL2 '{activeDistro}'...", InstallerLogLevel.Info, ProgressToolchainStart, ProvisioningStatus.InProgress);
+                }
+
                 var script = BuildLinuxToolchainScript(isWsl: true, skipDocker: options.SkipDocker);
                 var wslExecResult = await ExecuteWslRootBashScriptAsync(activeDistro, script, cancellationToken).ConfigureAwait(false);
 
@@ -473,17 +508,34 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 {
                     var err = string.IsNullOrWhiteSpace(wslExecResult.StandardError) ? wslExecResult.StandardOutput : wslExecResult.StandardError;
                     var message = $"WSL2 toolchain provisioning failed (exit code {wslExecResult.ExitCode}): {err}".Trim();
-                    steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Failed, message));
-                    Report(progress, StepToolchain, message, InstallerLogLevel.Error, null);
+                    if (!toolchainReady)
+                    {
+                        RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Failed, message, InstallerLogLevel.Error, null);
+                    }
+
+                    if (dockerEnabled && !dockerReady)
+                    {
+                        RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Failed, message, InstallerLogLevel.Error, null);
+                    }
+
                     return ProvisioningStatus.Failed;
                 }
 
-                steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Completed, $"Provisioned toolchain inside WSL2 '{activeDistro}'."));
+                if (!toolchainReady)
+                {
+                    RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Completed, $"Provisioned toolchain inside WSL2 '{activeDistro}'.", InstallerLogLevel.Info, ProgressComplete);
+                }
+
+                if (dockerEnabled && !dockerReady)
+                {
+                    RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Completed, $"Provisioned Docker Engine inside WSL2 '{activeDistro}'.", InstallerLogLevel.Info, ProgressComplete);
+                }
             }
         }
         else
         {
-            steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, "WSL2 toolchain provisioning skipped by options."));
+            RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Skipped, "WSL2 toolchain provisioning skipped by options.", InstallerLogLevel.Info, null);
+            RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Skipped, "Docker Engine provisioning skipped by options.", InstallerLogLevel.Info, null);
         }
 
         return null;
@@ -493,7 +545,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        Report(progress, StepHostDotNet, "Installing .NET 10 SDK via winget...", InstallerLogLevel.Info, ProgressHostDotNetStart);
+        ReportItem(progress, StepHostDotNet, "Installing .NET 10 SDK via winget...", InstallerLogLevel.Info, ProgressHostDotNetStart, ProvisioningStatus.InProgress);
         var wingetResult = await _processRunner.RunAsync(
             new ProcessRunRequest
             {
@@ -520,7 +572,7 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             }
         }
 
-        Report(progress, StepHostDotNet, "Winget unavailable or incomplete; installing .NET 10 SDK via dotnet-install.ps1...", InstallerLogLevel.Warning, ProgressHostDotNetFallback);
+        ReportItem(progress, StepHostDotNet, "Winget unavailable or incomplete; installing .NET 10 SDK via dotnet-install.ps1...", InstallerLogLevel.Warning, ProgressHostDotNetFallback, ProvisioningStatus.InProgress);
         var installScriptCmd =
             $"$ErrorActionPreference='Stop'; " +
             $"$p=Join-Path $env:TEMP 'dotnet-install-{Guid.NewGuid():N}.ps1'; " +
@@ -562,25 +614,63 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        if (!options.ProvisionLinuxOrWslToolchain && !options.ProvisionHostDotNet)
+        var hostDotNetNeeded = options.ProvisionHostDotNet && !probe.HostDotNet10Installed;
+        var toolchainNeeded = options.ProvisionLinuxOrWslToolchain && (!probe.HostGitInstalled || !probe.HostRipgrepInstalled);
+        var dockerEnabled = options.ProvisionLinuxOrWslToolchain && !options.SkipDocker;
+        var dockerNeeded = dockerEnabled && !probe.HostDockerAvailable;
+
+        if (!options.ProvisionHostDotNet)
         {
-            steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, "Linux toolchain provisioning skipped by options."));
+            RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Skipped, "Host .NET 10 SDK provisioning skipped by options.", InstallerLogLevel.Info, null);
+        }
+        else if (!hostDotNetNeeded)
+        {
+            RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Verified, ".NET 10 SDK is already installed.", InstallerLogLevel.Info, ProgressHostDotNetStart);
+        }
+
+        if (!options.ProvisionLinuxOrWslToolchain)
+        {
+            RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Skipped, "Linux toolchain provisioning skipped by options.", InstallerLogLevel.Info, null);
+            RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Skipped, "Docker Engine provisioning skipped by options.", InstallerLogLevel.Info, null);
+        }
+        else
+        {
+            if (!toolchainNeeded)
+            {
+                RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Verified, "Linux toolchain (git, ripgrep, core tools) is already installed.", InstallerLogLevel.Info, ProgressToolchainStart);
+            }
+
+            if (!dockerEnabled)
+            {
+                RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Skipped, "Docker Engine provisioning skipped by options.", InstallerLogLevel.Info, null);
+            }
+            else if (!dockerNeeded)
+            {
+                RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Verified, "Docker Engine is already running.", InstallerLogLevel.Info, ProgressToolchainStart);
+            }
+        }
+
+        if (!hostDotNetNeeded && !toolchainNeeded && !dockerNeeded)
+        {
             return;
         }
 
-        var alreadyReady = (!options.ProvisionHostDotNet || probe.HostDotNet10Installed) &&
-                           (!options.ProvisionLinuxOrWslToolchain ||
-                            (probe.HostGitInstalled &&
-                             probe.HostRipgrepInstalled &&
-                             (options.SkipDocker || probe.HostDockerAvailable)));
-        if (alreadyReady)
+        if (hostDotNetNeeded)
         {
-            steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Skipped, "Linux toolchain prerequisites are already installed."));
-            return;
+            ReportItem(progress, StepHostDotNet, "Provisioning .NET 10 SDK on Linux...", InstallerLogLevel.Info, ProgressHostDotNetStart, ProvisioningStatus.InProgress);
         }
 
-        Report(progress, StepToolchain, "Provisioning Linux toolchain (.NET 10 SDK, Docker Engine, ripgrep, git, ICU, locales)...", InstallerLogLevel.Info, ProgressHostDotNetStart);
-        var script = BuildLinuxToolchainScript(isWsl: false, skipDocker: options.SkipDocker);
+        if (toolchainNeeded)
+        {
+            ReportItem(progress, StepToolchain, "Provisioning Linux toolchain (ripgrep, git, ICU, locales)...", InstallerLogLevel.Info, ProgressToolchainStart, ProvisioningStatus.InProgress);
+        }
+
+        if (dockerNeeded)
+        {
+            ReportItem(progress, StepDockerEngine, "Provisioning Docker Engine on Linux...", InstallerLogLevel.Info, ProgressToolchainStart, ProvisioningStatus.InProgress);
+        }
+
+        var script = BuildLinuxToolchainScript(isWsl: false, skipDocker: !dockerEnabled);
         var tempScript = Path.Combine(Path.GetTempPath(), $"ncf-provision-{Guid.NewGuid():N}.sh");
 
         try
@@ -593,11 +683,39 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             if (result.ExitCode != InstallerConstants.ExitCodeSuccess)
             {
                 var err = string.IsNullOrWhiteSpace(result.StandardError) ? result.StandardOutput : result.StandardError;
-                steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Failed, $"Linux toolchain provisioning failed: {err}".Trim()));
+                var message = $"Linux toolchain provisioning failed: {err}".Trim();
+                if (hostDotNetNeeded)
+                {
+                    RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Failed, message, InstallerLogLevel.Error, null);
+                }
+
+                if (toolchainNeeded)
+                {
+                    RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Failed, message, InstallerLogLevel.Error, null);
+                }
+
+                if (dockerNeeded)
+                {
+                    RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Failed, message, InstallerLogLevel.Error, null);
+                }
+
                 return;
             }
 
-            steps.Add(new ProvisioningStepResult(StepToolchain, ProvisioningStatus.Completed, "Linux toolchain provisioned successfully."));
+            if (hostDotNetNeeded)
+            {
+                RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Completed, ".NET 10 SDK provisioned on Linux.", InstallerLogLevel.Info, ProgressComplete);
+            }
+
+            if (toolchainNeeded)
+            {
+                RecordStep(steps, progress, StepToolchain, ProvisioningStatus.Completed, "Linux toolchain provisioned successfully.", InstallerLogLevel.Info, ProgressComplete);
+            }
+
+            if (dockerNeeded)
+            {
+                RecordStep(steps, progress, StepDockerEngine, ProvisioningStatus.Completed, "Docker Engine provisioned successfully.", InstallerLogLevel.Info, ProgressComplete);
+            }
         }
         finally
         {
@@ -644,68 +762,105 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
         IProgress<InstallerProgressEvent>? progress,
         CancellationToken cancellationToken)
     {
-        if (!options.ProvisionHostDotNet && !options.ProvisionLinuxOrWslToolchain)
+        if (!options.ProvisionHostDotNet)
         {
-            steps.Add(new ProvisioningStepResult(StepMacOsPrerequisites, ProvisioningStatus.Skipped, "macOS prerequisites check skipped by options."));
+            RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Skipped, "Host .NET 10 SDK check skipped by options.", InstallerLogLevel.Info, null);
+        }
+        else if (probe.HostDotNet10Installed)
+        {
+            RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Verified, ".NET 10 SDK is installed on macOS host.", InstallerLogLevel.Info, ProgressHostDotNetStart);
+        }
+        else
+        {
+            RecordStep(steps, progress, StepHostDotNet, ProvisioningStatus.Failed, "Missing macOS prerequisite: .NET 10 SDK.", InstallerLogLevel.Error, null);
+        }
+
+        if (!options.ProvisionLinuxOrWslToolchain)
+        {
+            RecordStep(steps, progress, StepGit, ProvisioningStatus.Skipped, "Git check skipped by options.", InstallerLogLevel.Info, null);
+            RecordStep(steps, progress, StepRipgrep, ProvisioningStatus.Skipped, "ripgrep check skipped by options.", InstallerLogLevel.Info, null);
+            RecordStep(steps, progress, StepDockerRuntime, ProvisioningStatus.Skipped, "Docker runtime check skipped by options.", InstallerLogLevel.Info, null);
             return;
         }
 
-        Report(progress, StepMacOsPrerequisites, "Verifying macOS Docker runtime, Git, ripgrep, and .NET 10 SDK...", InstallerLogLevel.Info, ProgressMacOsStart);
+        await VerifyOrBrewInstallMacToolAsync(
+            StepGit,
+            InstallerConstants.GitExecutable,
+            InstallerConstants.GitExecutable,
+            probe.HostGitInstalled,
+            ProgressMacOsGitStart,
+            ProgressMacOsGitComplete,
+            steps,
+            progress,
+            cancellationToken).ConfigureAwait(false);
 
-        if (options.ProvisionLinuxOrWslToolchain && !probe.HostRipgrepInstalled && _platform.IsCommandOnPath(InstallerConstants.BrewExecutable))
+        await VerifyOrBrewInstallMacToolAsync(
+            StepRipgrep,
+            InstallerConstants.BrewRipgrepPackage,
+            InstallerConstants.RipgrepExecutable,
+            probe.HostRipgrepInstalled,
+            ProgressMacOsRipgrepStart,
+            ProgressMacOsRipgrepComplete,
+            steps,
+            progress,
+            cancellationToken).ConfigureAwait(false);
+
+        if (options.SkipDocker)
         {
-            var brewRg = await _processRunner.RunAsync(
-                new ProcessRunRequest { FileName = InstallerConstants.BrewExecutable, Arguments = ["install", "ripgrep"] },
-                cancellationToken).ConfigureAwait(false);
-            if (brewRg.ExitCode != InstallerConstants.ExitCodeSuccess)
-            {
-                Report(progress, StepMacOsPrerequisites, $"Warning: 'brew install ripgrep' exited with code {brewRg.ExitCode}: {brewRg.StandardError}".Trim(), InstallerLogLevel.Warning, null);
-            }
+            RecordStep(steps, progress, StepDockerRuntime, ProvisioningStatus.Skipped, "Docker runtime check skipped by options.", InstallerLogLevel.Info, null);
         }
-
-        if (options.ProvisionLinuxOrWslToolchain && !probe.HostGitInstalled && _platform.IsCommandOnPath(InstallerConstants.BrewExecutable))
+        else if (probe.HostDockerAvailable)
         {
-            var brewGit = await _processRunner.RunAsync(
-                new ProcessRunRequest { FileName = InstallerConstants.BrewExecutable, Arguments = ["install", InstallerConstants.GitExecutable] },
-                cancellationToken).ConfigureAwait(false);
-            if (brewGit.ExitCode != InstallerConstants.ExitCodeSuccess)
-            {
-                Report(progress, StepMacOsPrerequisites, $"Warning: 'brew install git' exited with code {brewGit.ExitCode}: {brewGit.StandardError}".Trim(), InstallerLogLevel.Warning, null);
-            }
+            RecordStep(steps, progress, StepDockerRuntime, ProvisioningStatus.Verified, "Docker runtime is running on macOS host.", InstallerLogLevel.Info, ProgressComplete);
         }
-
-        var refreshed = await ProbeAsync(InstallerConstants.DefaultWslDistro, cancellationToken).ConfigureAwait(false);
-        var missing = new List<string>();
-        if (options.ProvisionLinuxOrWslToolchain && !options.SkipDocker && !refreshed.HostDockerAvailable)
+        else
         {
-            missing.Add("Docker runtime (Docker Desktop, Colima, or OrbStack)");
+            RecordStep(steps, progress, StepDockerRuntime, ProvisioningStatus.Failed, "Missing macOS prerequisite: Docker runtime (Docker Desktop, Colima, or OrbStack).", InstallerLogLevel.Error, null);
         }
+    }
 
-        if (options.ProvisionHostDotNet && !refreshed.HostDotNet10Installed)
+    private async Task VerifyOrBrewInstallMacToolAsync(
+        string stepName,
+        string brewPackage,
+        string binaryName,
+        bool alreadyInstalled,
+        double startProgressPercent,
+        double completedProgressPercent,
+        List<ProvisioningStepResult> steps,
+        IProgress<InstallerProgressEvent>? progress,
+        CancellationToken cancellationToken)
+    {
+        if (alreadyInstalled)
         {
-            missing.Add(".NET 10 SDK");
-        }
-
-        if (options.ProvisionLinuxOrWslToolchain && !refreshed.HostGitInstalled)
-        {
-            missing.Add(InstallerConstants.GitExecutable);
-        }
-
-        if (options.ProvisionLinuxOrWslToolchain && !refreshed.HostRipgrepInstalled)
-        {
-            missing.Add("ripgrep");
-        }
-
-        if (missing.Count > 0)
-        {
-            steps.Add(new ProvisioningStepResult(
-                StepMacOsPrerequisites,
-                ProvisioningStatus.Failed,
-                $"Missing macOS prerequisite(s): {string.Join(", ", missing)}."));
+            RecordStep(steps, progress, stepName, ProvisioningStatus.Verified, $"{stepName} is already installed.", InstallerLogLevel.Info, completedProgressPercent);
             return;
         }
 
-        steps.Add(new ProvisioningStepResult(StepMacOsPrerequisites, ProvisioningStatus.Completed, "macOS prerequisites verified."));
+        if (!_platform.IsCommandOnPath(InstallerConstants.BrewExecutable))
+        {
+            RecordStep(steps, progress, stepName, ProvisioningStatus.Failed, $"Missing macOS prerequisite: {stepName} (Homebrew not available).", InstallerLogLevel.Error, null);
+            return;
+        }
+
+        ReportItem(progress, stepName, $"Installing {brewPackage} via Homebrew...", InstallerLogLevel.Info, startProgressPercent, ProvisioningStatus.InProgress);
+        var brewResult = await _processRunner.RunAsync(
+            new ProcessRunRequest { FileName = InstallerConstants.BrewExecutable, Arguments = ["install", brewPackage] },
+            cancellationToken).ConfigureAwait(false);
+
+        if (brewResult.ExitCode != InstallerConstants.ExitCodeSuccess)
+        {
+            Report(progress, stepName, $"Warning: 'brew install {brewPackage}' exited with code {brewResult.ExitCode}: {brewResult.StandardError}".Trim(), InstallerLogLevel.Warning, null);
+        }
+
+        var installedNow = await ProbeSimpleSuccessAsync(binaryName, ["--version"], cancellationToken).ConfigureAwait(false);
+        if (installedNow)
+        {
+            RecordStep(steps, progress, stepName, ProvisioningStatus.Completed, $"Installed {stepName} via Homebrew.", InstallerLogLevel.Info, completedProgressPercent);
+        }
+        else
+        {
+            RecordStep(steps, progress, stepName, ProvisioningStatus.Failed, $"Missing macOS prerequisite: {stepName}.", InstallerLogLevel.Error, null);
+        }
     }
 
     private async Task<ProcessExecutionResult> ExecuteWslRootBashScriptAsync(
@@ -889,8 +1044,13 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
             return ProvisioningStatus.Failed;
         }
 
-        return steps.Any(s => s.Status == ProvisioningStatus.Completed)
-            ? ProvisioningStatus.Completed
+        if (steps.Any(s => s.Status == ProvisioningStatus.Completed))
+        {
+            return ProvisioningStatus.Completed;
+        }
+
+        return steps.Any(s => s.Status == ProvisioningStatus.Verified)
+            ? ProvisioningStatus.Verified
             : ProvisioningStatus.Skipped;
     }
 
@@ -908,6 +1068,30 @@ public sealed partial class EnvironmentProvisioner : IEnvironmentProvisioner
                 ? null
                 : new Dictionary<string, string> { [InstallerConstants.WslUtf8EnvVar] = "1" }
         };
+
+    private static void RecordStep(
+        List<ProvisioningStepResult> steps,
+        IProgress<InstallerProgressEvent>? progress,
+        string stepName,
+        ProvisioningStatus status,
+        string message,
+        InstallerLogLevel level,
+        double? percent)
+    {
+        steps.Add(new ProvisioningStepResult(stepName, status, message));
+        ReportItem(progress, stepName, message, level, percent, status);
+    }
+
+    private static void ReportItem(
+        IProgress<InstallerProgressEvent>? progress,
+        string stepName,
+        string message,
+        InstallerLogLevel level,
+        double? percent,
+        ProvisioningStatus itemStatus)
+    {
+        progress?.Report(new InstallerProgressEvent(stepName, message, level, percent, stepName, itemStatus));
+    }
 
     private static void Report(
         IProgress<InstallerProgressEvent>? progress,

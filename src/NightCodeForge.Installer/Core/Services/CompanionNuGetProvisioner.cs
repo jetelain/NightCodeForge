@@ -130,47 +130,102 @@ public sealed class CompanionNuGetProvisioner : ICompanionNuGetProvisioner
                 var spec = Catalog[i];
                 var basePercent = (double)i / Catalog.Count * ProgressRangeMax;
                 var isPrereleaseBundle = hostBundleDir is not null && HasPrereleaseBundlePackage(hostBundleDir, spec.PackageId);
+                var itemKey = DeploymentComponentKeys.ForCompanionTool(spec.PackageId);
+                var willInstallWsl = provisionWsl && spec.InstallInWsl;
 
-                if (spec.InstallOnHost)
+                try
                 {
-                    progress?.Report(new InstallerProgressEvent(
-                        StepTools,
-                        $"Provisioning {spec.PackageId} ({spec.ToolCommand}) on Host...",
-                        InstallerLogLevel.Info,
-                        basePercent));
+                    if (spec.InstallOnHost)
+                    {
+                        progress?.Report(new InstallerProgressEvent(
+                            StepTools,
+                            $"Provisioning {spec.PackageId} ({spec.ToolCommand}) on Host...",
+                            InstallerLogLevel.Info,
+                            basePercent,
+                            itemKey,
+                            ProvisioningStatus.InProgress));
 
-                    var isInstalled = existingHostTools.ContainsKey(spec.PackageId);
-                    var outcome = await InstallOrUpgradeToolAsync(
-                        spec,
-                        source.Mode,
-                        hostBundleDir,
-                        hostNuGetConfigPath,
-                        isPrereleaseBundle,
-                        wslDistro: null,
-                        isInstalled,
-                        cancellationToken).ConfigureAwait(false);
-                    outcomes.Add(outcome);
+                        var isInstalled = existingHostTools.ContainsKey(spec.PackageId);
+                        var outcome = await InstallOrUpgradeToolAsync(
+                            spec,
+                            source.Mode,
+                            hostBundleDir,
+                            hostNuGetConfigPath,
+                            isPrereleaseBundle,
+                            wslDistro: null,
+                            isInstalled,
+                            cancellationToken).ConfigureAwait(false);
+                        outcomes.Add(outcome);
+
+                        if (!willInstallWsl)
+                        {
+                            progress?.Report(new InstallerProgressEvent(
+                                StepTools,
+                                $"{spec.PackageId} ({spec.ToolCommand}) ready on Host.",
+                                InstallerLogLevel.Info,
+                                ((double)(i + 1) / Catalog.Count) * ProgressRangeMax,
+                                itemKey,
+                                outcome.Status));
+                        }
+                        else
+                        {
+                            progress?.Report(new InstallerProgressEvent(
+                                StepTools,
+                                $"Host ✓ — provisioning {spec.PackageId} ({spec.ToolCommand}) inside WSL2 '{wslDistroName}'...",
+                                InstallerLogLevel.Info,
+                                basePercent + WslProgressStepOffset,
+                                itemKey,
+                                ProvisioningStatus.InProgress));
+                        }
+                    }
+
+                    if (willInstallWsl)
+                    {
+                        if (!spec.InstallOnHost)
+                        {
+                            progress?.Report(new InstallerProgressEvent(
+                                StepTools,
+                                $"Provisioning {spec.PackageId} ({spec.ToolCommand}) inside WSL2 '{wslDistroName}'...",
+                                InstallerLogLevel.Info,
+                                basePercent + WslProgressStepOffset,
+                                itemKey,
+                                ProvisioningStatus.InProgress));
+                        }
+
+                        var isInstalledInWsl = existingWslTools.ContainsKey(spec.PackageId);
+                        var outcome = await InstallOrUpgradeToolAsync(
+                            spec,
+                            source.Mode,
+                            wslBundleDir,
+                            wslNuGetConfigPath,
+                            isPrereleaseBundle,
+                            wslDistro: wslDistroName,
+                            isInstalledInWsl,
+                            cancellationToken).ConfigureAwait(false);
+                        outcomes.Add(outcome);
+
+                        var finalScopeMessage = spec.InstallOnHost
+                            ? $"{spec.PackageId} ({spec.ToolCommand}) ready on Host and WSL2 '{wslDistroName}'."
+                            : $"{spec.PackageId} ({spec.ToolCommand}) ready in WSL2 '{wslDistroName}'.";
+                        progress?.Report(new InstallerProgressEvent(
+                            StepTools,
+                            finalScopeMessage,
+                            InstallerLogLevel.Info,
+                            ((double)(i + 1) / Catalog.Count) * ProgressRangeMax,
+                            itemKey,
+                            outcome.Status));
+                    }
                 }
-
-                if (provisionWsl && spec.InstallInWsl)
+                catch (NuGetToolProvisioningException ex)
                 {
                     progress?.Report(new InstallerProgressEvent(
                         StepTools,
-                        $"Provisioning {spec.PackageId} ({spec.ToolCommand}) inside WSL2 '{wslDistroName}'...",
-                        InstallerLogLevel.Info,
-                        basePercent + WslProgressStepOffset));
-
-                    var isInstalledInWsl = existingWslTools.ContainsKey(spec.PackageId);
-                    var outcome = await InstallOrUpgradeToolAsync(
-                        spec,
-                        source.Mode,
-                        wslBundleDir,
-                        wslNuGetConfigPath,
-                        isPrereleaseBundle,
-                        wslDistro: wslDistroName,
-                        isInstalledInWsl,
-                        cancellationToken).ConfigureAwait(false);
-                    outcomes.Add(outcome);
+                        ex.Message,
+                        InstallerLogLevel.Error,
+                        null,
+                        itemKey,
+                        ProvisioningStatus.Failed));
+                    throw;
                 }
             }
 

@@ -1,6 +1,7 @@
 namespace NightCodeForge.Installer.Core.Constants;
 
 using System.Collections.Immutable;
+using NightCodeForge.Installer.Core.Abstractions;
 using NightCodeForge.Installer.Core.Models;
 
 /// <summary>
@@ -41,7 +42,21 @@ public static class InstallerConstants
     public const string LlmLegacyModelIdKey = "ModelId";
     public const string LlmContextWindowTokensKey = "ContextWindowTokens";
     public const string OllamaRouterProviderTypeName = "OllamaRouter";
+    public const string OpenAiCompatibleProviderTypeName = "OpenAiCompatible";
+    public const string LlmOpenAiCompatibleSectionName = "OpenAiCompatible";
+    public const string LlmOpenAiOrganizationIdKey = "OrganizationId";
+    public const string LlmOpenAiAllowedModelsKey = "AllowedModels";
+    public const string LlmOpenAiAllowedModelIdKey = "ModelId";
+    public const string LlmOpenAiDisplayNameKey = "DisplayName";
+    public const string LlmOpenAiMaxOutputTokensKey = "MaxOutputTokens";
+    public const string LlmLegacyApiKeyPropertyName = "ApiKey";
     public const int DefaultContextWindowTokens = 131072;
+    public const int DefaultOpenAiMaxOutputTokens = 8192;
+    public const int OpenAiDiscoveryTimeoutSeconds = 15;
+    public const string KeyringPackageName = "NightCodeForge";
+    public const string KeyringOpenAiCompatibleServiceName = "OpenAiCompatibleApiKey";
+    public const string EnvOpenAiApiKey = "OPENAI_API_KEY";
+    public const string DefaultOpenAiEndpoint = "https://api.openai.com/v1";
 
     public const string RoleBasic = "basic";
     public const string RoleAgenticChat = "agentic_chat";
@@ -115,6 +130,7 @@ public static class InstallerConstants
     public const string WingetExecutable = "winget";
     public const string GitExecutable = "git";
     public const string RipgrepExecutable = "rg";
+    public const string BrewRipgrepPackage = "ripgrep";
     public const string BashExecutable = "bash";
     public const string SudoExecutable = "sudo";
     public const string PkexecExecutable = "pkexec";
@@ -296,11 +312,190 @@ public static class InstallerConstants
             "av_libglesv2.dll",
             "libHarfBuzzSharp.dll",
             "libSkiaSharp.dll",
+            "skeychain.dll",
             "libHarfBuzzSharp.so",
             "libSkiaSharp.so",
+            "libskeychain.so",
             "libAvaloniaNative.dylib",
             "libHarfBuzzSharp.dylib",
-            "libSkiaSharp.dylib");
+            "libSkiaSharp.dylib",
+            "libskeychain.dylib");
+}
+
+/// <summary>
+/// Canonical step keys and display titles used across Step 2 host/subsystem provisioning.
+/// </summary>
+public static class ProvisioningStepNames
+{
+    public const string Wsl2 = "WSL2";
+    public const string Wsl2Distro = "WSL2 Distro";
+    public const string HostDotNet = "Host .NET 10 SDK";
+    public const string SubsystemToolchain = "Subsystem Toolchain";
+    public const string DockerEngine = "Docker Engine";
+    public const string Git = "Git";
+    public const string Ripgrep = "ripgrep";
+    public const string DockerRuntime = "Docker Runtime";
+}
+
+/// <summary>
+/// Canonical checklist item keys used across Step 3 software and companion tool deployment.
+/// </summary>
+public static class DeploymentComponentKeys
+{
+    public const string NightCodeForgeWeb = "component:nightcodeforge-web";
+    public const string OllamaRouter = "component:ollamarouter";
+    public const string CompanionToolPrefix = "tool:";
+
+    public static string ForCompanionTool(string packageId) => CompanionToolPrefix + packageId;
+}
+
+/// <summary>
+/// Built-in OpenAI-compatible provider presets surfaced during Step 4 AI setup.
+/// </summary>
+public static class OpenAiProviderPresetCatalog
+{
+    public static readonly OpenAiProviderPreset OpenAi = new(
+        "openai",
+        "OpenAI",
+        InstallerConstants.DefaultOpenAiEndpoint,
+        RequiresApiKey: true,
+        SupportsOrganizationId: true,
+        "Official OpenAI API (GPT-4o, o3, o4-mini).");
+
+    public static readonly OpenAiProviderPreset OpenRouter = new(
+        "openrouter",
+        "OpenRouter",
+        "https://openrouter.ai/api/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "Unified gateway across Claude, Gemini, DeepSeek, Qwen, and OpenAI models.");
+
+    public static readonly OpenAiProviderPreset DeepSeek = new(
+        "deepseek",
+        "DeepSeek",
+        "https://api.deepseek.com/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "DeepSeek API (deepseek-chat, deepseek-reasoner).");
+
+    public static readonly OpenAiProviderPreset Mistral = new(
+        "mistral",
+        "Mistral AI",
+        "https://api.mistral.ai/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "Mistral La Plateforme API (Codestral, Devstral, Mistral Large).");
+
+    public static readonly OpenAiProviderPreset Gemini = new(
+        "gemini",
+        "Google Gemini (OpenAI API)",
+        "https://generativelanguage.googleapis.com/v1beta/openai",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "Google Gemini OpenAI-compatible REST endpoint.");
+
+    public static readonly OpenAiProviderPreset Groq = new(
+        "groq",
+        "Groq",
+        "https://api.groq.com/openai/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "Ultra-low-latency Groq LPU inference endpoint.");
+
+    public static readonly OpenAiProviderPreset XAi = new(
+        "xai",
+        "xAI (Grok)",
+        "https://api.x.ai/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "xAI Grok OpenAI-compatible API.");
+
+    public static readonly OpenAiProviderPreset Together = new(
+        "together",
+        "Together AI",
+        "https://api.together.xyz/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "Together AI hosted open-weight models.");
+
+    public static readonly OpenAiProviderPreset Fireworks = new(
+        "fireworks",
+        "Fireworks AI",
+        "https://api.fireworks.ai/inference/v1",
+        RequiresApiKey: true,
+        SupportsOrganizationId: false,
+        "Fireworks AI high-throughput serverless inference.");
+
+    public static readonly OpenAiProviderPreset LmStudio = new(
+        "lmstudio",
+        "LM Studio (Local)",
+        "http://localhost:1234/v1",
+        RequiresApiKey: false,
+        SupportsOrganizationId: false,
+        "Local LM Studio OpenAI-compatible server.");
+
+    public static readonly OpenAiProviderPreset Vllm = new(
+        "vllm",
+        "vLLM (Local)",
+        "http://localhost:8000/v1",
+        RequiresApiKey: false,
+        SupportsOrganizationId: false,
+        "Local or LAN vLLM OpenAI-compatible server.");
+
+    public static readonly OpenAiProviderPreset CustomPreset = new(
+        "custom",
+        "Custom OpenAI-Compatible Endpoint",
+        string.Empty,
+        RequiresApiKey: false,
+        SupportsOrganizationId: true,
+        "Any custom OpenAI-compatible /v1 completions server (LiteLLM, Azure, self-hosted).");
+
+    public static readonly IReadOnlyList<OpenAiProviderPreset> All = ImmutableArray.Create(
+        OpenAi,
+        OpenRouter,
+        DeepSeek,
+        Mistral,
+        Gemini,
+        Groq,
+        XAi,
+        Together,
+        Fireworks,
+        LmStudio,
+        Vllm,
+        CustomPreset);
+
+    public static OpenAiProviderPreset FindByEndpoint(string? endpoint)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            return CustomPreset;
+        }
+
+        var hasNormalizedInput = InstallerEndpointNormalizer.TryNormalizeEndpoint(endpoint, out var normalizedInput);
+        var fallbackInput = endpoint.Trim().TrimEnd('/');
+
+        foreach (var preset in All)
+        {
+            if (string.IsNullOrWhiteSpace(preset.DefaultEndpoint))
+            {
+                continue;
+            }
+
+            if (hasNormalizedInput &&
+                InstallerEndpointNormalizer.TryNormalizeEndpoint(preset.DefaultEndpoint, out var normalizedPreset) &&
+                string.Equals(normalizedPreset, normalizedInput, StringComparison.OrdinalIgnoreCase))
+            {
+                return preset;
+            }
+
+            if (string.Equals(preset.DefaultEndpoint.TrimEnd('/'), fallbackInput, StringComparison.OrdinalIgnoreCase))
+            {
+                return preset;
+            }
+        }
+
+        return CustomPreset;
+    }
 }
 
 /// <summary>

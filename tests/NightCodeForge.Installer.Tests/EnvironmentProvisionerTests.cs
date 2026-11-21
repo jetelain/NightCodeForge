@@ -403,4 +403,187 @@ public sealed class EnvironmentProvisionerTests : IDisposable
         Assert.Contains("SetEnvironmentVariable('Path'", capturedPowerShellCommand, StringComparison.Ordinal);
         platform.Verify(p => p.RefreshProcessPath(), Times.AtLeastOnce);
     }
+
+    [Fact]
+    public async Task ProvisionAsync_Windows_ReportsPerItemProgressForVerifiedInstalledAndSkippedSteps()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var runner = new Mock<IProcessRunner>();
+        var wslToolchainRan = false;
+
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ProcessRunRequest req, CancellationToken _) =>
+            {
+                var joined = string.Join(' ', req.Arguments);
+                if (req.FileName == "dotnet" && joined == "--list-sdks")
+                {
+                    return new ProcessExecutionResult(0, "10.0.403 [C:\\Program Files\\dotnet\\sdk]", string.Empty);
+                }
+
+                if (req.FileName == "wsl.exe" && joined == "--status")
+                {
+                    return new ProcessExecutionResult(0, "Default Version: 2", string.Empty);
+                }
+
+                if (req.FileName == "wsl.exe" && joined == "-l -q")
+                {
+                    return new ProcessExecutionResult(0, "Ubuntu\r\n", string.Empty);
+                }
+
+                if (req.FileName == "wsl.exe" && joined.Contains("bash -lc", StringComparison.Ordinal))
+                {
+                    return new ProcessExecutionResult(0, wslToolchainRan ? "DOTNET=1\nDOCKER=0\nRG=1\n" : "DOTNET=0\nDOCKER=0\nRG=0\n", string.Empty);
+                }
+
+                if (req.FileName == "wsl.exe" && joined.Contains("wslpath", StringComparison.Ordinal))
+                {
+                    return new ProcessExecutionResult(0, "/mnt/c/temp/provision.sh\n", string.Empty);
+                }
+
+                if (req.FileName == "wsl.exe" && joined.Contains("bash /mnt/c/temp/provision.sh", StringComparison.Ordinal))
+                {
+                    wslToolchainRan = true;
+                    return new ProcessExecutionResult(0, "ok", string.Empty);
+                }
+
+                return new ProcessExecutionResult(0, string.Empty, string.Empty);
+            });
+
+        var itemEvents = new List<InstallerProgressEvent>();
+        var sut = new EnvironmentProvisioner(platform.Object, runner.Object);
+        var report = await sut.ProvisionAsync(
+            new ProvisioningOptions(
+                WslDistroName: "Ubuntu",
+                ProvisionWsl: true,
+                ProvisionHostDotNet: true,
+                ProvisionLinuxOrWslToolchain: true,
+                SkipDocker: true),
+            new SynchronousProgress<InstallerProgressEvent>(e =>
+            {
+                if (!string.IsNullOrWhiteSpace(e.ItemKey) && e.ItemStatus.HasValue)
+                {
+                    itemEvents.Add(e);
+                }
+            }));
+
+        Assert.Equal(ProvisioningStatus.Completed, report.OverallStatus);
+        Assert.Contains(itemEvents, e => e.ItemKey == ProvisioningStepNames.Wsl2 && e.ItemStatus == ProvisioningStatus.Verified);
+        Assert.Contains(itemEvents, e => e.ItemKey == ProvisioningStepNames.Wsl2Distro && e.ItemStatus == ProvisioningStatus.Verified);
+        Assert.Contains(itemEvents, e => e.ItemKey == ProvisioningStepNames.HostDotNet && e.ItemStatus == ProvisioningStatus.Verified);
+        Assert.Contains(itemEvents, e => e.ItemKey == ProvisioningStepNames.SubsystemToolchain && e.ItemStatus == ProvisioningStatus.InProgress);
+        Assert.Contains(itemEvents, e => e.ItemKey == ProvisioningStepNames.SubsystemToolchain && e.ItemStatus == ProvisioningStatus.Completed);
+        Assert.Contains(itemEvents, e => e.ItemKey == ProvisioningStepNames.DockerEngine && e.ItemStatus == ProvisioningStatus.Skipped);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_Linux_HostDotNetOnlyWithSkipDockerFalse_SkipsDockerAndExcludesDockerFromScript()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, _workspace.RootPath);
+        platform.Setup(p => p.GetEnvironmentVariable(InstallerConstants.EnvUserUnix)).Returns(InstallerConstants.RootUserUnix);
+
+        string? capturedScript = null;
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ProcessRunRequest req, CancellationToken _) =>
+            {
+                if (req.FileName == InstallerConstants.DotNetExecutable)
+                {
+                    return new ProcessExecutionResult(1, string.Empty, "not installed");
+                }
+
+                if (req.FileName == InstallerConstants.BashExecutable && req.Arguments.Count > 0 && File.Exists(req.Arguments[0]))
+                {
+                    capturedScript = File.ReadAllText(req.Arguments[0]);
+                    return new ProcessExecutionResult(0, "ok", string.Empty);
+                }
+
+                return new ProcessExecutionResult(0, "ok", string.Empty);
+            });
+
+        var sut = new EnvironmentProvisioner(platform.Object, runner.Object);
+        var report = await sut.ProvisionAsync(new ProvisioningOptions(
+            WslDistroName: InstallerConstants.DefaultWslDistro,
+            ProvisionWsl: false,
+            ProvisionHostDotNet: true,
+            ProvisionLinuxOrWslToolchain: false,
+            SkipDocker: false));
+
+        Assert.Equal(ProvisioningStatus.Completed, report.OverallStatus);
+        Assert.Contains(report.Steps, s => s.StepName == ProvisioningStepNames.DockerEngine && s.Status == ProvisioningStatus.Skipped);
+        Assert.NotNull(capturedScript);
+        Assert.Contains("dotnet-sdk-10.0", capturedScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("docker.io", capturedScript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_MacOs_ReportsMonotonicProgressPercentages()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.MacOS, InstallerConstants.RuntimeOsxArm64, _workspace.RootPath);
+        platform.Setup(p => p.IsCommandOnPath(InstallerConstants.BrewExecutable)).Returns(true);
+
+        var gitInstalled = false;
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ProcessRunRequest req, CancellationToken _) =>
+            {
+                if (req.FileName == InstallerConstants.DotNetExecutable)
+                {
+                    return new ProcessExecutionResult(0, "10.0.100", string.Empty);
+                }
+
+                if (req.FileName == InstallerConstants.BrewExecutable && req.Arguments.Count >= 2 && req.Arguments[1] == InstallerConstants.GitExecutable)
+                {
+                    gitInstalled = true;
+                    return new ProcessExecutionResult(0, "installed git", string.Empty);
+                }
+
+                if (req.FileName == InstallerConstants.GitExecutable)
+                {
+                    return gitInstalled
+                        ? new ProcessExecutionResult(0, "git 2.47", string.Empty)
+                        : new ProcessExecutionResult(1, string.Empty, "missing");
+                }
+
+                if (req.FileName == InstallerConstants.RipgrepExecutable)
+                {
+                    return new ProcessExecutionResult(0, "rg 14", string.Empty);
+                }
+
+                if (req.FileName == InstallerConstants.DockerExecutable)
+                {
+                    return new ProcessExecutionResult(0, "Docker running", string.Empty);
+                }
+
+                return new ProcessExecutionResult(0, "ok", string.Empty);
+            });
+
+        var percentages = new List<double>();
+        var sut = new EnvironmentProvisioner(platform.Object, runner.Object);
+        var report = await sut.ProvisionAsync(
+            new ProvisioningOptions(
+                WslDistroName: InstallerConstants.DefaultWslDistro,
+                ProvisionWsl: false,
+                ProvisionHostDotNet: true,
+                ProvisionLinuxOrWslToolchain: true,
+                SkipDocker: false),
+            new SynchronousProgress<InstallerProgressEvent>(e =>
+            {
+                if (e.ProgressPercent.HasValue)
+                {
+                    percentages.Add(e.ProgressPercent.Value);
+                }
+            }));
+
+        Assert.Equal(ProvisioningStatus.Completed, report.OverallStatus);
+        Assert.True(percentages.Count >= 4);
+        for (var i = 1; i < percentages.Count; i++)
+        {
+            Assert.True(percentages[i] >= percentages[i - 1], $"Progress went backwards: {percentages[i - 1]} -> {percentages[i]}");
+        }
+    }
+
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
+    }
 }

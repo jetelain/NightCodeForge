@@ -19,6 +19,7 @@ public enum ProvisioningStatus
 {
     NotStarted,
     InProgress,
+    Verified,
     Completed,
     RebootRequired,
     Failed,
@@ -57,7 +58,9 @@ public sealed record InstallerProgressEvent(
     string Step,
     string Message,
     InstallerLogLevel Level,
-    double? ProgressPercent);
+    double? ProgressPercent,
+    string? ItemKey = null,
+    ProvisioningStatus? ItemStatus = null);
 
 public sealed record EnvironmentProbeResult(
     HostPlatformType Platform,
@@ -264,3 +267,99 @@ public sealed record AllComponentUpgradeResult(
     ReleaseDeploymentResult? OllamaRouterDeployment,
     IReadOnlyList<CompanionToolInstallOutcome> CompanionToolOutcomes,
     string? ErrorMessage);
+
+public enum AiSetupMode
+{
+    OllamaRouter,
+    OpenAiCompatible
+}
+
+public enum OpenAiAllowedModelsPersistenceMode
+{
+    PreserveExisting,
+    ClearForDynamicDiscovery,
+    WriteManualModels
+}
+
+public sealed record OpenAiProviderPreset(
+    string Id,
+    string Name,
+    string DefaultEndpoint,
+    bool RequiresApiKey,
+    bool SupportsOrganizationId,
+    string Description);
+
+public sealed record OpenAiDiscoveredModel(
+    string ModelId,
+    string DisplayName,
+    int? ContextWindowTokens,
+    decimal? PromptCostPerMillion,
+    decimal? CompletionCostPerMillion)
+{
+    public string DisplayLabel
+    {
+        get
+        {
+            var baseName = string.IsNullOrWhiteSpace(DisplayName) ||
+                           string.Equals(DisplayName, ModelId, StringComparison.OrdinalIgnoreCase)
+                ? ModelId
+                : $"{DisplayName} ({ModelId})";
+
+            var parts = new List<string>();
+            if (ContextWindowTokens is > 0)
+            {
+                parts.Add(ContextWindowTokens.Value >= 1000
+                    ? $"{ContextWindowTokens.Value / 1000}k ctx"
+                    : $"{ContextWindowTokens.Value} ctx");
+            }
+
+            if (PromptCostPerMillion.HasValue && CompletionCostPerMillion.HasValue)
+            {
+                parts.Add(string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"${PromptCostPerMillion.Value:0.##}/${CompletionCostPerMillion.Value:0.##}/M"));
+            }
+
+            return parts.Count > 0 ? $"{baseName} [{string.Join(", ", parts)}]" : baseName;
+        }
+    }
+}
+
+public sealed record OpenAiModelDiscoveryResult(
+    bool IsSuccess,
+    bool IsDiscoveryImplemented,
+    IReadOnlyList<OpenAiDiscoveredModel> Models,
+    string? Message,
+    string? ErrorMessage);
+
+public sealed record OpenAiProviderSaveRequest(
+    string? InstallDirectory,
+    string ProviderName,
+    string Endpoint,
+    string? ApiKeyInput,
+    string? OrganizationId,
+    string DefaultModelId,
+    string? ArchitectModelId,
+    string? CoderModelId,
+    int ContextWindowTokens,
+    OpenAiAllowedModelsPersistenceMode AllowedModelsMode);
+
+public sealed record OpenAiProviderConfigurationSummary(
+    string ProviderName,
+    string Endpoint,
+    string DefaultModelId,
+    string? ArchitectModelId,
+    string? CoderModelId,
+    int ContextWindowTokens,
+    bool ApiKeyStoredInKeyring,
+    string ConfigFilePath);
+
+public sealed record ExistingOpenAiProviderConfig(
+    string Endpoint,
+    string? OrganizationId,
+    string? DefaultModelId,
+    string? ArchitectModelId,
+    string? CoderModelId,
+    int? ContextWindowTokens,
+    bool HasManualAllowedModels,
+    string ConfigFilePath);

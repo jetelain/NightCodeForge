@@ -22,7 +22,7 @@
                    FontWeight="{Binding SelectedStep, Converter={x:Static conv:IntEqualityToFontWeightConverter.Instance}, ConverterParameter=1}" />
         <TextBlock Text="3 · Software &amp; Tools"
                    FontWeight="{Binding SelectedStep, Converter={x:Static conv:IntEqualityToFontWeightConverter.Instance}, ConverterParameter=2}" />
-        <TextBlock Text="4 · AI Fleet (OllamaRouter)"
+        <TextBlock Text="4 · AI Provider &amp; Models"
                    FontWeight="{Binding SelectedStep, Converter={x:Static conv:IntEqualityToFontWeightConverter.Instance}, ConverterParameter=3}" />
         <TextBlock Text="5 · Ready to Forge"
                    FontWeight="{Binding SelectedStep, Converter={x:Static conv:IntEqualityToFontWeightConverter.Instance}, ConverterParameter=4}" />

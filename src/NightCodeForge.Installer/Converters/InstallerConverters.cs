@@ -132,6 +132,7 @@ public sealed class ProvisioningStatusToBrushConverter : IValueConverter
         value switch
         {
             ProvisioningStatus.Completed => CompletedBrush,
+            ProvisioningStatus.Verified => CompletedBrush,
             ProvisioningStatus.RebootRequired => WarningBrush,
             ProvisioningStatus.Failed => FailedBrush,
             ProvisioningStatus.InProgress => ActiveBrush,

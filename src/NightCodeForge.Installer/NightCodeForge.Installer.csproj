@@ -13,6 +13,8 @@
     <StripSymbols>true</StripSymbols>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <!-- Pmad.KeySharp's KeySharp.Glue.GetLibrarySearchPaths reads Assembly.Location and already falls back to AppContext.BaseDirectory when empty under Native AOT. -->
+    <NoWarn>$(NoWarn);IL3000</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +28,7 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.6" />
     <PackageReference Include="Semi.Avalonia" Version="12.1.0.1" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Pmad.KeySharp" Version="0.1.0" />
     <!-- Explicit transitive pin overriding 0.21.2 from Avalonia.Desktop to resolve NU1903 (GHSA-xrw6-gwf8-vvr9). -->
     <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.2" />
   </ItemGroup>

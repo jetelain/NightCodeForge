@@ -15,6 +15,7 @@ internal static class InstallerTestFactory
         IProcessRunner? processRunner = null,
         IProcessControlService? processControl = null,
         IWindowsRegistryAccessor? registry = null,
+        IInstallerSecretStore? secretStore = null,
         IEnvironmentProvisioner? environmentProvisioner = null,
         ICompanionNuGetProvisioner? nuGetProvisioner = null,
         IInstallationDetector? installationDetector = null,
@@ -23,6 +24,7 @@ internal static class InstallerTestFactory
         IUninstallService? uninstallService = null,
         IOllamaRouterRecommendationSyncService? recommendationSync = null,
         IOllamaRouterSetupHandoffService? setupHandoff = null,
+        IOpenAiProviderConfigurationService? openAiProvider = null,
         IAllComponentUpgradeService? upgradeService = null,
         IHostAppControlService? hostAppControl = null,
         IForgeDoctorService? forgeDoctor = null)
@@ -41,6 +43,7 @@ internal static class InstallerTestFactory
         var resolvedRunner = processRunner ?? Mock.Of<IProcessRunner>();
         var resolvedControl = processControl ?? Mock.Of<IProcessControlService>();
         var resolvedRegistry = registry ?? Mock.Of<IWindowsRegistryAccessor>();
+        var resolvedSecretStore = secretStore ?? CreateDefaultSecretStore();
 
         var resolvedEnv = environmentProvisioner ?? CreateDefaultEnvironmentProvisioner();
         var resolvedNuGet = nuGetProvisioner ?? CreateDefaultNuGetProvisioner();
@@ -50,6 +53,7 @@ internal static class InstallerTestFactory
         var resolvedUninstall = uninstallService ?? Mock.Of<IUninstallService>();
         var resolvedSync = recommendationSync ?? Mock.Of<IOllamaRouterRecommendationSyncService>();
         var resolvedHandoff = setupHandoff ?? Mock.Of<IOllamaRouterSetupHandoffService>();
+        var resolvedOpenAi = openAiProvider ?? new OpenAiProviderConfigurationService(resolvedHttp, resolvedDetector, resolvedSecretStore);
 
         var resolvedUpgrade = upgradeService ?? new AllComponentUpgradeService(
             resolvedDetector,
@@ -71,9 +75,9 @@ internal static class InstallerTestFactory
             resolvedControl);
 
         return new InstallerServiceContainer(
-            new InstallerCoreAbstractions(resolvedHttp, resolvedPlatform, resolvedRunner, resolvedControl, resolvedRegistry),
+            new InstallerCoreAbstractions(resolvedHttp, resolvedPlatform, resolvedRunner, resolvedControl, resolvedRegistry, resolvedSecretStore),
             new InstallerProvisioningServices(resolvedEnv, resolvedNuGet, resolvedDetector, resolvedOs, resolvedRelease, resolvedUninstall),
-            new InstallerOllamaRouterServices(resolvedSync, resolvedHandoff),
+            new InstallerAiProviderServices(resolvedSync, resolvedHandoff, resolvedOpenAi),
             new InstallerMaintenanceServices(resolvedUpgrade, resolvedHostControl, resolvedDoctor));
     }
 
@@ -119,6 +123,25 @@ internal static class InstallerTestFactory
         var mock = new Mock<ICompanionNuGetProvisioner>();
         mock.Setup(n => n.ProbeToolsAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        return mock.Object;
+    }
+
+    private static IInstallerSecretStore CreateDefaultSecretStore()
+    {
+        var keys = new Dictionary<string, string>(StringComparer.Ordinal);
+        var mock = new Mock<IInstallerSecretStore>();
+        mock.Setup(s => s.IsKeyringAvailable()).Returns(true);
+        mock.Setup(s => s.GetOpenAiApiKey(It.IsAny<string?>()))
+            .Returns((string? ep) => ep is not null && keys.TryGetValue(ep.Trim().TrimEnd('/'), out var val) ? val : null);
+        mock.Setup(s => s.ResolveEffectiveOpenAiApiKey(It.IsAny<string?>()))
+            .Returns((string? ep) => ep is not null && keys.TryGetValue(ep.Trim().TrimEnd('/'), out var val) ? val : null);
+        mock.Setup(s => s.HasOpenAiApiKey(It.IsAny<string?>()))
+            .Returns((string? ep) => ep is not null && keys.ContainsKey(ep.Trim().TrimEnd('/')));
+        mock.Setup(s => s.HasEnvironmentOpenAiApiKey()).Returns(false);
+        mock.Setup(s => s.SetOpenAiApiKey(It.IsAny<string>(), It.IsAny<string>()))
+            .Callback((string ep, string key) => keys[ep.Trim().TrimEnd('/')] = key.Trim());
+        mock.Setup(s => s.DeleteOpenAiApiKey(It.IsAny<string>()))
+            .Callback((string ep) => keys.Remove(ep.Trim().TrimEnd('/')));
         return mock.Object;
     }
 }

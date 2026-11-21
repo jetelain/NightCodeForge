@@ -26,7 +26,7 @@
             <TextBlock Grid.Row="2" Grid.Column="0" Text="OllamaRouter:" Foreground="{DynamicResource SemiColorText2}" />
             <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding OllamaRouterSummary}" TextWrapping="Wrap" />
 
-            <TextBlock Grid.Row="3" Grid.Column="0" Text="AI Fleet Roles:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="AI Provider &amp; Models:" Foreground="{DynamicResource SemiColorText2}" />
             <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding AiModelsSummary}" TextWrapping="Wrap" />
 
             <TextBlock Grid.Row="4" Grid.Column="0" Text="Companion Tools:" Foreground="{DynamicResource SemiColorText2}" />

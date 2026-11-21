@@ -132,3 +132,35 @@ public sealed class OllamaRouterSyncException : InstallerException
     {
     }
 }
+
+/// <summary>
+/// Raised when probing or persisting an OpenAI-compatible provider configuration fails.
+/// </summary>
+public sealed class OpenAiConfigurationException : InstallerException
+{
+    public OpenAiConfigurationException(string message)
+        : base(message)
+    {
+    }
+
+    public OpenAiConfigurationException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// Raised when reading, writing, or deleting credentials in the native OS keyring fails.
+/// </summary>
+public sealed class InstallerSecretStoreException : InstallerException
+{
+    public InstallerSecretStoreException(string message)
+        : base(message)
+    {
+    }
+
+    public InstallerSecretStoreException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}

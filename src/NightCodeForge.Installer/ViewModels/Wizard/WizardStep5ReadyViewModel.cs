@@ -88,11 +88,13 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
                 ? $"Detected v{_state.Discovery.OllamaRouter.Version ?? "unknown"} ({_state.Discovery.OllamaRouter.InstallDirectory})"
                 : "Not installed";
 
-        AiModelsSummary = _state.SyncedRecommendations is not null
-            ? $"Architect: {_state.SyncedRecommendations.ArchitectModelId ?? "-"} | Coder: {_state.SyncedRecommendations.CoderModelId ?? "-"}"
-            : _state.AiFleetSkipped
-                ? "Skipped (configure Cloud / ACP / OllamaRouter in Web UI)"
-                : "Not synced yet";
+        AiModelsSummary = _state.ConfiguredOpenAiProvider is not null
+            ? FormatOpenAiSummary(_state.ConfiguredOpenAiProvider)
+            : _state.SyncedRecommendations is not null
+                ? $"OllamaRouter — Architect: {_state.SyncedRecommendations.ArchitectModelId ?? "-"} | Coder: {_state.SyncedRecommendations.CoderModelId ?? "-"}"
+                : _state.AiFleetSkipped
+                    ? "Skipped (configure Cloud, ACP, or OllamaRouter in Web UI)"
+                    : "Not configured yet";
 
         CompanionToolsSummary = _state.CompanionOutcomes.Count > 0
             ? $"{_state.CompanionOutcomes.Count} tool installation target(s) completed."
@@ -251,4 +253,20 @@ public sealed partial class WizardStep5ReadyViewModel : ObservableObject
 
     [RelayCommand]
     private void Finish() => _uiHost.RequestExit(InstallerConstants.ExitCodeSuccess);
+
+    private static string FormatOpenAiSummary(Core.Models.OpenAiProviderConfigurationSummary openAi)
+    {
+        var roleParts = new List<string> { $"Default: {openAi.DefaultModelId}" };
+        if (!string.IsNullOrWhiteSpace(openAi.ArchitectModelId))
+        {
+            roleParts.Add($"Architect: {openAi.ArchitectModelId}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(openAi.CoderModelId))
+        {
+            roleParts.Add($"Coder: {openAi.CoderModelId}");
+        }
+
+        return $"OpenAI Compatible ({openAi.ProviderName} @ {openAi.Endpoint}) — {string.Join(" | ", roleParts)}";
+    }
 }

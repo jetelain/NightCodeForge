@@ -142,8 +142,10 @@ public sealed class InstallerArchitectureTests
         Assert.DoesNotContain("Hangfire.Core", referencedNames);
 
         using var container = InstallerServiceContainer.CreateDefault();
+        Assert.NotNull(container.SecretStore);
         Assert.NotNull(container.OllamaRouterRecommendationSync);
         Assert.NotNull(container.OllamaRouterSetupHandoff);
+        Assert.NotNull(container.OpenAiProviderConfiguration);
         Assert.NotNull(container.UpgradeService);
         Assert.NotNull(container.HostAppControl);
         Assert.NotNull(container.ForgeDoctor);
@@ -162,6 +164,9 @@ public sealed class InstallerArchitectureTests
         Assert.Equal(false, UiModeToVisibilityConverter.Instance.Convert(InstallerUiMode.OobeWizard, typeof(bool), "MaintenanceHub", CultureInfo.InvariantCulture));
         Assert.NotNull(DoctorStatusToBrushConverter.Instance.Convert(DoctorCheckStatus.Pass, typeof(object), null, CultureInfo.InvariantCulture));
         Assert.NotNull(ProvisioningStatusToBrushConverter.Instance.Convert(ProvisioningStatus.RebootRequired, typeof(object), null, CultureInfo.InvariantCulture));
+        Assert.Equal(
+            ProvisioningStatusToBrushConverter.Instance.Convert(ProvisioningStatus.Completed, typeof(object), null, CultureInfo.InvariantCulture),
+            ProvisioningStatusToBrushConverter.Instance.Convert(ProvisioningStatus.Verified, typeof(object), null, CultureInfo.InvariantCulture));
         Assert.NotNull(BoolToStatusBrushConverter.Instance.Convert(true, typeof(object), null, CultureInfo.InvariantCulture));
     }
 }

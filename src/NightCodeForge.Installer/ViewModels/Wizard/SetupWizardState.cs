@@ -57,7 +57,9 @@ public sealed class SetupWizardState
     public ReleaseDeploymentResult? NightCodeForgeDeployment { get; set; }
     public ReleaseDeploymentResult? OllamaRouterDeployment { get; set; }
     public IReadOnlyList<CompanionToolInstallOutcome> CompanionOutcomes { get; set; }
+    public AiSetupMode SelectedAiSetupMode { get; set; } = AiSetupMode.OllamaRouter;
     public RouterRoleRecommendationsSummary? SyncedRecommendations { get; set; }
+    public OpenAiProviderConfigurationSummary? ConfiguredOpenAiProvider { get; set; }
     public bool AiFleetSkipped { get; set; }
 
     public InstallSourceOptions ToInstallSourceOptions() =>

@@ -22,8 +22,6 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
     private const double ProgressPersistPercent = 70.0;
     private const double ProgressCompletePercent = 100.0;
 
-    private static readonly SemaphoreSlim ConfigFileLock = new(1, 1);
-
     private readonly HttpClient _httpClient;
     private readonly IInstallationDetector _installationDetector;
 
@@ -106,11 +104,13 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
         var mapped = MapRecommendations(dto);
 
         var resolvedInstallDir = candidateInstallDir ?? ResolveInstallDirectory(installDirectory);
-        var configDir = Path.Combine(resolvedInstallDir, InstallerConstants.ConfigDirectoryName);
-        var configFilePath = Path.Combine(configDir, InstallerConstants.UserConfigFileName);
+        var configFilePath = Path.Combine(
+            resolvedInstallDir,
+            InstallerConstants.ConfigDirectoryName,
+            InstallerConstants.UserConfigFileName);
 
         Report(progress, $"Updating '{configFilePath}' with calibrated OllamaRouter models...", InstallerLogLevel.Info, ProgressPersistPercent);
-        await PersistConfigOverlayAsync(configDir, configFilePath, effectiveBaseUrl, mapped, cancellationToken)
+        await PersistConfigOverlayAsync(resolvedInstallDir, effectiveBaseUrl, mapped, cancellationToken)
             .ConfigureAwait(false);
 
         var summary = new RouterRoleRecommendationsSummary(
@@ -266,218 +266,38 @@ public sealed class OllamaRouterRecommendationSyncService : IOllamaRouterRecomme
         }
     }
 
-    private static async Task PersistConfigOverlayAsync(
-        string configDir,
-        string configFilePath,
+    private static Task PersistConfigOverlayAsync(
+        string installDirectory,
         string endpoint,
         MappedInstallerRecommendations mapped,
         CancellationToken cancellationToken)
     {
-        await ConfigFileLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            try
+        return InstallerUserConfigWriter.UpdateConfigAsync(
+            installDirectory,
+            (root, configFilePath) =>
             {
-                var root = await ReadOrCreateRootObjectAsync(configFilePath, cancellationToken).ConfigureAwait(false);
-                var llmNode = MergeAndNormalizeSection(root, InstallerConstants.LlmProviderSectionName, configFilePath);
+                var llmNode = InstallerUserConfigWriter.MergeAndNormalizeSection(
+                    root,
+                    InstallerConstants.LlmProviderSectionName,
+                    configFilePath,
+                    CreateSyncException);
 
-                SetStringProperty(llmNode, InstallerConstants.LlmProviderTypeKey, InstallerConstants.OllamaRouterProviderTypeName);
-                SetStringProperty(llmNode, InstallerConstants.LlmEndpointKey, endpoint);
-                RemoveMatchingKeys(llmNode, InstallerConstants.LlmLegacyModelIdKey);
-                SetOptionalStringProperty(llmNode, InstallerConstants.LlmArchitectModelIdKey, mapped.ArchitectModelId);
-                SetOptionalStringProperty(llmNode, InstallerConstants.LlmCoderModelIdKey, mapped.CoderModelId);
-                SetOptionalStringProperty(llmNode, InstallerConstants.LlmDefaultModelIdKey, mapped.DefaultModelId);
-                SetIntProperty(llmNode, InstallerConstants.LlmContextWindowTokensKey, mapped.ContextWindowTokens);
-
-                Directory.CreateDirectory(configDir);
-                var tempFilePath = Path.Combine(configDir, $"{InstallerConstants.UserConfigFileName}.{Guid.NewGuid():N}.tmp");
-
-                try
-                {
-                    await using (var stream = new FileStream(
-                        tempFilePath,
-                        FileMode.CreateNew,
-                        FileAccess.Write,
-                        FileShare.None,
-                        InstallerConstants.DownloadBufferSizeBytes,
-                        useAsync: true))
-                    {
-                        await JsonSerializer.SerializeAsync(
-                            stream,
-                            root,
-                            InstallerJsonContext.Default.JsonObject,
-                            cancellationToken).ConfigureAwait(false);
-                        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                    }
-
-                    await MoveConfigWithRetryAsync(tempFilePath, configFilePath, cancellationToken).ConfigureAwait(false);
-                }
-                finally
-                {
-                    if (File.Exists(tempFilePath))
-                    {
-                        try
-                        {
-                            File.Delete(tempFilePath);
-                        }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                        {
-                            // Justification: Best-effort cleanup of temp config file must not mask primary failure.
-                            _ = ex;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
-            {
-                throw new OllamaRouterSyncException(
-                    $"Failed to read or update configuration file '{configFilePath}': {ex.Message}",
-                    ex);
-            }
-        }
-        finally
-        {
-            ConfigFileLock.Release();
-        }
+                InstallerUserConfigWriter.SetStringProperty(llmNode, InstallerConstants.LlmProviderTypeKey, InstallerConstants.OllamaRouterProviderTypeName);
+                InstallerUserConfigWriter.SetStringProperty(llmNode, InstallerConstants.LlmEndpointKey, endpoint);
+                InstallerUserConfigWriter.RemoveMatchingKeys(llmNode, InstallerConstants.LlmLegacyModelIdKey);
+                InstallerUserConfigWriter.SetOptionalStringProperty(llmNode, InstallerConstants.LlmArchitectModelIdKey, mapped.ArchitectModelId);
+                InstallerUserConfigWriter.SetOptionalStringProperty(llmNode, InstallerConstants.LlmCoderModelIdKey, mapped.CoderModelId);
+                InstallerUserConfigWriter.SetOptionalStringProperty(llmNode, InstallerConstants.LlmDefaultModelIdKey, mapped.DefaultModelId);
+                InstallerUserConfigWriter.SetIntProperty(llmNode, InstallerConstants.LlmContextWindowTokensKey, mapped.ContextWindowTokens);
+            },
+            CreateSyncException,
+            cancellationToken);
     }
 
-    private static async Task MoveConfigWithRetryAsync(
-        string tempFilePath,
-        string configFilePath,
-        CancellationToken cancellationToken)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                File.Move(tempFilePath, configFilePath, overwrite: true);
-                return;
-            }
-            catch (IOException) when (attempt < InstallerConstants.ConfigFileMoveRetryAttempts)
-            {
-                await Task.Delay(InstallerConstants.ConfigFileMoveRetryDelayMs, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-        }
-    }
-
-    private static async Task<JsonObject> ReadOrCreateRootObjectAsync(
-        string configFilePath,
-        CancellationToken cancellationToken)
-    {
-        if (!File.Exists(configFilePath))
-        {
-            return new JsonObject();
-        }
-
-        var existingJson = await File.ReadAllTextAsync(configFilePath, cancellationToken).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(existingJson))
-        {
-            return new JsonObject();
-        }
-
-        try
-        {
-            var parsed = JsonNode.Parse(
-                existingJson,
-                documentOptions: new JsonDocumentOptions
-                {
-                    CommentHandling = JsonCommentHandling.Skip,
-                    AllowTrailingCommas = true
-                });
-            if (parsed is not JsonObject root)
-            {
-                throw new OllamaRouterSyncException(
-                    $"Configuration file '{configFilePath}' does not contain a root JSON object.");
-            }
-
-            return root;
-        }
-        catch (Exception ex) when (ex is JsonException or ArgumentException)
-        {
-            throw new OllamaRouterSyncException(
-                $"Configuration file '{configFilePath}' contains invalid JSON and cannot be safely updated.",
-                ex);
-        }
-    }
-
-    private static JsonObject MergeAndNormalizeSection(JsonObject parent, string canonicalKey, string configFilePath)
-    {
-        var matchingEntries = parent
-            .Where(kvp => string.Equals(kvp.Key, canonicalKey, StringComparison.OrdinalIgnoreCase))
-            .Select(kvp => (kvp.Key, kvp.Value))
-            .ToList();
-
-        if (matchingEntries.Count == 0)
-        {
-            var created = new JsonObject();
-            parent[canonicalKey] = created;
-            return created;
-        }
-
-        foreach (var (key, _) in matchingEntries)
-        {
-            parent.Remove(key);
-        }
-
-        var merged = new JsonObject();
-        foreach (var (_, value) in matchingEntries)
-        {
-            if (value is null)
-            {
-                continue;
-            }
-
-            if (value is not JsonObject sectionObject)
-            {
-                throw new OllamaRouterSyncException(
-                    $"Configuration section '{canonicalKey}' in '{configFilePath}' must be a JSON object.");
-            }
-
-            foreach (var (childKey, childValue) in sectionObject)
-            {
-                RemoveMatchingKeys(merged, childKey);
-                merged[childKey] = childValue?.DeepClone();
-            }
-        }
-
-        parent[canonicalKey] = merged;
-        return merged;
-    }
-
-    private static void SetStringProperty(JsonObject parent, string key, string value)
-    {
-        RemoveMatchingKeys(parent, key);
-        parent[key] = JsonValue.Create(value);
-    }
-
-    private static void SetOptionalStringProperty(JsonObject parent, string key, string? value)
-    {
-        RemoveMatchingKeys(parent, key);
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            parent[key] = JsonValue.Create(value);
-        }
-    }
-
-    private static void SetIntProperty(JsonObject parent, string key, int value)
-    {
-        RemoveMatchingKeys(parent, key);
-        parent[key] = JsonValue.Create(value);
-    }
-
-    private static void RemoveMatchingKeys(JsonObject parent, string targetKey)
-    {
-        var keysToRemove = parent
-            .Select(kvp => kvp.Key)
-            .Where(key => string.Equals(key, targetKey, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        foreach (var key in keysToRemove)
-        {
-            parent.Remove(key);
-        }
-    }
+    private static Exception CreateSyncException(string message, Exception? innerException) =>
+        innerException is null
+            ? new OllamaRouterSyncException(message)
+            : new OllamaRouterSyncException(message, innerException);
 
     private static string NormalizeBaseUrl(string? routerBaseUrl)
     {

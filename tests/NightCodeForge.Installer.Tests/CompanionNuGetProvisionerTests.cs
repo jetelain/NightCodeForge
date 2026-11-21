@@ -329,4 +329,64 @@ public sealed class CompanionNuGetProvisionerTests : IDisposable
             Assert.Equal(ProvisioningStatus.Skipped, o.Status);
         });
     }
+
+    [Fact]
+    public async Task ProvisionAllAsync_EmitsPerToolChecklistProgressEventsAcrossHostAndWsl()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Windows, InstallerConstants.RuntimeWinX64, _workspace.RootPath);
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, "Package Id   Version   Commands\n---\n", string.Empty));
+
+        var itemEvents = new List<InstallerProgressEvent>();
+        var sut = new CompanionNuGetProvisioner(platform.Object, runner.Object);
+        await sut.ProvisionAllAsync(
+            new InstallSourceOptions(InstallSourceMode.Online, null),
+            "Ubuntu",
+            new SynchronousProgress<InstallerProgressEvent>(ev =>
+            {
+                if (!string.IsNullOrWhiteSpace(ev.ItemKey) && ev.ItemStatus.HasValue)
+                {
+                    itemEvents.Add(ev);
+                }
+            }));
+
+        foreach (var spec in CompanionToolCatalog.All)
+        {
+            var expectedKey = DeploymentComponentKeys.ForCompanionTool(spec.PackageId);
+            Assert.Contains(itemEvents, e => e.ItemKey == expectedKey && e.ItemStatus == ProvisioningStatus.InProgress);
+            Assert.Contains(itemEvents, e => e.ItemKey == expectedKey && e.ItemStatus == ProvisioningStatus.Completed);
+        }
+    }
+
+    [Fact]
+    public async Task ProvisionAllAsync_LinuxHostOnly_ReportsIncremental20To100PercentCompletionProgress()
+    {
+        var platform = TestArchiveHelper.CreateMockPlatform(HostPlatformType.Linux, InstallerConstants.RuntimeLinuxX64, _workspace.RootPath);
+        var runner = new Mock<IProcessRunner>();
+        runner.Setup(r => r.RunAsync(It.IsAny<ProcessRunRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, "Package Id   Version   Commands\n---\n", string.Empty));
+
+        var completionPercents = new List<double>();
+        var sut = new CompanionNuGetProvisioner(platform.Object, runner.Object);
+        await sut.ProvisionAllAsync(
+            new InstallSourceOptions(InstallSourceMode.Online, null),
+            wslDistroName: null,
+            new SynchronousProgress<InstallerProgressEvent>(ev =>
+            {
+                if (!string.IsNullOrWhiteSpace(ev.ItemKey) &&
+                    ev.ItemStatus == ProvisioningStatus.Completed &&
+                    ev.ProgressPercent.HasValue)
+                {
+                    completionPercents.Add(ev.ProgressPercent.Value);
+                }
+            }));
+
+        Assert.Equal([20.0, 40.0, 60.0, 80.0, 100.0], completionPercents);
+    }
+
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
+    }
 }

@@ -132,6 +132,18 @@ public sealed partial class SetupWizardViewModel : ObservableObject
             return;
         }
 
+        if (SelectedStep == (int)WizardStep.AiFleet &&
+            stepIndex > SelectedStep &&
+            Step4.IsOpenAiCompatibleMode &&
+            Step4.HasUnsavedOpenAiChanges)
+        {
+            var saved = await Step4.SaveOpenAiConfigurationAsync().ConfigureAwait(false);
+            if (!saved)
+            {
+                return;
+            }
+        }
+
         _dispatcher.Post(() => SelectedStep = stepIndex);
 
         switch ((WizardStep)stepIndex)
@@ -141,6 +153,9 @@ public sealed partial class SetupWizardViewModel : ObservableObject
                 break;
             case WizardStep.Software:
                 await Step3.OnStepEnteredAsync().ConfigureAwait(false);
+                break;
+            case WizardStep.AiFleet:
+                _dispatcher.Post(() => Step4.OnStepEntered());
                 break;
             case WizardStep.Ready:
                 _dispatcher.Post(() => Step5.RefreshSummary());
@@ -185,6 +200,7 @@ public sealed partial class SetupWizardViewModel : ObservableObject
         _state.OllamaRouterDeployment = null;
         _state.CompanionOutcomes = [];
         _state.SyncedRecommendations = null;
+        _state.ConfiguredOpenAiProvider = null;
         _state.AiFleetSkipped = false;
         _state.AppliedStartMenuShortcut = false;
         _state.AppliedDesktopShortcut = false;

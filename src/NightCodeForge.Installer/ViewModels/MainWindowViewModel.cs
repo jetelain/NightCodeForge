@@ -52,6 +52,8 @@ public sealed partial class MainWindowViewModel : ObservableObject, IDisposable
             wizardState,
             services.OllamaRouterSetupHandoff,
             services.OllamaRouterRecommendationSync,
+            services.OpenAiProviderConfiguration,
+            services.SecretStore,
             dispatcher);
         var step5 = new WizardStep5ReadyViewModel(
             wizardState,
