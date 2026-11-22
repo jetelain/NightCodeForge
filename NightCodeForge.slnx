@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/NightCodeForge.Agents/NightCodeForge.Agents.csproj" />
+    <Project Path="src/NightCodeForge.Benchmark.Cli/NightCodeForge.Benchmark.Cli.csproj" />
     <Project Path="src/NightCodeForge.Cli/NightCodeForge.Cli.csproj" />
     <Project Path="src/NightCodeForge.Core/NightCodeForge.Core.csproj" />
     <Project Path="src/NightCodeForge.Infrastructure/NightCodeForge.Infrastructure.csproj" />
@@ -9,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NightCodeForge.Agents.Tests/NightCodeForge.Agents.Tests.csproj" />
+    <Project Path="tests/NightCodeForge.Benchmark.Cli.Tests/NightCodeForge.Benchmark.Cli.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Cli.Tests/NightCodeForge.Cli.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Core.Tests/NightCodeForge.Core.Tests.csproj" />
     <Project Path="tests/NightCodeForge.Infrastructure.Tests/NightCodeForge.Infrastructure.Tests.csproj" />

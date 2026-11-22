@@ -65,11 +65,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ITaskCancellationManager, TaskCancellationManager>();
         services.TryAddScoped<IDependencyResolutionEngine, DependencyResolutionEngine>();
 
-        // 4. Git Infrastructure
-        services.AddGitInfrastructure();
+        // 4. Git, Execution Infrastructure & Activity Streamer (DB-free, SignalR-free core)
+        services.TryAddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
+        services.AddNightCodeForgeExecutionInfrastructure();
 
         // 5. Workflow Pipeline & Orchestration
-        services.TryAddSingleton(TimeProvider.System);
         services.TryAddSingleton<IPromptTemplateRenderer, ScribanPromptTemplateRenderer>();
         services.TryAddSingleton<IWorkflowStageRegistry, WorkflowStageRegistry>();
         services.TryAddScoped<IWorkflowStageFactory, WorkflowStageFactory>();
@@ -81,31 +81,6 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<ITaskOrchestrator, TaskOrchestrator>();
         services.TryAddScoped<IWorkspaceGitRecoveryService, WorkspaceGitRecoveryService>();
         services.TryAddScoped<IStartupRecoveryService, StartupRecoveryService>();
-
-        // 6. Execution Environments, Process Runner & Path Resolution
-        services.AddOptions<Execution.ExecutionEnvironmentProviderOptions>();
-        services.AddOptions<Execution.ContainerExecutorOptions>();
-        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Security.SecurityOptions>(
-            NightCodeForge.Core.Security.SecurityOptions.SectionName);
-
-        services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
-        services.TryAddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
-        services.TryAddSingleton<NightCodeForge.Core.Execution.SystemProcessRunner>();
-        services.TryAddSingleton<IProcessRunner>(sp => new Execution.TelemetryProcessRunner(
-            sp.GetRequiredService<NightCodeForge.Core.Execution.SystemProcessRunner>(),
-            sp.GetRequiredService<IOperationsTelemetryService>(),
-            sp.GetRequiredService<ILogger<Execution.TelemetryProcessRunner>>()));
-        services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
-        services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
-        services.TryAddSingleton<ICompanionToolInstaller, Execution.CompanionToolInstaller>();
-        services.TryAddSingleton<IHostUserIdentityResolver, Execution.HostUserIdentityResolver>();
-        services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
-        services.TryAddSingleton<Execution.BareHostExecutionEnvironment>();
-        services.TryAddSingleton<IExecutionEnvironment>(sp => sp.GetRequiredService<Execution.BareHostExecutionEnvironment>());
-        services.TryAddTransient<Execution.WslExecutionEnvironment>();
-        services.TryAddTransient<Execution.NightCodeForgeContainerExecutor>();
-        services.TryAddSingleton<Execution.IContainerEnvironmentFactory, Execution.ContainerEnvironmentFactory>();
-        services.TryAddSingleton<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
 
         // 7. LLM inference services are provider-specific: see AddNightCodeForgeInference.
 
@@ -123,9 +98,6 @@ public static class ServiceCollectionExtensions
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicSastStage>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicTestWithCoverageGate>();
         services.TryAddTransient<NightCodeForge.Core.Workflow.Stages.DeterministicWarningRatchetStage>();
-
-        // 10. Streaming & Activity Streamer
-        services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();
 
         // 11. GitHub Integration Services
         services.TryAddSingleton<IGitHubTokenStore, GitHub.GitHubTokenStore>();
@@ -157,6 +129,50 @@ public static class ServiceCollectionExtensions
             FilterHiddenText = true
         }));
         services.TryAddScoped<IAttachmentIntakeService, AttachmentIntakeService>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers DB-free, SignalR-free, and Hangfire-free execution infrastructure services:
+    /// Git CLI/workspaces, Docker container executor, process runner, host SDK discovery, and path resolution.
+    /// </summary>
+    public static IServiceCollection AddNightCodeForgeExecutionInfrastructure(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IWorkspaceLockProvider, WorkspaceLockProvider>();
+        services.AddGitInfrastructure();
+
+        services.AddOptions<Execution.ExecutionEnvironmentProviderOptions>();
+        services.AddOptions<Execution.ContainerExecutorOptions>();
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Security.SecurityOptions>(
+            NightCodeForge.Core.Security.SecurityOptions.SectionName);
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Resilience.RetryPolicyOptions>(
+            NightCodeForge.Core.Resilience.RetryPolicyOptions.SectionName);
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Resilience.LlmRetryPolicyOptions>(
+            NightCodeForge.Core.Resilience.LlmRetryPolicyOptions.SectionName);
+
+        services.TryAddSingleton<NightCodeForge.Core.Execution.IBackgroundTaskRunner, NightCodeForge.Core.Execution.BackgroundTaskRunner>();
+        services.TryAddSingleton<IOperationsTelemetryService, Telemetry.InMemoryOperationsTelemetryService>();
+        services.TryAddSingleton<NightCodeForge.Core.Execution.SystemProcessRunner>();
+        services.TryAddSingleton<IProcessRunner>(sp => new Execution.TelemetryProcessRunner(
+            sp.GetRequiredService<NightCodeForge.Core.Execution.SystemProcessRunner>(),
+            sp.GetRequiredService<IOperationsTelemetryService>(),
+            sp.GetRequiredService<ILogger<Execution.TelemetryProcessRunner>>()));
+        services.TryAddSingleton<IWslMetadataService, Execution.WslMetadataService>();
+        services.TryAddSingleton<IHostSdkDiscoveryService, Execution.HostSdkDiscoveryService>();
+        services.TryAddSingleton<ICompanionToolInstaller, Execution.CompanionToolInstaller>();
+        services.TryAddSingleton<IHostUserIdentityResolver, Execution.HostUserIdentityResolver>();
+        services.TryAddSingleton<IWorkspacePathResolver, Execution.WorkspacePathResolver>();
+        services.TryAddSingleton<Execution.BareHostExecutionEnvironment>();
+        services.TryAddSingleton<IExecutionEnvironment>(sp => sp.GetRequiredService<Execution.BareHostExecutionEnvironment>());
+        services.TryAddTransient<Execution.WslExecutionEnvironment>();
+        services.TryAddTransient<Execution.NightCodeForgeContainerExecutor>();
+        services.TryAddSingleton<Execution.IContainerEnvironmentFactory, Execution.ContainerEnvironmentFactory>();
+        services.TryAddSingleton<IExecutionEnvironmentProvider, Execution.ExecutionEnvironmentProvider>();
+        services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();
 
         return services;
     }

@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Hubs;
 using NightCodeForge.Infrastructure.Telemetry;
@@ -504,4 +506,88 @@ public class OperationsTelemetryServiceTests
 
         Assert.Equal(new[] { "late" }, _service.GetActiveLlmCalls().Select(c => c.CallId));
         Assert.Equal(new[] { "c-late" }, _service.GetActiveShellCommands().Select(c => c.CommandId));
-    }}
+    }
+
+    [Fact]
+    public void InMemoryOperationsTelemetryService_TracksLlmShellAndActiveTasks_WithoutSignalR()
+    {
+        var telemetry = new InMemoryOperationsTelemetryService(
+            NullLogger<InMemoryOperationsTelemetryService>.Instance,
+            maxLlmCalls: 2,
+            maxShellCommands: 2);
+
+        var llmEvents = new List<LlmCallRecord>();
+        ActiveTaskSummary? activeTaskEvent = null;
+        telemetry.OnLlmCallChanged += llmEvents.Add;
+        telemetry.OnActiveTaskChanged += t => activeTaskEvent = t;
+
+        for (int i = 1; i <= 3; i++)
+        {
+            var call = new LlmCallRecord(
+                CallId: $"mem-call-{i}",
+                Model: "qwen3:8b",
+                TargetBackend: "Local",
+                StartTime: DateTime.UtcNow.AddSeconds(i),
+                DurationMs: 0,
+                PromptTokens: 10,
+                CompletionTokens: 0,
+                TokensPerSecond: 0,
+                PromptPreview: "p",
+                CompletionPreview: null,
+                Status: LlmCallStatus.Running,
+                ErrorMessage: null);
+            telemetry.RecordLlmCallStarted(call);
+            telemetry.UpdateLlmCallProgress($"mem-call-{i}", 5, 100, 50.0);
+            telemetry.RecordLlmCallCompleted(call with { Status = LlmCallStatus.Completed, CompletionTokens = 10 });
+
+            var cmd = new ShellCommandRecord(
+                CommandId: $"mem-cmd-{i}",
+                CommandLine: $"echo {i}",
+                WorkingDirectory: "/w",
+                StartTime: DateTime.UtcNow.AddSeconds(i),
+                DurationMs: 0,
+                ExitCode: null,
+                Status: ShellCommandStatus.Running,
+                OutputPreview: null,
+                ErrorPreview: null);
+            telemetry.RecordShellCommandStarted(cmd);
+            telemetry.UpdateShellCommandOutput($"mem-cmd-{i}", "hello", isError: false);
+            telemetry.RecordShellCommandCompleted(cmd with { Status = ShellCommandStatus.Completed, ExitCode = 0 });
+        }
+
+        Assert.Equal(new[] { "mem-call-3", "mem-call-2" }, telemetry.GetRecentLlmCalls().Select(c => c.CallId));
+        Assert.Equal(new[] { "mem-cmd-3", "mem-cmd-2" }, telemetry.GetRecentShellCommands().Select(c => c.CommandId));
+        Assert.Equal(6, llmEvents.Count);
+        Assert.Null(telemetry.GetActiveLlmCall());
+        Assert.Null(telemetry.GetActiveShellCommand());
+
+        var task = new ActiveTaskSummary(12, "Mem Task", "implementation", 1, "default", DateTime.UtcNow);
+        telemetry.RecordActiveTask(task);
+        Assert.Equal(12, telemetry.GetActiveTask()?.TaskId);
+        Assert.Equal(12, activeTaskEvent?.TaskId);
+
+        telemetry.ClearActiveTask(12);
+        Assert.Null(telemetry.GetActiveTask());
+        Assert.Null(activeTaskEvent);
+    }
+
+    [Fact]
+    public void ServiceCollectionExtensions_RegistersExpectedTelemetryServiceTypePerMode()
+    {
+        var executionServices = new ServiceCollection();
+        executionServices.AddLogging();
+        executionServices.AddNightCodeForgeExecutionInfrastructure();
+
+        using var executionProvider = executionServices.BuildServiceProvider();
+        var executionTelemetry = executionProvider.GetRequiredService<IOperationsTelemetryService>();
+        Assert.Equal(typeof(InMemoryOperationsTelemetryService), executionTelemetry.GetType());
+
+        var fullServices = new ServiceCollection();
+        fullServices.AddLogging();
+        fullServices.AddNightCodeForgeCoreAndInfrastructure("Data Source=:memory:");
+
+        using var fullProvider = fullServices.BuildServiceProvider();
+        var fullTelemetry = fullProvider.GetRequiredService<IOperationsTelemetryService>();
+        Assert.Equal(typeof(OperationsTelemetryService), fullTelemetry.GetType());
+    }
+}

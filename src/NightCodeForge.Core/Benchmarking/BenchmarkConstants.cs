@@ -80,6 +80,7 @@ public static class BenchmarkPaths
     public const string TranscriptsSubdir = "transcripts";
     public const string PredictionsFileName = "predictions.jsonl";
     public const string ResultsFileName = "results.json";
+    public const string SummaryFileName = "summary.md";
     public const string DocsTasksPrefix = "docs/tasks/";
     public const string ContainerResultsDir = "/workspace/.ncf-bench-results";
     public const string TrxFileName = "results.trx";

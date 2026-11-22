@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>ncf-bench</ToolCommandName>
+    <PackageId>NightCodeForge.Benchmark.Cli</PackageId>
+    <Version>1.0.0</Version>
+    <Description>NightCodeForge Standalone Benchmark CLI (ncf-bench) — Crucible evaluation and cross-version comparative reporting.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NightCodeForge.Core\NightCodeForge.Core.csproj" />
+    <ProjectReference Include="..\NightCodeForge.Agents\NightCodeForge.Agents.csproj" />
+    <ProjectReference Include="..\NightCodeForge.Infrastructure\NightCodeForge.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NightCodeForge.Benchmark.Cli.Tests" />
+  </ItemGroup>
+
+</Project>
