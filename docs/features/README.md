@@ -45,13 +45,14 @@ To accelerate delivery of **`v0.1.0`**, remaining work is organized into four st
 
 ---
 
-#### 3. Benchmark Stream (`v0.1.0` — Parallel Standalone CLI)
-*Strictly standalone CLI using `NightCodeForge.Agents` classes + mock/in-memory DB (no Web UI or Hangfire) to evaluate Implementation, Code Review, and Task Review problems across models and tooling versions.*
+#### 3. Benchmark Stream (`v0.1.0` — Parallel Dedicated Standalone CLI)
+*Dedicated standalone CLI (`NightCodeForge.Benchmark.Cli`) using `NightCodeForge.Agents` classes + mock/in-memory DB (no Web UI or Hangfire, keeping `NightCodeForge.Cli` lean) to evaluate Implementation, Code Review, and ForgeTask Review problems across models and track regressions across NightCodeForge commits/branches.*
 
 | Step | Specification | Focus & Key Deliverables | Status |
 | :--- | :--- | :--- | :--- |
-| **12.23A** | [🏁 Step 12.23A: Standalone Crucible Benchmark Engine, Mock DB & Verifier](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md) | `IBenchmarkDatasetLoader` (Implementation, Code Review, and Task Review JSONL problems), `IBenchmarkWorkspaceManager` (leak-free `git init` + `git fetch <cache> <BaseCommit>`), mock/in-memory DB & turn sink decoupling `CrucibleAgentHarness` from SQLite, and containerized `FailToPass`/`PassToPass` + review verdict evaluators. | Planned |
-| **12.23B** | [🏁 Step 12.23B: Standalone Benchmark CLI (`run` & `report`)](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md) | Standalone CLI commands (`run` / `report`) sweeping across models and tooling versions (stack skills, optimization flags, harness config) with live progress, `predictions.jsonl`, `results.json`, `summary.md`, `transcripts/`, and terminal leaderboard rendering (Web UI `/benchmarks` deferred post-`v0.1.0`). | Planned |
+| **12.23A** | [🏁 Step 12.23A: Standalone Crucible Benchmark Engine, Mock DB & Verifier](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md) | `IBenchmarkDatasetLoader` (Implementation, Code Review, and ForgeTask Review JSONL/JSON problems), `IBenchmarkWorkspaceManager` (leak-free `git init` + `git fetch <cache> <BaseCommit>` + category workspace setup), decoupled turn sink & mock/in-memory coordinator for `CrucibleAgentHarness`, category-accurate tool/skill gating, multi-stack (`.trx`/JUnit XML/`cargo`) container verification, deterministic review checks, and optional `IBenchmarkLlmJudge`. | Planned |
+| **12.23B** | [🏁 Step 12.23B: Standalone Benchmark CLI (`NightCodeForge.Benchmark.Cli`)](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md) | Dedicated `ncf-bench` CLI (`run` / `report`) sweeping models with provider/config selection, `--resume`, `BenchmarkRunProvenance` capture, live progress, `predictions.jsonl`, `results.json`, `summary.md`, `transcripts/`, and single-run + cross-commit baseline regression leaderboards with per-language breakdown (Web UI `/benchmarks` deferred post-`v0.1.0`). | Planned |
+| **12.23C** | [🏁 Step 12.23C: Multi-Stack Benchmark Datasets, Importers & Crafted Scenarios](STEP_12_23C_BENCHMARK_DATASETS_IMPORTERS_AND_SCENARIOS.md) | C#-first (`SWE-Sharp-Bench`) + TS/JS + Python + Rust tiered suite manifests (`v1-smoke` / `v1-full`), `IBenchmarkDatasetImporter`, crafted Code Review (`Approve`/`MinorFix`/`RequestChanges`) & ForgeTask Review (`Ready`/`NeedsClarification`) scenarios, and `ncf-bench dataset import/validate` pre-flight container checks. | Planned |
 
 ---
 
