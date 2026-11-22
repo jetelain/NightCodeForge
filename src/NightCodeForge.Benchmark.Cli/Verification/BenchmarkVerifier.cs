@@ -146,12 +146,53 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(instance.TestPatch))
+        var testPatchError = await ResetAndApplyTestPatchAsync(
+            workspace.WorkspacePath,
+            workspace.BaseCommit,
+            instance.TestPatch,
+            cancellationToken).ConfigureAwait(false);
+        if (testPatchError != null)
         {
-            await _workspaceManager.ApplyPatchAsync(workspace.WorkspacePath, instance.TestPatch, cancellationToken).ConfigureAwait(false);
+            return new BenchmarkVerificationResult
+            {
+                Passed = false,
+                DeterministicScore = 0.0,
+                FailToPassTotal = instance.FailToPass.Count,
+                PassToPassTotal = instance.PassToPass.Count,
+                FailedTests = instance.FailToPass.Concat(instance.PassToPass).ToList(),
+                ErrorMessage = testPatchError
+            };
         }
 
         return await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<string?> ResetAndApplyTestPatchAsync(
+        string workspacePath,
+        string baseCommit,
+        string? testPatch,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(testPatch))
+        {
+            return null;
+        }
+
+        var targetPaths = BenchmarkWorkspaceManager.ExtractPatchTargetPaths(testPatch);
+        try
+        {
+            if (targetPaths.Count > 0)
+            {
+                await _workspaceManager.ResetPathsToBaseAsync(workspacePath, baseCommit, targetPaths, cancellationToken).ConfigureAwait(false);
+            }
+
+            await _workspaceManager.ApplyPatchAsync(workspacePath, testPatch, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        catch (BenchmarkWorkspaceException ex)
+        {
+            return $"Evaluation TestPatch failed to apply cleanly: {ex.Message}";
+        }
     }
 
     private async Task<BenchmarkVerificationResult> ExecuteTestSuiteAsync(
@@ -198,11 +239,15 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             try
             {
                 testRunStartedUtc = DateTime.UtcNow;
+                IReadOnlyDictionary<string, string>? environmentVariables =
+                    string.Equals(BenchmarkLanguages.Normalize(instance.Language), BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase)
+                        ? new Dictionary<string, string> { [BenchmarkDefaults.DotNetRollForwardEnvVar] = BenchmarkDefaults.DotNetRollForwardLatestMajor }
+                        : null;
                 cmdResult = await env.ExecuteAsync(
                     testCommand,
                     workingDirectory: executionMode == ExecutionMode.ContainerSandbox ? null : workspacePath,
                     timeoutSeconds: BenchmarkDefaults.DefaultVerificationTimeoutSeconds,
-                    environmentVariables: null,
+                    environmentVariables: environmentVariables,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -379,18 +424,27 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
 
             if (minorFixPatchApplied)
             {
-                if (!string.IsNullOrWhiteSpace(instance.TestPatch))
+                var testPatchError = await ResetAndApplyTestPatchAsync(
+                    workspace.WorkspacePath,
+                    workspace.BaseCommit,
+                    instance.TestPatch,
+                    cancellationToken).ConfigureAwait(false);
+                if (testPatchError != null)
                 {
-                    await _workspaceManager.ApplyPatchAsync(workspace.WorkspacePath, instance.TestPatch, cancellationToken).ConfigureAwait(false);
+                    minorFixTestsPassed = false;
+                    failedTests = instance.FailToPass.Concat(instance.PassToPass).ToList();
+                    testError = testPatchError;
                 }
-
-                var testRes = await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, cancellationToken).ConfigureAwait(false);
-                minorFixTestsPassed = testRes.Passed;
-                f2pPassed = testRes.FailToPassPassed;
-                p2pPassed = testRes.PassToPassPassed;
-                failedTests = testRes.FailedTests;
-                testLog = testRes.VerificationLog;
-                testError = testRes.ErrorMessage;
+                else
+                {
+                    var testRes = await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, cancellationToken).ConfigureAwait(false);
+                    minorFixTestsPassed = testRes.Passed;
+                    f2pPassed = testRes.FailToPassPassed;
+                    p2pPassed = testRes.PassToPassPassed;
+                    failedTests = testRes.FailedTests;
+                    testLog = testRes.VerificationLog;
+                    testError = testRes.ErrorMessage;
+                }
             }
         }
 
@@ -909,7 +963,10 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             hostWorkspacePath: workspacePath,
             canonicalClonePath: null,
             mountHostDotnetTools: false,
-            protectCloneWorkingTree: false);
+            protectCloneWorkingTree: false,
+            disableNetwork: false,
+            blockedHosts: BenchmarkDefaults.BlockedAntiCheatHosts,
+            mountAcpHostPaths: false);
     }
 
     private (TaskFrontmatter? Frontmatter, string? Body) ParseTaskMarkdownSafe(string? markdown) =>

@@ -216,6 +216,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
     public bool ExpandTildeInMounts { get; set; } = false;
     public bool AutoStartContainer { get; set; } = false;
     public bool ProtectCloneWorkingTree { get; set; } = true;
+    public bool DisableNetwork { get; set; } = false;
+    public IList<string> BlockedHosts { get; set; } = new List<string>();
 }
 
 /// <summary>

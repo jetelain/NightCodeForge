@@ -200,6 +200,9 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             }
         }
 
+        var reportPath = Path.Combine(request.OutputDirectory, BenchmarkPaths.ResultsFileName);
+        using var reportWriteLock = new SemaphoreSlim(1, 1);
+
         int maxConcurrency = Math.Max(1, request.Concurrency);
         using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
         var tasks = workItems.Select(async item =>
@@ -214,6 +217,13 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                     request,
                     cancellationToken).ConfigureAwait(false);
                 collectedResults.Add(result);
+                await PersistReportSnapshotAsync(
+                    reportPath,
+                    request,
+                    provenance,
+                    collectedResults,
+                    reportWriteLock,
+                    cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -223,23 +233,73 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
-        var orderedResults = collectedResults
-            .OrderBy(r => r.CandidateId, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.InstanceId, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var report = BenchmarkSummaryAggregator.BuildReport(
-            request.SuiteName,
-            request.DatasetPath,
+        return await PersistReportSnapshotAsync(
+            reportPath,
+            request,
             provenance,
-            request.Candidates,
-            orderedResults);
+            collectedResults,
+            reportWriteLock,
+            cancellationToken).ConfigureAwait(false);
+    }
 
-        var reportPath = Path.Combine(request.OutputDirectory, BenchmarkPaths.ResultsFileName);
-        var reportJson = JsonSerializer.Serialize(report, ReportJsonOptions);
-        await File.WriteAllTextAsync(reportPath, reportJson, cancellationToken).ConfigureAwait(false);
+    private static async Task<BenchmarkRunReport> PersistReportSnapshotAsync(
+        string reportPath,
+        BenchmarkRunRequest request,
+        BenchmarkRunProvenance provenance,
+        IEnumerable<BenchmarkInstanceResult> collectedResults,
+        SemaphoreSlim writeLock,
+        CancellationToken cancellationToken)
+    {
+        await writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var orderedResults = collectedResults
+                .OrderBy(r => r.CandidateId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(r => r.InstanceId, StringComparer.OrdinalIgnoreCase)
+                .ToList();
 
-        return report;
+            var report = BenchmarkSummaryAggregator.BuildReport(
+                request.SuiteName,
+                request.DatasetPath,
+                provenance,
+                request.Candidates,
+                orderedResults);
+
+            var reportJson = JsonSerializer.Serialize(report, ReportJsonOptions);
+            var directory = Path.GetDirectoryName(reportPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var tempPath = $"{reportPath}.{Guid.NewGuid():N}.tmp";
+            try
+            {
+                await File.WriteAllTextAsync(tempPath, reportJson, cancellationToken).ConfigureAwait(false);
+                File.Move(tempPath, reportPath, overwrite: true);
+            }
+            catch
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch (IOException)
+                {
+                    // Justification: best-effort cleanup of failed temp report snapshot before rethrowing primary write error.
+                }
+                throw;
+            }
+
+            return report;
+        }
+        finally
+        {
+            writeLock.Release();
+        }
     }
 
     private async Task<BenchmarkInstanceResult> RunSingleEvaluationAsync(
@@ -259,6 +319,15 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
         BenchmarkWorkspaceHandle? workspace = null;
         SandboxScopeDescriptor? scope = null;
+        var dispatchTelemetry = new LenientDispatchTelemetry();
+        var transcriptPath = Path.Combine(
+            request.OutputDirectory,
+            BenchmarkPaths.TranscriptsSubdir,
+            candidateSlug,
+            $"{instanceSlug}.md");
+        var capture = new InMemoryConversationCapture(transcriptPath);
+        AgentRunResult? runResult = null;
+        string? modelPatch = null;
         var stopwatch = Stopwatch.StartNew();
 
         try
@@ -282,7 +351,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             {
                 Id = 0,
                 WorkspaceId = 0,
-                Title = $"{instance.InstanceId}: {TruncateTitle(instance.ProblemStatement)}",
+                Title = TruncateTitle(instance.ProblemStatement),
                 Description = BuildTaskDescription(instance, category, request.IncludeHints, workspace),
                 Status = TaskOverallStatus.Open,
                 CurrentStageId = policy.StageId,
@@ -309,16 +378,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 RoutingTarget = candidate.RoutingTarget
             };
 
-            scope = BuildExecutionScope(workspace.WorkspacePath, instance.CustomContainerImage, request.ExecutionMode, containerName, candidate.EnableStackSkills);
-
-            var dispatchTelemetry = new LenientDispatchTelemetry();
-
-            var transcriptPath = Path.Combine(
-                request.OutputDirectory,
-                BenchmarkPaths.TranscriptsSubdir,
-                candidateSlug,
-                $"{instanceSlug}.md");
-            var capture = new InMemoryConversationCapture(transcriptPath);
+            scope = BuildExecutionScope(workspace.WorkspacePath, instance.CustomContainerImage, request.ExecutionMode, containerName, candidate.EnableStackSkills, category);
 
             var sessionContext = new AgentSessionContext
             {
@@ -330,13 +390,12 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 StageId = policy.StageId,
                 StageDirective = policy.StageDirective,
                 RequiredMode = policy.RequiredMode,
-                BootstrapPrompt = BuildBootstrapPrompt(instance, category, workspace),
+                BootstrapPrompt = BuildBootstrapPrompt(category, workspace),
                 WorkspacePath = workspace.WorkspacePath,
                 TaskMarkdownPath = workspace.TaskMarkdownPath,
                 ReviewDiffStat = workspace.ReviewDiffStat
             };
 
-            AgentRunResult runResult;
             bool timedOut = false;
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, candidate.InstanceTimeoutSeconds)));
@@ -428,7 +487,6 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 return errorResult;
             }
 
-            string? modelPatch = null;
             string? updatedTaskMarkdown = null;
             IReadOnlyList<string> modifiedOutsideDocsTasks = Array.Empty<string>();
 
@@ -540,6 +598,32 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             request.ProgressCallback?.Invoke($"[{finalOutcome.ToString().ToUpperInvariant()}] {candidate.CandidateId} | {instance.InstanceId} ({durationMs}ms, score={verification.DeterministicScore:F2})");
             return instanceResult;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            _logger.LogWarning(ex, "Benchmark evaluation failed with unhandled exception for candidate '{CandidateId}' on instance '{InstanceId}'.",
+                candidate.CandidateId, instance.InstanceId);
+
+            var telemetry = BuildTelemetryBreakdown(capture.TurnSink.Turns, dispatchTelemetry.CreateSnapshot());
+            var metrics = runResult?.Metrics ?? new AgentRunMetrics();
+            var errorResult = BuildAbnormalResult(
+                instance,
+                candidate,
+                category,
+                BenchmarkInstanceOutcome.Error,
+                stopwatch.ElapsedMilliseconds,
+                capture,
+                metrics,
+                telemetry,
+                ex.Message,
+                modelPatch);
+            request.ProgressCallback?.Invoke($"[ERROR] {candidate.CandidateId} | {instance.InstanceId}: {errorResult.ErrorMessage}");
+            return errorResult;
+        }
         finally
         {
             if (scope != null && request.ExecutionMode != ExecutionMode.BareHost)
@@ -639,11 +723,14 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         string? customContainerImage,
         ExecutionMode executionMode,
         string containerName,
-        bool enableStackSkills)
+        bool enableStackSkills,
+        BenchmarkProblemCategory category = BenchmarkProblemCategory.Implementation)
     {
         var mountTable = SandboxMountTable.ForWorkspace(
             hostWorkingDirectory: workspacePath,
             isReadOnly: false);
+
+        bool disableNetwork = category == BenchmarkProblemCategory.TaskReview;
 
         return new SandboxScopeDescriptor(
             scopeKind: SandboxScopeKind.WorkspaceClone,
@@ -661,7 +748,10 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             hostWorkspacePath: workspacePath,
             canonicalClonePath: null,
             mountHostDotnetTools: enableStackSkills,
-            protectCloneWorkingTree: false);
+            protectCloneWorkingTree: false,
+            disableNetwork: disableNetwork,
+            blockedHosts: disableNetwork ? Array.Empty<string>() : BenchmarkDefaults.BlockedAntiCheatHosts,
+            mountAcpHostPaths: false);
     }
 
     private static string BuildTaskDescription(
@@ -696,32 +786,31 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
     }
 
     private static string BuildBootstrapPrompt(
-        BenchmarkInstance instance,
         BenchmarkProblemCategory category,
         BenchmarkWorkspaceHandle workspace)
     {
         return category switch
         {
             BenchmarkProblemCategory.Implementation =>
-                $"Execute stage 'Implementation' for benchmark instance '{instance.InstanceId}'.\n" +
-                $"Inspect the repository and solve the problem described in <task>. Verify your fix with build/test commands using 'bash'.",
+                "Execute stage 'Implementation'.\n" +
+                "Inspect the repository and solve the problem described in <task>. Verify your fix with build/test commands using 'bash'.",
 
             BenchmarkProblemCategory.CodeReview =>
-                BuildCodeReviewBootstrapPrompt(instance, workspace),
+                BuildCodeReviewBootstrapPrompt(workspace),
 
             BenchmarkProblemCategory.TaskReview =>
-                $"Execute stage 'ForgeTask Review' for benchmark instance '{instance.InstanceId}'.\n" +
+                "Execute stage 'ForgeTask Review'.\n" +
                 $"Please inspect the repository and enrich '{workspace.TaskMarkdownPath}' on disk with your technical architecture, affected files, step-by-step implementation plan, and acceptance criteria. " +
-                $"If critical requirements are ambiguous or contradictory, call 'ask' instead of guessing.",
+                "If critical requirements are ambiguous or contradictory, call 'ask' instead of guessing.",
 
             _ => CrucibleConversationCoordinator.DefaultBootstrapPrompt
         };
     }
 
-    private static string BuildCodeReviewBootstrapPrompt(BenchmarkInstance instance, BenchmarkWorkspaceHandle workspace)
+    private static string BuildCodeReviewBootstrapPrompt(BenchmarkWorkspaceHandle workspace)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"Execute stage 'Code Review & Fix' for benchmark instance '{instance.InstanceId}'.");
+        sb.AppendLine("Execute stage 'Code Review & Fix'.");
         sb.AppendLine($"Compare branch '{workspace.FeatureBranch}' against base branch '{workspace.BaseBranch}'.");
 
         var diff = workspace.ReviewDiff ?? string.Empty;
@@ -777,11 +866,34 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         InMemoryConversationCapture capture,
         AgentRunResult runResult,
         ToolCallTelemetryBreakdown telemetry,
-        string errorMessage)
+        string errorMessage) =>
+        BuildAbnormalResult(
+            instance,
+            candidate,
+            category,
+            outcome,
+            durationMs,
+            capture,
+            runResult.Metrics,
+            telemetry,
+            errorMessage,
+            modelPatch: null);
+
+    private static BenchmarkInstanceResult BuildAbnormalResult(
+        BenchmarkInstance instance,
+        BenchmarkModelCandidate candidate,
+        BenchmarkProblemCategory category,
+        BenchmarkInstanceOutcome outcome,
+        long durationMs,
+        InMemoryConversationCapture capture,
+        AgentRunMetrics metrics,
+        ToolCallTelemetryBreakdown telemetry,
+        string errorMessage,
+        string? modelPatch)
     {
-        long totalTokens = runResult.Metrics.TotalTokens > 0
-            ? runResult.Metrics.TotalTokens
-            : (runResult.Metrics.PromptTokens + runResult.Metrics.CompletionTokens);
+        long totalTokens = metrics.TotalTokens > 0
+            ? metrics.TotalTokens
+            : (metrics.PromptTokens + metrics.CompletionTokens);
 
         return new BenchmarkInstanceResult
         {
@@ -793,12 +905,14 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             Outcome = outcome,
             DurationMs = Math.Max(1, durationMs),
             Turns = ResolveTurnCount(capture),
-            PromptTokens = runResult.Metrics.PromptTokens,
-            CompletionTokens = runResult.Metrics.CompletionTokens,
+            PromptTokens = metrics.PromptTokens,
+            CompletionTokens = metrics.CompletionTokens,
             TotalTokens = totalTokens,
+            ModelPatch = modelPatch,
             TranscriptPath = capture.SavedTranscriptPath,
             Telemetry = telemetry,
-            ErrorMessage = errorMessage
+            ErrorMessage = errorMessage,
+            CompletedAtUtc = DateTimeOffset.UtcNow
         };
     }
 

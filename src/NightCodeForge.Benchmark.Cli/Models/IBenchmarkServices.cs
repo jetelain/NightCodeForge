@@ -44,6 +44,12 @@ public interface IBenchmarkWorkspaceManager
         string baseCommitOrRef,
         CancellationToken cancellationToken = default);
 
+    Task ResetPathsToBaseAsync(
+        string workspacePath,
+        string baseCommitOrRef,
+        IReadOnlyList<string> relativePaths,
+        CancellationToken cancellationToken = default);
+
     Task ApplyPatchAsync(
         string workspacePath,
         string patchContent,

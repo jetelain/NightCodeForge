@@ -570,6 +570,49 @@ public sealed class BenchmarkDatasetImporterTests : IDisposable
     }
 
     [Fact]
+    public async Task SweSharpBenchImporter_ParsesPythonSingleQuotedTestListsAndRejectsMalformed()
+    {
+        var manifest = new BenchmarkDatasetManifest
+        {
+            SuiteName = "sharp-pylist",
+            Version = "1.0.0",
+            Entries =
+            [
+                new BenchmarkManifestEntry
+                {
+                    InstanceId = "serilog__serilog-2083",
+                    Category = BenchmarkProblemCategory.Implementation,
+                    Language = BenchmarkLanguages.CSharp
+                }
+            ]
+        };
+
+        var inputPath = Path.Combine(_tempDir, "sharp-pylist.jsonl");
+        await File.WriteAllTextAsync(inputPath, """
+        {"instance_id":"serilog__serilog-2083","repo":"serilog/serilog","base_commit":"fdf4a4872b4effd02dcd7d788e45b6b8ffdfa2fc","problem_statement":"Fix logger","patch":"diff","FAIL_TO_PASS":"['Serilog.Tests.A(\"x\")', 'Serilog.Tests.B(\\'y\\')', \"Test('z')\",]","PASS_TO_PASS":"[]"}
+        """);
+
+        var importer = new SweSharpBenchImporter();
+        var imported = await importer.ImportAsync(inputPath, manifest);
+
+        var item = Assert.Single(imported);
+        Assert.Equal(
+            ["""Serilog.Tests.A("x")""", """Serilog.Tests.B('y')""", """Test('z')"""],
+            item.FailToPass);
+        Assert.Empty(item.PassToPass);
+
+        foreach (var badList in new[] { "['unterminated", "[123]", "['a' 'b']", "['bad\\u12']" })
+        {
+            var badPath = Path.Combine(_tempDir, $"bad-{Guid.NewGuid():N}.jsonl");
+            var escapedBad = System.Text.Json.JsonSerializer.Serialize(badList);
+            await File.WriteAllTextAsync(badPath,
+                "{\"instance_id\":\"serilog__serilog-2083\",\"repo\":\"serilog/serilog\",\"base_commit\":\"fdf\",\"problem_statement\":\"Fix\",\"patch\":\"diff\",\"FAIL_TO_PASS\":" + escapedBad + "}");
+
+            await Assert.ThrowsAsync<BenchmarkDatasetException>(() => importer.ImportAsync(badPath, manifest));
+        }
+    }
+
+    [Fact]
     public void ImporterRegistry_RejectsNullElementsAndDuplicateSources()
     {
         Assert.Throws<ArgumentException>(() =>

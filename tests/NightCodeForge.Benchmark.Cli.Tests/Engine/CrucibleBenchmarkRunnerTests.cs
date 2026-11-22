@@ -206,7 +206,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
             .Returns<AgentSessionContext, CancellationToken>((ctx, _) =>
             {
-                if (ctx.ForgeTask.Title.StartsWith("i-cancelled:", StringComparison.Ordinal))
+                if (string.Equals(ctx.ForgeTask.Title, "Fix 2", StringComparison.Ordinal))
                 {
                     return Task.FromResult(AgentRunResult.Cancelled("External abort", new AgentRunMetrics(DurationMs: 50)));
                 }
@@ -533,7 +533,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         });
 
         Assert.Single(evaluated);
-        Assert.StartsWith("inst-2:", evaluated[0]);
+        Assert.Equal("Two", evaluated[0]);
         Assert.Equal(2, report.Results.Count);
 
         var badResumeDir = Path.Combine(_tempDir, "resume-bad");
@@ -654,7 +654,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
             .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
             {
-                if (ctx.ForgeTask.Title.StartsWith("i-timeout:", StringComparison.Ordinal))
+                if (string.Equals(ctx.ForgeTask.Title, "Timeout", StringComparison.Ordinal))
                 {
                     await Task.Delay(TimeSpan.FromSeconds(5), ct);
                 }
@@ -697,5 +697,112 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         var timedOut = Assert.Single(report.Results, r => r.InstanceId == "i-timeout");
         Assert.Equal(BenchmarkInstanceOutcome.Timeout, timedOut.Outcome);
         Assert.True(timedOut.DurationMs >= 1);
+    }
+
+    [Fact]
+    public async Task RunAsync_RedactsInstanceIdFromPromptsIsolatesUnhandledErrorsWritesIncrementalSnapshotsAndConfiguresAntiCheatScopes()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-isolation.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"secret__repo-2083","language":"csharp","repo":"secret/repo","base_commit":"c1","problem_statement":"Fix assembly versioning policy","fail_to_pass":["T1"]}""",
+            """{"instance_id":"secret__repo-9999","language":"csharp","repo":"secret/repo","base_commit":"c2","problem_statement":"Unhandled verifier failure case","fail_to_pass":["T2"]}"""
+        ]));
+
+        var outDir = Path.Combine(_tempDir, "out-isolation");
+        var resultsFilePath = Path.Combine(outDir, BenchmarkPaths.ResultsFileName);
+        var wks1 = Path.Combine(_tempDir, "wks-iso-1");
+        var wks2 = Path.Combine(_tempDir, "wks-iso-2");
+        Directory.CreateDirectory(wks1);
+        Directory.CreateDirectory(wks2);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "secret__repo-2083"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "secret__repo-2083", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks1, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "secret__repo-9999"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "secret__repo-9999", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks2, BaseCommit = "c2" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks1, "c1", It.IsAny<CancellationToken>())).ReturnsAsync("diff-1");
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks2, "c2", It.IsAny<CancellationToken>())).ReturnsAsync("diff-2");
+
+        var capturedPrompts = new List<(string? Title, string? Description, string? Bootstrap, SandboxScopeDescriptor? Scope)>();
+        bool snapshotExistedBeforeSecondInstanceCompleted = false;
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>((ctx, _) =>
+            {
+                capturedPrompts.Add((ctx.ForgeTask.Title, ctx.ForgeTask.Description, ctx.BootstrapPrompt, ctx.SandboxScope));
+                if (ctx.ForgeTask.Title.Contains("Unhandled verifier failure", StringComparison.Ordinal))
+                {
+                    snapshotExistedBeforeSecondInstanceCompleted = File.Exists(resultsFilePath);
+                }
+
+                return Task.FromResult(AgentRunResult.Completed(new AgentRunMetrics(DurationMs: 50, PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20), summary: "Ok"));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "secret__repo-2083"), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0, FailToPassPassed = 1, FailToPassTotal = 1 });
+        verifier.Setup(v => v.VerifyAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "secret__repo-9999"), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Simulated verifier crash"));
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "iso",
+            DatasetPath = datasetPath,
+            OutputDirectory = outDir,
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost,
+            Concurrency = 1
+        });
+
+        Assert.True(snapshotExistedBeforeSecondInstanceCompleted);
+        Assert.Equal(2, report.Results.Count);
+
+        var ok = Assert.Single(report.Results, r => r.InstanceId == "secret__repo-2083");
+        Assert.Equal(BenchmarkInstanceOutcome.Passed, ok.Outcome);
+
+        var errored = Assert.Single(report.Results, r => r.InstanceId == "secret__repo-9999");
+        Assert.Equal(BenchmarkInstanceOutcome.Error, errored.Outcome);
+        Assert.Equal("Simulated verifier crash", errored.ErrorMessage);
+        Assert.Equal("diff-2", errored.ModelPatch);
+
+        Assert.All(capturedPrompts, p =>
+        {
+            Assert.DoesNotContain("secret__repo-", p.Title ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("secret__repo-", p.Description ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("secret__repo-", p.Bootstrap ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(p.Scope);
+            Assert.False(p.Scope!.MountAcpHostPaths);
+            Assert.False(p.Scope.DisableNetwork);
+            Assert.Contains("api.github.com", p.Scope.BlockedHosts);
+        });
+
+        var trScope = CrucibleBenchmarkRunner.BuildExecutionScope(
+            wks1,
+            null,
+            ExecutionMode.ContainerSandbox,
+            "ncf-bench-tr",
+            enableStackSkills: true,
+            category: BenchmarkProblemCategory.TaskReview);
+        Assert.True(trScope.DisableNetwork);
+        Assert.Empty(trScope.BlockedHosts);
+        Assert.False(trScope.MountAcpHostPaths);
     }
 }

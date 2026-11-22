@@ -369,6 +369,305 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
         }
     }
 
+    public async Task ResetPathsToBaseAsync(
+        string workspacePath,
+        string baseCommitOrRef,
+        IReadOnlyList<string> relativePaths,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath) || !Directory.Exists(workspacePath))
+        {
+            throw new BenchmarkWorkspaceException($"Workspace path '{workspacePath}' does not exist.", workspacePath: workspacePath);
+        }
+
+        if (string.IsNullOrWhiteSpace(baseCommitOrRef))
+        {
+            throw new BenchmarkWorkspaceException("Base commit/ref is required to reset paths.", workspacePath: workspacePath);
+        }
+
+        ArgumentNullException.ThrowIfNull(relativePaths);
+        if (relativePaths.Count == 0)
+        {
+            return;
+        }
+
+        var normalizedPaths = new List<string>(relativePaths.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawPath in relativePaths)
+        {
+            var normalized = NormalizeSafeRelativePath(rawPath, workspacePath);
+            if (seen.Add(normalized))
+            {
+                normalizedPaths.Add(normalized);
+            }
+        }
+
+        try
+        {
+            var lsTreeArgs = new List<string> { "-c", "core.quotepath=false", "ls-tree", "-r", "--name-only", baseCommitOrRef, "--" };
+            lsTreeArgs.AddRange(normalizedPaths);
+
+            var lsTreeResult = await _gitCliRunner.ExecuteAsync(
+                workspacePath,
+                lsTreeArgs,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            var existingInBase = (lsTreeResult.StandardOutput ?? string.Empty)
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(p => UnquoteGitPath(p).Replace('\\', '/').TrimStart('/'))
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var pathsToRestore = normalizedPaths.Where(existingInBase.Contains).ToList();
+            if (pathsToRestore.Count > 0)
+            {
+                var checkoutArgs = new List<string> { "checkout", baseCommitOrRef, "--" };
+                checkoutArgs.AddRange(pathsToRestore);
+                await _gitCliRunner.ExecuteAsync(workspacePath, checkoutArgs, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var relPath in normalizedPaths)
+            {
+                if (existingInBase.Contains(relPath))
+                {
+                    continue;
+                }
+
+                var fullPath = Path.Combine(workspacePath, relPath.Replace('/', Path.DirectorySeparatorChar));
+                if (File.Exists(fullPath))
+                {
+                    var attrs = File.GetAttributes(fullPath);
+                    if ((attrs & FileAttributes.ReadOnly) != 0)
+                    {
+                        File.SetAttributes(fullPath, attrs & ~FileAttributes.ReadOnly);
+                    }
+                    File.Delete(fullPath);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not BenchmarkWorkspaceException)
+        {
+            throw new BenchmarkWorkspaceException(
+                $"Failed to reset patch paths in workspace '{workspacePath}' against '{baseCommitOrRef}': {ex.Message}",
+                ex,
+                workspacePath: workspacePath);
+        }
+    }
+
+    internal static IReadOnlyList<string> ExtractPatchTargetPaths(string? patchContent)
+    {
+        if (string.IsNullOrWhiteSpace(patchContent))
+        {
+            return Array.Empty<string>();
+        }
+
+        var paths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        string? pendingOld = null;
+        string? pendingNew = null;
+        bool sectionHasHeaderPath = false;
+
+        void FlushGitFallback()
+        {
+            if (!sectionHasHeaderPath)
+            {
+                AddTargetPathIfValid(pendingOld, paths, seen);
+                AddTargetPathIfValid(pendingNew, paths, seen);
+            }
+
+            pendingOld = null;
+            pendingNew = null;
+            sectionHasHeaderPath = false;
+        }
+
+        foreach (var rawLine in patchContent.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (line.StartsWith("diff --git ", StringComparison.Ordinal))
+            {
+                FlushGitFallback();
+                TryParseGitDiffHeaderPaths(line, out pendingOld, out pendingNew);
+                continue;
+            }
+
+            if (line.StartsWith("--- ", StringComparison.Ordinal))
+            {
+                if (TryExtractDiffHeaderPath(line[4..], expectedSidePrefix: "a/", out var oldPath))
+                {
+                    AddTargetPathIfValid(oldPath, paths, seen);
+                    sectionHasHeaderPath = true;
+                }
+                continue;
+            }
+
+            if (line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                if (TryExtractDiffHeaderPath(line[4..], expectedSidePrefix: "b/", out var newPath))
+                {
+                    AddTargetPathIfValid(newPath, paths, seen);
+                    sectionHasHeaderPath = true;
+                }
+            }
+        }
+
+        FlushGitFallback();
+        return paths;
+    }
+
+    private static void AddTargetPathIfValid(string? candidate, List<string> target, HashSet<string> seen)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return;
+        }
+
+        var norm = candidate.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrWhiteSpace(norm) ||
+            Path.IsPathRooted(norm) ||
+            norm.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(seg => seg == ".."))
+        {
+            return;
+        }
+
+        if (seen.Add(norm))
+        {
+            target.Add(norm);
+        }
+    }
+
+    private static bool TryExtractDiffHeaderPath(string rawToken, string expectedSidePrefix, out string? path)
+    {
+        path = null;
+        var trimmed = rawToken.Trim();
+        if (trimmed.Length == 0 || trimmed.StartsWith("/dev/null", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        string candidate;
+        if (trimmed.StartsWith('"'))
+        {
+            var closingQuote = FindClosingQuoteIndex(trimmed);
+            if (closingQuote <= 0)
+            {
+                return false;
+            }
+            candidate = UnquoteGitPath(trimmed[..(closingQuote + 1)]);
+        }
+        else
+        {
+            var tabIdx = trimmed.IndexOf('\t');
+            candidate = tabIdx >= 0 ? trimmed[..tabIdx] : trimmed;
+        }
+
+        candidate = candidate.Replace('\\', '/');
+        if (candidate.StartsWith(expectedSidePrefix, StringComparison.Ordinal))
+        {
+            candidate = candidate[expectedSidePrefix.Length..];
+        }
+
+        path = candidate;
+        return !string.IsNullOrWhiteSpace(path);
+    }
+
+    private static void TryParseGitDiffHeaderPaths(string line, out string? oldPath, out string? newPath)
+    {
+        oldPath = null;
+        newPath = null;
+        var rest = line["diff --git ".Length..].Trim();
+        if (string.IsNullOrEmpty(rest))
+        {
+            return;
+        }
+
+        if (rest.StartsWith('"'))
+        {
+            var firstEnd = FindClosingQuoteIndex(rest);
+            if (firstEnd <= 0)
+            {
+                return;
+            }
+
+            var first = UnquoteGitPath(rest[..(firstEnd + 1)]).Replace('\\', '/');
+            if (first.StartsWith("a/", StringComparison.Ordinal))
+            {
+                oldPath = first[2..];
+            }
+
+            var secondPart = rest[(firstEnd + 1)..].TrimStart();
+            if (secondPart.StartsWith('"'))
+            {
+                var secondEnd = FindClosingQuoteIndex(secondPart);
+                if (secondEnd > 0)
+                {
+                    var second = UnquoteGitPath(secondPart[..(secondEnd + 1)]).Replace('\\', '/');
+                    if (second.StartsWith("b/", StringComparison.Ordinal))
+                    {
+                        newPath = second[2..];
+                    }
+                }
+            }
+            else if (secondPart.StartsWith("b/", StringComparison.Ordinal))
+            {
+                newPath = secondPart[2..];
+            }
+
+            return;
+        }
+
+        var splitIdx = rest.IndexOf(" b/", StringComparison.Ordinal);
+        if (splitIdx < 0)
+        {
+            return;
+        }
+
+        var aToken = rest[..splitIdx].Replace('\\', '/');
+        var bToken = rest[(splitIdx + 1)..].Replace('\\', '/');
+        oldPath = aToken.StartsWith("a/", StringComparison.Ordinal) ? aToken[2..] : aToken;
+        newPath = bToken.StartsWith("b/", StringComparison.Ordinal) ? bToken[2..] : bToken;
+    }
+
+    private static int FindClosingQuoteIndex(string text)
+    {
+        bool escaped = false;
+        for (int i = 1; i < text.Length; i++)
+        {
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+            if (text[i] == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+            if (text[i] == '"')
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static string NormalizeSafeRelativePath(string rawPath, string workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(rawPath))
+        {
+            throw new BenchmarkWorkspaceException("Patch target path cannot be empty.", workspacePath: workspacePath);
+        }
+
+        var normalized = rawPath.Replace('\\', '/').TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            Path.IsPathRooted(normalized) ||
+            normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(seg => seg == ".."))
+        {
+            throw new BenchmarkWorkspaceException($"Unsafe relative path '{rawPath}' for workspace reset.", workspacePath: workspacePath);
+        }
+
+        return normalized;
+    }
+
     public async Task ApplyPatchAsync(
         string workspacePath,
         string patchContent,

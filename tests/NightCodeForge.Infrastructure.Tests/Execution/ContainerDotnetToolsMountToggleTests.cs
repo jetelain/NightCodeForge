@@ -77,4 +77,40 @@ public sealed class ContainerDotnetToolsMountToggleTests
         Assert.True(tmpfsIdx >= 0);
         Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools:ro", dockerArgs[tmpfsIdx + 1]);
     }
+
+    [Fact]
+    public void BuildDockerRunArgs_SupportsDisableNetworkAndDeduplicatedBlockedHosts()
+    {
+        var blockedOptions = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = false,
+            MountHostSdks = false,
+            DisableNetwork = false,
+            BlockedHosts = ["github.com", "api.github.com", "GITHUB.COM", "   "]
+        };
+
+        var blockedArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(blockedOptions);
+        Assert.DoesNotContain("--network", blockedArgs);
+        Assert.Equal(2, blockedArgs.Count(a => a == "--add-host"));
+        Assert.Contains("github.com:127.0.0.1", blockedArgs);
+        Assert.Contains("api.github.com:127.0.0.1", blockedArgs);
+
+        var offlineOptions = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = false,
+            MountHostSdks = false,
+            DisableNetwork = true,
+            IsRestrictedReadOnly = false,
+            BlockedHosts = ["github.com"]
+        };
+
+        var offlineArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(offlineOptions);
+        var netIdx = offlineArgs.IndexOf("--network");
+        Assert.True(netIdx >= 0);
+        Assert.Equal("none", offlineArgs[netIdx + 1]);
+        Assert.DoesNotContain("--read-only", offlineArgs);
+        Assert.DoesNotContain("--add-host", offlineArgs);
+    }
 }

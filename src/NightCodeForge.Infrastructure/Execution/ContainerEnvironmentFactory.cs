@@ -224,7 +224,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             }
         }
 
-        if (scope.SecurityTier != SandboxSecurityTier.RestrictedReadOnly &&
+        if (scope.MountAcpHostPaths &&
+            scope.SecurityTier != SandboxSecurityTier.RestrictedReadOnly &&
             scope.ScopeKind != SandboxScopeKind.SystemNightwatch &&
             !_securityOptions.AirGappedMode)
         {
@@ -282,6 +283,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             WslUserName = _pathResolver.GetWslUserName(),
             ExpandTildeInMounts = true,
             ProtectCloneWorkingTree = scope.ProtectCloneWorkingTree && scope.ScopeKind != SandboxScopeKind.SystemNightwatch,
+            DisableNetwork = scope.DisableNetwork,
+            BlockedHosts = scope.BlockedHosts?.ToList() ?? new List<string>(),
             UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
         };
 

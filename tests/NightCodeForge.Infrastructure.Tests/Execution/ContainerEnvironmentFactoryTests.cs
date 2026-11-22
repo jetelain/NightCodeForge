@@ -304,4 +304,50 @@ public class ContainerEnvironmentFactoryTests
             m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
             m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath);
     }
+
+    [Fact]
+    public async Task CreateContainerEnvironmentAsync_BenchmarkScope_SkipsAcpMountsAndPropagatesNetworkIsolation()
+    {
+        var probeCallCount = 0;
+        _processRunnerMock
+            .Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
+            .Callback<ProcessStartSpec, CancellationToken>((_, _) => Interlocked.Increment(ref probeCallCount))
+            .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+
+        var sut = CreateSut();
+        var mountTable = SandboxMountTable.ForWorkspace("/host/bench-wks", isReadOnly: false);
+
+        var blockedScope = new SandboxScopeDescriptor(
+            SandboxScopeKind.WorkspaceClone,
+            ExecutionMode.ContainerSandbox,
+            SandboxSecurityTier.Standard,
+            mountTable,
+            containerName: "ncf-bench-test",
+            repositoryPath: "/host/bench-wks",
+            hostWorkspacePath: "/host/bench-wks",
+            blockedHosts: ["api.github.com", "github.com"],
+            mountAcpHostPaths: false);
+
+        var blockedExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(await sut.CreateContainerEnvironmentAsync(blockedScope));
+        Assert.Equal(0, probeCallCount);
+        Assert.DoesNotContain(blockedExecutor.Options.AdditionalVolumeMounts, m =>
+            m.ContainerPath == ContainerExecutorOptions.HostAgyContainerBinaryPath ||
+            m.ContainerPath == ContainerExecutorOptions.ContainerGeminiConfigPath);
+        Assert.False(blockedExecutor.Options.DisableNetwork);
+        Assert.Equal(["api.github.com", "github.com"], blockedExecutor.Options.BlockedHosts);
+
+        var offlineScope = new SandboxScopeDescriptor(
+            SandboxScopeKind.WorkspaceClone,
+            ExecutionMode.ContainerSandbox,
+            SandboxSecurityTier.Standard,
+            mountTable,
+            containerName: "ncf-bench-offline",
+            repositoryPath: "/host/bench-wks",
+            hostWorkspacePath: "/host/bench-wks",
+            disableNetwork: true,
+            mountAcpHostPaths: false);
+
+        var offlineExecutor = Assert.IsType<NightCodeForgeContainerExecutor>(await sut.CreateContainerEnvironmentAsync(offlineScope));
+        Assert.True(offlineExecutor.Options.DisableNetwork);
+    }
 }

@@ -404,6 +404,9 @@ public sealed record SandboxScopeDescriptor
     public SandboxMountTable MountTable { get; init; }
     public bool MountHostDotnetTools { get; init; } = true;
     public bool ProtectCloneWorkingTree { get; init; } = true;
+    public bool DisableNetwork { get; init; } = false;
+    public IReadOnlyList<string> BlockedHosts { get; init; } = Array.Empty<string>();
+    public bool MountAcpHostPaths { get; init; } = true;
 
     public bool IsReadOnly => SecurityTier == SandboxSecurityTier.RestrictedReadOnly;
 
@@ -427,7 +430,10 @@ public sealed record SandboxScopeDescriptor
         string? hostWorkspacePath = null,
         string? canonicalClonePath = null,
         bool mountHostDotnetTools = true,
-        bool protectCloneWorkingTree = true)
+        bool protectCloneWorkingTree = true,
+        bool disableNetwork = false,
+        IReadOnlyList<string>? blockedHosts = null,
+        bool mountAcpHostPaths = true)
     {
         ArgumentNullException.ThrowIfNull(mountTable);
         var effectiveTaskId = taskId is > 0 ? taskId : null;
@@ -458,6 +464,9 @@ public sealed record SandboxScopeDescriptor
         MountTable = mountTable;
         MountHostDotnetTools = mountHostDotnetTools;
         ProtectCloneWorkingTree = protectCloneWorkingTree;
+        DisableNetwork = disableNetwork;
+        BlockedHosts = blockedHosts ?? Array.Empty<string>();
+        MountAcpHostPaths = mountAcpHostPaths;
         ScopeCacheKey = !string.IsNullOrWhiteSpace(scopeCacheKey)
             ? scopeCacheKey
             : BuildCacheKey(scopeKind, effectiveWorkspaceId, effectiveTaskId, securityTier);

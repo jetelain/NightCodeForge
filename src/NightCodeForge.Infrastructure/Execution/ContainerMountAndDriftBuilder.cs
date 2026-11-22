@@ -1001,9 +1001,23 @@ public class ContainerMountAndDriftBuilder
             args.AddRange(["--pids-limit", options.PidsLimit.ToString()]);
         }
 
-        if (options.IsRestrictedReadOnly)
+        if (options.IsRestrictedReadOnly || options.DisableNetwork)
         {
             args.AddRange(["--network", "none"]);
+        }
+        else if (options.BlockedHosts is { Count: > 0 })
+        {
+            foreach (var host in options.BlockedHosts
+                .Where(h => !string.IsNullOrWhiteSpace(h))
+                .Select(h => h.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                args.AddRange(["--add-host", $"{host}:127.0.0.1"]);
+            }
+        }
+
+        if (options.IsRestrictedReadOnly)
+        {
             args.AddRange(["--read-only"]);
             if (!mounts.Any(m => string.Equals(NormalizeContainerPath(m.ContainerPath), "/tmp", StringComparison.OrdinalIgnoreCase)))
             {

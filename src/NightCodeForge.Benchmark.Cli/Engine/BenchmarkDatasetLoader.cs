@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Models;
@@ -446,6 +448,11 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
             }
             catch (JsonException ex)
             {
+                if (TryParsePythonStringList(raw, out var pythonItems))
+                {
+                    return pythonItems;
+                }
+
                 throw new BenchmarkDatasetException(
                     $"Field '{propertyName}' string value for instance '{instanceId}' in '{datasetPath}' is not valid JSON: {ex.Message}",
                     ex,
@@ -458,6 +465,131 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
             $"Field '{propertyName}' for instance '{instanceId}' in '{datasetPath}' must be a JSON array or JSON-encoded string array, got {prop.ValueKind}.",
             datasetPath,
             instanceId);
+    }
+
+    internal static bool TryParsePythonStringList(string raw, out IReadOnlyList<string> items)
+    {
+        items = Array.Empty<string>();
+        var trimmed = raw.AsSpan().Trim();
+        if (trimmed.Length < 2 || trimmed[0] != '[' || trimmed[^1] != ']')
+        {
+            return false;
+        }
+
+        var result = new List<string>();
+        int index = 1;
+        int end = trimmed.Length - 1;
+
+        while (index < end)
+        {
+            while (index < end && char.IsWhiteSpace(trimmed[index]))
+            {
+                index++;
+            }
+
+            if (index >= end)
+            {
+                break;
+            }
+
+            var quoteChar = trimmed[index];
+            if (quoteChar is not '\'' and not '"')
+            {
+                return false;
+            }
+
+            index++;
+            if (!TryReadPythonQuotedString(trimmed, ref index, end, quoteChar, out var item))
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(item))
+            {
+                result.Add(item);
+            }
+
+            while (index < end && char.IsWhiteSpace(trimmed[index]))
+            {
+                index++;
+            }
+
+            if (index >= end)
+            {
+                break;
+            }
+
+            if (trimmed[index] != ',')
+            {
+                return false;
+            }
+
+            index++;
+        }
+
+        items = result;
+        return true;
+    }
+
+    private static bool TryReadPythonQuotedString(
+        ReadOnlySpan<char> source,
+        ref int index,
+        int end,
+        char quoteChar,
+        out string value)
+    {
+        var sb = new StringBuilder();
+        while (index < end)
+        {
+            var ch = source[index++];
+            if (ch == quoteChar)
+            {
+                value = sb.ToString();
+                return true;
+            }
+
+            if (ch != '\\')
+            {
+                sb.Append(ch);
+                continue;
+            }
+
+            if (index >= end)
+            {
+                value = string.Empty;
+                return false;
+            }
+
+            var escaped = source[index++];
+            switch (escaped)
+            {
+                case '\\': sb.Append('\\'); break;
+                case '\'': sb.Append('\''); break;
+                case '"': sb.Append('"'); break;
+                case '/': sb.Append('/'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'b': sb.Append('\b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'u':
+                    if (index + 4 > end ||
+                        !ushort.TryParse(source.Slice(index, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var codeUnit))
+                    {
+                        value = string.Empty;
+                        return false;
+                    }
+                    sb.Append((char)codeUnit);
+                    index += 4;
+                    break;
+                default:
+                    value = string.Empty;
+                    return false;
+            }
+        }
+
+        value = string.Empty;
+        return false;
     }
 
     private static IReadOnlyList<string> ExtractStringArray(

@@ -938,4 +938,112 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Equal("Open", whitespaceFences.Frontmatter.Status);
         Assert.Equal("Body content", whitespaceFences.Body);
     }
+
+    [Fact]
+    public async Task VerifyAsync_Implementation_ResetsTestPatchPathsSetsDotNetRollForwardAndCatchesTestPatchCollision()
+    {
+        var workspaceDir = Path.Combine(_tempDir, "wks-tp-reset");
+        Directory.CreateDirectory(workspaceDir);
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        IReadOnlyDictionary<string, string>? capturedEnvVars = null;
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string?, int?, IReadOnlyDictionary<string, string>?, CancellationToken>((_, _, _, envVars, _) =>
+            {
+                capturedEnvVars = envVars;
+                var dir = Path.Combine(workspaceDir, BenchmarkPaths.BenchmarkResultDirRelative);
+                Directory.CreateDirectory(dir);
+                File.WriteAllText(Path.Combine(dir, BenchmarkPaths.TrxFileName), """
+                    <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                      <Results><UnitTestResult testId="1" testName="NewGoldTest" outcome="Passed" /></Results>
+                    </TestRun>
+                    """);
+            })
+            .ReturnsAsync(new CommandResult(0, "ok", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            envProvider.Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        const string testPatch = """
+            diff --git a/tests/NewGoldTest.cs b/tests/NewGoldTest.cs
+            new file mode 100644
+            --- /dev/null
+            +++ b/tests/NewGoldTest.cs
+            @@ -0,0 +1 @@
+            +class NewGoldTest {}
+            """;
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "cs-reset-1",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "owner/repo",
+            BaseCommit = "base1",
+            ProblemStatement = "Fix",
+            TestPatch = testPatch,
+            FailToPass = ["NewGoldTest"]
+        };
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "cs-reset-1",
+            Category = BenchmarkProblemCategory.Implementation,
+            WorkspacePath = workspaceDir,
+            BaseCommit = "base1"
+        };
+
+        var passResult = await verifier.VerifyAsync(
+            instance,
+            handle,
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff model" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.True(passResult.Passed);
+        Assert.NotNull(capturedEnvVars);
+        Assert.Equal(BenchmarkDefaults.DotNetRollForwardLatestMajor, capturedEnvVars[BenchmarkDefaults.DotNetRollForwardEnvVar]);
+        workspaceManager.Verify(w => w.ResetPathsToBaseAsync(
+            workspaceDir,
+            "base1",
+            It.Is<IReadOnlyList<string>>(p => p.SequenceEqual(new[] { "tests/NewGoldTest.cs" })),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        // If TestPatch still fails to apply after path reset, verifier returns Passed = false rather than throwing
+        workspaceManager
+            .Setup(w => w.ApplyPatchAsync(workspaceDir, testPatch, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new BenchmarkWorkspaceException("patch conflict"));
+
+        var failResult = await verifier.VerifyAsync(
+            instance,
+            handle,
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff model" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.False(failResult.Passed);
+        Assert.Contains("Evaluation TestPatch failed to apply cleanly", failResult.ErrorMessage);
+    }
+
+    [Fact]
+    public void CreateVerificationScope_DisablesAcpMountsAndBlocksCheatHosts()
+    {
+        var scope = BenchmarkVerifier.CreateVerificationScope("C:/tmp/wks", "custom:img", ExecutionMode.ContainerSandbox, "ncf-bench-verify-1");
+        Assert.False(scope.MountHostDotnetTools);
+        Assert.False(scope.MountAcpHostPaths);
+        Assert.False(scope.DisableNetwork);
+        Assert.Equal(BenchmarkDefaults.BlockedAntiCheatHosts, scope.BlockedHosts);
+    }
 }

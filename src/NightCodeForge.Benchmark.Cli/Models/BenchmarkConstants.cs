@@ -104,6 +104,23 @@ public static class BenchmarkDefaults
     public const int MinimumEnrichedBodyDeltaChars = 40;
     public const int MinimumReadyBodyChars = 80;
     public const string DefaultTaskDifficulty = "standard";
+    public const string DotNetRollForwardEnvVar = "DOTNET_ROLL_FORWARD";
+    public const string DotNetRollForwardLatestMajor = "LatestMajor";
+
+    public static readonly IReadOnlyList<string> BlockedAntiCheatHosts =
+    [
+        "github.com",
+        "www.github.com",
+        "api.github.com",
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "gist.github.com",
+        "gitlab.com",
+        "bitbucket.org",
+        "huggingface.co",
+        "datasets-server.huggingface.co"
+    ];
 
     public static readonly IReadOnlyList<string> ImplementationPermittedTools =
     [
