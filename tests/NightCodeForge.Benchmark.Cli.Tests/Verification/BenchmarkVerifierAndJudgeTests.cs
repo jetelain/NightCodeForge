@@ -1,9 +1,11 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using NightCodeForge.Benchmark.Cli.Cli;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Benchmark.Cli.Verification;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Inference;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 
@@ -718,5 +720,206 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         await Assert.ThrowsAsync<BenchmarkVerificationException>(() =>
             judge.EvaluateCodeReviewAsync(instance, new BenchmarkAgentOutcome(), new BenchmarkJudgeConfig { ModelName = "m" }));
         client.As<IDisposable>().Verify(d => d.Dispose(), Times.Exactly(2));
+    }
+
+    [Fact]
+    public void LlmJudge_ParseJudgeResponse_StripsThinkTagContainingBraces()
+    {
+        const string responseWithThink = """
+            <think>
+            Drafting score: {"score": 0.1, "rationale": "incomplete draft"}
+            Wait, let me reconsider carefully.
+            </think>
+            ```json
+            {"score": 0.85, "rationale": "Accurate review."}
+            ```
+            """;
+
+        var parsed = BenchmarkLlmJudge.ParseJudgeResponse(responseWithThink, "inst-think");
+
+        Assert.Equal(0.85, parsed.Score, 3);
+        Assert.Equal("Accurate review.", parsed.Rationale);
+    }
+
+    [Fact]
+    public void DefaultBenchmarkJudgeClientFactory_ResolveOpenAiApiKey_IgnoresWhitespaceEnvVars()
+    {
+        var withFallbackToOpenAi = DefaultBenchmarkJudgeClientFactory.ResolveOpenAiApiKey(
+            explicitKey: "   ",
+            name => name switch
+            {
+                BenchmarkCliConstants.BenchmarkApiKeyEnvVar => "  \t ",
+                BenchmarkCliConstants.OpenAiApiKeyEnvVar => " sk-real-key ",
+                _ => null
+            });
+        Assert.Equal("sk-real-key", withFallbackToOpenAi);
+
+        var withAllBlank = DefaultBenchmarkJudgeClientFactory.ResolveOpenAiApiKey(
+            explicitKey: null,
+            name => name switch
+            {
+                BenchmarkCliConstants.BenchmarkApiKeyEnvVar => "",
+                BenchmarkCliConstants.OpenAiApiKeyEnvVar => "   ",
+                _ => null
+            });
+        Assert.Equal(KnownDefaultModels.LocalAuthBypassKey, withAllBlank);
+
+        var withExplicit = DefaultBenchmarkJudgeClientFactory.ResolveOpenAiApiKey(
+            explicitKey: " sk-explicit ",
+            _ => "sk-ignored");
+        Assert.Equal("sk-explicit", withExplicit);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_Implementation_DiscoversCustomCommandNestedTrxAndRootJunit_IgnoringBuildDirs()
+    {
+        var workspaceDir = Path.Combine(_tempDir, "wks-custom-scan");
+        Directory.CreateDirectory(workspaceDir);
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var judge = new Mock<IBenchmarkLlmJudge>();
+
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        // Nested subproject TRX written by a CustomTestCommand, plus a failing decoy inside obj/
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string?, int?, IReadOnlyDictionary<string, string>?, CancellationToken>((_, _, _, _, _) =>
+            {
+                var nestedDir = Path.Combine(workspaceDir, "tests", "SubProject.Tests", "TestResults");
+                Directory.CreateDirectory(nestedDir);
+                File.WriteAllText(Path.Combine(nestedDir, "results.trx"), """
+                    <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                      <Results><UnitTestResult testId="1" testName="SubProjTest" outcome="Passed" /></Results>
+                    </TestRun>
+                    """);
+
+                var objDir = Path.Combine(workspaceDir, "obj");
+                Directory.CreateDirectory(objDir);
+                File.WriteAllText(Path.Combine(objDir, "decoy.trx"), """
+                    <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                      <Results><UnitTestResult testId="1" testName="SubProjTest" outcome="Failed" /></Results>
+                    </TestRun>
+                    """);
+            })
+            .ReturnsAsync(new CommandResult(0, "ok", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            containerFactory.Object,
+            envProvider.Object,
+            judge.Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var trxInstance = new BenchmarkInstance
+        {
+            InstanceId = "custom-nested-trx",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "owner/repo",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "dotnet test --results-directory tests/SubProject.Tests/TestResults",
+            FailToPass = ["SubProjTest"]
+        };
+
+        var trxResult = await verifier.VerifyAsync(
+            trxInstance,
+            new BenchmarkWorkspaceHandle { InstanceId = "custom-nested-trx", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.True(trxResult.Passed);
+        Assert.Equal(1, trxResult.FailToPassPassed);
+
+        // Workspace root junit.xml with failing decoy XML in obj/
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string?, int?, IReadOnlyDictionary<string, string>?, CancellationToken>((_, _, _, _, _) =>
+            {
+                File.WriteAllText(Path.Combine(workspaceDir, "junit.xml"), """
+                    <testsuite name="pytest">
+                      <testcase classname="suite" name="test_py" />
+                    </testsuite>
+                    """);
+                File.WriteAllText(Path.Combine(workspaceDir, "obj", "doc.xml"), """
+                    <testsuite name="decoy">
+                      <testcase classname="suite" name="test_py"><failure>decoy</failure></testcase>
+                    </testsuite>
+                    """);
+            })
+            .ReturnsAsync(new CommandResult(0, "ok", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var pyInstance = new BenchmarkInstance
+        {
+            InstanceId = "custom-root-junit",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.Python,
+            Repo = "owner/py",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix py",
+            CustomTestCommand = "pytest --junitxml=junit.xml",
+            TestResultFormat = TestResultFormat.JUnitXml,
+            FailToPass = ["test_py"]
+        };
+
+        var pyResult = await verifier.VerifyAsync(
+            pyInstance,
+            new BenchmarkWorkspaceHandle { InstanceId = "custom-root-junit", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.True(pyResult.Passed);
+        Assert.Equal(1, pyResult.FailToPassPassed);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_Implementation_NonZeroExitWithNoParsedOutcomes_IncludesExitCodeInErrorMessage()
+    {
+        var workspaceDir = Path.Combine(_tempDir, "wks-nonzero-empty");
+        Directory.CreateDirectory(workspaceDir);
+
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommandResult(2, string.Empty, "compile failed", TimeSpan.FromSeconds(1)));
+
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            envProvider.Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "nonzero-empty",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "owner/repo",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            FailToPass = ["TestA"]
+        };
+
+        var res = await verifier.VerifyAsync(
+            instance,
+            new BenchmarkWorkspaceHandle { InstanceId = "nonzero-empty", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.False(res.Passed);
+        Assert.Contains("exited with code 2", res.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("TestA", res.ErrorMessage);
     }
 }

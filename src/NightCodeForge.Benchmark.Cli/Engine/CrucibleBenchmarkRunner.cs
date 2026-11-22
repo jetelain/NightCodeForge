@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Crucible;
@@ -32,7 +33,9 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
     private static readonly JsonSerializerOptions ReportJsonOptions = new()
     {
         WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: true) }
     };
 
     private static readonly JsonSerializerOptions CompactJsonOptions = new()
@@ -149,7 +152,10 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         }
 
         if (!string.IsNullOrWhiteSpace(request.ResumeFromDir) &&
-            !string.Equals(Path.GetFullPath(request.ResumeFromDir), Path.GetFullPath(request.OutputDirectory), StringComparison.OrdinalIgnoreCase))
+            !string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.ResumeFromDir)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.OutputDirectory)),
+                StringComparison.OrdinalIgnoreCase))
         {
             foreach (var resumed in resumedByKey.Values)
             {
@@ -610,8 +616,20 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         }
 
         var json = await File.ReadAllTextAsync(resultsFile, cancellationToken).ConfigureAwait(false);
-        var priorReport = JsonSerializer.Deserialize<BenchmarkRunReport>(json, ReportJsonOptions)
-            ?? throw new BenchmarkException($"Failed to deserialize prior benchmark report at '{resultsFile}'.");
+        BenchmarkRunReport? priorReport;
+        try
+        {
+            priorReport = JsonSerializer.Deserialize<BenchmarkRunReport>(json, ReportJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new BenchmarkException($"Failed to parse prior benchmark report at '{resultsFile}': {ex.Message}", ex);
+        }
+
+        if (priorReport == null)
+        {
+            throw new BenchmarkException($"Failed to deserialize prior benchmark report at '{resultsFile}'.");
+        }
 
         return priorReport.Results;
     }
@@ -761,6 +779,10 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         ToolCallTelemetryBreakdown telemetry,
         string errorMessage)
     {
+        long totalTokens = runResult.Metrics.TotalTokens > 0
+            ? runResult.Metrics.TotalTokens
+            : (runResult.Metrics.PromptTokens + runResult.Metrics.CompletionTokens);
+
         return new BenchmarkInstanceResult
         {
             InstanceId = instance.InstanceId,
@@ -769,11 +791,11 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             Category = category,
             Language = instance.Language,
             Outcome = outcome,
-            DurationMs = durationMs,
+            DurationMs = Math.Max(1, durationMs),
             Turns = ResolveTurnCount(capture),
             PromptTokens = runResult.Metrics.PromptTokens,
             CompletionTokens = runResult.Metrics.CompletionTokens,
-            TotalTokens = runResult.Metrics.TotalTokens,
+            TotalTokens = totalTokens,
             TranscriptPath = capture.SavedTranscriptPath,
             Telemetry = telemetry,
             ErrorMessage = errorMessage

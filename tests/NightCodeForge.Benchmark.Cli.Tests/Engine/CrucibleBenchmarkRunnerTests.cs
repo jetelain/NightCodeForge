@@ -441,4 +441,261 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.Equal(1, breakdown.DispatcherRepairs);
         Assert.Equal(1, breakdown.StringifiedJsonRepaired);
     }
+
+    [Fact]
+    public async Task RunAsync_ResumesFromSnakeCaseStringEnumReport_AndFailsOnMalformedResumeJson()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-resume-enum.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"inst-1","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"One"}""",
+            """{"instance_id":"inst-2","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Two"}"""
+        ]));
+
+        var resumeDir = Path.Combine(_tempDir, "resume-snake");
+        Directory.CreateDirectory(resumeDir);
+        const string snakeCaseResults = """
+            {
+              "suite_name": "smoke",
+              "dataset_path": "dataset.jsonl",
+              "provenance": {
+                "ncf_version": "0.1.0",
+                "git_commit": "abc",
+                "git_branch": "main",
+                "run_timestamp_utc": "2026-11-22T00:00:00Z",
+                "provider_type": "ollama",
+                "endpoint": "http://localhost:11434",
+                "enable_stack_skills": true
+              },
+              "summaries": [],
+              "results": [
+                {
+                  "instance_id": "inst-1",
+                  "candidate_id": "cand",
+                  "model_name": "m1",
+                  "category": "implementation",
+                  "language": "csharp",
+                  "outcome": "passed",
+                  "duration_ms": 100,
+                  "deterministic_score": 1.0,
+                  "model_patch": "diff --git a/A.cs b/A.cs"
+                }
+              ]
+            }
+            """;
+        await File.WriteAllTextAsync(Path.Combine(resumeDir, BenchmarkPaths.ResultsFileName), snakeCaseResults);
+
+        var wks2 = Path.Combine(_tempDir, "wks-2");
+        Directory.CreateDirectory(wks2);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-2"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-2", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks2, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks2, "c1", It.IsAny<CancellationToken>())).ReturnsAsync("diff2");
+
+        var evaluated = new List<string>();
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>((ctx, _) =>
+            {
+                evaluated.Add(ctx.ForgeTask.Title);
+                return Task.FromResult(AgentRunResult.Completed(new AgentRunMetrics(50, 10, 10, 20), summary: "Ok"));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "smoke",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-snake"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost,
+            ResumeFromDir = resumeDir
+        });
+
+        Assert.Single(evaluated);
+        Assert.StartsWith("inst-2:", evaluated[0]);
+        Assert.Equal(2, report.Results.Count);
+
+        var badResumeDir = Path.Combine(_tempDir, "resume-bad");
+        Directory.CreateDirectory(badResumeDir);
+        await File.WriteAllTextAsync(Path.Combine(badResumeDir, BenchmarkPaths.ResultsFileName), "{not-valid-json");
+
+        await Assert.ThrowsAsync<BenchmarkException>(() => runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "smoke",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-bad"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost,
+            ResumeFromDir = badResumeDir
+        }));
+    }
+
+    [Fact]
+    public async Task RunAsync_ResumeFromSameOutputDirectoryWithTrailingSlash_DoesNotDuplicatePredictions()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-dedup.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"inst-1","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"One"}""");
+
+        var outDir = Path.Combine(_tempDir, "out-same");
+        var wks1 = Path.Combine(_tempDir, "wks-dedup-1");
+        var wks2 = Path.Combine(_tempDir, "wks-dedup-2");
+        Directory.CreateDirectory(wks1);
+        Directory.CreateDirectory(wks2);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-1"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-1", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks1, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-2"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-2", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks2, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks1, "c1", It.IsAny<CancellationToken>())).ReturnsAsync("diff1");
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks2, "c1", It.IsAny<CancellationToken>())).ReturnsAsync("diff2");
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(50, 10, 10, 20), summary: "Ok"));
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var candidate = new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" };
+        await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "dedup",
+            DatasetPath = datasetPath,
+            OutputDirectory = outDir,
+            Candidates = [candidate],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"inst-1","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"One"}""",
+            """{"instance_id":"inst-2","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Two"}"""
+        ]));
+
+        await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "dedup",
+            DatasetPath = datasetPath,
+            OutputDirectory = outDir,
+            Candidates = [candidate],
+            ExecutionMode = ExecutionMode.BareHost,
+            ResumeFromDir = outDir + Path.DirectorySeparatorChar
+        });
+
+        var predictionsFile = Path.Combine(outDir, "cand", BenchmarkPaths.PredictionsFileName);
+        var lines = await File.ReadAllLinesAsync(predictionsFile);
+        Assert.Equal(2, lines.Length);
+        Assert.Single(lines, l => l.Contains("\"inst-1\"", StringComparison.Ordinal));
+        Assert.Single(lines, l => l.Contains("\"inst-2\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RunAsync_AbnormalFailedAndTimeoutResults_ComputeTotalTokensAndMinimumDuration()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-abnormal.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"i-fail","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Fail"}""",
+            """{"instance_id":"i-timeout","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Timeout"}"""
+        ]));
+
+        var wks1 = Path.Combine(_tempDir, "wks-ab-1");
+        var wks2 = Path.Combine(_tempDir, "wks-ab-2");
+        Directory.CreateDirectory(wks1);
+        Directory.CreateDirectory(wks2);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "i-fail"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "i-fail", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks1, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "i-timeout"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "i-timeout", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks2, BaseCommit = "c1" });
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                if (ctx.ForgeTask.Title.StartsWith("i-timeout:", StringComparison.Ordinal))
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                }
+
+                return AgentRunResult.Failed(
+                    "Model error",
+                    new AgentRunMetrics(DurationMs: 0, PromptTokens: 40, CompletionTokens: 15, TotalTokens: 0));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "abnormal",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-abnormal"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1", InstanceTimeoutSeconds = 1 }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var failed = Assert.Single(report.Results, r => r.InstanceId == "i-fail");
+        Assert.Equal(BenchmarkInstanceOutcome.Error, failed.Outcome);
+        Assert.Equal(55, failed.TotalTokens);
+        Assert.True(failed.DurationMs >= 1);
+
+        var timedOut = Assert.Single(report.Results, r => r.InstanceId == "i-timeout");
+        Assert.Equal(BenchmarkInstanceOutcome.Timeout, timedOut.Outcome);
+        Assert.True(timedOut.DurationMs >= 1);
+    }
 }

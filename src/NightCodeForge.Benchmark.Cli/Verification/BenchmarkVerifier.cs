@@ -291,7 +291,11 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             PassToPassTotal = eval.PassToPassTotal,
             FailedTests = eval.FailedTests,
             VerificationLog = combinedOutput,
-            ErrorMessage = eval.AllPassed ? null : $"Failed tests: {string.Join(", ", eval.FailedTests)}"
+            ErrorMessage = eval.AllPassed
+                ? null
+                : (parsedOutcomes.Count == 0 && cmdResult.ExitCode != 0
+                    ? $"Test command exited with code {cmdResult.ExitCode} and produced no parsed test results. Failed tests: {string.Join(", ", eval.FailedTests)}"
+                    : $"Failed tests: {string.Join(", ", eval.FailedTests)}")
         };
     }
 
@@ -769,7 +773,15 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         return outcomes;
     }
 
-    private static IReadOnlyList<string> FindResultFiles(
+    private static readonly HashSet<string> SkippedResultScanDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git",
+        "node_modules",
+        "bin",
+        "obj"
+    };
+
+    private IReadOnlyList<string> FindResultFiles(
         string resultsHostDir,
         string workspacePath,
         string searchPattern,
@@ -784,16 +796,73 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             }
         }
 
+        var cutoffUtc = testRunStartedUtc.AddSeconds(-2);
         var testResultsDir = Path.Combine(workspacePath, "TestResults");
         if (Directory.Exists(testResultsDir))
         {
-            var cutoffUtc = testRunStartedUtc.AddSeconds(-1);
-            return Directory.GetFiles(testResultsDir, searchPattern, SearchOption.AllDirectories)
+            var testResultsFiles = Directory.GetFiles(testResultsDir, searchPattern, SearchOption.AllDirectories)
+                .Where(f => File.GetLastWriteTimeUtc(f) >= cutoffUtc)
+                .ToArray();
+            if (testResultsFiles.Length > 0)
+            {
+                return testResultsFiles;
+            }
+        }
+
+        if (Directory.Exists(workspacePath))
+        {
+            return EnumerateFilesSkippingBuildDirs(workspacePath, searchPattern)
                 .Where(f => File.GetLastWriteTimeUtc(f) >= cutoffUtc)
                 .ToArray();
         }
 
         return Array.Empty<string>();
+    }
+
+    private IEnumerable<string> EnumerateFilesSkippingBuildDirs(string rootDir, string searchPattern)
+    {
+        var pending = new Stack<string>();
+        pending.Push(rootDir);
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            IEnumerable<string> files;
+            try
+            {
+                files = Directory.EnumerateFiles(current, searchPattern, SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogDebug(ex, "Skipping inaccessible directory '{Directory}' while scanning for test result files.", current);
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                yield return file;
+            }
+
+            IEnumerable<string> subDirs;
+            try
+            {
+                subDirs = Directory.EnumerateDirectories(current, "*", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger.LogDebug(ex, "Skipping inaccessible subdirectories under '{Directory}' while scanning for test result files.", current);
+                continue;
+            }
+
+            foreach (var subDir in subDirs)
+            {
+                var dirName = Path.GetFileName(subDir);
+                if (!SkippedResultScanDirectories.Contains(dirName))
+                {
+                    pending.Push(subDir);
+                }
+            }
+        }
     }
 
     internal static SandboxScopeDescriptor CreateVerificationScope(

@@ -2,8 +2,11 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NightCodeForge.Benchmark.Cli.Cli;
+using NightCodeForge.Benchmark.Cli.Commands;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Inference;
@@ -25,8 +28,6 @@ public interface IBenchmarkJudgeClientFactory
 /// </summary>
 public sealed class DefaultBenchmarkJudgeClientFactory : IBenchmarkJudgeClientFactory
 {
-    private const string DefaultOllamaEndpoint = "http://localhost:11434";
-
     public IChatClient CreateJudgeClient(BenchmarkJudgeConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -38,7 +39,7 @@ public sealed class DefaultBenchmarkJudgeClientFactory : IBenchmarkJudgeClientFa
 
         var timeout = TimeSpan.FromSeconds(Math.Max(10, config.TimeoutSeconds));
         var endpoint = string.IsNullOrWhiteSpace(config.Endpoint)
-            ? DefaultOllamaEndpoint
+            ? BenchmarkCliConstants.DefaultOllamaEndpoint
             : config.Endpoint.Trim();
 
         if (config.ProviderType is LlmProviderType.Ollama or LlmProviderType.OllamaRouter)
@@ -63,11 +64,7 @@ public sealed class DefaultBenchmarkJudgeClientFactory : IBenchmarkJudgeClientFa
                 throw new BenchmarkVerificationException($"Valid judge endpoint URL is required for OpenAiCompatible judge provider (got '{config.Endpoint ?? "<null>"}').");
             }
 
-            var apiKey = !string.IsNullOrWhiteSpace(config.ApiKey)
-                ? config.ApiKey.Trim()
-                : (Environment.GetEnvironmentVariable("NCF_BENCHMARK_API_KEY")
-                    ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-                    ?? KnownDefaultModels.LocalAuthBypassKey);
+            var apiKey = ResolveOpenAiApiKey(config.ApiKey, Environment.GetEnvironmentVariable);
 
             var clientOptions = new OpenAIClientOptions
             {
@@ -81,6 +78,19 @@ public sealed class DefaultBenchmarkJudgeClientFactory : IBenchmarkJudgeClientFa
         }
 
         throw new BenchmarkVerificationException($"Unsupported judge provider type '{config.ProviderType}'.");
+    }
+
+    internal static string ResolveOpenAiApiKey(string? explicitKey, Func<string, string?> getEnvironmentVariable)
+    {
+        ArgumentNullException.ThrowIfNull(getEnvironmentVariable);
+
+        if (!string.IsNullOrWhiteSpace(explicitKey))
+        {
+            return explicitKey.Trim();
+        }
+
+        return RunBenchmarkCommand.ResolveApiKeyFromEnvironment(getEnvironmentVariable)
+            ?? KnownDefaultModels.LocalAuthBypassKey;
     }
 
     private sealed class OwnedHttpClientChatClient : DelegatingChatClient
@@ -107,8 +117,11 @@ public sealed class DefaultBenchmarkJudgeClientFactory : IBenchmarkJudgeClientFa
 /// <summary>
 /// Optional qualitative LLM-as-judge evaluator for Code Review and ForgeTask Review benchmark runs.
 /// </summary>
-public sealed class BenchmarkLlmJudge : IBenchmarkLlmJudge
+public sealed partial class BenchmarkLlmJudge : IBenchmarkLlmJudge
 {
+    [GeneratedRegex(@"<think>.*?</think>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant)]
+    private static partial Regex ThinkTagRegex();
+
     private readonly IBenchmarkJudgeClientFactory _clientFactory;
     private readonly ILogger<BenchmarkLlmJudge> _logger;
 
@@ -251,7 +264,8 @@ public sealed class BenchmarkLlmJudge : IBenchmarkLlmJudge
 
     private static string ExtractJsonObject(string raw)
     {
-        var trimmed = raw.Trim();
+        var withoutThink = ThinkTagRegex().Replace(raw, string.Empty);
+        var trimmed = withoutThink.Trim();
         if (trimmed.StartsWith("```", StringComparison.Ordinal))
         {
             var firstNewline = trimmed.IndexOf('\n');

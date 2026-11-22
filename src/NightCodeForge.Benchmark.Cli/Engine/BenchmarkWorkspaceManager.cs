@@ -197,6 +197,19 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
                 await _gitCliRunner.ExecuteAsync(workspacePath, ["remote", "remove", "origin"], cancellationToken: cancellationToken).ConfigureAwait(false);
             }
 
+            var fetchHeadPath = Path.Combine(workspacePath, ".git", "FETCH_HEAD");
+            if (File.Exists(fetchHeadPath))
+            {
+                try
+                {
+                    File.Delete(fetchHeadPath);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogDebug(ex, "Could not remove FETCH_HEAD from '{WorkspacePath}'.", workspacePath);
+                }
+            }
+
             var resolvedHead = (await _gitCliRunner.ExecuteAsync(workspacePath, ["rev-parse", "HEAD"], cancellationToken: cancellationToken).ConfigureAwait(false))
                 .StandardOutput.Trim();
 
@@ -371,20 +384,29 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
             throw new BenchmarkWorkspaceException($"Workspace path '{workspacePath}' does not exist.", workspacePath: workspacePath);
         }
 
-        var normalizedPatch = patchContent.Replace("\r\n", "\n");
-        if (!normalizedPatch.EndsWith('\n'))
-        {
-            normalizedPatch += "\n";
-        }
+        var primaryPatch = patchContent.EndsWith('\n') ? patchContent : patchContent + "\n";
 
         var tempPatchFile = Path.Combine(Path.GetTempPath(), $"ncf-bench-patch-{Guid.NewGuid():N}.diff");
         try
         {
-            await File.WriteAllTextAsync(tempPatchFile, normalizedPatch, Utf8NoBom, cancellationToken).ConfigureAwait(false);
-            await _gitCliRunner.ExecuteAsync(
-                workspacePath,
-                ["apply", "--whitespace=nowarn", tempPatchFile],
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(tempPatchFile, primaryPatch, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _gitCliRunner.ExecuteAsync(
+                    workspacePath,
+                    ["apply", "--whitespace=nowarn", tempPatchFile],
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && patchContent.Contains("\r\n", StringComparison.Ordinal))
+            {
+                _logger.LogDebug(ex, "git apply with preserved line endings failed in '{WorkspacePath}'; retrying with LF line endings.", workspacePath);
+                var lfPatch = primaryPatch.Replace("\r\n", "\n");
+                await File.WriteAllTextAsync(tempPatchFile, lfPatch, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+                await _gitCliRunner.ExecuteAsync(
+                    workspacePath,
+                    ["apply", "--whitespace=nowarn", tempPatchFile],
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

@@ -377,6 +377,74 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         Assert.Contains("id: 42", preserved);
     }
 
+    [Fact]
+    public async Task ProvisionAsync_RemovesFetchHeadFileFromGitDirectory()
+    {
+        File.WriteAllText(Path.Combine(_sourceRepoDir, "File.cs"), "class F {}\n");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Base\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "fetch-head-check",
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Check FETCH_HEAD removal"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        Assert.False(File.Exists(Path.Combine(handle.WorkspacePath, ".git", "FETCH_HEAD")));
+    }
+
+    [Fact]
+    public async Task ApplyPatchAsync_PreservesCrlfPatchesAndSupportsLfFallback()
+    {
+        RunGit(_sourceRepoDir, "config core.autocrlf false");
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "CrlfFile.cs"), "line1\r\nline2\r\n");
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "LfFile.cs"), "lf1\nlf2\n");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Mixed line endings\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "crlf-roundtrip",
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Fix CRLF and LF files"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        var crlfFilePath = Path.Combine(handle.WorkspacePath, "CrlfFile.cs");
+        await File.WriteAllTextAsync(crlfFilePath, "line1\r\nline2-fixed\r\n");
+
+        var crlfPatch = await _manager.ExtractPatchAsync(handle.WorkspacePath, handle.BaseCommit);
+        Assert.Contains("\r\n", crlfPatch);
+
+        await _manager.ResetToBaseAsync(handle.WorkspacePath, handle.BaseCommit);
+        Assert.DoesNotContain("line2-fixed", await File.ReadAllTextAsync(crlfFilePath));
+
+        await _manager.ApplyPatchAsync(handle.WorkspacePath, crlfPatch);
+        Assert.Equal("line1\r\nline2-fixed\r\n", await File.ReadAllTextAsync(crlfFilePath));
+
+        // Verify CRLF-serialized patch targeting an LF file still applies via LF fallback
+        await _manager.ResetToBaseAsync(handle.WorkspacePath, handle.BaseCommit);
+        const string crlfFormattedPatchForLfFile =
+            "diff --git a/LfFile.cs b/LfFile.cs\r\n" +
+            "--- a/LfFile.cs\r\n" +
+            "+++ b/LfFile.cs\r\n" +
+            "@@ -1,2 +1,2 @@\r\n" +
+            " lf1\r\n" +
+            "-lf2\r\n" +
+            "+lf2-fixed\r\n";
+
+        await _manager.ApplyPatchAsync(handle.WorkspacePath, crlfFormattedPatchForLfFile);
+        Assert.Equal("lf1\nlf2-fixed\n", await File.ReadAllTextAsync(Path.Combine(handle.WorkspacePath, "LfFile.cs")));
+    }
+
     private static string RunGit(string workingDir, string arguments)
     {
         var psi = new ProcessStartInfo("git", arguments)
