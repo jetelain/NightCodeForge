@@ -59,7 +59,8 @@ public sealed record CanonicalToolsetRequest(
     IReadOnlyDictionary<string, string> ToolDirectives,
     bool AttachBacklogMutationService,
     SandboxScopeDescriptor? SandboxScope = null,
-    IReadOnlyList<IAgentToolModule>? AdditionalModules = null);
+    IReadOnlyList<IAgentToolModule>? AdditionalModules = null,
+    LenientDispatchTelemetry? DispatchTelemetry = null);
 
 /// <summary>The configured tools of one agent session.</summary>
 public sealed record CanonicalToolsetSession(
@@ -221,7 +222,8 @@ public sealed class CanonicalToolsetFactory : ICanonicalToolsetFactory
         var dispatcher = NightCodeForgeToolDispatcher.Create(
             tools,
             request.CustomTools,
-            _backlogContext.CanonicalToolsLogger);
+            _backlogContext.CanonicalToolsLogger,
+            telemetry: request.DispatchTelemetry);
 
         RegisterCustomTools(dispatcher, request.CustomTools);
         await RegisterMcpToolsAsync(dispatcher, scope.WorkspaceRoot, cancellationToken);

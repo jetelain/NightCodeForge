@@ -281,6 +281,11 @@ public class ContainerMountAndDriftBuilder
                 var trimmedSdk = sdkPath.TrimEnd('/');
                 if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (!options.MountHostDotnetTools)
+                    {
+                        continue;
+                    }
+
                     var parentDotnet = trimmedSdk[..^"/tools".Length];
                     if (userDotnetRoots.Contains(parentDotnet))
                     {
@@ -310,6 +315,15 @@ public class ContainerMountAndDriftBuilder
         {
             foreach (var customMount in options.AdditionalVolumeMounts)
             {
+                if (!options.MountHostDotnetTools &&
+                    string.Equals(
+                        NormalizeContainerPath(customMount.ContainerPath),
+                        ContainerExecutorOptions.HostDotnetToolsContainerPath,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 AddMount(
                     ResolveHostPath(customMount.HostPath, options),
                     customMount.ContainerPath,
@@ -771,6 +785,11 @@ public class ContainerMountAndDriftBuilder
 
                 if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (!options.MountHostDotnetTools)
+                    {
+                        continue;
+                    }
+
                     var parentDotnet = trimmedSdk[..^"/tools".Length];
                     if (userDotnetRoots.Contains(parentDotnet))
                     {
@@ -788,20 +807,29 @@ public class ContainerMountAndDriftBuilder
                     {
                         if (!options.IsRestrictedReadOnly)
                         {
-                            pathEntries.Add($"{containerHomeDotnet}/tools");
+                            if (options.MountHostDotnetTools)
+                            {
+                                pathEntries.Add($"{containerHomeDotnet}/tools");
+                            }
                             pathEntries.Add(containerHomeDotnet);
                         }
                     }
                     else
                     {
-                        pathEntries.Add($"{trimmedSdk}/tools");
+                        if (options.MountHostDotnetTools)
+                        {
+                            pathEntries.Add($"{trimmedSdk}/tools");
+                        }
                         pathEntries.Add(trimmedSdk);
                     }
                 }
                 else if (trimmedSdk.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || trimmedSdk == "/usr/share/dotnet")
                 {
                     pathEntries.Add(trimmedSdk);
-                    pathEntries.Add("/root/.dotnet/tools");
+                    if (options.MountHostDotnetTools)
+                    {
+                        pathEntries.Add("/root/.dotnet/tools");
+                    }
                 }
                 else if (trimmedSdk.Contains("jvm", StringComparison.OrdinalIgnoreCase))
                 {
@@ -851,13 +879,22 @@ public class ContainerMountAndDriftBuilder
         else
         {
             pathEntries.Add("/usr/share/dotnet");
-            pathEntries.Add("/root/.dotnet/tools");
+            if (options.MountHostDotnetTools)
+            {
+                pathEntries.Add("/root/.dotnet/tools");
+            }
         }
 
-        pathEntries.Add(ContainerExecutorOptions.HostDotnetToolsContainerPath);
-        pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools");
+        if (options.MountHostDotnetTools)
+        {
+            pathEntries.Add(ContainerExecutorOptions.HostDotnetToolsContainerPath);
+            pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools");
+        }
         pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.local/bin");
-        pathEntries.Add("/root/.dotnet/tools");
+        if (options.MountHostDotnetTools)
+        {
+            pathEntries.Add("/root/.dotnet/tools");
+        }
         pathEntries.Add("/root/.local/bin");
         pathEntries.Add("/root/.cargo/bin");
         pathEntries.Add("/root/.npm-global/bin");
@@ -923,6 +960,15 @@ public class ContainerMountAndDriftBuilder
         {
             args.Add("-v");
             args.Add(mount.ToString());
+        }
+
+        if (!options.MountHostDotnetTools &&
+            mounts.Any(m => string.Equals(
+                NormalizeContainerPath(m.ContainerPath),
+                $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            args.AddRange(["--tmpfs", $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools:ro,noexec,nosuid,size=1m"]);
         }
 
         var workDir = !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)

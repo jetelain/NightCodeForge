@@ -60,7 +60,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
         _yamlSerializer = CreateYamlSerializer();
     }
 
-    internal static IDeserializer CreateYamlDeserializer() =>
+    public static IDeserializer CreateYamlDeserializer() =>
         new DeserializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
             .WithTypeConverter(new TaskDependencyReferenceListYamlConverter())

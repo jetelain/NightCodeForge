@@ -351,6 +351,28 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         return 1;
     }
 
+    /// <inheritdoc />
+    public async Task CleanupScopeEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (scope.ExecutionMode == ExecutionMode.BareHost)
+        {
+            return;
+        }
+
+        var effectiveTaskId = scope.TaskId is > 0 ? scope.TaskId : null;
+        var cacheKey = !string.IsNullOrWhiteSpace(scope.ScopeCacheKey)
+            ? scope.ScopeCacheKey
+            : SandboxScopeDescriptor.BuildCacheKey(scope.ScopeKind, scope.WorkspaceId, effectiveTaskId, scope.SecurityTier);
+
+        await RemoveCachedKeyUnderLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
+
+        if (scope.ExecutionMode == ExecutionMode.ContainerSandbox)
+        {
+            await _containerEnvironmentFactory.RemoveContainerAsync(scope, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private WslExecutionEnvironment CreateWslEnvironmentForWorkspace(Workspace workspace, int? effectiveTaskId)
     {
         string defaultWorkingDir;

@@ -44,6 +44,7 @@ public class DeterministicStageTests
         public Task CleanupWorkspaceContainersAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<int>> ListTaskContainerIdsAsync(Workspace workspace, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);
         public Task<int> EvictIdleWorkspaceContainersAsync(Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task CleanupScopeEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<CommandResult> ExecuteAsync(
             string command,

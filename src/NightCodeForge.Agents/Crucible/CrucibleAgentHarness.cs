@@ -224,7 +224,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 harnessConfig.CustomTools,
                 harnessConfig.ToolDirectives,
                 AttachBacklogMutationService: effectiveBacklogPolicy != null,
-                SandboxScope: context.SandboxScope),
+                SandboxScope: context.SandboxScope,
+                DispatchTelemetry: CrucibleDispatchTelemetryScope.Current),
             cancellationToken);
         var canonicalTools = toolset.Tools;
         var dispatcher = toolset.Dispatcher;
@@ -293,7 +294,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         // The backlog digest serves Stage 1 dependency audits and Stage 0 triage deduplication/ownership checks, and stays in Layer 3 (Task Scope).
         string? backlogDigest = null;
-        if (context.StageId is StandardStageIds.TaskReview or "stage-1" || isTriageSession)
+        if (workspace.Id > 0 && (context.StageId is StandardStageIds.TaskReview or "stage-1" || isTriageSession))
         {
             backlogDigest = await _workspaceContext.BuildBacklogDigestAsync(workspace.Id, persistedTaskId, cancellationToken);
         }
@@ -325,10 +326,14 @@ public partial class CrucibleAgentHarness : IAgentHarness
         string latestSerializedState = SerializeSession(chatHistory);
         int maxTurns = ResolveMaxTurns(harnessConfig, context.Profile);
 
+        var llmSessionId = !string.IsNullOrWhiteSpace(conversationState.SessionId)
+            ? conversationState.SessionId
+            : LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId);
+
         var setup = await _agentFactory.CreateAsync(
             new HarnessAgentRequest(
                 context.Profile,
-                LlmSessionIds.ForStage(context.ForgeTask.Id, context.StageId),
+                llmSessionId,
                 AgentId: context.StageId,
                 AgentName: context.Profile.Name ?? context.Profile.Id,
                 Instructions: stabilizedPrefix,

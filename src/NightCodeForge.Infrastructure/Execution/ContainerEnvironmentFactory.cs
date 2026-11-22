@@ -171,14 +171,17 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         }
         var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
 
-        var rawPath = !string.IsNullOrWhiteSpace(scope.Ext4MirrorPath)
-            ? scope.Ext4MirrorPath
-            : scope.RepositoryPath;
-        var detectedStack = !string.IsNullOrWhiteSpace(rawPath)
-            ? CodeStackPresets.Detect(rawPath)?.Name ?? CodeStack.DotNet
-            : CodeStack.DotNet;
+        if (scope.MountHostDotnetTools)
+        {
+            var rawPath = !string.IsNullOrWhiteSpace(scope.Ext4MirrorPath)
+                ? scope.Ext4MirrorPath
+                : scope.RepositoryPath;
+            var detectedStack = !string.IsNullOrWhiteSpace(rawPath)
+                ? CodeStackPresets.Detect(rawPath)?.Name ?? CodeStack.DotNet
+                : CodeStack.DotNet;
 
-        await EnsureCompanionToolsOnceAsync(detectedStack, useWsl, targetDistro, cancellationToken);
+            await EnsureCompanionToolsOnceAsync(detectedStack, useWsl, targetDistro, cancellationToken);
+        }
 
         var additionalMounts = new List<ContainerVolumeMount>();
         var extraPathDirectories = new List<string>();
@@ -192,15 +195,18 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
                 isReadOnly: true));
         }
 
-        var hostToolsSource = useWsl
-            ? "~/.dotnet/tools"
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools");
-        if (useWsl || Directory.Exists(hostToolsSource))
+        if (scope.MountHostDotnetTools)
         {
-            additionalMounts.Add(new(
-                hostPath: hostToolsSource,
-                containerPath: ContainerExecutorOptions.HostDotnetToolsContainerPath,
-                isReadOnly: true));
+            var hostToolsSource = useWsl
+                ? "~/.dotnet/tools"
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools");
+            if (useWsl || Directory.Exists(hostToolsSource))
+            {
+                additionalMounts.Add(new(
+                    hostPath: hostToolsSource,
+                    containerPath: ContainerExecutorOptions.HostDotnetToolsContainerPath,
+                    isReadOnly: true));
+            }
         }
 
         if (scope.MountTable.SandboxTmpMount != null)
@@ -264,6 +270,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             DefaultWorkingDirectory = scope.DefaultWorkingDirectory,
             MountPackageCaches = true,
             MountHostSdks = true,
+            MountHostDotnetTools = scope.MountHostDotnetTools,
             SdkMountPaths = sdkMountPaths?.ToList() ?? new List<string>(),
             AdditionalVolumeMounts = additionalMounts,
             ExtraPathDirectories = extraPathDirectories,
@@ -274,7 +281,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             WslExecutable = _options.WslExecutable,
             WslUserName = _pathResolver.GetWslUserName(),
             ExpandTildeInMounts = true,
-            ProtectCloneWorkingTree = scope.ScopeKind != SandboxScopeKind.SystemNightwatch,
+            ProtectCloneWorkingTree = scope.ProtectCloneWorkingTree && scope.ScopeKind != SandboxScopeKind.SystemNightwatch,
             UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
         };
 

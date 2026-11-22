@@ -83,5 +83,11 @@ public interface IExecutionEnvironmentProvider
     /// Evicts idle workspace-level sandbox containers that have been inactive longer than <paramref name="idleTimeout"/>.
     /// </summary>
     Task<int> EvictIdleWorkspaceContainersAsync(NightCodeForge.Core.Domain.Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Evicts and disposes the cached execution environment for <paramref name="scope"/> and removes its
+    /// container when running in <see cref="NightCodeForge.Core.Domain.ExecutionMode.ContainerSandbox"/>.
+    /// </summary>
+    Task CleanupScopeEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default);
 }
 

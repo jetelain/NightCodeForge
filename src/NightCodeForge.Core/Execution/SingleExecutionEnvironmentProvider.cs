@@ -46,4 +46,7 @@ public class SingleExecutionEnvironmentProvider : IExecutionEnvironmentProvider
 
     public Task<int> EvictIdleWorkspaceContainersAsync(Workspace workspace, TimeSpan idleTimeout, CancellationToken cancellationToken = default) =>
         Task.FromResult(0);
+
+    public Task CleanupScopeEnvironmentAsync(SandboxScopeDescriptor scope, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
 }

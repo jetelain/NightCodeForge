@@ -402,6 +402,8 @@ public sealed record SandboxScopeDescriptor
     public string VirtualRootPath { get; init; }
     public string DefaultWorkingDirectory { get; init; }
     public SandboxMountTable MountTable { get; init; }
+    public bool MountHostDotnetTools { get; init; } = true;
+    public bool ProtectCloneWorkingTree { get; init; } = true;
 
     public bool IsReadOnly => SecurityTier == SandboxSecurityTier.RestrictedReadOnly;
 
@@ -423,7 +425,9 @@ public sealed record SandboxScopeDescriptor
         string? scopeCacheKey = null,
         Workspace? workspace = null,
         string? hostWorkspacePath = null,
-        string? canonicalClonePath = null)
+        string? canonicalClonePath = null,
+        bool mountHostDotnetTools = true,
+        bool protectCloneWorkingTree = true)
     {
         ArgumentNullException.ThrowIfNull(mountTable);
         var effectiveTaskId = taskId is > 0 ? taskId : null;
@@ -452,6 +456,8 @@ public sealed record SandboxScopeDescriptor
             ? VirtualMountEntry.NormalizeVirtualPath(defaultWorkingDirectory)
             : VirtualRootPath;
         MountTable = mountTable;
+        MountHostDotnetTools = mountHostDotnetTools;
+        ProtectCloneWorkingTree = protectCloneWorkingTree;
         ScopeCacheKey = !string.IsNullOrWhiteSpace(scopeCacheKey)
             ? scopeCacheKey
             : BuildCacheKey(scopeKind, effectiveWorkspaceId, effectiveTaskId, securityTier);

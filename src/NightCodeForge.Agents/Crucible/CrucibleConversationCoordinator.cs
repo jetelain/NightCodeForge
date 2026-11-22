@@ -35,23 +35,28 @@ public sealed record CrucibleTranscriptRequest(
 /// </summary>
 public sealed class CrucibleConversationState
 {
-    private readonly ITaskRepository _repository;
+    private readonly IConversationTurnSink _turnSink;
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<string, bool> _writtenToolCallIds = new(StringComparer.Ordinal);
     private readonly List<ConversationTurn> _trackedTurns = new();
     private readonly object _gate = new();
     private Task _tail = Task.CompletedTask;
 
-    internal CrucibleConversationState(Conversation conversation, int attemptIndex, ITaskRepository repository, ILogger logger)
+    public CrucibleConversationState(Conversation conversation, int attemptIndex, IConversationTurnSink turnSink, ILogger logger)
     {
-        Conversation = conversation;
+        Conversation = conversation ?? throw new ArgumentNullException(nameof(conversation));
         AttemptIndex = attemptIndex;
-        _repository = repository;
-        _logger = logger;
+        _turnSink = turnSink ?? throw new ArgumentNullException(nameof(turnSink));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         if (conversation.Turns is { Count: > 0 })
         {
             _trackedTurns.AddRange(conversation.Turns);
         }
+    }
+
+    internal CrucibleConversationState(Conversation conversation, int attemptIndex, ITaskRepository repository, ILogger logger)
+        : this(conversation, attemptIndex, new TaskRepositoryConversationTurnSink(repository ?? throw new ArgumentNullException(nameof(repository))), logger)
+    {
     }
 
     public Conversation Conversation { get; }
@@ -122,7 +127,7 @@ public sealed class CrucibleConversationState
         EnqueueWrite(
             async () =>
             {
-                var turn = await _repository.AddConversationTurnAsync(
+                var turn = await _turnSink.AddTurnAsync(
                     conversationId,
                     role,
                     content: content,
@@ -151,7 +156,7 @@ public sealed class CrucibleConversationState
     /// <summary>Queues the sync of the task (pipeline data bag) with the conversation turn writes, preserving order.</summary>
     public void EnqueueTaskUpdate(ForgeTask task, CancellationToken cancellationToken) =>
         EnqueueWrite(
-            () => _repository.UpdateAsync(task, cancellationToken: cancellationToken),
+            () => _turnSink.UpdateTaskAsync(task, cancellationToken),
             $"Failed to sync pipeline data bag for task #{task.Id}");
 
     /// <summary>Completes once every queued write has run.</summary>
@@ -165,7 +170,7 @@ public sealed class CrucibleConversationState
 
     public async Task SanitizeTrailingInterruptedTurnsAsync(CancellationToken cancellationToken)
     {
-        await _repository.SanitizeTrailingInterruptedTurnsAsync(Conversation.Id, cancellationToken).ConfigureAwait(false);
+        await _turnSink.SanitizeTrailingInterruptedTurnsAsync(Conversation.Id, cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
             if (_trackedTurns.Count > 0)

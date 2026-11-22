@@ -196,6 +196,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
     public string? PlaywrightCachePath { get; set; } = "~/.cache/ms-playwright";
 
     public bool MountHostSdks { get; set; } = true;
+    public bool MountHostDotnetTools { get; set; } = true;
 
     public static readonly IReadOnlyList<string> DefaultSdkMountPaths = new[]
     {

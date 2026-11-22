@@ -156,9 +156,9 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
             }
             else
             {
-                bool hasClone = hasOverride ||
+                bool hasClone = (hasOverride && workspace.Id > 0) ||
                                 !string.IsNullOrEmpty(workspace.Ext4MirrorPath) ||
-                                Directory.Exists(_pathResolver.ResolveCruciblePath(workspace.Id, string.Empty));
+                                (workspace.Id > 0 && Directory.Exists(_pathResolver.ResolveCruciblePath(workspace.Id, string.Empty)));
                 agentWorkingDir = hasClone ? ContainerCloneDir : ContainerWorkspaceRoot;
             }
         }

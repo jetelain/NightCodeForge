@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
@@ -160,6 +162,54 @@ public class ExecutionEnvironmentProviderTests
         public Task<HostSdkDiscoveryDetails> DiscoverSdkDetailsAsync(string? distribution = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(DiscoverSdkDetails(distribution));
         public void ClearCache() { }
+    }
+
+    [Fact]
+    public async Task CleanupScopeEnvironmentAsync_EvictsAndDisposesCachedExecutor_AndRemovesContainer()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+
+        var env1 = new Mock<IExecutionEnvironment>();
+        var disp1 = env1.As<IDisposable>();
+        var env2 = new Mock<IExecutionEnvironment>();
+        var disp2 = env2.As<IDisposable>();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.SetupSequence(f => f.CreateContainerEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(env1.Object)
+            .ReturnsAsync(env2.Object);
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var scope = new SandboxScopeDescriptor(
+            scopeKind: SandboxScopeKind.WorkspaceClone,
+            executionMode: ExecutionMode.ContainerSandbox,
+            securityTier: SandboxSecurityTier.Standard,
+            mountTable: SandboxMountTable.ForWorkspace("/tmp/bench-cleanup", isReadOnly: false),
+            containerName: "ncf-bench-cleanup",
+            scopeCacheKey: "bench-run:ncf-bench-cleanup");
+
+        var first = await provider.GetEnvironmentAsync(scope);
+        Assert.Same(env1.Object, first);
+
+        await provider.CleanupScopeEnvironmentAsync(scope);
+
+        disp1.Verify(d => d.Dispose(), Times.Once);
+        containerFactory.Verify(f => f.RemoveContainerAsync(scope, It.IsAny<CancellationToken>()), Times.Once);
+
+        var second = await provider.GetEnvironmentAsync(scope);
+        Assert.Same(env2.Object, second);
+        Assert.NotSame(first, second);
+        disp2.Verify(d => d.Dispose(), Times.Never);
     }
 }
 
