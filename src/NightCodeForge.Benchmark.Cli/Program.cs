@@ -3,8 +3,10 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Benchmark.Cli.Cli;
 using NightCodeForge.Benchmark.Cli.Commands;
+using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Hosting;
 using NightCodeForge.Benchmark.Cli.Models;
+using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Benchmark.Cli;
 
@@ -71,64 +73,17 @@ public static class Program
 
             if (firstArg.Equals(BenchmarkCliConstants.CommandRun, StringComparison.OrdinalIgnoreCase))
             {
-                var remainingArgs = args.Skip(1).ToArray();
-                if (remainingArgs.Any(IsHelpFlag))
-                {
-                    PrintUsage(stdout);
-                    return BenchmarkCliConstants.ExitSuccess;
-                }
-
-                var options = BenchmarkCliArgumentParser.ParseRunOptions(remainingArgs, out var parseError);
-                if (options == null)
-                {
-                    stderr.WriteLine($"[{BenchmarkCliConstants.ToolName}] Error: {parseError}");
-                    stderr.WriteLine();
-                    PrintUsage(stdout);
-                    return BenchmarkCliConstants.ExitUsageError;
-                }
-
-                var candidates = BenchmarkCandidateConfigLoader.LoadCandidates(options);
-                var endpoint = RunBenchmarkCommand.ResolveEndpoint(options.Provider, options.Endpoint);
-                var apiKey = RunBenchmarkCommand.ResolveApiKeyFromEnvironment();
-
-                var hostConfig = new BenchmarkCliHostConfig(
-                    ProviderType: options.Provider,
-                    Endpoint: endpoint,
-                    ApiKey: apiKey,
-                    AllowedOpenAiModels: candidates.Select(c => c.ModelName).ToList(),
-                    BenchmarkRootDirectory: null);
-
-                var services = new ServiceCollection();
-                services.AddNightCodeForgeBenchmarkCliServices(hostConfig);
-
-                await using var serviceProvider = services.BuildServiceProvider();
-                using var scope = serviceProvider.CreateScope();
-                var runner = scope.ServiceProvider.GetRequiredService<ICrucibleBenchmarkRunner>();
-                var command = new RunBenchmarkCommand(runner);
-
-                return await command.ExecuteAsync(options, candidates, stdout.WriteLine, cancellationToken).ConfigureAwait(false);
+                return await ExecuteRunCommandAsync(args.Skip(1).ToArray(), stdout, stderr, cancellationToken).ConfigureAwait(false);
             }
 
             if (firstArg.Equals(BenchmarkCliConstants.CommandReport, StringComparison.OrdinalIgnoreCase))
             {
-                var remainingArgs = args.Skip(1).ToArray();
-                if (remainingArgs.Any(IsHelpFlag))
-                {
-                    PrintUsage(stdout);
-                    return BenchmarkCliConstants.ExitSuccess;
-                }
+                return await ExecuteReportCommandAsync(args.Skip(1).ToArray(), stdout, stderr, cancellationToken).ConfigureAwait(false);
+            }
 
-                var options = BenchmarkCliArgumentParser.ParseReportOptions(remainingArgs, out var parseError);
-                if (options == null)
-                {
-                    stderr.WriteLine($"[{BenchmarkCliConstants.ToolName}] Error: {parseError}");
-                    stderr.WriteLine();
-                    PrintUsage(stdout);
-                    return BenchmarkCliConstants.ExitUsageError;
-                }
-
-                var command = new ReportBenchmarkCommand();
-                return await command.ExecuteAsync(options, stdout.WriteLine, cancellationToken).ConfigureAwait(false);
+            if (firstArg.Equals(BenchmarkCliConstants.CommandDataset, StringComparison.OrdinalIgnoreCase))
+            {
+                return await ExecuteDatasetCommandAsync(args.Skip(1).ToArray(), stdout, stderr, cancellationToken).ConfigureAwait(false);
             }
 
             stderr.WriteLine($"[{BenchmarkCliConstants.ToolName}] Unknown command: '{firstArg}'");
@@ -152,6 +107,141 @@ public static class Program
             stderr.WriteLine(ex.StackTrace);
             return BenchmarkCliConstants.ExitFailure;
         }
+    }
+
+    private static async Task<int> ExecuteRunCommandAsync(
+        string[] remainingArgs,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        if (remainingArgs.Any(IsHelpFlag))
+        {
+            PrintUsage(stdout);
+            return BenchmarkCliConstants.ExitSuccess;
+        }
+
+        var options = BenchmarkCliArgumentParser.ParseRunOptions(remainingArgs, out var parseError);
+        if (options == null)
+        {
+            return PrintUsageError(stdout, stderr, parseError!);
+        }
+
+        var candidates = BenchmarkCandidateConfigLoader.LoadCandidates(options);
+        var endpoint = RunBenchmarkCommand.ResolveEndpoint(options.Provider, options.Endpoint);
+        var apiKey = RunBenchmarkCommand.ResolveApiKeyFromEnvironment();
+
+        var hostConfig = new BenchmarkCliHostConfig(
+            ProviderType: options.Provider,
+            Endpoint: endpoint,
+            ApiKey: apiKey,
+            AllowedOpenAiModels: candidates.Select(c => c.ModelName).ToList(),
+            BenchmarkRootDirectory: null);
+
+        var services = new ServiceCollection();
+        services.AddNightCodeForgeBenchmarkCliServices(hostConfig);
+
+        await using var serviceProvider = services.BuildServiceProvider();
+        using var scope = serviceProvider.CreateScope();
+        var runner = scope.ServiceProvider.GetRequiredService<ICrucibleBenchmarkRunner>();
+        var command = new RunBenchmarkCommand(runner);
+
+        return await command.ExecuteAsync(options, candidates, stdout.WriteLine, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<int> ExecuteReportCommandAsync(
+        string[] remainingArgs,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        if (remainingArgs.Any(IsHelpFlag))
+        {
+            PrintUsage(stdout);
+            return BenchmarkCliConstants.ExitSuccess;
+        }
+
+        var options = BenchmarkCliArgumentParser.ParseReportOptions(remainingArgs, out var parseError);
+        if (options == null)
+        {
+            return PrintUsageError(stdout, stderr, parseError!);
+        }
+
+        var command = new ReportBenchmarkCommand();
+        return await command.ExecuteAsync(options, stdout.WriteLine, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<int> ExecuteDatasetCommandAsync(
+        string[] remainingArgs,
+        TextWriter stdout,
+        TextWriter stderr,
+        CancellationToken cancellationToken)
+    {
+        if (remainingArgs.Length == 0 ||
+            IsTopLevelHelpToken(remainingArgs[0].Trim()) ||
+            remainingArgs.Any(IsHelpFlag))
+        {
+            PrintUsage(stdout);
+            return BenchmarkCliConstants.ExitSuccess;
+        }
+
+        var subCommand = remainingArgs[0].Trim();
+        var subArgs = remainingArgs.Skip(1).ToArray();
+
+        if (subCommand.Equals(BenchmarkCliConstants.SubCommandImport, StringComparison.OrdinalIgnoreCase))
+        {
+            var options = BenchmarkCliArgumentParser.ParseDatasetImportOptions(subArgs, out var parseError);
+            if (options == null)
+            {
+                return PrintUsageError(stdout, stderr, parseError!);
+            }
+
+            var services = new ServiceCollection();
+            services.AddNightCodeForgeBenchmarkDatasetImporters();
+
+            await using var serviceProvider = services.BuildServiceProvider();
+            var registry = serviceProvider.GetRequiredService<IBenchmarkDatasetImporterRegistry>();
+            var command = new DatasetImportCommand(registry);
+            return await command.ExecuteAsync(options, stdout.WriteLine, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (subCommand.Equals(BenchmarkCliConstants.SubCommandValidate, StringComparison.OrdinalIgnoreCase))
+        {
+            var options = BenchmarkCliArgumentParser.ParseDatasetValidateOptions(subArgs, out var parseError);
+            if (options == null)
+            {
+                return PrintUsageError(stdout, stderr, parseError!);
+            }
+
+            var hostConfig = new BenchmarkCliHostConfig(
+                ProviderType: LlmProviderType.Ollama,
+                Endpoint: BenchmarkCliConstants.DefaultOllamaEndpoint,
+                ApiKey: null,
+                AllowedOpenAiModels: Array.Empty<string>(),
+                BenchmarkRootDirectory: null);
+
+            var services = new ServiceCollection();
+            services.AddNightCodeForgeBenchmarkCliServices(hostConfig);
+
+            await using var serviceProvider = services.BuildServiceProvider();
+            using var scope = serviceProvider.CreateScope();
+            var validator = scope.ServiceProvider.GetRequiredService<IBenchmarkDatasetValidator>();
+            var command = new DatasetValidateCommand(validator);
+            return await command.ExecuteAsync(options, stdout.WriteLine, cancellationToken).ConfigureAwait(false);
+        }
+
+        stderr.WriteLine($"[{BenchmarkCliConstants.ToolName}] Unknown dataset subcommand: '{subCommand}'");
+        stderr.WriteLine();
+        PrintUsage(stdout);
+        return BenchmarkCliConstants.ExitUsageError;
+    }
+
+    private static int PrintUsageError(TextWriter stdout, TextWriter stderr, string parseError)
+    {
+        stderr.WriteLine($"[{BenchmarkCliConstants.ToolName}] Error: {parseError}");
+        stderr.WriteLine();
+        PrintUsage(stdout);
+        return BenchmarkCliConstants.ExitUsageError;
     }
 
     private static bool IsTopLevelHelpToken(string token) =>
@@ -178,6 +268,8 @@ public static class Program
 USAGE:
   ncf-bench run --dataset <path.jsonl|json> (--models <m1,m2> | --config <candidates.json>) [options]
   ncf-bench report <resultsDir1> [<resultsDir2> ...] [--baseline <resultsDir>] [--format markdown|ascii|json]
+  ncf-bench dataset import --source <swe-sharp-bench|swebench-multilingual|multi-swe-bench|swebench-verified> --input <path> --manifest <manifest.json> --out <path.jsonl>
+  ncf-bench dataset validate --dataset <path.jsonl> [--category <implementation|code-review|task-review>] [--filter <id1,id2>] [--limit <N>] [--verify|--no-verify]
   ncf-bench --version
   ncf-bench --help
 
@@ -206,6 +298,18 @@ REPORT OPTIONS:
   <resultsDir...>               One or more benchmark result directories (containing results.json)
   --baseline <resultsDir>       Baseline run directory for regression deltas (defaults to first directory in multi-run)
   --format <fmt>                markdown | ascii | json (default: markdown)
-");
+
+DATASET OPTIONS:
+  import:
+    --source <name>             swe-sharp-bench | swebench-multilingual | multi-swe-bench | swebench-verified
+    --input <path>              Raw external dataset file (.jsonl or .json)
+    --manifest <manifest.json>  Pinned selection manifest JSON file
+    --out <path.jsonl>          Destination normalized BenchmarkInstance JSONL file
+  validate:
+    --dataset <path>            Path to benchmark dataset (.jsonl or .json)
+    --category <name>           Optional category override (implementation | code-review | task-review)
+    --filter <id1,id2>          Comma-separated instance IDs to validate
+    --limit <N>                 Maximum number of dataset instances to validate
+    --verify / --no-verify      Run containerized test verification vs patch/frontmatter-only check (default: --verify)");
     }
 }

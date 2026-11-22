@@ -1,0 +1,784 @@
+{
+  "suite_name": "v1-full",
+  "version": "1.0.0",
+  "description": "Comprehensive multi-stack overnight benchmark suite (90 instances: ~53.3% C#, 20.0% TypeScript/JavaScript, ~15.6% Python, ~11.1% Rust) spanning Implementation, CodeReview, and TaskReview.",
+  "entries": [
+    {
+      "instance_id": "serilog__serilog-2083",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "serilog__serilog-2103",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1338",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1458",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "polly-1852",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "restsharp__restsharp-1676",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "messagepack-csharp__messagepack-csharp-1798",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "MessagePack-CSharp/MessagePack-CSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "autofac__autofac-1424",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "autofac/Autofac",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "vuejs__core-11915",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "facebook__docusaurus-9897",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "facebook/docusaurus",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+    },
+    {
+      "instance_id": "axios__axios-5892",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "ExitCode",
+      "custom_test_command": "npm run test:mocha"
+    },
+    {
+      "instance_id": "psf__requests-1921",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pallets__flask-5014",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pallets/flask",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "burntsushi__ripgrep-2576",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "burntsushi/ripgrep",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "serilog__serilog-1926",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "serilog__serilog-2116",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "serilog__serilog-1903",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "serilog__serilog-1897",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1552",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1513",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1308",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1503",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "polly-1898",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "polly-2164",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "polly-1316",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "polly-1579",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "restsharp__restsharp-2021",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "restsharp__restsharp-2020",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "messagepack-csharp__messagepack-csharp-2022",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "MessagePack-CSharp/MessagePack-CSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "messagepack-csharp__messagepack-csharp-2031",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "MessagePack-CSharp/MessagePack-CSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "messagepack-csharp__messagepack-csharp-1842",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "MessagePack-CSharp/MessagePack-CSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "autofac__autofac-1428",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "autofac/Autofac",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "autofac__autofac-1451",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "autofac/Autofac",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "devlooped__moq-1076",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "devlooped/moq",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "devlooped__moq-1081",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "devlooped/moq",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "ardalis__cleanarchitecture-546",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "ardalis/CleanArchitecture",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "vuejs__core-11870",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "vuejs__core-11589",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "facebook__docusaurus-10130",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "facebook/docusaurus",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+    },
+    {
+      "instance_id": "immutable-js__immutable-js-2006",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "immutable-js/immutable-js",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+    },
+    {
+      "instance_id": "axios__axios-4731",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "ExitCode",
+      "custom_test_command": "npm run test:mocha"
+    },
+    {
+      "instance_id": "axios__axios-6539",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "ExitCode",
+      "custom_test_command": "npm run test:mocha"
+    },
+    {
+      "instance_id": "babel__babel-15445",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "javascript",
+      "repo": "babel/babel",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+    },
+    {
+      "instance_id": "babel__babel-13928",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "javascript",
+      "repo": "babel/babel",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+    },
+    {
+      "instance_id": "psf__requests-6028",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "psf__requests-5414",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "psf__requests-2931",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-10051",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pytest-dev/pytest",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-10356",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pytest-dev/pytest",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pytest-dev__pytest-7324",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pytest-dev/pytest",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-7080",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pylint-dev/pylint",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pylint-dev__pylint-4970",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pylint-dev/pylint",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "burntsushi__ripgrep-2209",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "burntsushi/ripgrep",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "sharkdp__bat-2650",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "sharkdp/bat",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "sharkdp__bat-2201",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "sharkdp/bat",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "tokio-rs__tokio-6752",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "tokio-rs/tokio",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "tokio-rs__axum-691",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "tokio-rs/axum",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-002",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-003",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-004",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-005",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-006",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-007",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-008",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-009",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "autofac/Autofac",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-010",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-ts-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-ts-002",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-js-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-js-002",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-py-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-py-002",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "python",
+      "repo": "pallets/flask",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-rust-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "rust",
+      "repo": "burntsushi/ripgrep",
+      "test_result_format": "CargoTest"
+    },
+    {
+      "instance_id": "ncf-cr-rust-002",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "rust",
+      "repo": "tokio-rs/tokio",
+      "test_result_format": "CargoTest"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-002",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-003",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-004",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "autofac/Autofac",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-005",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-006",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-007",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "MessagePack-CSharp/MessagePack-CSharp",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-008",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "devlooped/moq",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-ts-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "typescript",
+      "repo": "facebook/docusaurus",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-ts-002",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-js-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-py-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-py-002",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "python",
+      "repo": "pytest-dev/pytest",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-rust-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "rust",
+      "repo": "burntsushi/ripgrep",
+      "test_result_format": "CargoTest"
+    },
+    {
+      "instance_id": "ncf-tr-rust-002",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "rust",
+      "repo": "tokio-rs/tokio",
+      "test_result_format": "CargoTest"
+    }
+  ]
+}

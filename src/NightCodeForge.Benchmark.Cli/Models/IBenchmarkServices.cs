@@ -67,6 +67,13 @@ public interface IBenchmarkVerifier
         bool verifyWithTests,
         BenchmarkJudgeConfig? judgeConfig,
         CancellationToken cancellationToken = default);
+
+    Task<BenchmarkVerificationResult> RunImplementationTestsAsync(
+        BenchmarkInstance instance,
+        BenchmarkWorkspaceHandle workspace,
+        string? patchToApply,
+        ExecutionMode executionMode,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

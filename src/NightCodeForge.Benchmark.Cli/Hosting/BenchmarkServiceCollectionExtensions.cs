@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NightCodeForge.Agents.Crucible;
+using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Engine;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Benchmark.Cli.Verification;
@@ -29,6 +30,25 @@ public static class BenchmarkServiceCollectionExtensions
         services.TryAddScoped<IBenchmarkVerifier, BenchmarkVerifier>();
         services.TryAddSingleton<IBenchmarkProvenanceProvider, BenchmarkProvenanceProvider>();
         services.TryAddScoped<ICrucibleBenchmarkRunner, CrucibleBenchmarkRunner>();
+        services.AddNightCodeForgeBenchmarkDatasetImporters();
+        services.TryAddScoped<IBenchmarkDatasetValidator, BenchmarkDatasetValidator>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the standalone external dataset importers and importer registry without requiring
+    /// execution, container, or LLM dependencies.
+    /// </summary>
+    public static IServiceCollection AddNightCodeForgeBenchmarkDatasetImporters(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IBenchmarkDatasetImporter, SweSharpBenchImporter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IBenchmarkDatasetImporter, SweBenchMultilingualImporter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IBenchmarkDatasetImporter, MultiSweBenchImporter>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IBenchmarkDatasetImporter, SweBenchVerifiedImporter>());
+        services.TryAddSingleton<IBenchmarkDatasetImporterRegistry, BenchmarkDatasetImporterRegistry>();
 
         return services;
     }

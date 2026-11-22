@@ -1,4 +1,5 @@
 using NightCodeForge.Benchmark.Cli.Cli;
+using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
@@ -148,6 +149,81 @@ public sealed class BenchmarkCliArgumentParserTests
     public void ParseReportOptions_InvalidInputs_ReturnExpectedError(string[] args, string expectedSubstring)
     {
         var options = BenchmarkCliArgumentParser.ParseReportOptions(args, out var error);
+
+        Assert.Null(options);
+        Assert.NotNull(error);
+        Assert.Contains(expectedSubstring, error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseDatasetImportOptions_AllRequiredOptions_ParsesCorrectly()
+    {
+        var args = new[]
+        {
+            "--source", "swe-sharp-bench",
+            "--input", "raw/swe.jsonl",
+            "--manifest=benchmarks/datasets/v1-smoke.manifest.json",
+            "--out", "out/v1-smoke-csharp.jsonl"
+        };
+
+        var options = BenchmarkCliArgumentParser.ParseDatasetImportOptions(args, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(options);
+        Assert.Equal(BenchmarkDatasetSource.SweSharpBench, options.Source);
+        Assert.Equal("raw/swe.jsonl", options.InputPath);
+        Assert.Equal("benchmarks/datasets/v1-smoke.manifest.json", options.ManifestPath);
+        Assert.Equal("out/v1-smoke-csharp.jsonl", options.OutputPath);
+    }
+
+    [Theory]
+    [InlineData(new[] { "--input", "a.jsonl", "--manifest", "m.json", "--out", "o.jsonl" }, "--source")]
+    [InlineData(new[] { "--source", "bad-source", "--input", "a.jsonl", "--manifest", "m.json", "--out", "o.jsonl" }, "--source")]
+    [InlineData(new[] { "--source", "swebench-verified", "--manifest", "m.json", "--out", "o.jsonl" }, "--input")]
+    [InlineData(new[] { "--source", "multi-swe-bench", "--input", "a.jsonl", "--out", "o.jsonl" }, "--manifest")]
+    [InlineData(new[] { "--source", "swebench-multilingual", "--input", "a.jsonl", "--manifest", "m.json" }, "--out")]
+    [InlineData(new[] { "--source", "swebench-verified", "--input", "a.jsonl", "--manifest", "m.json", "--out", "o.jsonl", "extra" }, "Unexpected positional argument")]
+    public void ParseDatasetImportOptions_InvalidInputs_ReturnExpectedError(string[] args, string expectedSubstring)
+    {
+        var options = BenchmarkCliArgumentParser.ParseDatasetImportOptions(args, out var error);
+
+        Assert.Null(options);
+        Assert.NotNull(error);
+        Assert.Contains(expectedSubstring, error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseDatasetValidateOptions_AllFlags_ParsesCorrectly()
+    {
+        var args = new[]
+        {
+            "--dataset", "benchmarks/datasets/v1-code-review.jsonl",
+            "--category=code-review",
+            "--filter", "ncf-cr-csharp-001,ncf-cr-ts-001",
+            "--limit", "2",
+            "--no-verify"
+        };
+
+        var options = BenchmarkCliArgumentParser.ParseDatasetValidateOptions(args, out var error);
+
+        Assert.Null(error);
+        Assert.NotNull(options);
+        Assert.Equal("benchmarks/datasets/v1-code-review.jsonl", options.DatasetPath);
+        Assert.Equal(BenchmarkProblemCategory.CodeReview, options.Category);
+        Assert.Equal(["ncf-cr-csharp-001", "ncf-cr-ts-001"], options.FilterInstanceIds);
+        Assert.Equal(2, options.Limit);
+        Assert.False(options.VerifyWithTests);
+    }
+
+    [Theory]
+    [InlineData(new string[0], "--dataset")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--category", "invalid" }, "--category")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--limit", "0" }, "--limit")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--filter", " , " }, "--filter")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--bogus" }, "Unrecognized option")]
+    public void ParseDatasetValidateOptions_InvalidInputs_ReturnExpectedError(string[] args, string expectedSubstring)
+    {
+        var options = BenchmarkCliArgumentParser.ParseDatasetValidateOptions(args, out var error);
 
         Assert.Null(options);
         Assert.NotNull(error);

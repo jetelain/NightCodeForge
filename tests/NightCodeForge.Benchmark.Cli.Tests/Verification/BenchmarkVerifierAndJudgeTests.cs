@@ -922,4 +922,20 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("exited with code 2", res.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("TestA", res.ErrorMessage);
     }
+
+    [Fact]
+    public void ParseTaskMarkdown_RejectsMalformedFencesAndPreservesTrailingWhitespaceFenceHandling()
+    {
+        var malformedOpen = BenchmarkVerifier.ParseTaskMarkdown("----extra\nid: 1\n---\n\nBody");
+        Assert.Null(malformedOpen.Frontmatter);
+
+        var malformedClose = BenchmarkVerifier.ParseTaskMarkdown("---\nid: 1\n---extra\nBody");
+        Assert.Null(malformedClose.Frontmatter);
+
+        var whitespaceFences = BenchmarkVerifier.ParseTaskMarkdown("---   \nid: 42\ntitle: \"Valid\"\nstatus: Open\n---   \n\nBody content");
+        Assert.NotNull(whitespaceFences.Frontmatter);
+        Assert.Equal(42, whitespaceFences.Frontmatter.Id);
+        Assert.Equal("Open", whitespaceFences.Frontmatter.Status);
+        Assert.Equal("Body content", whitespaceFences.Body);
+    }
 }

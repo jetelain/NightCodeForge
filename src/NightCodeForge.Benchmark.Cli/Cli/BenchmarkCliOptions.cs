@@ -1,3 +1,4 @@
+using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
@@ -47,4 +48,27 @@ public sealed class ReportCommandOptions
     public List<string> ResultDirectories { get; } = [];
     public string? BaselineDirectory { get; set; }
     public ReportOutputFormat Format { get; set; } = ReportOutputFormat.Markdown;
+}
+
+/// <summary>
+/// Parsed CLI options for <c>ncf-bench dataset import</c>.
+/// </summary>
+public sealed class DatasetImportCommandOptions
+{
+    public BenchmarkDatasetSource Source { get; set; }
+    public string InputPath { get; set; } = string.Empty;
+    public string ManifestPath { get; set; } = string.Empty;
+    public string OutputPath { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Parsed CLI options for <c>ncf-bench dataset validate</c>.
+/// </summary>
+public sealed class DatasetValidateCommandOptions
+{
+    public string DatasetPath { get; set; } = string.Empty;
+    public BenchmarkProblemCategory? Category { get; set; }
+    public List<string> FilterInstanceIds { get; } = [];
+    public int? Limit { get; set; }
+    public bool VerifyWithTests { get; set; } = true;
 }

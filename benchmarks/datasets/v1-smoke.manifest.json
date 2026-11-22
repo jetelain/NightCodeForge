@@ -1,0 +1,245 @@
+{
+  "suite_name": "v1-smoke",
+  "version": "1.0.0",
+  "description": "Fast multi-stack regression suite (28 instances: ~53.6% C#, ~21.4% TypeScript/JavaScript, ~14.3% Python, ~10.7% Rust) spanning Implementation, CodeReview, and TaskReview.",
+  "entries": [
+    {
+      "instance_id": "serilog__serilog-2083",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "serilog__serilog-2103",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1338",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "spectreconsole__spectre-console-1458",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "spectreconsole/spectre.console",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "polly-1852",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "restsharp__restsharp-1676",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "messagepack-csharp__messagepack-csharp-1798",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "MessagePack-CSharp/MessagePack-CSharp",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "autofac__autofac-1424",
+      "source": "swe-sharp-bench",
+      "category": "Implementation",
+      "language": "csharp",
+      "repo": "autofac/Autofac",
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+    },
+    {
+      "instance_id": "vuejs__core-11915",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "facebook__docusaurus-9897",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "typescript",
+      "repo": "facebook/docusaurus",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+    },
+    {
+      "instance_id": "axios__axios-5892",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "ExitCode",
+      "custom_test_command": "npm run test:mocha"
+    },
+    {
+      "instance_id": "psf__requests-1921",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "pallets__flask-5014",
+      "source": "swebench-verified",
+      "category": "Implementation",
+      "language": "python",
+      "repo": "pallets/flask",
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+    },
+    {
+      "instance_id": "burntsushi__ripgrep-2576",
+      "source": "swebench-multilingual",
+      "category": "Implementation",
+      "language": "rust",
+      "repo": "burntsushi/ripgrep",
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test --no-fail-fast"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-003",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-006",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-csharp-008",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-cr-ts-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-js-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "javascript",
+      "repo": "axios/axios",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-py-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-cr-rust-001",
+      "source": "crafted-code-review",
+      "category": "CodeReview",
+      "language": "rust",
+      "repo": "burntsushi/ripgrep",
+      "test_result_format": "CargoTest"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "serilog/serilog",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-003",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "App-vNext/Polly",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-csharp-005",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "csharp",
+      "repo": "restsharp/RestSharp",
+      "test_result_format": "Trx"
+    },
+    {
+      "instance_id": "ncf-tr-ts-002",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "typescript",
+      "repo": "vuejs/core",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-py-001",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "python",
+      "repo": "psf/requests",
+      "test_result_format": "JUnitXml"
+    },
+    {
+      "instance_id": "ncf-tr-rust-002",
+      "source": "crafted-task-review",
+      "category": "TaskReview",
+      "language": "rust",
+      "repo": "tokio-rs/tokio",
+      "test_result_format": "CargoTest"
+    }
+  ]
+}

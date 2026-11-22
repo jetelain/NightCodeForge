@@ -75,6 +75,7 @@ public static class BenchmarkSkillNames
 public static class BenchmarkPaths
 {
     public const string DefaultRootSubdir = "benchmarks";
+    public const string DatasetsSubdir = "datasets";
     public const string ReposCacheSubdir = "repos";
     public const string WorkspacesSubdir = "workspaces";
     public const string TranscriptsSubdir = "transcripts";

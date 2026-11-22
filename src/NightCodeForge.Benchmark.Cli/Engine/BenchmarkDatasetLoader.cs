@@ -1,4 +1,5 @@
 using System.Text.Json;
+using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
@@ -10,7 +11,7 @@ namespace NightCodeForge.Benchmark.Cli.Engine;
 /// </summary>
 public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
 {
-    private static readonly JsonDocumentOptions DocumentOptions = new()
+    internal static readonly JsonDocumentOptions DocumentOptions = new()
     {
         AllowTrailingCommas = true,
         CommentHandling = JsonCommentHandling.Skip
@@ -34,7 +35,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         var extension = Path.GetExtension(datasetPath);
         var records = new List<BenchmarkInstance>();
 
-        if (string.Equals(extension, ".jsonl", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(extension, BenchmarkDatasetConstants.JsonlExtension, StringComparison.OrdinalIgnoreCase))
         {
             using var reader = new StreamReader(datasetPath);
             int lineNumber = 0;
@@ -74,7 +75,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
                 }
             }
         }
-        else if (string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(extension, BenchmarkDatasetConstants.JsonExtension, StringComparison.OrdinalIgnoreCase))
         {
             var content = await File.ReadAllTextAsync(datasetPath, cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(content))
@@ -154,16 +155,16 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         string location,
         BenchmarkProblemCategory? categoryOverride)
     {
-        var instanceId = RequireString(element, "instance_id", datasetPath, location).Trim();
-        var repo = RequireString(element, "repo", datasetPath, location, instanceId).Trim();
-        var baseCommit = RequireString(element, "base_commit", datasetPath, location, instanceId).Trim();
-        var problemStatement = RequireString(element, "problem_statement", datasetPath, location, instanceId);
+        var instanceId = RequireString(element, BenchmarkDatasetConstants.FieldInstanceId, datasetPath, location).Trim();
+        var repo = RequireString(element, BenchmarkDatasetConstants.FieldRepo, datasetPath, location, instanceId).Trim();
+        var baseCommit = RequireString(element, BenchmarkDatasetConstants.FieldBaseCommit, datasetPath, location, instanceId).Trim();
+        var problemStatement = RequireString(element, BenchmarkDatasetConstants.FieldProblemStatement, datasetPath, location, instanceId);
 
-        var rawCategory = GetOptionalString(element, "category", datasetPath, instanceId);
+        var rawCategory = GetOptionalString(element, BenchmarkDatasetConstants.FieldCategory, datasetPath, instanceId);
         var category = ParseOptionalCategory(rawCategory, datasetPath, instanceId);
         var effectiveCategory = categoryOverride ?? category ?? BenchmarkProblemCategory.Implementation;
 
-        var rawLanguage = GetOptionalString(element, "language", datasetPath, instanceId);
+        var rawLanguage = GetOptionalString(element, BenchmarkDatasetConstants.FieldLanguage, datasetPath, instanceId);
         var language = BenchmarkLanguages.Normalize(rawLanguage);
         if (!BenchmarkLanguages.Supported.Contains(language))
         {
@@ -173,21 +174,21 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
                 instanceId);
         }
 
-        var rawFormat = GetOptionalString(element, "test_result_format", datasetPath, instanceId);
+        var rawFormat = GetOptionalString(element, BenchmarkDatasetConstants.FieldTestResultFormat, datasetPath, instanceId);
         var testResultFormat = ParseOptionalTestResultFormat(rawFormat, datasetPath, instanceId);
 
-        var hintsText = GetOptionalString(element, "hints_text", datasetPath, instanceId);
-        var customImage = GetOptionalString(element, "custom_container_image", datasetPath, instanceId)?.Trim();
-        var customTestCmd = GetOptionalString(element, "custom_test_command", datasetPath, instanceId)?.Trim();
-        var goldPatch = GetOptionalString(element, "patch", datasetPath, instanceId)
-            ?? GetOptionalString(element, "gold_patch", datasetPath, instanceId);
-        var testPatch = GetOptionalString(element, "test_patch", datasetPath, instanceId);
-        var failToPass = ParseStringArrayOrJsonString(element, "fail_to_pass", datasetPath, instanceId);
-        var passToPass = ParseStringArrayOrJsonString(element, "pass_to_pass", datasetPath, instanceId);
-        var candidatePatch = GetOptionalString(element, "candidate_patch", datasetPath, instanceId);
-        var taskSpecification = GetOptionalString(element, "task_specification", datasetPath, instanceId);
-        var expectedVerdict = GetOptionalString(element, "expected_verdict", datasetPath, instanceId)?.Trim();
-        var expectedDifficulty = GetOptionalString(element, "expected_difficulty", datasetPath, instanceId)?.Trim();
+        var hintsText = GetOptionalString(element, BenchmarkDatasetConstants.FieldHintsText, datasetPath, instanceId);
+        var customImage = GetOptionalString(element, BenchmarkDatasetConstants.FieldCustomContainerImage, datasetPath, instanceId)?.Trim();
+        var customTestCmd = GetOptionalString(element, BenchmarkDatasetConstants.FieldCustomTestCommand, datasetPath, instanceId)?.Trim();
+        var goldPatch = GetOptionalString(element, BenchmarkDatasetConstants.FieldPatch, datasetPath, instanceId)
+            ?? GetOptionalString(element, BenchmarkDatasetConstants.FieldGoldPatch, datasetPath, instanceId);
+        var testPatch = GetOptionalString(element, BenchmarkDatasetConstants.FieldTestPatch, datasetPath, instanceId);
+        var failToPass = ParseStringArrayOrJsonString(element, BenchmarkDatasetConstants.FieldFailToPass, datasetPath, instanceId);
+        var passToPass = ParseStringArrayOrJsonString(element, BenchmarkDatasetConstants.FieldPassToPass, datasetPath, instanceId);
+        var candidatePatch = GetOptionalString(element, BenchmarkDatasetConstants.FieldCandidatePatch, datasetPath, instanceId);
+        var taskSpecification = GetOptionalString(element, BenchmarkDatasetConstants.FieldTaskSpecification, datasetPath, instanceId);
+        var expectedVerdict = GetOptionalString(element, BenchmarkDatasetConstants.FieldExpectedVerdict, datasetPath, instanceId)?.Trim();
+        var expectedDifficulty = GetOptionalString(element, BenchmarkDatasetConstants.FieldExpectedDifficulty, datasetPath, instanceId)?.Trim();
         var expectedFindings = ParseExpectedFindings(element, datasetPath, instanceId);
 
         ValidateCategoryRequirements(
@@ -327,7 +328,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
     private static bool IsValidDifficulty(string value) =>
         Enum.TryParse<TaskDifficulty>(value.Trim(), ignoreCase: true, out _);
 
-    private static BenchmarkProblemCategory? ParseOptionalCategory(string? raw, string datasetPath, string instanceId)
+    internal static BenchmarkProblemCategory? ParseOptionalCategory(string? raw, string datasetPath, string instanceId)
     {
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -346,7 +347,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         };
     }
 
-    private static TestResultFormat? ParseOptionalTestResultFormat(string? raw, string datasetPath, string instanceId)
+    internal static TestResultFormat? ParseOptionalTestResultFormat(string? raw, string datasetPath, string instanceId)
     {
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -385,7 +386,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         return value;
     }
 
-    private static string? GetOptionalString(
+    internal static string? GetOptionalString(
         JsonElement obj,
         string propertyName,
         string? datasetPath = null,
@@ -406,7 +407,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         };
     }
 
-    private static IReadOnlyList<string> ParseStringArrayOrJsonString(
+    internal static IReadOnlyList<string> ParseStringArrayOrJsonString(
         JsonElement obj,
         string propertyName,
         string datasetPath,
@@ -491,7 +492,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         string datasetPath,
         string instanceId)
     {
-        if (!TryGetPropertyIgnoreCase(obj, "expected_findings", out var prop) || prop.ValueKind == JsonValueKind.Null)
+        if (!TryGetPropertyIgnoreCase(obj, BenchmarkDatasetConstants.FieldExpectedFindings, out var prop) || prop.ValueKind == JsonValueKind.Null)
         {
             return Array.Empty<BenchmarkExpectedFinding>();
         }
@@ -515,14 +516,14 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
                     instanceId);
             }
 
-            var filePath = GetOptionalString(item, "file_path", datasetPath, instanceId)
-                ?? GetOptionalString(item, "file", datasetPath, instanceId);
-            var symbolHint = GetOptionalString(item, "symbol_or_line_hint", datasetPath, instanceId)
-                ?? GetOptionalString(item, "symbol", datasetPath, instanceId)
-                ?? GetOptionalString(item, "line_hint", datasetPath, instanceId);
-            var severity = GetOptionalString(item, "severity", datasetPath, instanceId);
-            var summary = GetOptionalString(item, "summary", datasetPath, instanceId);
-            var keywords = ParseStringArrayOrJsonString(item, "keywords", datasetPath, instanceId);
+            var filePath = GetOptionalString(item, BenchmarkDatasetConstants.FieldFilePath, datasetPath, instanceId)
+                ?? GetOptionalString(item, BenchmarkDatasetConstants.FieldFile, datasetPath, instanceId);
+            var symbolHint = GetOptionalString(item, BenchmarkDatasetConstants.FieldSymbolOrLineHint, datasetPath, instanceId)
+                ?? GetOptionalString(item, BenchmarkDatasetConstants.FieldSymbol, datasetPath, instanceId)
+                ?? GetOptionalString(item, BenchmarkDatasetConstants.FieldLineHint, datasetPath, instanceId);
+            var severity = GetOptionalString(item, BenchmarkDatasetConstants.FieldSeverity, datasetPath, instanceId);
+            var summary = GetOptionalString(item, BenchmarkDatasetConstants.FieldSummary, datasetPath, instanceId);
+            var keywords = ParseStringArrayOrJsonString(item, BenchmarkDatasetConstants.FieldKeywords, datasetPath, instanceId);
 
             if (string.IsNullOrWhiteSpace(filePath) &&
                 string.IsNullOrWhiteSpace(symbolHint) &&
@@ -541,7 +542,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         return findings;
     }
 
-    private static bool TryGetPropertyIgnoreCase(JsonElement obj, string propertyName, out JsonElement value)
+    internal static bool TryGetPropertyIgnoreCase(JsonElement obj, string propertyName, out JsonElement value)
     {
         if (obj.TryGetProperty(propertyName, out value))
         {
@@ -563,6 +564,6 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         return false;
     }
 
-    private static string NormalizeToken(string value) =>
+    internal static string NormalizeToken(string value) =>
         value.Trim().Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
 }

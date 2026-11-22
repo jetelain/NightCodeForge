@@ -106,13 +106,31 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             };
         }
 
+        return await RunImplementationTestsAsync(
+            instance,
+            workspace,
+            outcome.ModelPatch,
+            executionMode,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<BenchmarkVerificationResult> RunImplementationTestsAsync(
+        BenchmarkInstance instance,
+        BenchmarkWorkspaceHandle workspace,
+        string? patchToApply,
+        ExecutionMode executionMode,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(workspace);
+
         await _workspaceManager.ResetToBaseAsync(workspace.WorkspacePath, workspace.BaseCommit, cancellationToken).ConfigureAwait(false);
 
-        if (!string.IsNullOrWhiteSpace(outcome.ModelPatch))
+        if (!string.IsNullOrWhiteSpace(patchToApply))
         {
             try
             {
-                await _workspaceManager.ApplyPatchAsync(workspace.WorkspacePath, outcome.ModelPatch, cancellationToken).ConfigureAwait(false);
+                await _workspaceManager.ApplyPatchAsync(workspace.WorkspacePath, patchToApply, cancellationToken).ConfigureAwait(false);
             }
             catch (BenchmarkWorkspaceException ex)
             {
@@ -123,7 +141,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                     FailToPassTotal = instance.FailToPass.Count,
                     PassToPassTotal = instance.PassToPass.Count,
                     FailedTests = instance.FailToPass.Concat(instance.PassToPass).ToList(),
-                    ErrorMessage = $"Generated model patch failed to apply cleanly: {ex.Message}"
+                    ErrorMessage = $"Patch failed to apply cleanly: {ex.Message}"
                 };
             }
         }
@@ -894,27 +912,43 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             protectCloneWorkingTree: false);
     }
 
-    private (TaskFrontmatter? Frontmatter, string? Body) ParseTaskMarkdownSafe(string? markdown)
+    private (TaskFrontmatter? Frontmatter, string? Body) ParseTaskMarkdownSafe(string? markdown) =>
+        ParseTaskMarkdown(markdown, _logger);
+
+    internal static (TaskFrontmatter? Frontmatter, string? Body) ParseTaskMarkdown(string? markdown, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(markdown))
         {
             return (null, null);
         }
 
-        var normalized = markdown.TrimStart('\uFEFF').Replace("\r\n", "\n").TrimStart();
-        if (!normalized.StartsWith("---", StringComparison.Ordinal))
+        var normalized = markdown.TrimStart('\uFEFF').Replace("\r\n", "\n").Replace('\r', '\n').TrimStart();
+        var lines = normalized.Split('\n');
+        if (lines.Length == 0 || !string.Equals(lines[0].Trim(), "---", StringComparison.Ordinal))
         {
             return (null, normalized);
         }
 
-        var secondFence = normalized.IndexOf("\n---", 3, StringComparison.Ordinal);
-        if (secondFence < 0)
+        int closingIndex = -1;
+        for (int i = 1; i < lines.Length; i++)
+        {
+            if (string.Equals(lines[i].Trim(), "---", StringComparison.Ordinal))
+            {
+                closingIndex = i;
+                break;
+            }
+        }
+
+        if (closingIndex < 0)
         {
             return (null, normalized);
         }
 
-        var yamlPart = normalized.Substring(3, secondFence - 3).Trim();
-        var bodyPart = normalized[(secondFence + 4)..].TrimStart('\r', '\n');
+        var yamlPart = string.Join('\n', lines, 1, closingIndex - 1).Trim();
+        var bodyPart = closingIndex + 1 < lines.Length
+            ? string.Join('\n', lines, closingIndex + 1, lines.Length - closingIndex - 1).TrimStart('\n')
+            : string.Empty;
+
         var deserializer = TaskMarkdownSyncService.CreateYamlDeserializer();
         try
         {
@@ -923,7 +957,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         }
         catch (YamlException ex)
         {
-            _logger.LogDebug(ex, "Task markdown frontmatter YAML deserialization failed during benchmark verification.");
+            logger?.LogDebug(ex, "Task markdown frontmatter YAML deserialization failed during benchmark verification.");
             return (null, bodyPart);
         }
     }

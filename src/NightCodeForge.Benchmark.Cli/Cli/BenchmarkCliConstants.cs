@@ -20,8 +20,12 @@ public static class BenchmarkCliConstants
 
     public const string CommandRun = "run";
     public const string CommandReport = "report";
+    public const string CommandDataset = "dataset";
     public const string CommandHelp = "help";
     public const string CommandVersion = "version";
+
+    public const string SubCommandImport = "import";
+    public const string SubCommandValidate = "validate";
 
     public const string FlagHelp = "--help";
     public const string FlagHelpShort = "-h";
@@ -52,6 +56,9 @@ public static class BenchmarkCliConstants
     public const string OptionOut = "--out";
     public const string OptionBaseline = "--baseline";
     public const string OptionFormat = "--format";
+    public const string OptionSource = "--source";
+    public const string OptionInput = "--input";
+    public const string OptionManifest = "--manifest";
 
     public const string BenchmarkApiKeyEnvVar = "NCF_BENCHMARK_API_KEY";
     public const string OpenAiApiKeyEnvVar = ApiKeySecretConstants.OpenAiApiKeyEnvironmentVariable;

@@ -6,6 +6,7 @@ using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Benchmark.Cli.Cli;
+using NightCodeForge.Benchmark.Cli.Datasets;
 using NightCodeForge.Benchmark.Cli.Hosting;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
@@ -60,6 +61,8 @@ public sealed class BenchmarkCliDependencyInjectionTests
 
         var runner = sp.GetRequiredService<ICrucibleBenchmarkRunner>();
         var loader = sp.GetRequiredService<IBenchmarkDatasetLoader>();
+        var importerRegistry = sp.GetRequiredService<IBenchmarkDatasetImporterRegistry>();
+        var datasetValidator = sp.GetRequiredService<IBenchmarkDatasetValidator>();
         var workspaceManager = sp.GetRequiredService<IBenchmarkWorkspaceManager>();
         var verifier = sp.GetRequiredService<IBenchmarkVerifier>();
         var provenanceProvider = sp.GetRequiredService<IBenchmarkProvenanceProvider>();
@@ -80,6 +83,12 @@ public sealed class BenchmarkCliDependencyInjectionTests
 
         Assert.NotNull(runner);
         Assert.NotNull(loader);
+        Assert.NotNull(importerRegistry);
+        Assert.NotNull(importerRegistry.GetImporter(BenchmarkDatasetSource.SweSharpBench));
+        Assert.NotNull(importerRegistry.GetImporter(BenchmarkDatasetSource.SweBenchMultilingual));
+        Assert.NotNull(importerRegistry.GetImporter(BenchmarkDatasetSource.MultiSweBench));
+        Assert.NotNull(importerRegistry.GetImporter(BenchmarkDatasetSource.SweBenchVerified));
+        Assert.NotNull(datasetValidator);
         Assert.NotNull(workspaceManager);
         Assert.NotNull(verifier);
         Assert.NotNull(provenanceProvider);
@@ -196,5 +205,25 @@ public sealed class BenchmarkCliDependencyInjectionTests
         Assert.NotNull(provider.GetRequiredService<IExecutionEnvironmentProvider>());
         Assert.NotNull(provider.GetRequiredService<NightCodeForgeContainerExecutor>());
         Assert.Equal(typeof(InMemoryOperationsTelemetryService), provider.GetRequiredService<IOperationsTelemetryService>().GetType());
+    }
+
+    [Fact]
+    public void AddNightCodeForgeBenchmarkDatasetImporters_ResolvesRegistryStandaloneWithoutExecutionOrLlmDependencies()
+    {
+        var services = new ServiceCollection();
+        services.AddNightCodeForgeBenchmarkDatasetImporters();
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateScopes = true,
+            ValidateOnBuild = true
+        });
+
+        var registry = provider.GetRequiredService<IBenchmarkDatasetImporterRegistry>();
+        Assert.NotNull(registry.GetImporter(BenchmarkDatasetSource.SweSharpBench));
+        Assert.NotNull(registry.GetImporter(BenchmarkDatasetSource.SweBenchMultilingual));
+        Assert.NotNull(registry.GetImporter(BenchmarkDatasetSource.MultiSweBench));
+        Assert.NotNull(registry.GetImporter(BenchmarkDatasetSource.SweBenchVerified));
+        Assert.Null(provider.GetService<ICrucibleBenchmarkRunner>());
     }
 }

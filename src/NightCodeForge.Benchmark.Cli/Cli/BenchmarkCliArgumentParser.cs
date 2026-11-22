@@ -1,11 +1,14 @@
 using System.Globalization;
+using NightCodeForge.Benchmark.Cli.Datasets;
+using NightCodeForge.Benchmark.Cli.Engine;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Benchmark.Cli.Cli;
 
 /// <summary>
-/// Parses and validates command-line arguments for <c>ncf-bench run</c> and <c>ncf-bench report</c>.
+/// Parses and validates command-line arguments for <c>ncf-bench run</c>, <c>ncf-bench report</c>,
+/// <c>ncf-bench dataset import</c>, and <c>ncf-bench dataset validate</c>.
 /// </summary>
 public static class BenchmarkCliArgumentParser
 {
@@ -103,16 +106,9 @@ public static class BenchmarkCliArgumentParser
             if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionFilter, out var filterVal, out error))
             {
                 if (error != null) return null;
-                var ids = filterVal!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                if (ids.Length == 0)
+                if (!TryAppendFilterIds(filterVal!, options.FilterInstanceIds, out error))
                 {
-                    error = $"Option '{BenchmarkCliConstants.OptionFilter}' must contain at least one instance ID.";
                     return null;
-                }
-
-                foreach (var id in ids)
-                {
-                    options.FilterInstanceIds.Add(id);
                 }
                 continue;
             }
@@ -292,6 +288,210 @@ public static class BenchmarkCliArgumentParser
         }
 
         return options;
+    }
+
+    public static DatasetImportCommandOptions? ParseDatasetImportOptions(string[] args, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        error = null;
+        var options = new DatasetImportCommandOptions();
+        bool hasSource = false;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var rawArg = args[i].Trim();
+            if (string.IsNullOrEmpty(rawArg))
+            {
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionSource, out var sourceVal, out error))
+            {
+                if (error != null) return null;
+                if (!TryParseDatasetSource(sourceVal!, out var parsedSource))
+                {
+                    error = $"Invalid value '{sourceVal}' for '{BenchmarkCliConstants.OptionSource}'. Expected one of: {BenchmarkDatasetConstants.SourceSweSharpBench}, {BenchmarkDatasetConstants.SourceSweBenchMultilingual}, {BenchmarkDatasetConstants.SourceMultiSweBench}, {BenchmarkDatasetConstants.SourceSweBenchVerified}.";
+                    return null;
+                }
+
+                options.Source = parsedSource;
+                hasSource = true;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionInput, out var inputVal, out error))
+            {
+                if (error != null) return null;
+                options.InputPath = inputVal!;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionManifest, out var manifestVal, out error))
+            {
+                if (error != null) return null;
+                options.ManifestPath = manifestVal!;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionOut, out var outVal, out error))
+            {
+                if (error != null) return null;
+                options.OutputPath = outVal!;
+                continue;
+            }
+
+            error = rawArg.StartsWith('-')
+                ? $"Unrecognized option '{rawArg}'."
+                : $"Unexpected positional argument '{rawArg}'.";
+            return null;
+        }
+
+        if (!hasSource)
+        {
+            error = $"Missing required option '{BenchmarkCliConstants.OptionSource} <source>'.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.InputPath))
+        {
+            error = $"Missing required option '{BenchmarkCliConstants.OptionInput} <path>'.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ManifestPath))
+        {
+            error = $"Missing required option '{BenchmarkCliConstants.OptionManifest} <manifest.json>'.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.OutputPath))
+        {
+            error = $"Missing required option '{BenchmarkCliConstants.OptionOut} <path.jsonl>'.";
+            return null;
+        }
+
+        return options;
+    }
+
+    public static DatasetValidateCommandOptions? ParseDatasetValidateOptions(string[] args, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        error = null;
+        var options = new DatasetValidateCommandOptions();
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            var rawArg = args[i].Trim();
+            if (string.IsNullOrEmpty(rawArg))
+            {
+                continue;
+            }
+
+            if (TryMatchBooleanFlag(rawArg, BenchmarkCliConstants.OptionVerify, BenchmarkCliConstants.OptionNoVerify, out var verifyVal))
+            {
+                options.VerifyWithTests = verifyVal;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionDataset, out var datasetVal, out error))
+            {
+                if (error != null) return null;
+                options.DatasetPath = datasetVal!;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionCategory, out var categoryVal, out error))
+            {
+                if (error != null) return null;
+                if (!TryParseCategory(categoryVal!, out var parsedCategory))
+                {
+                    error = $"Invalid value '{categoryVal}' for '{BenchmarkCliConstants.OptionCategory}'. Expected one of: {BenchmarkCliConstants.CategoryImplementation}, {BenchmarkCliConstants.CategoryCodeReview}, {BenchmarkCliConstants.CategoryTaskReview}.";
+                    return null;
+                }
+                options.Category = parsedCategory;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionFilter, out var filterVal, out error))
+            {
+                if (error != null) return null;
+                if (!TryAppendFilterIds(filterVal!, options.FilterInstanceIds, out error))
+                {
+                    return null;
+                }
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionLimit, out var limitVal, out error))
+            {
+                if (error != null) return null;
+                if (!TryParsePositiveInt(limitVal!, BenchmarkCliConstants.OptionLimit, out var limit, out error))
+                {
+                    return null;
+                }
+                options.Limit = limit;
+                continue;
+            }
+
+            error = rawArg.StartsWith('-')
+                ? $"Unrecognized option '{rawArg}'."
+                : $"Unexpected positional argument '{rawArg}'.";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.DatasetPath))
+        {
+            error = $"Missing required option '{BenchmarkCliConstants.OptionDataset} <path>'.";
+            return null;
+        }
+
+        return options;
+    }
+
+    public static bool TryParseDatasetSource(string raw, out BenchmarkDatasetSource source)
+    {
+        if (!BenchmarkDatasetManifestLoader.TryNormalizeManifestSource(raw, out var canonical))
+        {
+            source = default;
+            return false;
+        }
+
+        switch (canonical)
+        {
+            case BenchmarkDatasetConstants.SourceSweSharpBench:
+                source = BenchmarkDatasetSource.SweSharpBench;
+                return true;
+            case BenchmarkDatasetConstants.SourceSweBenchMultilingual:
+                source = BenchmarkDatasetSource.SweBenchMultilingual;
+                return true;
+            case BenchmarkDatasetConstants.SourceMultiSweBench:
+                source = BenchmarkDatasetSource.MultiSweBench;
+                return true;
+            case BenchmarkDatasetConstants.SourceSweBenchVerified:
+                source = BenchmarkDatasetSource.SweBenchVerified;
+                return true;
+            default:
+                source = default;
+                return false;
+        }
+    }
+
+    private static bool TryAppendFilterIds(string rawFilter, List<string> target, out string? error)
+    {
+        var ids = rawFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (ids.Length == 0)
+        {
+            error = $"Option '{BenchmarkCliConstants.OptionFilter}' must contain at least one instance ID.";
+            return false;
+        }
+
+        foreach (var id in ids)
+        {
+            target.Add(id);
+        }
+
+        error = null;
+        return true;
     }
 
     public static bool TryParseProvider(string raw, out LlmProviderType provider)
