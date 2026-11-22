@@ -2,15 +2,14 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
-using NightCodeForge.Agents.Benchmarking;
-using NightCodeForge.Core.Benchmarking;
-using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Tests.Engine;
 
 public sealed class BenchmarkWorkspaceManagerTests : IDisposable
 {

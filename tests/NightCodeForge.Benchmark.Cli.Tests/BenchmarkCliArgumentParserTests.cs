@@ -1,5 +1,5 @@
 using NightCodeForge.Benchmark.Cli.Cli;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Benchmark.Cli.Tests;

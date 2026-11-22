@@ -3,7 +3,7 @@ using Pmad.AI.Tools;
 namespace NightCodeForge.Agents.Crucible;
 
 /// <summary>
-/// Ambient <see cref="AsyncLocal{T}"/> scope allowing benchmark runners to attach a per-instance
+/// Ambient <see cref="AsyncLocal{T}"/> scope allowing stateless runners to attach a per-instance
 /// <see cref="LenientDispatchTelemetry"/> collector to <see cref="CrucibleAgentHarness"/> without
 /// expanding the harness constructor beyond the AGENTS.md parameter ceiling.
 /// </summary>

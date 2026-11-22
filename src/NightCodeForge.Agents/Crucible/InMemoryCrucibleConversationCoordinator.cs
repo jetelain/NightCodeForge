@@ -30,7 +30,7 @@ public sealed class InMemoryConversationCapture
 /// <summary>
 /// Stateless, database-free <see cref="ICrucibleConversationCoordinator"/> backed by
 /// <see cref="InMemoryConversationTurnSink"/> and <see cref="SessionTranscriptService"/>.
-/// Used by benchmark runs so zero <c>Workspace</c>, <c>ForgeTask</c>, or <c>Conversation</c> rows touch SQLite.
+/// Used by stateless in-memory runs so zero <c>Workspace</c>, <c>ForgeTask</c>, or <c>Conversation</c> rows touch SQLite.
 /// </summary>
 public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversationCoordinator
 {
@@ -55,7 +55,7 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
 
     /// <summary>
     /// Scopes an <see cref="InMemoryConversationCapture"/> to the current async execution flow so callers
-    /// can inspect captured turns and redirect markdown transcript writes away from the benchmarked git tree.
+    /// can inspect captured turns and redirect markdown transcript writes away from the target git tree.
     /// </summary>
     public static IDisposable BeginCapture(InMemoryConversationCapture capture)
     {
@@ -95,7 +95,7 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
         var sink = _activeCapture.Value?.TurnSink ?? new InMemoryConversationTurnSink();
         var state = new CrucibleConversationState(conversation, attemptIndex: 1, sink, _logger)
         {
-            SessionId = $"bench-{Guid.NewGuid():N}",
+            SessionId = $"inmem-{Guid.NewGuid():N}",
             IsResumedConversation = !string.IsNullOrWhiteSpace(context.SerializedStateJson)
         };
 

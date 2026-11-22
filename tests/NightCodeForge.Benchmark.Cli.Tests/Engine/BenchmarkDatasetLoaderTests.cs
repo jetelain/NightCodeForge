@@ -1,8 +1,7 @@
-using NightCodeForge.Agents.Benchmarking;
-using NightCodeForge.Core.Benchmarking;
-using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Tests.Engine;
 
 public sealed class BenchmarkDatasetLoaderTests : IDisposable
 {

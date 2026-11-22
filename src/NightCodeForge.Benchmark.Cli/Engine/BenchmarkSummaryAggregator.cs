@@ -1,6 +1,6 @@
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Engine;
 
 /// <summary>
 /// Aggregates per-instance benchmark telemetry and outcomes into candidate-level scorecards

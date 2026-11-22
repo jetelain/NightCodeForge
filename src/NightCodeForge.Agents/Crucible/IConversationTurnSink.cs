@@ -75,7 +75,7 @@ public sealed class TaskRepositoryConversationTurnSink : IConversationTurnSink
 }
 
 /// <summary>
-/// Thread-safe in-memory <see cref="IConversationTurnSink"/> used by stateless benchmark runs without database writes.
+/// Thread-safe in-memory <see cref="IConversationTurnSink"/> used by stateless runs without database writes.
 /// </summary>
 public sealed class InMemoryConversationTurnSink : IConversationTurnSink
 {

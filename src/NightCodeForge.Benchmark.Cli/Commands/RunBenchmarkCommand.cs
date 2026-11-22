@@ -1,8 +1,8 @@
 using System.Globalization;
-using NightCodeForge.Agents.Benchmarking;
 using NightCodeForge.Benchmark.Cli.Cli;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Benchmark.Cli.Reporting;
-using NightCodeForge.Core.Benchmarking;
 using NightCodeForge.Core.Domain;
 
 namespace NightCodeForge.Benchmark.Cli.Commands;

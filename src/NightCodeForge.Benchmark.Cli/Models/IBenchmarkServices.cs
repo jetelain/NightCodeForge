@@ -1,6 +1,6 @@
 using NightCodeForge.Core.Domain;
 
-namespace NightCodeForge.Core.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Models;
 
 /// <summary>
 /// Parses and validates benchmark datasets across Implementation, Code Review, and ForgeTask Review formats.

@@ -1,9 +1,8 @@
 using System.Text.Json;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Engine;
 
 /// <summary>
 /// Parses and strictly validates `.jsonl` and `.json` benchmark datasets across Implementation,

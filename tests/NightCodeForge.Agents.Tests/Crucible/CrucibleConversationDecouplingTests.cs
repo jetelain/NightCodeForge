@@ -5,7 +5,6 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
-using NightCodeForge.Agents.Benchmarking;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Inference;
@@ -28,7 +27,7 @@ using NightCodeForge.Core.Streaming;
 using NightCodeForge.Core.Workflow.Filtering;
 using Pmad.AI.Tools;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Agents.Tests.Crucible;
 
 public sealed class CrucibleConversationDecouplingTests : IDisposable
 {
@@ -295,25 +294,21 @@ public sealed class CrucibleConversationDecouplingTests : IDisposable
 
         var sessionId = Assert.Single(capturedSessionIds);
         Assert.NotNull(sessionId);
-        Assert.StartsWith("bench-", sessionId, StringComparison.Ordinal);
+        Assert.StartsWith("inmem-", sessionId, StringComparison.Ordinal);
 
-        var breakdown = CrucibleBenchmarkRunner.BuildTelemetryBreakdown(
-            capture.TurnSink.Turns,
-            new LenientDispatchTelemetry().CreateSnapshot());
-        Assert.Equal(1, breakdown.TotalToolCalls);
+        var toolTurns = capture.TurnSink.Turns.Where(t => t.Role == StageTurnRole.Tool).ToList();
+        var toolTurn = Assert.Single(toolTurns);
 
         if (triggerAsk)
         {
             Assert.Equal(AgentRunStatus.WaitingForHuman, result.Status);
-            Assert.Equal(1, breakdown.AskCalls);
-            Assert.Equal(0, breakdown.RequestChangesCalls);
+            Assert.Equal(CanonicalToolNames.Ask, toolTurn.ToolName);
         }
         else
         {
             Assert.Equal(AgentRunStatus.Completed, result.Status);
             Assert.Equal("Missing null check", result.ReviewerFeedback);
-            Assert.Equal(1, breakdown.RequestChangesCalls);
-            Assert.Equal(0, breakdown.AskCalls);
+            Assert.Equal(CanonicalToolNames.RequestChanges, toolTurn.ToolName);
         }
     }
 

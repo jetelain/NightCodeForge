@@ -1,12 +1,11 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using NightCodeForge.Agents.Benchmarking;
 using NightCodeForge.Benchmark.Cli.Cli;
 using NightCodeForge.Benchmark.Cli.Commands;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 
 namespace NightCodeForge.Benchmark.Cli.Tests;

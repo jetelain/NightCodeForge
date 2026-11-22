@@ -1,4 +1,4 @@
-namespace NightCodeForge.Core.Exceptions;
+namespace NightCodeForge.Benchmark.Cli.Models;
 
 /// <summary>
 /// Base exception for failures in the standalone Crucible benchmark engine.

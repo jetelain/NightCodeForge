@@ -1,9 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using NightCodeForge.Agents.Benchmarking;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 
 namespace NightCodeForge.Benchmark.Cli.Cli;
 

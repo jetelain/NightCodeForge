@@ -1,8 +1,8 @@
-using NightCodeForge.Agents.Benchmarking;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Tests.Engine;
 
 public sealed class BenchmarkStagePolicyResolverTests
 {

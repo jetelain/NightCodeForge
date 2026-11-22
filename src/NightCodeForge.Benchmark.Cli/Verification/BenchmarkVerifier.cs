@@ -2,15 +2,15 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 using Microsoft.Extensions.Logging;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure.Execution;
 using YamlDotNet.Core;
 
-namespace NightCodeForge.Agents.Benchmarking.Verification;
+namespace NightCodeForge.Benchmark.Cli.Verification;
 
 /// <summary>
 /// Verifies benchmark outcomes across Implementation (containerized multi-stack test verification),

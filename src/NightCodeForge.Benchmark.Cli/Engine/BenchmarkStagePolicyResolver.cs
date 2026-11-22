@@ -1,8 +1,8 @@
 using System.Text.Json;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Engine;
 
 /// <summary>
 /// Resolved stage identity, tool permissions, skills configuration, and directive for a benchmark category.

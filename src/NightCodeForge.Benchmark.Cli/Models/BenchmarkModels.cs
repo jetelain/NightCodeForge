@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 
-namespace NightCodeForge.Core.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Models;
 
 /// <summary>
 /// Structured defect or specification finding anchor used in Code Review and ForgeTask Review benchmarks.

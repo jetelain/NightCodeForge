@@ -2,7 +2,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Infrastructure.Tests.Execution;
 
 public sealed class ContainerDotnetToolsMountToggleTests
 {

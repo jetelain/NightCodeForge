@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
-namespace NightCodeForge.Agents.Benchmarking.Verification;
+namespace NightCodeForge.Benchmark.Cli.Verification;
 
 /// <summary>
 /// Parsed test outcome from `.trx`, JUnit XML, or `cargo test` output.

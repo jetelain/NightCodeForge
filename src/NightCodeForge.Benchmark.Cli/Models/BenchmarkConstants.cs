@@ -1,6 +1,6 @@
 using NightCodeForge.Core.Domain;
 
-namespace NightCodeForge.Core.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Models;
 
 /// <summary>
 /// Supported programming languages in benchmark datasets.

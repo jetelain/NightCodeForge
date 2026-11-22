@@ -1,4 +1,4 @@
-namespace NightCodeForge.Core.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Models;
 
 /// <summary>
 /// Problem category evaluated by the Crucible benchmark engine.

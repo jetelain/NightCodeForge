@@ -5,14 +5,13 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Crucible;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 using Pmad.AI.Tools;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Engine;
 
 /// <summary>
 /// Stateless, single-shot Crucible benchmark runner executing model candidates across Implementation,

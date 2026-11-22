@@ -1,11 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using NightCodeForge.Agents.Benchmarking.Verification;
 using NightCodeForge.Agents.Crucible;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Engine;
+using NightCodeForge.Benchmark.Cli.Models;
+using NightCodeForge.Benchmark.Cli.Verification;
 using NightCodeForge.Core.Interfaces;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Hosting;
 
 /// <summary>
 /// Dependency injection registrations for the standalone Crucible benchmark engine.

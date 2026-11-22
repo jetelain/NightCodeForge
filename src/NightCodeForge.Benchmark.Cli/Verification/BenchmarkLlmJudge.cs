@@ -4,14 +4,13 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Inference;
 using OllamaSharp;
 using OpenAI;
 
-namespace NightCodeForge.Agents.Benchmarking.Verification;
+namespace NightCodeForge.Benchmark.Cli.Verification;
 
 /// <summary>
 /// Creates an <see cref="IChatClient"/> configured for an optional benchmark LLM-as-judge endpoint.

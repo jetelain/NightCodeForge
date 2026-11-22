@@ -1,14 +1,13 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using NightCodeForge.Agents.Benchmarking.Verification;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
+using NightCodeForge.Benchmark.Cli.Verification;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Tests.Verification;
 
 public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
 {

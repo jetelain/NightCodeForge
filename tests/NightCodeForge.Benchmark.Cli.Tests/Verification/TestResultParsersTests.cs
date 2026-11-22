@@ -1,6 +1,6 @@
-using NightCodeForge.Agents.Benchmarking.Verification;
+using NightCodeForge.Benchmark.Cli.Verification;
 
-namespace NightCodeForge.Agents.Tests.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Tests.Verification;
 
 public sealed class TestResultParsersTests
 {

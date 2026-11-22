@@ -1,11 +1,11 @@
 using System.Reflection;
 using Microsoft.Extensions.Logging;
-using NightCodeForge.Core.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Engine;
 
 /// <summary>
 /// Captures benchmark provenance metadata (NCF version, git commit/branch, and installed CLI tool versions)

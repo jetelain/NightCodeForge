@@ -4,8 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Benchmark.Cli.Cli;
 using NightCodeForge.Benchmark.Cli.Commands;
 using NightCodeForge.Benchmark.Cli.Hosting;
-using NightCodeForge.Core.Benchmarking;
-using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Benchmark.Cli.Models;
 
 namespace NightCodeForge.Benchmark.Cli;
 

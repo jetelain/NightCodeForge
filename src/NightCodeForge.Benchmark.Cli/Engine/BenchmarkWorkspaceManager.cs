@@ -3,11 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using NightCodeForge.Core.Benchmarking;
-using NightCodeForge.Core.Exceptions;
+using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Interfaces;
 
-namespace NightCodeForge.Agents.Benchmarking;
+namespace NightCodeForge.Benchmark.Cli.Engine;
 
 /// <summary>
 /// Options configuring local repository cache and ephemeral workspace locations for benchmarks.

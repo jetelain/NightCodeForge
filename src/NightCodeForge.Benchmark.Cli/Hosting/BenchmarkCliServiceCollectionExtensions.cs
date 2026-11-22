@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using NightCodeForge.Agents;
-using NightCodeForge.Agents.Benchmarking;
+using NightCodeForge.Benchmark.Cli.Engine;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Concurrency;
