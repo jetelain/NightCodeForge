@@ -165,6 +165,13 @@ public interface IVcsHostingProvider
         string? description, 
         bool isPrivate, 
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a short-lived HTTP Authorization header value (e.g. "Authorization: Basic &lt;base64&gt;")
+    /// for ephemeral <c>git -c http.extraHeader=...</c> clone and push operations without persisting
+    /// credentials into <c>.git/config</c>, or null if unauthenticated.
+    /// </summary>
+    Task<string?> GetGitHttpAuthHeaderAsync(CancellationToken cancellationToken = default);
 }
 
 public interface IVcsHostingProviderRegistry
@@ -179,13 +186,17 @@ public interface IVcsHostingProviderRegistry
 ### 2.4 GitHub Provider Implementation
 
 - Implements `IVcsHostingProvider` using the GitHub App Device Flow infrastructure from [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) (`IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`).
-- When tokens are present and valid, `IsAuthenticatedAsync()` returns `true` and `ListRepositoriesAsync()` queries the authenticated user's accessible repositories via `GET /user/repos?sort=updated&per_page=100` (using refresh-aware tokens from `IGitHubDeviceAuthService.GetValidAccessTokenAsync`).
+- `IGitHubClientService.ListAccessibleRepositoriesAsync()` already queries `GET /user/repos?sort=updated&per_page=100` through `GitHubClientService`'s reactive 401 token refresh pipeline. To support `IVcsHostingProvider` cleanly without duplicating HTTP/auth plumbing:
+  - Extend [`GitHubRepository`](../../src/NightCodeForge.Core/Domain/GitHubModels.cs) and `GitHubClientService.ParseRepository` with `Description`, `CloneUrl` (`HttpsCloneUrl`), `SshUrl` (`SshCloneUrl`), and `UpdatedAt`.
+  - Add `CreateRepositoryAsync` (`POST /user/repos`) to [`IGitHubClientService`](../../src/NightCodeForge.Core/Interfaces/IGitHubClientService.cs) / `GitHubClientService` so repository creation also reuses the reactive 401 refresh pipeline.
+- `GitHubVcsHostingProvider.GetGitHttpAuthHeaderAsync()` obtains a refresh-aware token via `IGitHubDeviceAuthService.GetValidAccessTokenAsync()` and formats the ephemeral `Authorization: Basic <base64(x-access-token:token)>` header for `git clone` / `git push` (Steps 12.32A and 12.32B).
 - **GitHub App Permission Requirement for `CreateRepositoryAsync`:** Creating a remote repository via `POST /user/repos` with a GitHub App user-to-server token (`ghu_...`) requires the NightCodeForge GitHub App registration to include **`Administration: Read & write`** repository permission. If the GitHub API returns `403 Forbidden` (e.g., the app installation is restricted to selected repositories and does not permit user-level repository creation), `CreateRepositoryAsync` throws a clear `VcsHostingProviderException` explaining the required GitHub App installation/permission setting.
 - Extensible design: adding GitLab in the future only requires implementing `IVcsHostingProvider` and registering it in `IVcsHostingProviderRegistry`.
 
 ### 2.5 Constructor Parameter Limit & Service Cohesion ([AGENTS.md](../../AGENTS.md))
 
 - [`WorkspaceProvisioningService`](../../src/NightCodeForge.Web/Services/WorkspaceProvisioningService.cs) already has 9 constructor parameters. Per [AGENTS.md](../../AGENTS.md) (*"never exceed 10 constructor parameters"*), do **not** inject `ILocalRepositoryDiscoveryService`, `IVcsHostingProviderRegistry`, and `IWorkspaceTemplateService` all directly into `WorkspaceProvisioningService`. Either extract cohesive collaborator services (e.g., `IWorkspaceRemoteCloneService` or `WorkspaceGitHygieneService`) or keep discovery and remote cloning in dedicated services injected into the wizard presentation helper.
+- To persist linked remote repository metadata (`GitHubIntegrationSettings`) during workspace provisioning without adding constructor parameters to `WorkspaceProvisioningService`, extend [`WorkspaceCreationModel`](../../src/NightCodeForge.Web/Models/WorkspaceCreationModel.cs) with optional `GitHubIntegrationSettings? GitHubSettings` (carrying `RepositoryOwner`, `RepositoryName`, `Enabled = true`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to map it onto the created [`Workspace.GitHubSettings`](../../src/NightCodeForge.Core/Domain/Workspace.cs).
 
 ---
 
@@ -214,9 +225,10 @@ public interface IVcsHostingProviderRegistry
      - **Already Cloned Locally:** Shows a `✅ Local copy found` badge and a "Select Local Repository" button directing straight to Step 2.
      - **Not Cloned Locally:** Shows a `📥 Clone & Onboard` primary action button.
 3. **Clone Execution Drawer / Modal (Ephemeral Auth for Private Repos):**
-   - Clicking `📥 Clone & Onboard` suggests the default target path: `{DefaultReposRoot}/{RepoName}` (e.g. `C:\Users\Julien\source\repos\my-api`).
-   - Runs `git clone` via `IGitCliRunner` / `CliWrap` using the ephemeral HTTP header authentication pattern from [Step 12.11B](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) (`git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" clone <HttpsCloneUrl> <targetPath>` with `GIT_TERMINAL_PROMPT=0`), ensuring private repositories clone without interactive credential prompts and without writing short-lived `ghu_...` tokens into `.git/config`.
-   - On clone completion, automatically initializes `Model.RepositoryPath`, probes the repository, links `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`), and transitions smoothly to Step 2.
+   - Clicking `📥 Clone & Onboard` suggests the default target path: `{DefaultReposRoot}/{RepoName}` (e.g. `C:\Users\Julien\source\repos\my-api`) and allows the user to edit the target directory path before cloning.
+   - Validates the target path in real time and fails fast with a clear warning/error if the directory already exists and is non-empty.
+   - Runs `git clone` via `IGitCliRunner` / `CliWrap` using an ephemeral HTTP header returned by `IVcsHostingProvider.GetGitHttpAuthHeaderAsync()` (`git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" clone <HttpsCloneUrl> <targetPath>` with `GIT_TERMINAL_PROMPT=0`), ensuring private repositories clone without interactive credential prompts and without writing short-lived `ghu_...` tokens into `.git/config`.
+   - On clone completion, automatically initializes `Model.RepositoryPath`, probes the repository, populates `Model.GitHubSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`) on `WorkspaceCreationModel` so `WorkspaceProvisioningService.ProvisionWorkspaceAsync` persists `Workspace.GitHubSettings` in SQLite, and transitions smoothly to Step 2.
 
 ---
 
@@ -224,20 +236,22 @@ public interface IVcsHostingProviderRegistry
 
 - [ ] **Core Interfaces & Models (`NightCodeForge.Core`):**
   - [ ] Add `DiscoveredRepository` record and `ILocalRepositoryDiscoveryService` in `NightCodeForge.Core.Interfaces`.
-  - [ ] Add `VcsHostingProviderType`, `VcsRepositorySummary`, `IVcsHostingProvider`, and `IVcsHostingProviderRegistry` in `NightCodeForge.Core.Interfaces`.
+  - [ ] Add `VcsHostingProviderType`, `VcsRepositorySummary`, `IVcsHostingProvider` (including `GetGitHttpAuthHeaderAsync`), and `IVcsHostingProviderRegistry` in `NightCodeForge.Core.Interfaces`.
+  - [ ] Extend `GitHubRepository` (`GitHubModels.cs`) with `Description`, `CloneUrl`, `SshUrl`, and `UpdatedAt`, and add `CreateRepositoryAsync` to `IGitHubClientService`.
   - [ ] Add domain exceptions: `LocalRepositoryDiscoveryException`, `VcsHostingProviderException`.
 - [ ] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
   - [ ] Implement `LocalRepositoryDiscoveryService` scanning Windows, Linux, and WSL standard locations with depth-2 limits, cache TTL, and error isolation.
-  - [ ] Implement `GitHubVcsHostingProvider` bridging `IGitHubClientService` / GitHub App tokens.
+  - [ ] Extend `GitHubClientService` (`ParseRepository` fields and `CreateRepositoryAsync`) and implement `GitHubVcsHostingProvider` bridging `IGitHubClientService` / `IGitHubDeviceAuthService`.
   - [ ] Implement `VcsHostingProviderRegistry` supporting dynamic discovery and primary provider resolution.
   - [ ] Bind `LocalDiscoveryOptions` in DI configuration.
 - [ ] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
   - [ ] Enhance `WizardStep1PathProbe.razor` with local repository autocomplete / dropdown selector.
   - [ ] Add remote forge project browser tab with search filter and canonical URL-normalized local clone status badges.
-  - [ ] Add 1-click ephemeral-auth clone workflow (`CloneRemoteRepositoryAsync`), respecting the 10-constructor-parameter limit on `WorkspaceProvisioningService`.
+  - [ ] Add 1-click ephemeral-auth clone workflow (`CloneRemoteRepositoryAsync`) with editable target path and non-empty directory collision validation, respecting the 10-constructor-parameter limit on `WorkspaceProvisioningService`.
+  - [ ] Extend `WorkspaceCreationModel` with optional `GitHubSettings` (`GitHubIntegrationSettings`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to persist `Workspace.GitHubSettings`.
   - [ ] Extract presentation, URL normalization, and list mapping from `.razor` components into dedicated helper services per [AGENTS.md](../../AGENTS.md).
 - [ ] **Automated Testing:**
   - [ ] Unit tests for `LocalRepositoryDiscoveryService` testing Windows and Linux standard paths, `.git` folder/worktree file detection, `.git/HEAD` + `.git/config` parsing, depth-2 limits, and caching in `NightCodeForge.Infrastructure.Tests`.
-  - [ ] Unit tests for canonical Git URL normalization, `VcsHostingProviderRegistry`, and `GitHubVcsHostingProvider` mock responses.
-  - [ ] bUnit component tests in `NightCodeForge.Web.Tests` asserting dropdown rendering, path auto-fill, and remote repository selection.
+  - [ ] Unit tests for canonical Git URL normalization, `VcsHostingProviderRegistry`, and `GitHubVcsHostingProvider` / `GitHubClientService` mock responses.
+  - [ ] bUnit component tests in `NightCodeForge.Web.Tests` asserting dropdown rendering, path auto-fill, target collision validation, and remote repository selection.
 
