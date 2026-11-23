@@ -315,7 +315,7 @@ public partial class TaskMarkdownSyncService : ITaskMarkdownSyncService
     public static DateTime? TryExtractDateFromPath(string? filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath)) return null;
-        var fileName = Path.GetFileName(filePath);
+        var fileName = Path.GetFileName(filePath.Replace('\\', '/'));
         if (fileName.Length >= 10 && DatePrefixRegex().IsMatch(fileName) &&
             DateTime.TryParseExact(fileName[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
         {

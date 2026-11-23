@@ -53,12 +53,33 @@ public class ContainerReplExecutorTests
         {
             CustomProcessFactory = () =>
             {
+                if (OperatingSystem.IsWindows())
+                {
+                    return new Process
+                    {
+                        StartInfo = new ProcessStartInfo
+                        {
+                            FileName = "powershell.exe",
+                            Arguments = "-NoProfile -NonInteractive -Command \"while ($line = [Console]::ReadLine()) { if ($line -match '(__NCF_SENTINEL_[a-zA-Z0-9_]+__)') { [Console]::WriteLine('hello world'); [Console]::WriteLine(\\\"$($Matches[1]) 0\\\") } }\"",
+                            RedirectStandardInput = true,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        }
+                    };
+                }
+
                 return new Process
                 {
                     StartInfo = new ProcessStartInfo
                     {
-                        FileName = "powershell.exe",
-                        Arguments = "-NoProfile -NonInteractive -Command \"while ($line = [Console]::ReadLine()) { if ($line -match '(__NCF_SENTINEL_[a-zA-Z0-9_]+__)') { [Console]::WriteLine('hello world'); [Console]::WriteLine(\\\"$($Matches[1]) 0\\\") } }\"",
+                        FileName = "/bin/sh",
+                        ArgumentList =
+                        {
+                            "-c",
+                            "while IFS= read -r line; do case \"$line\" in *__NCF_SENTINEL_*__*) sentinel=\"${line##*__NCF_SENTINEL_}\"; sentinel=\"__NCF_SENTINEL_${sentinel%%__*}__\"; printf 'hello world\\n%s 0\\n' \"$sentinel\";; esac; done"
+                        },
                         RedirectStandardInput = true,
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,

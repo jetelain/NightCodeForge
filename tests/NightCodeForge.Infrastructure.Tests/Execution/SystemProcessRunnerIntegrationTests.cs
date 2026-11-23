@@ -36,11 +36,33 @@ public class SystemProcessRunnerIntegrationTests : IDisposable
         return path;
     }
 
+    private (string Executable, List<string> Arguments) CreateCrossPlatformScriptCommand(
+        string baseName,
+        string powershellScript,
+        string pythonScript,
+        params string[] extraArguments)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var psPath = CreateScript($"{baseName}.ps1", powershellScript);
+            var args = new List<string> { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", psPath };
+            args.AddRange(extraArguments);
+            return ("powershell.exe", args);
+        }
+
+        var pyPath = CreateScript($"{baseName}.py", pythonScript);
+        var pyArgs = new List<string> { "-u", pyPath };
+        pyArgs.AddRange(extraArguments);
+        return ("python3", pyArgs);
+    }
+
     [Fact]
     public async Task Streaming_ProgressiveEvents_EmittedInRealTimeWithCorrectTimestamps()
     {
         // Arrange: Script that progressively emits 5 stdout events and 2 stderr events separated by 100ms pauses
-        var scriptPath = CreateScript("progressive_stream.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "progressive_stream",
+            """
 param([int]$Count = 5, [int]$DelayMs = 100)
 for ($i = 1; $i -le $Count; $i++) {
     [Console]::Out.WriteLine("STDOUT_EVENT_$i")
@@ -51,6 +73,16 @@ for ($i = 1; $i -le $Count; $i++) {
     }
     Start-Sleep -Milliseconds $DelayMs
 }
+""",
+            """
+import sys, time
+for i in range(1, 6):
+    sys.stdout.write(f"STDOUT_EVENT_{i}\n")
+    sys.stdout.flush()
+    if i % 2 == 0:
+        sys.stderr.write(f"STDERR_EVENT_{i}\n")
+        sys.stderr.flush()
+    time.sleep(0.1)
 """);
 
         var chunks = new List<(ProcessStreamChunk Chunk, TimeSpan Elapsed)>();
@@ -58,8 +90,8 @@ for ($i = 1; $i -le $Count; $i++) {
 
         // Act: Stream the events
         await foreach (var chunk in _runner.RunStreamingAsync(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+            exe,
+            args,
             timeoutSeconds: 15))
         {
             chunks.Add((chunk, sw.Elapsed));
@@ -101,7 +133,9 @@ for ($i = 1; $i -le $Count; $i++) {
     {
         // Arrange: Generate 10,000 lines of 250 characters each (> 2.5 MB stdout) and 1,000 lines of stderr (> 250 KB)
         // Standard OS pipe buffers are 4KB-64KB. This strictly tests concurrent draining without blocking or deadlocking.
-        var scriptPath = CreateScript("high_volume.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "high_volume",
+            """
 param([int]$Lines = 10000)
 $payload = "X" * 250
 for ($i = 1; $i -le $Lines; $i++) {
@@ -110,12 +144,20 @@ for ($i = 1; $i -le $Lines; $i++) {
         [Console]::Error.WriteLine("ERR_LINE_${i}_$payload")
     }
 }
+""",
+            """
+import sys
+payload = "X" * 250
+for i in range(1, 10001):
+    sys.stdout.write(f"DATA_LINE_{i}_{payload}\n")
+    if i % 10 == 0:
+        sys.stderr.write(f"ERR_LINE_{i}_{payload}\n")
 """);
 
         // Act: Run asynchronously with 30s timeout
         var result = await _runner.RunAsync(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+            exe,
+            args,
             timeoutSeconds: 30);
 
         // Assert
@@ -140,12 +182,20 @@ for ($i = 1; $i -le $Lines; $i++) {
     public async Task BufferLimits_HighVolumeStreaming_ConsumesAllChunksWithoutLoss()
     {
         // Arrange: Stream 5,000 lines of 200 characters each (> 1 MB)
-        var scriptPath = CreateScript("stream_volume.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "stream_volume",
+            """
 param([int]$Lines = 5000)
 $payload = "Y" * 200
 for ($i = 1; $i -le $Lines; $i++) {
     [Console]::Out.WriteLine("CHUNK_LINE_${i}_$payload")
 }
+""",
+            """
+import sys
+payload = "Y" * 200
+for i in range(1, 5001):
+    sys.stdout.write(f"CHUNK_LINE_{i}_{payload}\n")
 """);
 
         var stdoutBuilder = new StringBuilder();
@@ -154,8 +204,8 @@ for ($i = 1; $i -le $Lines; $i++) {
 
         // Act: Consume via streaming
         await foreach (var chunk in _runner.RunStreamingAsync(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+            exe,
+            args,
             timeoutSeconds: 30))
         {
             if (chunk.Kind == ProcessStreamKind.StandardOutput)
@@ -184,13 +234,6 @@ for ($i = 1; $i -le $Lines; $i++) {
     public void ArgumentList_ComplexEscaping_PreservesExactArgumentsVerbatim()
     {
         // Arrange: Script that echoes each argument formatted as [ARG:index]=value
-        var scriptPath = CreateScript("echo_arguments.ps1", """
-[Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = [System.Text.Encoding]::UTF8
-for ($i = 0; $i -lt $args.Count; $i++) {
-    [Console]::Out.WriteLine("[ARG:" + $i + "]=" + $args[$i])
-}
-""");
-
         var testArguments = new List<string>
         {
             "Simple",
@@ -203,19 +246,22 @@ for ($i = 0; $i -lt $args.Count; $i++) {
             "Unicode: 🚀 éàç 漢字 日本語 Русский"
         };
 
-        // Act: Execute via ArgumentList
-        var argsList = new List<string>
-        {
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            scriptPath
-        };
-        argsList.AddRange(testArguments);
+        var (exe, argsList) = CreateCrossPlatformScriptCommand(
+            "echo_arguments",
+            """
+[Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = [System.Text.Encoding]::UTF8
+for ($i = 0; $i -lt $args.Count; $i++) {
+    [Console]::Out.WriteLine("[ARG:" + $i + "]=" + $args[$i])
+}
+""",
+            """
+import sys
+for i, arg in enumerate(sys.argv[1:]):
+    sys.stdout.write(f"[ARG:{i}]={arg}\n")
+""",
+            testArguments.ToArray());
 
-        var result = _runner.Run("powershell.exe", argsList, timeoutSeconds: 15);
+        var result = _runner.Run(exe, argsList, timeoutSeconds: 15);
 
         // Assert
         Assert.Equal(0, result.ExitCode);
@@ -231,7 +277,9 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     public async Task InteractiveSession_TwoWayFullDuplexCommunication_HandlesRequestResponseLoops()
     {
         // Arrange: A REPL script that listens on stdin and responds with PONG: <input>, quitting on QUIT
-        var scriptPath = CreateScript("echo_repl.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "echo_repl",
+            """
 [Console]::InputEncoding = [Console]::OutputEncoding = $OutputEncoding = [System.Text.Encoding]::UTF8
 while ($line = [Console]::In.ReadLine()) {
     if ($line -eq "QUIT") {
@@ -241,12 +289,21 @@ while ($line = [Console]::In.ReadLine()) {
     [Console]::Out.Flush()
 }
 exit 0
+""",
+            """
+import sys
+for line in sys.stdin:
+    line = line.rstrip("\r\n")
+    if line == "QUIT":
+        break
+    sys.stdout.write(f"PONG: {line}\n")
+    sys.stdout.flush()
 """);
 
         var spec = new ProcessStartSpec
         {
-            FileName = "powershell.exe",
-            ArgumentList = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+            FileName = exe,
+            ArgumentList = args,
             TimeoutSeconds = 15
         };
 
@@ -287,7 +344,9 @@ exit 0
     public async Task Cancellation_MidStream_TerminatesProcessTreeImmediately()
     {
         // Arrange: Infinite loop generating output
-        var scriptPath = CreateScript("infinite_loop.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "infinite_loop",
+            """
 $i = 0
 while ($true) {
     [Console]::Out.WriteLine("HEARTBEAT_$i")
@@ -295,6 +354,15 @@ while ($true) {
     $i++
     Start-Sleep -Milliseconds 50
 }
+""",
+            """
+import sys, time
+i = 0
+while True:
+    sys.stdout.write(f"HEARTBEAT_{i}\n")
+    sys.stdout.flush()
+    i += 1
+    time.sleep(0.05)
 """);
 
         using var cts = new CancellationTokenSource();
@@ -304,8 +372,8 @@ while ($true) {
         try
         {
             await foreach (var chunk in _runner.RunStreamingAsync(
-                "powershell.exe",
-                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+                exe,
+                args,
                 timeoutSeconds: 30,
                 cancellationToken: cts.Token))
             {
@@ -326,16 +394,24 @@ while ($true) {
     public async Task ErrorHandling_StderrAndStdoutCaptured_ReturnsCustomExitCode()
     {
         // Arrange: Script that outputs to both stdout and stderr then exits with code 42
-        var scriptPath = CreateScript("exit_error.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "exit_error",
+            """
 [Console]::Out.WriteLine("OUTPUT BEFORE ERROR")
 [Console]::Error.WriteLine("FATAL ERROR IN SCRIPT")
 exit 42
+""",
+            """
+import sys
+sys.stdout.write("OUTPUT BEFORE ERROR\n")
+sys.stderr.write("FATAL ERROR IN SCRIPT\n")
+sys.exit(42)
 """);
 
         // Act
         var result = await _runner.RunAsync(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+            exe,
+            args,
             timeoutSeconds: 10);
 
         // Assert
@@ -348,15 +424,21 @@ exit 42
     public void NullByteSanitization_CleansEmbeddedNullsFromStream()
     {
         // Arrange: Script that emits a string containing embedded null \0 characters
-        var scriptPath = CreateScript("null_bytes.ps1", """
+        var (exe, args) = CreateCrossPlatformScriptCommand(
+            "null_bytes",
+            """
 $rawWithNulls = "CLEAN_START" + [char]0 + "MIDDLE" + [char]0 + "END"
 [Console]::Out.WriteLine($rawWithNulls)
+""",
+            """
+import sys
+sys.stdout.write("CLEAN_START\0MIDDLE\0END\n")
 """);
 
         // Act
         var result = _runner.Run(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+            exe,
+            args,
             timeoutSeconds: 10);
 
         // Assert

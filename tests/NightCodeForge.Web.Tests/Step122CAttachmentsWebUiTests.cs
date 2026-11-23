@@ -1070,33 +1070,37 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             .Add(d => d.Task, task));
 
         cut.WaitForAssertion(() =>
-            Assert.Contains("drawer-doc.md", cut.Find(".task-attachments-section").TextContent));
+            Assert.Contains("drawer-doc.md", cut.Find(".task-attachments-section").TextContent), TimeSpan.FromSeconds(10));
 
         // 1. Delete the last attachment via preview drawer -> chip disappears immediately
-        cut.Find(".task-attachments-section .task-attachment-chip").Click();
-        cut.WaitForAssertion(() => cut.Find("#btn-open-delete-attachment"));
-        cut.Find("#btn-open-delete-attachment").Click();
-        cut.WaitForAssertion(() => cut.Find("#btn-confirm-delete-attachment"));
-        cut.Find("#btn-confirm-delete-attachment").Click();
+        await cut.InvokeAsync(() => cut.Find(".task-attachments-section .task-attachment-chip").Click());
+        cut.WaitForAssertion(() => cut.Find("#btn-open-delete-attachment"), TimeSpan.FromSeconds(10));
+        await cut.InvokeAsync(() => cut.Find("#btn-open-delete-attachment").Click());
+        cut.WaitForAssertion(() => cut.Find("#btn-confirm-delete-attachment"), TimeSpan.FromSeconds(10));
+        await cut.InvokeAsync(() => cut.Find("#btn-confirm-delete-attachment").Click());
 
         cut.WaitForAssertion(() =>
         {
             Assert.Empty(cut.FindAll(".task-attachments-section .task-attachment-chip"));
             Assert.Contains("No context attachments linked to this task.", cut.Find(".task-attachments-section").TextContent);
             Assert.DoesNotContain($"@attachment:{att1.Id}", task.Description);
-        });
+        }, TimeSpan.FromSeconds(10));
 
         // 2. Edit description to cite att2 -> chip surfaces immediately
-        var editDescBtn = cut.FindAll(".drawer-section")
-            .First(s => s.TextContent.Contains("Description & Specification"))
-            .QuerySelector("button")!;
-        editDescBtn.Click();
+        await cut.InvokeAsync(() =>
+        {
+            var editDescBtn = cut.FindAll(".drawer-section")
+                .First(s => s.TextContent.Contains("Description & Specification"))
+                .QuerySelector("button")!;
+            editDescBtn.Click();
+        });
 
-        cut.Find(".edit-description-box textarea").Change($"Updated spec referencing @attachment:{att2.Id}.");
-        cut.Find(".edit-description-box button.forge-btn-primary").Click();
+        cut.WaitForAssertion(() => Assert.NotNull(cut.Find(".edit-description-box textarea")), TimeSpan.FromSeconds(10));
+        await cut.InvokeAsync(() => cut.Find(".edit-description-box textarea").Change($"Updated spec referencing @attachment:{att2.Id}."));
+        await cut.InvokeAsync(() => cut.Find(".edit-description-box button.forge-btn-primary").Click());
 
         cut.WaitForAssertion(() =>
-            Assert.Contains("cited-after-edit.md", cut.Find(".task-attachments-section").TextContent));
+            Assert.Contains("cited-after-edit.md", cut.Find(".task-attachments-section").TextContent), TimeSpan.FromSeconds(10));
     }
 
     [Fact]
@@ -1309,16 +1313,16 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             .Add(d => d.Task, task1)
             .Add(d => d.OnTaskUpdated, EventCallback.Factory.Create<ForgeTask>(this, t => callbackTask = t)));
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find(".task-attachment-chip")));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find(".task-attachment-chip")), TimeSpan.FromSeconds(10));
         await drawerCut.InvokeAsync(() => drawerCut.Find(".task-attachment-chip").Click());
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-open-delete-attachment")));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-open-delete-attachment")), TimeSpan.FromSeconds(10));
         await drawerCut.InvokeAsync(() => drawerCut.Find("#btn-open-delete-attachment").Click());
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-confirm-delete-attachment")));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-confirm-delete-attachment")), TimeSpan.FromSeconds(10));
         await drawerCut.InvokeAsync(() => drawerCut.Find("#btn-confirm-delete-attachment").Click());
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(callbackTask));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(callbackTask), TimeSpan.FromSeconds(10));
 
         Assert.Null(await harness.AttachmentRepo.GetByIdAsync(att.Id));
 

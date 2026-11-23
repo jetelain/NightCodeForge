@@ -702,7 +702,7 @@ public class ContainerMountAndDriftBuilder
             return targetDir;
         }
 
-        if (!Path.IsPathRooted(targetDir) && !targetDir.StartsWith('/') && !targetDir.StartsWith('\\'))
+        if (!Path.IsPathRooted(targetDir) && !targetDir.StartsWith('/') && !targetDir.StartsWith('\\') && !targetDir.Contains(":\\") && !targetDir.Contains(":/"))
         {
             var cleanRel = targetDir.Replace('\\', '/').TrimStart('.', '/');
             return string.IsNullOrEmpty(cleanRel) ? defaultDir : $"{defaultDir}/{cleanRel}";

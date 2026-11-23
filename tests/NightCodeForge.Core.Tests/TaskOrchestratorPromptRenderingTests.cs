@@ -148,11 +148,12 @@ public class TaskOrchestratorPromptRenderingTests
 
         Assert.Single(fakeHarness.ExecutedSessions);
         var prompt = fakeHarness.ExecutedSessions[0].BootstrapPrompt;
+        var normalizedPrompt = prompt.Replace("\r\n", "\n");
 
-        Assert.Contains("Execute stage 'Authentication Designer' for task #101: Add User Authentication", prompt);
-        Assert.Contains("Support OAuth2 login with GitHub", prompt);
-        Assert.Contains("[Human Clarifications & Answers]:", prompt);
-        Assert.Contains("Q: Which providers are needed?\nA: GitHub only", prompt);
+        Assert.Contains("Execute stage 'Authentication Designer' for task #101: Add User Authentication", normalizedPrompt);
+        Assert.Contains("Support OAuth2 login with GitHub", normalizedPrompt);
+        Assert.Contains("[Human Clarifications & Answers]:", normalizedPrompt);
+        Assert.Contains("Q: Which providers are needed?\nA: GitHub only", normalizedPrompt);
     }
 
     [Fact]

@@ -152,6 +152,11 @@ public sealed partial class SandboxPathResolver : ISandboxPathResolver
                 return Scope.DefaultWorkingDirectory;
             }
 
+            if (TryResolveAlreadyMappedHostOrWslPath(trimmed, norm, forWrite: false, out _))
+            {
+                return MapHostOrWslDirectoryToVirtual(norm);
+            }
+
             if (norm.Equals("/tmp", StringComparison.OrdinalIgnoreCase) ||
                 norm.StartsWith("/tmp/", StringComparison.OrdinalIgnoreCase))
             {

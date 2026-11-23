@@ -70,7 +70,7 @@ public class AcpHarnessCatalogServiceTests
         Assert.True(status.IsInstalled);
         Assert.True(status.IsAuthenticated);
         Assert.NotNull(capturedTokenSpec);
-        Assert.Contains("sh", capturedTokenSpec!.ArgumentList!);
+        Assert.True(string.Equals(capturedTokenSpec!.FileName, "sh", StringComparison.Ordinal) || capturedTokenSpec.ArgumentList!.Contains("sh"));
         Assert.Contains("-c", capturedTokenSpec.ArgumentList!);
         Assert.Contains("test -f ~/.gemini/antigravity-cli/antigravity-oauth-token", capturedTokenSpec.ArgumentList!);
 

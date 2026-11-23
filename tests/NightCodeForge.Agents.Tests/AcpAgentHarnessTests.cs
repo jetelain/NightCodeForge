@@ -365,7 +365,7 @@ public class AcpAgentHarnessTests
             await Assert.ThrowsAsync<IOException>(() => harness.RunStageAsync(context));
 
             Assert.NotNull(capturedSpec);
-            Assert.Equal(OperatingSystem.IsWindows() ? tempDir : unixWorkspacePath, capturedSpec.WorkingDirectory);
+            Assert.Equal(tempDir, capturedSpec.WorkingDirectory);
             Assert.True(session.IsDisposed);
         }
         finally

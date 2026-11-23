@@ -6,9 +6,13 @@ namespace NightCodeForge.Infrastructure.Tests.Inference;
 /// <summary>Routes requests to a delegate and records them; the first matching route wins.</summary>
 internal sealed class StubHttpHandler : HttpMessageHandler
 {
-    private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+    private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _handler;
 
-    public StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) => _handler = handler;
+    public StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
+        => _handler = (request, _) => Task.FromResult(handler(request));
+
+    public StubHttpHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
+        => _handler = handler;
 
     public List<(HttpMethod Method, string Path, string Body)> Requests { get; } = [];
 
@@ -16,7 +20,7 @@ internal sealed class StubHttpHandler : HttpMessageHandler
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
         Requests.Add((request.Method, request.RequestUri!.AbsolutePath.TrimStart('/'), body));
-        return _handler(request);
+        return await _handler(request, cancellationToken);
     }
 
     public static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK)

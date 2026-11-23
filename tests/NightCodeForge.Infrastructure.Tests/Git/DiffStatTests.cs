@@ -213,22 +213,46 @@ public class DiffStatTests : IDisposable
             new Mock<IProcessRunner>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
-        var containerWorkspace = new Workspace
+        string? tempLinuxMirrorRoot = null;
+        if (!OperatingSystem.IsWindows())
         {
-            Id = 918,
-            Name = "Container Workspace",
-            ExecutionMode = ExecutionMode.ContainerSandbox,
-            Ext4MirrorPath = "/home/runner/.nightcodeforge/wks/918/clone",
-            RepositoryPath = "C:\\host\\repo",
-            DefaultBaseBranch = "main"
-        };
+            tempLinuxMirrorRoot = Path.Combine(Path.GetTempPath(), $"ncf-diffstat-{Guid.NewGuid():N}", "wks", "918");
+            Directory.CreateDirectory(Path.Combine(tempLinuxMirrorRoot, "clone"));
+            Directory.CreateDirectory(Path.Combine(tempLinuxMirrorRoot, "task-42"));
+        }
 
-        var diff = await manager.GenerateLiveDiffAsync(containerWorkspace, 42, "main");
+        try
+        {
+            var containerWorkspace = new Workspace
+            {
+                Id = 918,
+                Name = "Container Workspace",
+                ExecutionMode = ExecutionMode.ContainerSandbox,
+                Ext4MirrorPath = tempLinuxMirrorRoot != null
+                    ? Path.Combine(tempLinuxMirrorRoot, "clone")
+                    : "/home/runner/.nightcodeforge/wks/918/clone",
+                RepositoryPath = "C:\\host\\repo",
+                DefaultBaseBranch = "main"
+            };
 
-        Assert.Equal("diff --git a/test.cs b/test.cs", diff);
-        Assert.NotNull(executedWorkingDir);
-        Assert.Contains("task-42", executedWorkingDir);
-        Assert.DoesNotContain("C:\\host\\repo", executedWorkingDir);
+            var diff = await manager.GenerateLiveDiffAsync(containerWorkspace, 42, "main");
+
+            Assert.Equal("diff --git a/test.cs b/test.cs", diff);
+            Assert.NotNull(executedWorkingDir);
+            Assert.Contains("task-42", executedWorkingDir);
+            Assert.DoesNotContain("C:\\host\\repo", executedWorkingDir);
+        }
+        finally
+        {
+            if (tempLinuxMirrorRoot != null)
+            {
+                var rootParent = Path.GetDirectoryName(Path.GetDirectoryName(tempLinuxMirrorRoot));
+                if (!string.IsNullOrEmpty(rootParent) && Directory.Exists(rootParent))
+                {
+                    Directory.Delete(rootParent, recursive: true);
+                }
+            }
+        }
     }
 
     [Theory]
@@ -402,22 +426,46 @@ public class DiffStatTests : IDisposable
             new Mock<IProcessRunner>().Object,
             NullLogger<GitWorkspaceManager>.Instance);
 
-        var containerWorkspace = new Workspace
+        string? tempLinuxMirrorRoot = null;
+        if (!OperatingSystem.IsWindows())
         {
-            Id = 920,
-            Name = "Container Workspace",
-            ExecutionMode = ExecutionMode.ContainerSandbox,
-            Ext4MirrorPath = "/home/runner/.nightcodeforge/wks/920/clone",
-            RepositoryPath = "C:\\host\\repo",
-            DefaultBaseBranch = "main"
-        };
+            tempLinuxMirrorRoot = Path.Combine(Path.GetTempPath(), $"ncf-diffstat-dnf-{Guid.NewGuid():N}", "wks", "920");
+            Directory.CreateDirectory(Path.Combine(tempLinuxMirrorRoot, "clone"));
+            Directory.CreateDirectory(Path.Combine(tempLinuxMirrorRoot, "task-42"));
+        }
 
-        var ex = await Assert.ThrowsAsync<WorktreeNotFoundException>(() =>
-            manager.GenerateLiveDiffAsync(containerWorkspace, 42, "main"));
+        try
+        {
+            var containerWorkspace = new Workspace
+            {
+                Id = 920,
+                Name = "Container Workspace",
+                ExecutionMode = ExecutionMode.ContainerSandbox,
+                Ext4MirrorPath = tempLinuxMirrorRoot != null
+                    ? Path.Combine(tempLinuxMirrorRoot, "clone")
+                    : "/home/runner/.nightcodeforge/wks/920/clone",
+                RepositoryPath = "C:\\host\\repo",
+                DefaultBaseBranch = "main"
+            };
 
-        Assert.Equal(42, ex.TaskId);
-        Assert.NotNull(ex.InnerException);
-        Assert.IsType<DirectoryNotFoundException>(ex.InnerException);
+            var ex = await Assert.ThrowsAsync<WorktreeNotFoundException>(() =>
+                manager.GenerateLiveDiffAsync(containerWorkspace, 42, "main"));
+
+            Assert.Equal(42, ex.TaskId);
+            Assert.NotNull(ex.InnerException);
+            Assert.IsType<DirectoryNotFoundException>(ex.InnerException);
+        }
+        finally
+        {
+            if (tempLinuxMirrorRoot != null)
+            {
+                var rootParent = Path.GetDirectoryName(Path.GetDirectoryName(tempLinuxMirrorRoot));
+                if (!string.IsNullOrEmpty(rootParent) && Directory.Exists(rootParent))
+                {
+                    Directory.Delete(rootParent, recursive: true);
+                }
+            }
+        }
     }
 
     [Fact]
@@ -544,6 +592,11 @@ public class DiffStatTests : IDisposable
     [Fact]
     public async Task GenerateLiveDiffAsync_InWslWorktree_InvokesProcessRunnerToCleanTempIndex()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // WSL worktree cleanup only applies on Windows hosts.
+        }
+
         var mockRunner = new Mock<IGitCliRunner>();
         mockRunner.Setup(r => r.ExecuteAsync(
                 It.IsAny<string>(),

@@ -327,6 +327,8 @@ public class HostConfigurationSourcesTests : IDisposable
         builder.SetBasePath(_tempDirectory);
         HostConfigurationSources.AddUserConfiguration(builder, _tempDirectory, environment: null, logger);
         var config = builder.Build();
+        using var configLifetime = config as IDisposable;
+        Assert.Equal("InitialValue", config["DynamicKey"]);
 
         await File.WriteAllTextAsync(configFile, "{ broken");
 
@@ -355,6 +357,8 @@ public class HostConfigurationSourcesTests : IDisposable
             loggerAccessor: () => deferredLogger);
 
         var config = builder.Build();
+        using var configLifetime = config as IDisposable;
+        Assert.Equal("InitialValue", config["DynamicKey"]);
         deferredLogger = logger;
 
         await File.WriteAllTextAsync(configFile, "{ broken");

@@ -48,6 +48,8 @@ jobs:
 
       - name: Build solution
         run: dotnet build NightCodeForge.slnx -c Release --no-restore -p:Version=${{ env.VERSION }}
+        env:
+          SixLaborsLicenseKey: ${{secrets.SixLaborsLicenseKey}}
 
       - name: Run unit & integration tests
         run: dotnet test NightCodeForge.slnx -c Release --no-build --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
@@ -80,7 +82,9 @@ jobs:
 
       - name: Build solution
         run: dotnet build NightCodeForge.slnx -c Release --no-restore
-
+        env:
+          SixLaborsLicenseKey: ${{secrets.SixLaborsLicenseKey}}
+          
       - name: Run unit & integration tests (Linux)
         run: dotnet test NightCodeForge.slnx -c Release --no-build --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
 

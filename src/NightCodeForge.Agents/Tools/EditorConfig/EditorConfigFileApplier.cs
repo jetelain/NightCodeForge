@@ -95,26 +95,24 @@ public partial class EditorConfigFileApplier : IEditorConfigFileApplier
         if (!string.IsNullOrWhiteSpace(targetPath))
         {
             var trimmedPath = targetPath.Trim();
-            // If targetPath is a WSL path (POSIX path starting with / or ~, or Windows UNC path matching WslPathConverter.IsWslUncPath),
-            // unconditionally force \n (LF), overriding any CRLF auto-detection from existing content.
-            if (trimmedPath.StartsWith('/') || trimmedPath.StartsWith('~') || WslPathConverter.IsWslUncPath(trimmedPath))
+            // Always force \n (LF) for WSL UNC paths, and on Windows for any POSIX/WSL path.
+            if (WslPathConverter.IsWslUncPath(trimmedPath) ||
+                (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && (trimmedPath.StartsWith('/') || trimmedPath.StartsWith('~'))))
             {
                 return "\n";
             }
 
-            // If setting is not specified by .editorconfig and the environment is on Windows targeting a workspace mirror,
-            // default to \n rather than auto-detecting CRLF.
-            if (!setting.HasValue && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            // For NightCodeForge workspace mirror paths, force \n for POSIX paths and default to \n when unconfigured.
+            var norm = trimmedPath.Replace('/', '\\');
+            bool isWorkspaceMirror =
+                norm.Contains(@"\.nightcodeforge\", StringComparison.OrdinalIgnoreCase) ||
+                norm.Contains(@"\wks\", StringComparison.OrdinalIgnoreCase) ||
+                norm.Contains(@"\wt\", StringComparison.OrdinalIgnoreCase) ||
+                norm.Contains(@"\clone\", StringComparison.OrdinalIgnoreCase) ||
+                norm.Contains("task-", StringComparison.OrdinalIgnoreCase);
+            if (isWorkspaceMirror && (trimmedPath.StartsWith('/') || trimmedPath.StartsWith('~') || !setting.HasValue))
             {
-                var norm = trimmedPath.Replace('/', '\\');
-                if (norm.Contains(@"\.nightcodeforge\", StringComparison.OrdinalIgnoreCase) ||
-                    norm.Contains(@"\wks\", StringComparison.OrdinalIgnoreCase) ||
-                    norm.Contains(@"\wt\", StringComparison.OrdinalIgnoreCase) ||
-                    norm.Contains(@"\clone\", StringComparison.OrdinalIgnoreCase) ||
-                    norm.Contains("task-", StringComparison.OrdinalIgnoreCase))
-                {
-                    return "\n";
-                }
+                return "\n";
             }
         }
 

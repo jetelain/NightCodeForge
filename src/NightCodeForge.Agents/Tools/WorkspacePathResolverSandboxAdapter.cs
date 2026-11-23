@@ -49,8 +49,9 @@ public sealed partial class WorkspacePathResolverSandboxAdapter : ISandboxPathRe
         _isReadOnly = scope.IsReadOnly;
         _allowLocalMemoryWriteInReadOnlyScope = scope.AllowLocalMemoryWriteInReadOnlyScope;
 
-        var isUnixVirtualRoot = (_workspaceRoot.StartsWith('/') && !_workspaceRoot.StartsWith("//")) ||
-                                _workspaceRoot.StartsWith('~');
+        var isUnixVirtualRoot = OperatingSystem.IsWindows() &&
+            ((_workspaceRoot.StartsWith('/') && !_workspaceRoot.StartsWith("//")) ||
+             _workspaceRoot.StartsWith('~'));
         var workspaceTmpRoot = isUnixVirtualRoot && string.IsNullOrWhiteSpace(_pathResolver.GetWslDistributionName())
             ? "/tmp"
             : _pathResolver.ResolveCruciblePath(_workspaceRoot, "/tmp", _taskId);
@@ -593,8 +594,9 @@ public sealed partial class WorkspacePathResolverSandboxAdapter : ISandboxPathRe
         if (!string.IsNullOrWhiteSpace(_workspaceRoot))
         {
             allowedRoots.Add(_workspaceRoot);
-            var isUnixVirtualRoot = (_workspaceRoot.StartsWith('/') && !_workspaceRoot.StartsWith("//")) ||
-                                    _workspaceRoot.StartsWith('~');
+            var isUnixVirtualRoot = OperatingSystem.IsWindows() &&
+                ((_workspaceRoot.StartsWith('/') && !_workspaceRoot.StartsWith("//")) ||
+                 _workspaceRoot.StartsWith('~'));
             var workspaceTmpRoot = isUnixVirtualRoot && string.IsNullOrWhiteSpace(_pathResolver.GetWslDistributionName())
                 ? "/tmp"
                 : _pathResolver.ResolveCruciblePath(_workspaceRoot, "/tmp", _taskId);
@@ -864,14 +866,15 @@ public sealed partial class WorkspacePathResolverSandboxAdapter : ISandboxPathRe
     {
         if (string.IsNullOrWhiteSpace(path)) return string.Empty;
         var normalized = path.Replace('\\', '/').TrimEnd('/');
-        if (Path.IsPathRooted(path) && !normalized.StartsWith("//") && !normalized.StartsWith(@"\\") &&
-            !normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase) &&
-            !normalized.StartsWith("/tmp", StringComparison.OrdinalIgnoreCase))
+        bool isVirtualContainerPrefix =
+            normalized.StartsWith("/workspace", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/clone", StringComparison.OrdinalIgnoreCase) ||
+            (OperatingSystem.IsWindows() && normalized.StartsWith("/tmp", StringComparison.OrdinalIgnoreCase));
+        if (Path.IsPathRooted(normalized) && !normalized.StartsWith("//") && !isVirtualContainerPrefix)
         {
             try
             {
-                normalized = Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
+                normalized = Path.GetFullPath(normalized).Replace('\\', '/').TrimEnd('/');
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
             {
