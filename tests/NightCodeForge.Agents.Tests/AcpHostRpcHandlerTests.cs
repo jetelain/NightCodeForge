@@ -285,7 +285,8 @@ public class AcpHostRpcHandlerTests
     [Fact]
     public async Task FsReadAndWrite_WithoutSandboxPathResolver_RejectsPathTraversalAndOutsideWorkspacePaths()
     {
-        var baseDir = Directory.CreateTempSubdirectory().FullName;
+        var baseDir = Path.Combine(AppContext.BaseDirectory, "acp-sandbox-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
         try
         {
             var wsDir = Path.Combine(baseDir, "ws");

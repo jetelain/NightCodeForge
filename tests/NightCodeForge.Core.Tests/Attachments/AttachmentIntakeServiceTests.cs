@@ -348,7 +348,7 @@ public class AttachmentIntakeServiceTests : IDisposable
         await sut.DeleteAttachmentAsync(attachment.Id);
 
         Assert.NotNull(capturedUnlinkSpec);
-        Assert.Contains("rm", capturedUnlinkSpec!.ArgumentList!);
+        Assert.True(string.Equals(capturedUnlinkSpec!.FileName, "rm", StringComparison.Ordinal) || capturedUnlinkSpec.ArgumentList!.Contains("rm"));
         Assert.Contains("-f", capturedUnlinkSpec.ArgumentList!);
         Assert.False(File.Exists(companionPath));
         Assert.True(File.Exists(hostHtmlPath));
