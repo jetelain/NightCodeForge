@@ -655,12 +655,12 @@ public class HomeDashboardTests : BunitContext
 
         // Now allow the first load to complete; the follow-up refresh must be re-queued and executed.
         firstLoadGate.TrySetResult();
-        await secondLoadCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await secondLoadCompleted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         cut.WaitForAssertion(() =>
         {
             Assert.Contains("Added During In-Flight Load", cut.Markup);
-        });
+        }, TimeSpan.FromSeconds(10));
     }
 
     [Fact]

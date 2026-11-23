@@ -1309,16 +1309,16 @@ public class Step122CAttachmentsWebUiTests : BunitContext, IDisposable
             .Add(d => d.Task, task1)
             .Add(d => d.OnTaskUpdated, EventCallback.Factory.Create<ForgeTask>(this, t => callbackTask = t)));
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find(".task-attachment-chip")));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find(".task-attachment-chip")), TimeSpan.FromSeconds(10));
         await drawerCut.InvokeAsync(() => drawerCut.Find(".task-attachment-chip").Click());
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-open-delete-attachment")));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-open-delete-attachment")), TimeSpan.FromSeconds(10));
         await drawerCut.InvokeAsync(() => drawerCut.Find("#btn-open-delete-attachment").Click());
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-confirm-delete-attachment")));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(drawerCut.Find("#btn-confirm-delete-attachment")), TimeSpan.FromSeconds(10));
         await drawerCut.InvokeAsync(() => drawerCut.Find("#btn-confirm-delete-attachment").Click());
 
-        drawerCut.WaitForAssertion(() => Assert.NotNull(callbackTask));
+        drawerCut.WaitForAssertion(() => Assert.NotNull(callbackTask), TimeSpan.FromSeconds(10));
 
         Assert.Null(await harness.AttachmentRepo.GetByIdAsync(att.Id));
 

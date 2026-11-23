@@ -240,10 +240,10 @@ public class LlmModelCatalogServiceTests
     [Fact]
     public async Task GetAvailableModelsAsync_WhenTagsProbeTimesOut_ReturnsEmptyGracefully()
     {
-        var handler = new StubHttpHandler(_ =>
+        var handler = new StubHttpHandler(async (_, ct) =>
         {
             // Simulate a hanging / dropped packet response exceeding probe timeout
-            Thread.Sleep(3500);
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
             return StubHttpHandler.Json(TagsJson);
         });
 

@@ -18,6 +18,7 @@ using Xunit;
 
 namespace NightCodeForge.Web.Tests;
 
+[Collection("HangfireGlobalState")]
 public class DevQueueServiceTests : IDisposable
 {
     private readonly MockLockProvider _lockProvider;

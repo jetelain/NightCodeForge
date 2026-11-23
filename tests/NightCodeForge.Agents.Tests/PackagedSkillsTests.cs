@@ -34,7 +34,7 @@ public class PackagedSkillsTests
         Assert.True(Directory.Exists(skillDir), $"Skill directory not found: {skillDir}");
         Assert.True(File.Exists(skillFile), $"SKILL.md not found in {skillDir}");
 
-        var content = File.ReadAllText(skillFile);
+        var content = File.ReadAllText(skillFile).Replace("\r\n", "\n");
         Assert.False(string.IsNullOrWhiteSpace(content), "SKILL.md must not be empty");
 
         // Frontmatter must be enclosed between leading --- and closing ---
@@ -120,7 +120,7 @@ public class PackagedSkillsTests
         var skillFile = Path.Combine(repoRoot, "skills", skillName, "SKILL.md");
 
         Assert.True(File.Exists(skillFile), $"SKILL.md not found for {skillName}");
-        var content = File.ReadAllText(skillFile);
+        var content = File.ReadAllText(skillFile).Replace("\r\n", "\n");
 
         // Explains docs/tasks management
         Assert.Contains("docs/tasks", content);

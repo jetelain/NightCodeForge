@@ -180,7 +180,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         await _runner.ExecuteAsync(_mirrorDir, ["checkout", "-B", "feature/task-301"]);
         File.WriteAllText(Path.Combine(_mirrorDir, "agent_solution.cs"), "public class Solution {}");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
-        await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Agent commit from mirror", "--no-verify"]);
+        await CommitMirrorAsync("Agent commit from mirror");
 
         // Act: Push to host
         var result = await _syncService.PushToHostAsync(_mirrorDir, 301);
@@ -216,7 +216,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         await _runner.ExecuteAsync(_mirrorDir, ["checkout", "-B", "feature/task-302", "host-origin/feature/task-302"]);
         File.WriteAllText(Path.Combine(_mirrorDir, "shared_model.cs"), "public class Model { public int V1; public int V2; }");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
-        await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Agent modified shared_model", "--no-verify"]);
+        await CommitMirrorAsync("Agent modified shared_model");
 
         // NOW developer introduces UNCOMMITTED changes to shared_model.cs on host (dirty working tree!)
         File.WriteAllText(Path.Combine(_hostRepo.RepositoryPath, "shared_model.cs"), "public class Model { /* DIRTY DEVELOPER EDITS */ }");
@@ -254,7 +254,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         var featureFile = Path.Combine(_mirrorDir, "squash_feature.txt");
         await File.WriteAllTextAsync(featureFile, "Squashed feature implementation");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
-        await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Squash: ForgeTask #500 feature complete", "--no-verify"]);
+        await CommitMirrorAsync("Squash: ForgeTask #500 feature complete");
 
         // Act
         var result = await _syncService.PushBaseBranchToHostAsync(_mirrorDir, "main");
@@ -286,7 +286,7 @@ public class GitMirrorSyncServiceTests : IDisposable
         await _runner.ExecuteAsync(_mirrorDir, ["reset", "--hard", "host-origin/main"]);
         await File.AppendAllTextAsync(Path.Combine(_mirrorDir, "base_tracked.txt"), "\nAgent added line");
         await _runner.ExecuteAsync(_mirrorDir, ["add", "-A"]);
-        await _runner.ExecuteAsync(_mirrorDir, ["commit", "-m", "Agent base branch update", "--no-verify"]);
+        await CommitMirrorAsync("Agent base branch update");
 
         // Introduce uncommitted edits on host main
         await File.AppendAllTextAsync(Path.Combine(_hostRepo.RepositoryPath, "base_tracked.txt"), "\nDeveloper dirty edit on main");
@@ -309,6 +309,9 @@ public class GitMirrorSyncServiceTests : IDisposable
         var hostBranchLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["log", "main-ncf", "-1", "--pretty=%B"]);
         Assert.Contains("Agent base branch update", hostBranchLog.StandardOutput);
     }
+
+    private Task CommitMirrorAsync(string message) =>
+        _runner.ExecuteAsync(_mirrorDir, ["-c", "user.name=Test Agent", "-c", "user.email=agent@test.local", "commit", "-m", message, "--no-verify"]);
 
     public void Dispose()
     {

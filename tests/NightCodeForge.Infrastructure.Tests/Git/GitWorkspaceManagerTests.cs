@@ -507,29 +507,8 @@ public class GitWorkspaceManagerTests : IDisposable
 
         try
         {
-            using (var proc1 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "init -b main")
-            {
-                WorkingDirectory = cloneDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }))
-            {
-                proc1?.WaitForExit();
-            }
-
-            using (var proc2 = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("git", "commit --allow-empty -m init --no-verify")
-            {
-                WorkingDirectory = cloneDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            }))
-            {
-                proc2?.WaitForExit();
-            }
+            await _runner.ExecuteAsync(cloneDir, ["init", "-b", "main"]);
+            await _runner.ExecuteAsync(cloneDir, ["-c", "user.name=Test User", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init", "--no-verify"]);
 
             var siblingWorkspace = new Workspace
             {

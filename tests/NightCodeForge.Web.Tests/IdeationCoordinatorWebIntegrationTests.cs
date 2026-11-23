@@ -33,6 +33,7 @@ using Pmad.Markitdown;
 
 namespace NightCodeForge.Web.Tests;
 
+[Collection("HangfireGlobalState")]
 public class IdeationCoordinatorWebIntegrationTests
 {
     private static void RegisterSharedWebServices(
@@ -385,6 +386,7 @@ public class IdeationCoordinatorWebIntegrationTests
         }
         finally
         {
+            Hangfire.Logging.LogProvider.SetCurrentLogProvider(null);
             SqliteConnection.ClearAllPools();
             foreach (var dbFile in new[] { tempDb, tempHangfireDb })
             {
