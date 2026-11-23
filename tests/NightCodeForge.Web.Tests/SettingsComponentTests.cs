@@ -703,6 +703,274 @@ public class SettingsComponentTests : BunitContext, IDisposable
         Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Title == "Error Saving Settings");
     }
 
+    [Fact]
+    public void OllamaRouterGatewayCard_RendersProtocolShortcutsWithoutBlankTarget_AndHidesRemovedMonitorLink()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+
+        var cut = Render<OllamaRouterGatewayCard>();
+
+        var openAppLink = cut.Find("#link-open-ollamarouter-app");
+        Assert.Equal(OllamaRouterProtocolUris.OpenApp, openAppLink.GetAttribute("href"));
+        Assert.False(openAppLink.HasAttribute("target"));
+        Assert.Contains("Open OllamaRouter App", openAppLink.TextContent);
+
+        var wizardLink = cut.Find("#link-run-ollamarouter-wizard");
+        Assert.Equal(OllamaRouterProtocolUris.SetupWizard, wizardLink.GetAttribute("href"));
+        Assert.False(wizardLink.HasAttribute("target"));
+        Assert.Contains("Run Router Setup Wizard", wizardLink.TextContent);
+
+        Assert.NotNull(cut.Find("#btn-sync-recommended-models"));
+        Assert.DoesNotContain("/monitor", cut.Markup);
+        Assert.DoesNotContain("Open Router Monitor", cut.Markup);
+
+        // Switching to Standalone Ollama hides OllamaRouter protocol links and sync button
+        var radioInputs = cut.FindAll("input[name=providerOption]");
+        radioInputs[0].Change(new ChangeEventArgs { Value = "Ollama" });
+        Assert.Empty(cut.FindAll("#link-open-ollamarouter-app"));
+        Assert.Empty(cut.FindAll("#link-run-ollamarouter-wizard"));
+        Assert.Empty(cut.FindAll("#btn-sync-recommended-models"));
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_PopulatesRolesAndPersistsConfig()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.Endpoint = "http://localhost:11434";
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.Basic] = new("basic", "gemma4:e4b", 131072, "Fast auxiliary", []),
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", []),
+                [OllamaRouterRoleNames.SoftwareArchitect] = new("software_architect", "qwen3.8:27b", 262144, "Architecture", []),
+                [OllamaRouterRoleNames.SeniorDeveloper] = new("senior_developer", "qwen3.6:35b-a3b", 131072, "Implementation", [])
+            });
+
+        var cut = Render<OllamaRouterGatewayCard>();
+
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.True(_configWriter.SaveProviderCalled);
+        Assert.Equal(LlmProviderType.OllamaRouter, _configWriter.LastSavedOptions.ProviderType);
+        Assert.Equal("qwen3.8:27b", _configWriter.LastSavedOptions.DefaultModelId);
+        Assert.Equal("qwen3.8:27b", _configWriter.LastSavedOptions.ArchitectModelId);
+        Assert.Equal("qwen3.6:35b-a3b", _configWriter.LastSavedOptions.CoderModelId);
+        Assert.Equal(262144, _configWriter.LastSavedOptions.ContextWindowTokens);
+
+        Assert.NotNull(cut.Find("#select-coder-model"));
+        Assert.NotNull(cut.Find("#select-architect-model"));
+        Assert.Equal("qwen3.8:27b", cut.Find("#select-default-model").GetAttribute("value"));
+        Assert.Equal("qwen3.6:35b-a3b", cut.Find("#select-coder-model").GetAttribute("value"));
+        Assert.Equal("qwen3.8:27b", cut.Find("#select-architect-model").GetAttribute("value"));
+
+        Assert.Contains(
+            _toastService.Toasts,
+            t => t.Level == ToastLevel.Success &&
+                 t.Title == "Recommended Models Synced" &&
+                 t.Message.Contains("qwen3.8:27b") &&
+                 t.Message.Contains("qwen3.6:35b-a3b"));
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenUnreachableOrEmpty_ShowsWarningWithoutPersisting()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = null;
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "OllamaRouter Unreachable");
+
+        _gatewayService.Recommendations = new RouterRecommendationsDto(null, new Dictionary<string, RouterRoleRecommendationDto>());
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "No Recommendations Available");
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenActiveProviderNotOllamaRouter_ShowsRestartRequiredToast()
+    {
+        _llmOptions.ProviderType = LlmProviderType.Ollama;
+        _gatewayService.ProviderType = LlmProviderType.Ollama;
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        var radioInputs = cut.FindAll("input[name=providerOption]");
+        radioInputs[1].Change(new ChangeEventArgs { Value = "OllamaRouter" });
+
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "Restart Required");
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenPersistenceThrows_PreservesUiStateAndShowsErrorToast()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.DefaultModelId = "existing:latest";
+        _llmOptions.ArchitectModelId = null;
+        _llmOptions.CoderModelId = null;
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", []),
+                [OllamaRouterRoleNames.SoftwareArchitect] = new("software_architect", "qwen3.8:27b", 262144, "Architecture", []),
+                [OllamaRouterRoleNames.SeniorDeveloper] = new("senior_developer", "qwen3.6:35b-a3b", 131072, "Implementation", [])
+            });
+        _configWriter.ThrowOnSaveProvider = new IOException("Disk full");
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Title == "Recommendation Sync Error" && t.Message.Contains("Disk full"));
+        Assert.Equal("existing:latest", cut.Find("#select-default-model").GetAttribute("value"));
+        Assert.Empty(cut.FindAll("#select-coder-model"));
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_InvalidOllamaEndpoint_BlocksBothSyncAndSaveWithoutPersisting()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", [])
+            });
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#ollama-endpoint-input").Change("not-a-url");
+
+        cut.Find("#btn-sync-recommended-models").Click();
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Title == "Recommendation Sync Error");
+
+        cut.Find("#btn-save-settings-ollama").Click();
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Error && t.Title == "Error Saving Settings");
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenEndpointChangedWithoutRestart_ShowsRestartRequiredToast()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.Endpoint = "http://localhost:11434";
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", [])
+            });
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#ollama-endpoint-input").Change("http://127.0.0.1:22434");
+
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.False(_configWriter.SaveProviderCalled);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "Restart Required");
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_SyncRecommendedModels_WhenEndpointMatchesModuloTrailingSlash_SyncsNormally()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _llmOptions.Endpoint = "http://localhost:11434";
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.Recommendations = new RouterRecommendationsDto(
+            GeneratedAt: DateTimeOffset.UtcNow,
+            Roles: new Dictionary<string, RouterRoleRecommendationDto>
+            {
+                [OllamaRouterRoleNames.AgenticChat] = new("agentic_chat", "qwen3.8:27b", 262144, "Ideation", [])
+            });
+
+        var cut = Render<OllamaRouterGatewayCard>();
+        cut.Find("#ollama-endpoint-input").Change(" http://localhost:11434/ ");
+
+        cut.Find("#btn-sync-recommended-models").Click();
+
+        Assert.True(_configWriter.SaveProviderCalled);
+        Assert.Equal("http://localhost:11434", _configWriter.LastSavedOptions.Endpoint);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Success && t.Title == "Recommended Models Synced");
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayCard_RoleDifferentiation_SavesAndClearsForOllamaRouterAndOllama()
+    {
+        _llmOptions.ProviderType = LlmProviderType.OllamaRouter;
+        _gatewayService.ProviderType = LlmProviderType.OllamaRouter;
+        _catalogService.Models =
+        [
+            new AvailableModelInfo("qwen3.8:27b", "qwen3.8:27b", ContextWindowTokens: 262144),
+            new AvailableModelInfo("qwen3.6:35b-a3b", "qwen3.6:35b-a3b", ContextWindowTokens: 131072)
+        ];
+
+        var cut = Render<OllamaRouterGatewayCard>();
+
+        cut.Find("#chk-differentiate-roles").Change(true);
+        cut.Find("#select-default-model").Change("qwen3.8:27b");
+        cut.Find("#select-coder-model").Change("qwen3.6:35b-a3b");
+        cut.Find("#select-architect-model").Change("qwen3.8:27b");
+        cut.Find("#btn-save-settings-ollama").Click();
+
+        Assert.True(_configWriter.SaveProviderCalled);
+        Assert.Equal(LlmProviderType.OllamaRouter, _configWriter.LastSavedOptions.ProviderType);
+        Assert.Equal("qwen3.8:27b", _configWriter.LastSavedOptions.DefaultModelId);
+        Assert.Equal("qwen3.6:35b-a3b", _configWriter.LastSavedOptions.CoderModelId);
+        Assert.Equal("qwen3.8:27b", _configWriter.LastSavedOptions.ArchitectModelId);
+
+        // Unchecking clears role overrides
+        cut.Find("#chk-differentiate-roles").Change(false);
+        cut.Find("#btn-save-settings-ollama").Click();
+        Assert.Null(_configWriter.LastSavedOptions.CoderModelId);
+        Assert.Null(_configWriter.LastSavedOptions.ArchitectModelId);
+
+        // Also works for Standalone Ollama
+        var radioInputs = cut.FindAll("input[name=providerOption]");
+        radioInputs[0].Change(new ChangeEventArgs { Value = "Ollama" });
+        cut.Find("#chk-differentiate-roles").Change(true);
+        cut.Find("#select-coder-model").Change("coder-local:latest");
+        cut.Find("#select-architect-model").Change("architect-local:latest");
+        cut.Find("#btn-save-settings-ollama").Click();
+
+        Assert.Equal(LlmProviderType.Ollama, _configWriter.LastSavedOptions.ProviderType);
+        Assert.Equal("coder-local:latest", _configWriter.LastSavedOptions.CoderModelId);
+        Assert.Equal("architect-local:latest", _configWriter.LastSavedOptions.ArchitectModelId);
+    }
+
+    [Fact]
+    public void OllamaRouterGatewayUiHelper_ExposesProtocolUrisAndFormatsSummary()
+    {
+        Assert.Equal("ollamarouter://open", OllamaRouterGatewayUiHelper.OpenAppUri);
+        Assert.Equal("ollamarouter://wizard", OllamaRouterGatewayUiHelper.SetupWizardUri);
+
+        var summary = OllamaRouterGatewayUiHelper.FormatSyncedModelsSummary(
+            new NightCodeForge.Core.Inference.MappedRouterRecommendations(
+                DefaultModelId: "qwen3.8:27b",
+                ArchitectModelId: "qwen3.8:27b",
+                CoderModelId: "qwen3.6:35b-a3b",
+                ContextWindowTokens: 262144,
+                GeneratedAt: DateTimeOffset.UtcNow));
+
+        Assert.Contains("Architect: qwen3.8:27b", summary);
+        Assert.Contains("Coder: qwen3.6:35b-a3b", summary);
+        Assert.Contains("Default: qwen3.8:27b", summary);
+        Assert.Contains("262,144 tokens", summary);
+        Assert.Contains("config/config.json", summary);
+    }
+
     #endregion
 
     #region AgentProfilesTab Tests
@@ -1395,11 +1663,17 @@ public class SettingsComponentTests : BunitContext, IDisposable
     {
         public bool SaveProviderCalled { get; private set; }
         public bool SaveAllowedModelsCalled { get; private set; }
+        public Exception? ThrowOnSaveProvider { get; set; }
         public LlmProviderOptions LastSavedOptions { get; private set; } = new();
         public List<OpenAiAllowedModel> LastSavedAllowedModels { get; private set; } = [];
 
         public Task SaveProviderConfigurationAsync(Action<LlmProviderOptions> updateAction, CancellationToken cancellationToken = default)
         {
+            if (ThrowOnSaveProvider is not null)
+            {
+                throw ThrowOnSaveProvider;
+            }
+
             SaveProviderCalled = true;
             updateAction(LastSavedOptions);
             return Task.CompletedTask;
@@ -1427,6 +1701,8 @@ public class SettingsComponentTests : BunitContext, IDisposable
         public bool ReclaimCalled { get; private set; }
 
         public LlmProviderType ProviderType { get; set; } = LlmProviderType.OllamaRouter;
+
+        public RouterRecommendationsDto? Recommendations { get; set; }
 
         public Task<LlmProviderType?> DetectProviderAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<LlmProviderType?>(ProviderType);
@@ -1474,6 +1750,9 @@ public class SettingsComponentTests : BunitContext, IDisposable
 
         public Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default) =>
             Task.FromResult(true);
+
+        public Task<RouterRecommendationsDto?> GetRecommendationsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(Recommendations);
     }
 
     private class MockWslMetadataService : IWslMetadataService

@@ -1,0 +1,120 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wvm="using:NightCodeForge.Installer.ViewModels.Wizard"
+             xmlns:conv="using:NightCodeForge.Installer.Converters"
+             x:Class="NightCodeForge.Installer.Views.Wizard.WizardStep2ProvisioningView"
+             x:DataType="wvm:WizardStep2ProvisioningViewModel">
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="12">
+
+    <Border Grid.Row="0"
+            Padding="14"
+            CornerRadius="8"
+            Background="{DynamicResource NightCodeBgSurface}"
+            BorderBrush="{DynamicResource SemiColorBorder}"
+            BorderThickness="1">
+      <StackPanel Spacing="10">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" Spacing="2">
+            <TextBlock Text="Host &amp; Subsystem Provisioning" FontSize="14" FontWeight="SemiBold" />
+            <TextBlock Text="{Binding StatusMessage}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+          </StackPanel>
+          <Button Grid.Column="1"
+                  Content="Run / Re-run Provisioning"
+                  Classes="Primary"
+                  Command="{Binding RunProvisioningCommand}"
+                  IsEnabled="{Binding !IsRunning}" />
+        </Grid>
+        <ProgressBar Minimum="0" Maximum="100" Value="{Binding ProgressPercent}" Height="8" />
+      </StackPanel>
+    </Border>
+
+    <!-- WSL2 Reboot Prompt -->
+    <Border Grid.Row="1"
+            IsVisible="{Binding IsRebootRequired}"
+            Padding="12"
+            CornerRadius="8"
+            Background="{DynamicResource SemiColorWarningLight}"
+            BorderBrush="{DynamicResource SemiColorWarning}"
+            BorderThickness="1">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+        <TextBlock Grid.Column="0"
+                   Text="WSL2 returned exit code 3010 (reboot required). Restart Windows and re-run the installer to continue."
+                   TextWrapping="Wrap"
+                   VerticalAlignment="Center" />
+        <Button Grid.Column="1"
+                Content="Exit Installer to Reboot"
+                Command="{Binding CloseForRebootCommand}" />
+      </Grid>
+    </Border>
+
+    <!-- Provisioning Steps & Real-Time Log Terminal -->
+    <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="12">
+      <Border Grid.Column="0"
+              Padding="12"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Provisioning Steps" FontWeight="SemiBold" Margin="0,0,0,8" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding Steps}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="wvm:WizardChecklistItemViewModel">
+                  <Border Padding="8,7" Margin="0,0,0,6" CornerRadius="6" Background="{DynamicResource NightCodeBgInput}">
+                    <Grid ColumnDefinitions="22,*" ColumnSpacing="8">
+                      <TextBlock Grid.Column="0"
+                                 Text="{Binding StatusGlyph}"
+                                 FontSize="14"
+                                 FontWeight="Bold"
+                                 VerticalAlignment="Top"
+                                 Margin="0,1,0,0"
+                                 Foreground="{Binding Status, Converter={x:Static conv:ProvisioningStatusToBrushConverter.Instance}}" />
+                      <StackPanel Grid.Column="1" Spacing="2">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                          <TextBlock Grid.Column="0" Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                          <TextBlock Grid.Column="1"
+                                     Text="{Binding StatusLabel}"
+                                     FontSize="11"
+                                     FontWeight="SemiBold"
+                                     Foreground="{Binding Status, Converter={x:Static conv:ProvisioningStatusToBrushConverter.Instance}}" />
+                        </Grid>
+                        <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{DynamicResource SemiColorText2}" TextWrapping="Wrap" />
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+
+      <Border Grid.Column="1"
+              Padding="12"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgInput}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Provisioning Log" FontWeight="SemiBold" Margin="0,0,0,8" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding LogLines}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                  <TextBlock Text="{Binding}" FontFamily="Consolas,Menlo,monospace" FontSize="11" TextWrapping="Wrap" Margin="0,1" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Grid>
+
+    <TextBlock Grid.Row="3"
+               Text="Tip: Click Next once provisioning completes to deploy NightCodeForge, OllamaRouter, and companion NuGet tools."
+               FontSize="11"
+               Foreground="{DynamicResource SemiColorText2}" />
+  </Grid>
+</UserControl>

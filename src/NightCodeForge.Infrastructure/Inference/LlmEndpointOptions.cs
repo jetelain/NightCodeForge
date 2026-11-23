@@ -18,14 +18,31 @@ public class LlmEndpointOptions
     /// <summary>Baseline context window (tokens) used when no model name is available to probe.</summary>
     public int ContextWindowTokens { get; set; } = DefaultContextWindowTokens;
 
+    private string? _defaultModelId;
+    private bool _hasExplicitDefaultModelId;
+
     /// <summary>Default model identifier configured in LlmProvider section.</summary>
-    public string? DefaultModelId { get; set; }
+    public string? DefaultModelId
+    {
+        get => _defaultModelId;
+        set
+        {
+            _defaultModelId = value;
+            _hasExplicitDefaultModelId = true;
+        }
+    }
 
     /// <summary>Legacy ModelId property forwarding to DefaultModelId for backwards compatibility.</summary>
     public string? ModelId
     {
-        get => DefaultModelId;
-        set => DefaultModelId = value;
+        get => _defaultModelId;
+        set
+        {
+            if (!_hasExplicitDefaultModelId)
+            {
+                _defaultModelId = value;
+            }
+        }
     }
 }
 
@@ -67,6 +84,7 @@ internal static class OllamaApiPaths
     public const string RouterInfo = "api/router/info";
     public const string RouterFleet = "api/router/fleet";
     public const string RouterModels = "api/router/models";
+    public const string RouterRecommendations = "api/router/recommendations";
     public const string RouterVramReclaim = "api/router/vram/reclaim";
     public const string RouterSessionAffinityRelease = "api/router/sessions/affinity/release";
     public const string RouterMonitorSessionsPrefix = "api/router/monitor/sessions/";

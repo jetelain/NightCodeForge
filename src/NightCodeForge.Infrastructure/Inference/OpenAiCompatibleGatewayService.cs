@@ -76,6 +76,9 @@ public sealed class OpenAiCompatibleGatewayService : ILlmGatewayService
     public Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default) =>
         Task.FromResult(false);
 
+    public Task<RouterRecommendationsDto?> GetRecommendationsAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<RouterRecommendationsDto?>(null);
+
     public Task<int> ResolveContextWindowAsync(string modelName, CancellationToken cancellationToken = default)
     {
         string effectiveModel;

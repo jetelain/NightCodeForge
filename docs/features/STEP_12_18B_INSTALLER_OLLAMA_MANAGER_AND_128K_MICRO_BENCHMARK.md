@@ -13,10 +13,10 @@
 
 ## 1. Executive Objective
 
-Local Ollama port migration (`:11435`), LAN/Cloud target provisioning, GPU/VRAM hardware inspection, candidate model micro-benchmarking, and role-to-model recommendations are now handled directly by **OllamaRouter's standalone 0-VRAM Avalonia Desktop App & 4-Step Setup Wizard (`OllamaRouter.App` / `ollamarouter setup --wizard --wait`)**.
+Local Ollama port migration (`:11435`), LAN/Cloud target provisioning, GPU/VRAM hardware inspection, candidate model micro-benchmarking, and role-to-model recommendations are now handled directly by **OllamaRouter's standalone 0-VRAM Avalonia Desktop App & 5-Step Setup Wizard (`OllamaRouter.App` / `ollamarouter setup --wizard --wait`)**.
 
 Consequently, NightCodeForge drops duplicate in-app fleet management (formerly Step 12.15) and in-house micro-benchmarking, and instead implements a clean **3-part integration with OllamaRouter**:
-1. **Delegated Setup Wizard Handoff (`IOllamaRouterSetupHandoffService`):** Launch `ollamarouter setup --wizard --wait` from `NightCodeForge.Installer` (or CLI), wait for the user to complete OllamaRouter's 4-step wizard, and inspect the exit code (`0` = completed).
+1. **Delegated Setup Wizard Handoff (`IOllamaRouterSetupHandoffService`):** Launch `ollamarouter setup --wizard --wait` from `NightCodeForge.Installer` (or CLI), wait for the user to complete OllamaRouter's 5-step wizard, and inspect the exit code (`0` = completed).
 2. **Role Recommendation Synchronization (`IOllamaRouterRecommendationSyncService`):** Query `GET /api/router/recommendations` from OllamaRouter to retrieve the benchmark-calibrated native models and context ceilings (`software_architect`, `senior_developer`, `junior_developer`, `agentic_chat`, `basic`) and persist them into NightCodeForge's `config/config.json` user overlay (`LlmProviderOptions`).
 3. **Custom Protocol Shortcut (`ollamarouter://`) in NightCodeForge Web UI (`OllamaRouterGatewayCard.razor`):** Replace the obsolete `/monitor` web link with a custom protocol shortcut (`ollamarouter://open` and `ollamarouter://wizard`) that launches `OllamaRouter.App` directly from the browser, alongside a 1-click **"Sync Recommended Models"** button.
 
@@ -35,10 +35,11 @@ During initial installation (or when triggered from the NightCodeForge Maintenan
      ollamarouter setup --wizard --wait
      ```
    - `ollamarouter` launches `ollamarouter-app --wizard` (rendered in 0-VRAM software mode) and waits for the wizard window to close:
-     - **Wizard Step 1 (Local Environment & Ollama Port Check):** Verifies Ollama is installed, configures `OLLAMA_HOST=127.0.0.1:11435` (or `0.0.0.0:11435`), `OLLAMA_FLASH_ATTENTION=1`, and `OLLAMA_KV_CACHE_TYPE=q8_0`, restarts local `ollama` on `:11435`, and starts `ollamarouter-server` on `:11434`.
-     - **Wizard Step 2 (Fleet Nodes & Cloud Providers):** Adds local (`:11435`), remote LAN Ollama nodes, Cloud Overflow (`ollama.com`), and/or OpenAI-compatible providers.
-     - **Wizard Step 3 (Hardware Discovery & Micro-Benchmarking):** Detects GPU/VRAM per node (`GET /api/router/fleet/hardware`) and runs candidate model micro-benchmarks (`POST /api/router/benchmark`) measuring `tokens/sec` ($\ge 20\text{ t/s}$ viability gate) across the context ladder.
-     - **Wizard Step 4 (Role Recommendations & Finish):** Generates and activates role recommendations (`POST /api/router/recommendations/generate` and `POST /api/router/recommendations/apply`), writing `<stateDir>/recommended.json` and exiting with code `0`.
+     - **Wizard Step 1 (Local Ollama for the Router):** Verifies/installs/starts local Ollama, checks effective port `:11435` (fixes port and configures `OLLAMA_HOST=127.0.0.1:11435` or `0.0.0.0:11435` for LAN mesh, `OLLAMA_FLASH_ATTENTION=1`, and `OLLAMA_KV_CACHE_TYPE=q8_0`), and starts `ollamarouter-server` on `:11434`.
+     - **Wizard Step 2 (Fleet Targets):** Auto-registers the Local node (`:11435`) and lets the user add remote LAN Ollama nodes or external providers.
+     - **Wizard Step 3 (Cloud & External Providers):** Configures optional Ollama Cloud (`ollama.com`) overflow and OpenAI-compatible external providers.
+     - **Wizard Step 4 (Micro-Benchmark):** Displays detected GPU/VRAM per node (`GET /api/router/fleet/hardware`) and runs candidate model micro-benchmarks (`POST /api/router/benchmark`) measuring `tokens/sec` ($\ge 20\text{ t/s}$ viability gate) across the context ladder.
+     - **Wizard Step 5 (Role Recommendations & Finish):** Generates and activates role recommendations (`POST /api/router/recommendations/generate` and `POST /api/router/recommendations/apply`), writing `<stateDir>/recommended.json` and exiting with code `0`.
 2. **Handoff Result:**
    - When `ollamarouter setup --wizard --wait` exits with code `0`, `NightCodeForge.Installer` immediately runs `IOllamaRouterRecommendationSyncService.SyncRecommendationsToConfigAsync()` to populate NightCodeForge's `config/config.json`.
    - If the process exits with a non-zero code (user cancelled or closed early), the installer surfaces a clear status message allowing the user to retry the wizard or skip local LLM setup.
@@ -132,7 +133,8 @@ OllamaRouter exposes its active recommendation matrix at `GET /api/router/recomm
 | **`DefaultModelId`** | `roles["agentic_chat"].Model` $\rightarrow$ `ArchitectModelId` $\rightarrow$ `CoderModelId` | Fallback model across pipeline stages. |
 | **`ContextWindowTokens`** | `roles["software_architect"].RecommendedContextWindow` (min `131072` when available, fallback `131072`) | Baseline context window (while OllamaRouter dynamically clamps/injects per-node context ceilings at runtime). |
 
-> **Why Native Model Names Matter:** OllamaRouter's recommendation engine assigns **native model names** (e.g., `qwen3.8:27b`) rather than synthetic aliases so `agentic_chat`, `software_architect`, and `senior_developer` share the exact same hot model in GPU VRAM without triggering Ollama model evictions, while OllamaRouter enforces per-node context ceilings (`<stateDir>/recommended.json`) automatically during Stage-1 routing and `num_ctx` sizing.
+    - **Why Native Model Names Matter:** OllamaRouter's recommendation engine assigns **native model names** (e.g., `qwen3.8:27b`) rather than synthetic aliases so `agentic_chat`, `software_architect`, and `senior_developer` share the exact same hot model in GPU VRAM without triggering Ollama model evictions, while OllamaRouter enforces per-node context ceilings (`<stateDir>/recommended.json`) automatically during Stage-1 routing and `num_ctx` sizing.
+    - **Native AOT Separation & Configuration Persistence:** `NightCodeForge.Installer` MUST NOT reference `NightCodeForge.Infrastructure` (which brings in EF Core, Hangfire, SignalR, `Newtonsoft.Json`, and reflection-based `LlmConfigurationWriter` bound to `IHostEnvironment.ContentRootPath`). Instead, inside `NightCodeForge.Installer`, `IOllamaRouterRecommendationSyncService` deserializes `GET /api/router/recommendations` using source-generated `System.Text.Json` (`InstallerJsonContext`) and performs an atomic read-modify-write directly on `<InstallDir>/config/config.json` using `System.Text.Json.Nodes.JsonObject` + `InstallerJsonContext` so the installer stays 100% Native AOT compatible. Meanwhile, inside `NightCodeForge.Web`, the Web UI's **"Sync Recommended Models"** action queries `ILlmGatewayService.GetRecommendationsAsync()` and persists via `ILlmConfigurationWriter`.
 
 ---
 
@@ -141,12 +143,13 @@ OllamaRouter exposes its active recommendation matrix at `GET /api/router/recomm
 1. **Custom URI Protocol Contract (`ollamarouter://`):**
    - Registered in the OS by the OllamaRouter installation/setup process (`HKCU\Software\Classes\ollamarouter` on Windows, `x-scheme-handler/ollamarouter` desktop entry on Linux):
      - `ollamarouter://open` — Opens the `OllamaRouter.App` desktop dashboard (Monitor & Savings, Fleet & Cloud Targets, Model Cartography & Preload, Settings & API Keys).
-     - `ollamarouter://wizard` — Opens `OllamaRouter.App` directly in the 4-step Setup Wizard (`--wizard`).
+     - `ollamarouter://wizard` — Opens `OllamaRouter.App` directly in the 5-step Setup Wizard (`--wizard`).
 2. **Updates to [`OllamaRouterGatewayCard.razor`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor):**
    - Replace the obsolete `<a href="@GetRouterMonitorUrl()" target="_blank">↗ Open Router Monitor</a>` link (`${baseUrl}/monitor`, which was removed when `ollamarouter-server` became headless) with:
      - **`🖥️ Open OllamaRouter App`** (`href="ollamarouter://open"`, without `target="_blank"` so the browser invokes the registered OS protocol handler cleanly without leaving a blank tab).
      - **`🧙 Run Router Setup Wizard`** (`href="ollamarouter://wizard"`).
-     - **`🔄 Sync Recommended Models`** button: queries `GET /api/router/recommendations` via `ILlmGatewayService` / `IOllamaRouterRecommendationSyncService`, populates `_defaultModelId`, `_architectModelId`, and `_coderModelId` (enabling `_differentiateRoles` when both Architect and Coder models are returned), and displays a toast summarizing the imported role models.
+     - **`🔄 Sync Recommended Models`** button: queries `GET /api/router/recommendations` via `ILlmGatewayService.GetRecommendationsAsync()`, populates `_defaultModelId`, `_architectModelId`, and `_coderModelId` (enabling `_differentiateRoles` when both Architect and Coder models are returned), and displays a toast summarizing the imported role models.
+   - Ensure role differentiation (`_differentiateRoles`, `_architectModelId`, `_coderModelId`) is displayed and persisted in `SaveSettingsAsync()` for `OllamaRouter` (and standalone `Ollama`) in addition to `OpenAiCompatible`, so clicking **Sync Recommended Models** and saving in the Web UI properly displays and stores the synced Architect and Coder models.
    - Per `AGENTS.md`, protocol URI constants and recommendation-to-options mapping logic must reside in a testable service/helper class outside `.razor` `@code` blocks.
 
 ---
@@ -154,7 +157,7 @@ OllamaRouter exposes its active recommendation matrix at `GET /api/router/recomm
 ## 3. Implementation Checklist & Deliverables
 
 - [ ] Add `OllamaApiPaths.RouterRecommendations = "/api/router/recommendations"` and recommendation response DTOs (`RouterRecommendationsDto`, `RouterRoleRecommendationDto`, `RouterNodeRoleProfileDto`), plus `GetRecommendationsAsync` on `ILlmGatewayService` / `OllamaRouterGatewayService`.
-- [ ] Implement `IOllamaRouterRecommendationSyncService` to map `GET /api/router/recommendations` onto `LlmProviderOptions` (`ArchitectModelId`, `CoderModelId`, `DefaultModelId`, `ContextWindowTokens`) and persist via `ILlmConfigurationWriter`.
-- [ ] Update `OllamaRouterGatewayCard.razor` to replace the removed `/monitor` link with `ollamarouter://open` (**Open OllamaRouter App**), `ollamarouter://wizard` (**Run Setup Wizard**), and a **Sync Recommended Models** action.
-- [ ] Implement `IOllamaRouterSetupHandoffService` in `NightCodeForge.Installer` invoking `ollamarouter setup --wizard --wait` and syncing recommendations into `config/config.json` upon exit code `0`.
+- [ ] Implement `IOllamaRouterRecommendationSyncService` in `NightCodeForge.Installer` (without referencing `NightCodeForge.Infrastructure` or `ILlmConfigurationWriter`) using source-generated `System.Text.Json` (`InstallerJsonContext`) and `JsonObject` to map `GET /api/router/recommendations` onto `LlmProviderOptions` (`ArchitectModelId`, `CoderModelId`, `DefaultModelId`, `ContextWindowTokens`) and update `<InstallDir>/config/config.json` atomically.
+- [ ] Update `OllamaRouterGatewayCard.razor` to replace the removed `/monitor` link with `ollamarouter://open` (**Open OllamaRouter App**), `ollamarouter://wizard` (**Run Setup Wizard**), a **Sync Recommended Models** action (querying `ILlmGatewayService.GetRecommendationsAsync()` and persisting via `ILlmConfigurationWriter`), and role differentiation UI/persistence for `OllamaRouter` / `Ollama`.
+- [ ] Implement `IOllamaRouterSetupHandoffService` in `NightCodeForge.Installer` invoking `ollamarouter setup --wizard --wait` and syncing recommendations into `<InstallDir>/config/config.json` upon exit code `0`.
 - [ ] Add unit tests in `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Web.Tests`, and `NightCodeForge.Installer.Tests` covering `/api/router/recommendations` deserialization, role-to-options mapping, `ollamarouter://` shortcut rendering, and `ollamarouter setup --wizard --wait` exit-code handling.

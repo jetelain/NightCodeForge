@@ -139,6 +139,7 @@ public class OpenAiCompatibleGatewayServiceTests
 
         Assert.Null(await gateway.GetSessionUsageAsync("ncf-task1-stage-1"));
         Assert.False(await gateway.ReleaseSessionAffinityAsync("ncf-task1-stage-1"));
+        Assert.Null(await gateway.GetRecommendationsAsync());
     }
 }
 

@@ -249,4 +249,5 @@ public interface ILlmGatewayService
     Task<bool> ReclaimVramAsync(string? targetName, CancellationToken cancellationToken = default);
     Task<RouterSessionUsage?> GetSessionUsageAsync(string sessionId, CancellationToken cancellationToken = default);
     Task<bool> ReleaseSessionAffinityAsync(string sessionId, CancellationToken cancellationToken = default);
+    Task<RouterRecommendationsDto?> GetRecommendationsAsync(CancellationToken cancellationToken = default);
 }

@@ -1,0 +1,122 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wvm="using:NightCodeForge.Installer.ViewModels.Wizard"
+             x:Class="NightCodeForge.Installer.Views.Wizard.WizardStep1WelcomeView"
+             x:DataType="wvm:WizardStep1WelcomeViewModel">
+
+  <ScrollViewer>
+    <StackPanel Spacing="12">
+
+      <!-- Upgrade/Repair Banner -->
+      <Border IsVisible="{Binding IsUpgradeMode}"
+              Padding="12"
+              CornerRadius="8"
+              Background="{DynamicResource SemiColorInformationLight}"
+              BorderBrush="{DynamicResource SemiColorInformation}"
+              BorderThickness="1">
+        <TextBlock Text="{Binding UpgradeBannerText}" TextWrapping="Wrap" FontWeight="SemiBold" />
+      </Border>
+
+      <!-- Installation Source Card -->
+      <Border Padding="14"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <StackPanel Spacing="10">
+          <TextBlock Text="Installation Source" FontSize="14" FontWeight="SemiBold" />
+          <StackPanel Orientation="Horizontal" Spacing="20">
+            <RadioButton GroupName="WizardInstallSource"
+                         Content="Online (GitHub Releases &amp; NuGet.org)"
+                         IsChecked="{Binding IsOnlineSource}" />
+            <RadioButton GroupName="WizardInstallSource"
+                         Content="Air-Gapped / Local Bundle (bundle/)"
+                         IsChecked="{Binding IsAirGappedSource}" />
+          </StackPanel>
+
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding IsAirGappedSource}">
+            <TextBox Grid.Column="0"
+                     Text="{Binding BundleDirectory}"
+                     PlaceholderText="Path to folder containing .zip/.tar.gz and .nupkg bundle assets" />
+            <Button Grid.Column="1"
+                    Content="Browse Folder..."
+                    Command="{Binding BrowseBundleFolderCommand}" />
+          </Grid>
+
+          <StackPanel Spacing="4" IsVisible="{Binding IsAirGappedSource}">
+            <TextBlock Text="{Binding BundleAssetSummary}"
+                       FontSize="12"
+                       Foreground="{DynamicResource SemiColorText2}" />
+            <ItemsControl ItemsSource="{Binding DetectedBundleAssets}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                  <TextBlock Text="{Binding}" FontSize="11" Foreground="{DynamicResource SemiColorText1}" />
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+
+          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="8" Margin="0,4,0,0">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Install Directory:" VerticalAlignment="Center" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding InstallDirectory}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="WSL2 Distro:" VerticalAlignment="Center" IsVisible="{Binding IsWindowsHost}" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding WslDistroName}" IsVisible="{Binding IsWindowsHost}" />
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Detected Host Environment Card -->
+      <Border Padding="14"
+              CornerRadius="8"
+              Background="{DynamicResource NightCodeBgSurface}"
+              BorderBrush="{DynamicResource SemiColorBorder}"
+              BorderThickness="1">
+        <StackPanel Spacing="10">
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0" Text="Detected Host Environment &amp; Prerequisites Plan" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="Re-scan Host" Command="{Binding RescanEnvironmentCommand}" IsEnabled="{Binding !IsProbing}" />
+          </Grid>
+
+          <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="6" ColumnSpacing="12">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="WSL2 / Platform:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding WslStatusText}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Docker Engine:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DockerStatusText}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text=".NET 10 SDK:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DotNetStatusText}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="Git:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding GitStatusText}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="OllamaRouter:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding OllamaRouterStatusText}" TextWrapping="Wrap" />
+
+            <TextBlock Grid.Row="5" Grid.Column="0" Text="Companion Tools:" Foreground="{DynamicResource SemiColorText2}" />
+            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding CompanionToolsStatusText}" TextWrapping="Wrap" />
+          </Grid>
+
+          <StackPanel Spacing="6" Margin="0,6,0,0">
+            <CheckBox Content="Provision WSL2 &amp; Ubuntu distribution (Windows hosts)"
+                      IsChecked="{Binding ProvisionWsl}"
+                      IsVisible="{Binding IsWindowsHost}" />
+            <CheckBox Content="Verify / install .NET 10 SDK on Host"
+                      IsChecked="{Binding ProvisionHostDotNet}" />
+            <CheckBox Content="Provision Linux / WSL2 toolchain (.NET 10 SDK, ripgrep, git, ICU, locales)"
+                      IsChecked="{Binding ProvisionLinuxOrWslToolchain}" />
+            <CheckBox Content="Include Docker Engine inside WSL2 / Linux"
+                      IsChecked="{Binding IncludeDocker}" />
+            <CheckBox Content="Install or update OllamaRouter (server, CLI, 0-VRAM app &amp; ollamarouter:// handler)"
+                      IsChecked="{Binding InstallOllamaRouter}" />
+            <CheckBox Content="Pre-install companion NuGet global tools (ncf, nightcodeassay, csnav, mdfetch, codecondenser)"
+                      IsChecked="{Binding InstallCompanionTools}" />
+          </StackPanel>
+
+          <TextBlock Text="{Binding StatusMessage}" FontSize="12" Foreground="{DynamicResource SemiColorText2}" />
+        </StackPanel>
+      </Border>
+
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

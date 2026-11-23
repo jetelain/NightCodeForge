@@ -149,6 +149,34 @@ public sealed class OllamaRouterGatewayService : OllamaGatewayServiceBase
         }
     }
 
+    public override async Task<RouterRecommendationsDto?> GetRecommendationsAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(StatusTimeout);
+
+            using var response = await Http.GetAsync(OllamaApiPaths.RouterRecommendations, timeoutCts.Token);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.LogWarning("OllamaRouter recommendations query failed with HTTP {Status}.", (int)response.StatusCode);
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<RouterRecommendationsDto>(timeoutCts.Token);
+        }
+        catch (Exception ex) when (IsRecoverableProbeFailure(ex, cancellationToken))
+        {
+            Logger.LogWarning(ex, "OllamaRouter recommendations query failed at {BaseAddress}.", Http.BaseAddress);
+            return null;
+        }
+    }
+
     protected override async Task<int?> ProbeProviderContextWindowAsync(string modelName, CancellationToken cancellationToken)
     {
         var detail = await TryGetJsonAsync<RouterModelDto>(

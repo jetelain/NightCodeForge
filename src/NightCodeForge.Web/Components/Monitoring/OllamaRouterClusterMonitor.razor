@@ -34,8 +34,8 @@
         <div style="display: flex; gap: 0.65rem; align-items: center; flex-wrap: wrap;">
             @if (_status?.ProviderType == NightCodeForge.Core.Domain.LlmProviderType.OllamaRouter)
             {
-                <a href="@GetRouterMonitorUrl()" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;">
-                    ↗ Gateway Monitor
+                <a id="link-open-ollamarouter-app" href="@OllamaRouterGatewayUiHelper.OpenAppUri" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem; text-decoration: none;">
+                    🖥️ Open OllamaRouter App
                 </a>
             }
             <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.5rem 1rem; font-size: 0.85rem;" @onclick="RefreshAsync" disabled="@_isLoading">
@@ -172,12 +172,6 @@
     protected override async Task OnInitializedAsync()
     {
         await RefreshAsync();
-    }
-
-    private string GetRouterMonitorUrl()
-    {
-        var baseUrl = _status?.BaseUrl;
-        return string.IsNullOrWhiteSpace(baseUrl) ? "/monitor" : $"{baseUrl.TrimEnd('/')}/monitor";
     }
 
     public async Task RefreshAsync()

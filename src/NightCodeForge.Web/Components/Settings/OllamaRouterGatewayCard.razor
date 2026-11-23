@@ -3,6 +3,7 @@
 @using NightCodeForge.Agents.Inference
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Exceptions
+@using NightCodeForge.Core.Inference
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Infrastructure.Configuration
 @using NightCodeForge.Web.Services
@@ -37,11 +38,17 @@
             </p>
         </div>
         <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
-            @if (_selectedProvider == LlmProviderType.OllamaRouter && _status?.ProviderType == LlmProviderType.OllamaRouter)
+            @if (_selectedProvider == LlmProviderType.OllamaRouter)
             {
-                <a href="@GetRouterMonitorUrl()" target="_blank" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;">
-                    ↗ Open Router Monitor
+                <a id="link-open-ollamarouter-app" href="@OllamaRouterGatewayUiHelper.OpenAppUri" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem; text-decoration: none;">
+                    🖥️ Open OllamaRouter App
                 </a>
+                <a id="link-run-ollamarouter-wizard" href="@OllamaRouterGatewayUiHelper.SetupWizardUri" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem; text-decoration: none;">
+                    🧙 Run Router Setup Wizard
+                </a>
+                <button type="button" id="btn-sync-recommended-models" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" @onclick="SyncRecommendedModelsAsync" disabled="@(_isSyncingRecommendations || _isLoading || _isSaving)">
+                    @(_isSyncingRecommendations ? "Syncing..." : "🔄 Sync Recommended Models")
+                </button>
             }
             <button type="button" class="forge-btn forge-btn-outline" style="padding: 0.65rem 1.25rem; font-size: 0.92rem;" @onclick="RefreshAsync" disabled="@_isLoading">
                 @(_isLoading ? "Refreshing..." : "🔄 Refresh")
@@ -483,13 +490,13 @@
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem;">
                 <div>
                     <label class="forge-field-label">Endpoint URL</label>
-                    <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="_ollamaEndpoint" placeholder="http://localhost:11434" />
+                    <input type="text" id="ollama-endpoint-input" class="forge-input font-mono" style="width: 100%;" @bind="_ollamaEndpoint" placeholder="@LlmProviderOptions.DefaultEndpoint" />
                 </div>
                 <div>
                     <label class="forge-field-label">Default Model</label>
                     @if (_availableModels.Count > 0)
                     {
-                        <select class="forge-input font-mono" style="width: 100%;" @bind="_defaultModelId">
+                        <select id="select-default-model" class="forge-input font-mono" style="width: 100%;" @bind="_defaultModelId">
                             <option value="">Auto-select (Most capable: largest context)</option>
                             @if (!string.IsNullOrWhiteSpace(_defaultModelId) && !_availableModels.Any(m => string.Equals(m.ModelId, _defaultModelId, StringComparison.OrdinalIgnoreCase)))
                             {
@@ -503,12 +510,68 @@
                     }
                     else
                     {
-                        <input type="text" class="forge-input font-mono" style="width: 100%;" @bind="_defaultModelId" placeholder="e.g. qwen2.5-coder:32b" />
+                        <input type="text" id="select-default-model" class="forge-input font-mono" style="width: 100%;" @bind="_defaultModelId" placeholder="e.g. qwen2.5-coder:32b" />
                     }
                 </div>
+                <div>
+                    <label class="forge-field-label">Role Differentiation</label>
+                    <div style="padding-top: 0.5rem;">
+                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; color: var(--text-primary); cursor: pointer;">
+                            <input type="checkbox" id="chk-differentiate-roles" @bind="_differentiateRoles" />
+                            <span>Differentiate Implementation &amp; Review Roles</span>
+                        </label>
+                    </div>
+                </div>
             </div>
+            @if (_differentiateRoles)
+            {
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem; padding: 1rem; background: var(--bg-input); border-radius: var(--radius-md);">
+                    <div>
+                        <label class="forge-field-label">Coder Model</label>
+                        @if (_availableModels.Count > 0)
+                        {
+                            <select id="select-coder-model" class="forge-input font-mono" style="width: 100%;" @bind="_coderModelId">
+                                <option value="">Inherit Default Model</option>
+                                @if (!string.IsNullOrWhiteSpace(_coderModelId) && !_availableModels.Any(m => string.Equals(m.ModelId, _coderModelId, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    <option value="@_coderModelId">@_coderModelId (Configured)</option>
+                                }
+                                @foreach (var m in _availableModels)
+                                {
+                                    <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <input type="text" id="select-coder-model" class="forge-input font-mono" style="width: 100%;" @bind="_coderModelId" placeholder="Inherit Default" />
+                        }
+                    </div>
+                    <div>
+                        <label class="forge-field-label">Architect Model</label>
+                        @if (_availableModels.Count > 0)
+                        {
+                            <select id="select-architect-model" class="forge-input font-mono" style="width: 100%;" @bind="_architectModelId">
+                                <option value="">Inherit Default Model</option>
+                                @if (!string.IsNullOrWhiteSpace(_architectModelId) && !_availableModels.Any(m => string.Equals(m.ModelId, _architectModelId, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    <option value="@_architectModelId">@_architectModelId (Configured)</option>
+                                }
+                                @foreach (var m in _availableModels)
+                                {
+                                    <option value="@m.ModelId">@AttachmentPresentationHelper.FormatModelOptionLabel(m)</option>
+                                }
+                            </select>
+                        }
+                        else
+                        {
+                            <input type="text" id="select-architect-model" class="forge-input font-mono" style="width: 100%;" @bind="_architectModelId" placeholder="Inherit Default" />
+                        }
+                    </div>
+                </div>
+            }
             <div style="display: flex; justify-content: flex-end; gap: 0.75rem;">
-                <button type="button" id="btn-save-settings-ollama" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@_isSaving">
+                <button type="button" id="btn-save-settings-ollama" class="forge-btn forge-btn-primary" style="padding: 0.65rem 1.4rem; font-size: 0.92rem; font-weight: 600;" @onclick="SaveSettingsAsync" disabled="@(_isSaving || _isSyncingRecommendations)">
                     @(_isSaving ? "Saving..." : "💾 Save Settings")
                 </button>
             </div>
@@ -524,7 +587,7 @@
     private EndpointVerificationResult? _verificationResult;
 
     private LlmProviderType _selectedProvider;
-    private string _ollamaEndpoint = "http://localhost:11434";
+    private string _ollamaEndpoint = LlmProviderOptions.DefaultEndpoint;
     private string _openAiEndpoint = "https://api.openai.com/v1";
     private string _openAiApiKeyInput = string.Empty;
     private ApiKeyCredentialBadgeViewModel? _openAiCredentialStatus;
@@ -538,6 +601,7 @@
 
     private bool _isLoading;
     private bool _isReclaiming;
+    private bool _isSyncingRecommendations;
     private bool _isVerifying;
     private bool _isSaving;
     private bool _showApiKey;
@@ -548,7 +612,7 @@
         _selectedProvider = opts.ProviderType;
         _maxConcurrentTasks = Math.Clamp(opts.MaxConcurrentInferenceTasks, LlmProviderOptions.MinConcurrentInferenceTasks, LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
         _initialMaxConcurrentTasks = _maxConcurrentTasks;
-        _ollamaEndpoint = !string.IsNullOrWhiteSpace(opts.Endpoint) ? opts.Endpoint : "http://localhost:11434";
+        _ollamaEndpoint = !string.IsNullOrWhiteSpace(opts.Endpoint) ? opts.Endpoint : LlmProviderOptions.DefaultEndpoint;
         _openAiEndpoint = !string.IsNullOrWhiteSpace(opts.OpenAiCompatible?.Endpoint) ? opts.OpenAiCompatible.Endpoint : "https://api.openai.com/v1";
         _openAiApiKeyInput = string.Empty;
         _openAiOrgId = opts.OpenAiCompatible?.OrganizationId ?? "";
@@ -728,10 +792,83 @@
         _allowedModels = models;
     }
 
-    private string GetRouterMonitorUrl()
+    private async Task SyncRecommendedModelsAsync()
     {
-        var baseUrl = _status?.BaseUrl;
-        return string.IsNullOrWhiteSpace(baseUrl) ? "/monitor" : $"{baseUrl.TrimEnd('/')}/monitor";
+        if (_isSyncingRecommendations || _isSaving)
+        {
+            return;
+        }
+
+        if (GatewayService.ProviderType != LlmProviderType.OllamaRouter)
+        {
+            ToastService.Show(
+                "Restart Required",
+                "Save settings and restart NightCodeForge with OllamaRouter active before syncing recommended models.",
+                ToastLevel.Warning);
+            return;
+        }
+
+        _isSyncingRecommendations = true;
+        try
+        {
+            var endpointOverride = string.IsNullOrWhiteSpace(_ollamaEndpoint)
+                ? null
+                : OllamaRouterRecommendationMapper.NormalizeEndpoint(_ollamaEndpoint);
+
+            if (OllamaRouterGatewayUiHelper.RequiresEndpointRestart(endpointOverride, LlmOptions.Value.Endpoint))
+            {
+                ToastService.Show(
+                    "Restart Required",
+                    "Save settings and restart NightCodeForge to apply the updated OllamaRouter endpoint before syncing recommended models.",
+                    ToastLevel.Warning);
+                return;
+            }
+
+            var dto = await GatewayService.GetRecommendationsAsync();
+            if (dto is null)
+            {
+                ToastService.Show(
+                    "OllamaRouter Unreachable",
+                    "Could not retrieve recommendations from /api/router/recommendations. Ensure OllamaRouter is running.",
+                    ToastLevel.Warning);
+                return;
+            }
+
+            var mapped = OllamaRouterRecommendationMapper.Map(dto);
+            if (!mapped.HasRecommendations)
+            {
+                ToastService.Show(
+                    "No Recommendations Available",
+                    "OllamaRouter returned no calibrated role recommendations. Run the Router Setup Wizard to benchmark models first.",
+                    ToastLevel.Warning);
+                return;
+            }
+
+            await ConfigurationWriter.SaveProviderConfigurationAsync(
+                opts => OllamaRouterRecommendationMapper.ApplyToOptions(opts, mapped, endpointOverride));
+
+            _defaultModelId = mapped.DefaultModelId ?? string.Empty;
+            _architectModelId = mapped.ArchitectModelId ?? string.Empty;
+            _coderModelId = mapped.CoderModelId ?? string.Empty;
+            _differentiateRoles = mapped.ShouldDifferentiateRoles;
+            if (endpointOverride is not null)
+            {
+                _ollamaEndpoint = endpointOverride;
+            }
+
+            ToastService.Show(
+                "Recommended Models Synced",
+                OllamaRouterGatewayUiHelper.FormatSyncedModelsSummary(mapped),
+                ToastLevel.Success);
+        }
+        catch (Exception ex)
+        {
+            ToastService.Show("Recommendation Sync Error", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isSyncingRecommendations = false;
+        }
     }
 
     public async Task RefreshAsync()
@@ -845,17 +982,27 @@
 
     private async Task SaveSettingsAsync()
     {
+        if (_isSaving || _isSyncingRecommendations)
+        {
+            return;
+        }
+
         _isSaving = true;
         try
         {
             _maxConcurrentTasks = Math.Clamp(_maxConcurrentTasks, LlmProviderOptions.MinConcurrentInferenceTasks, LlmProviderOptions.MaxConcurrentInferenceTasksLimit);
 
+            string? normalizedOllamaEndpoint = null;
             if (_selectedProvider == LlmProviderType.OpenAiCompatible)
             {
                 var keyOutcome = ApiKeySettingsUi.ApplyOpenAiApiKeyInput(_openAiEndpoint, _openAiApiKeyInput);
                 _openAiApiKeyInput = string.Empty;
                 _showApiKey = false;
                 _openAiCredentialStatus = keyOutcome.UpdatedStatus;
+            }
+            else
+            {
+                normalizedOllamaEndpoint = OllamaRouterRecommendationMapper.NormalizeEndpoint(_ollamaEndpoint);
             }
 
             await ConfigurationWriter.SaveProviderConfigurationAsync(opts =>
@@ -871,24 +1018,26 @@
                 }
                 else
                 {
-                    opts.Endpoint = _ollamaEndpoint;
+                    opts.Endpoint = normalizedOllamaEndpoint!;
                 }
 
-                opts.DefaultModelId = string.IsNullOrWhiteSpace(_defaultModelId) ? null : _defaultModelId;
-                if (_selectedProvider == LlmProviderType.OpenAiCompatible)
+                opts.DefaultModelId = string.IsNullOrWhiteSpace(_defaultModelId) ? null : _defaultModelId.Trim();
+                if (_differentiateRoles)
                 {
-                    if (_differentiateRoles)
-                    {
-                        opts.CoderModelId = string.IsNullOrWhiteSpace(_coderModelId) ? null : _coderModelId;
-                        opts.ArchitectModelId = string.IsNullOrWhiteSpace(_architectModelId) ? null : _architectModelId;
-                    }
-                    else
-                    {
-                        opts.CoderModelId = null;
-                        opts.ArchitectModelId = null;
-                    }
+                    opts.CoderModelId = string.IsNullOrWhiteSpace(_coderModelId) ? null : _coderModelId.Trim();
+                    opts.ArchitectModelId = string.IsNullOrWhiteSpace(_architectModelId) ? null : _architectModelId.Trim();
+                }
+                else
+                {
+                    opts.CoderModelId = null;
+                    opts.ArchitectModelId = null;
                 }
             });
+
+            if (normalizedOllamaEndpoint is not null)
+            {
+                _ollamaEndpoint = normalizedOllamaEndpoint;
+            }
 
             if (_selectedProvider == LlmProviderType.OpenAiCompatible)
             {
