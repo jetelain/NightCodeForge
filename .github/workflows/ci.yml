@@ -132,6 +132,7 @@ jobs:
         env:
           VERSION: ${{ needs.build-and-test.outputs.version }}
           RID: ${{ matrix.rid }}
+          SixLaborsLicenseKey: ${{secrets.SixLaborsLicenseKey}}
         run: |
           set -euo pipefail
           mkdir -p ./dist/web ./dist/web/bin ./dist/launcher ./dist/setup ./artifacts
@@ -209,9 +210,7 @@ jobs:
           find ./dist/setup \( -name '*.pdb' -o -name '*.dbg' \) -type f -delete
           find ./dist/setup -type d -name '*.dSYM' -prune -exec rm -rf {} +
           cp README.md LICENSE ./dist/setup/
-        env:
-          SixLaborsLicenseKey: ${{secrets.SixLaborsLicenseKey}}
-          
+
       - name: Package zip archives & SHA256SUMS (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
