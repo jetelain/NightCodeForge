@@ -52,7 +52,7 @@ jobs:
           SixLaborsLicenseKey: ${{secrets.SixLaborsLicenseKey}}
 
       - name: Run unit & integration tests
-        run: dotnet test NightCodeForge.slnx -c Release --no-build --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
+        run: dotnet test NightCodeForge.slnx -c Release --no-build -m:1 --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
 
       - name: Pack NightCodeForge.Cli NuGet tool
         run: dotnet pack src/NightCodeForge.Cli/NightCodeForge.Cli.csproj -c Release --no-build -p:Version=${{ env.VERSION }} -o ./artifacts/nuget
@@ -86,7 +86,7 @@ jobs:
           SixLaborsLicenseKey: ${{secrets.SixLaborsLicenseKey}}
           
       - name: Run unit & integration tests (Linux)
-        run: dotnet test NightCodeForge.slnx -c Release --no-build --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
+        run: dotnet test NightCodeForge.slnx -c Release --no-build -m:1 --filter "Category!=Acceptance&Category!=E2E" --verbosity normal
 
   publish:
     name: Publish (${{ matrix.rid }})
