@@ -218,7 +218,7 @@ public static class WorkspaceUrlHelper
         queryAndFragment = string.Empty;
         var working = input;
 
-        if (Uri.TryCreate(working, UriKind.Absolute, out var absoluteUri))
+        if (Uri.TryCreate(working, UriKind.Absolute, out var absoluteUri) && !absoluteUri.IsFile)
         {
             working = absoluteUri.PathAndQuery + absoluteUri.Fragment;
         }

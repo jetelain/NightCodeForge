@@ -238,7 +238,8 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             rootLeaf.StartsWith("task-", StringComparison.OrdinalIgnoreCase) ||
             rootLeaf.StartsWith("wt-", StringComparison.OrdinalIgnoreCase))
         {
-            parentDir = Path.GetDirectoryName(normRoot) ?? normRoot;
+            var lastSlash = normRoot.LastIndexOf('/');
+            parentDir = lastSlash > 0 ? normRoot[..lastSlash] : normRoot;
         }
         else
         {
@@ -267,7 +268,19 @@ public partial class WorkspacePathResolver : IWorkspacePathResolver
             {
                 var cleanBase = baseDir.Replace('\\', '/').TrimEnd('/');
                 var cleanSub = subPath.Replace('\\', '/').TrimStart('/');
-                return $"{cleanBase}/{cleanSub}";
+                var combined = $"{cleanBase}/{cleanSub}";
+                if (!OperatingSystem.IsWindows() && cleanBase.StartsWith('/') && !cleanBase.StartsWith("//"))
+                {
+                    try
+                    {
+                        return Path.GetFullPath(combined);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+                    {
+                        // Retain unnormalized path when non-standard characters prevent Path.GetFullPath
+                    }
+                }
+                return combined;
             }
 
             return Path.GetFullPath(Path.Combine(baseDir, subPath));

@@ -10,6 +10,22 @@ public class GitHubTokenStoreTests : IDisposable
 {
     private const string TestPackage = "NightCodeForge.Tests";
     private const string TestService = "GitHubAppOAuth";
+    private static readonly Lazy<bool> OsKeyringAvailable = new(() =>
+    {
+        try
+        {
+            Keyring.GetPassword(TestPackage, TestService, $"probe-{Guid.NewGuid():N}");
+            return true;
+        }
+        catch (KeyringException ex) when (ex.Type == ErrorType.NotFound)
+        {
+            return true;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or TypeInitializationException or AggregateException or KeyringException or PlatformNotSupportedException)
+        {
+            return false;
+        }
+    });
     private readonly string _testUsername;
 
     public GitHubTokenStoreTests()
@@ -19,6 +35,11 @@ public class GitHubTokenStoreTests : IDisposable
 
     public void Dispose()
     {
+        if (!OsKeyringAvailable.Value)
+        {
+            return;
+        }
+
         try
         {
             Keyring.DeletePassword(TestPackage, TestService, _testUsername);
@@ -32,6 +53,7 @@ public class GitHubTokenStoreTests : IDisposable
     [Fact]
     public async Task GetTokenAsync_WhenEntryDoesNotExist_ReturnsNull()
     {
+        if (!OsKeyringAvailable.Value) return;
         var store = new GitHubTokenStore(TestPackage, TestService, _testUsername);
 
         var token = await store.GetTokenAsync();
@@ -43,6 +65,7 @@ public class GitHubTokenStoreTests : IDisposable
     [Fact]
     public async Task SaveTokenAsync_And_GetTokenAsync_RoundTripsPayloadInOsKeyring()
     {
+        if (!OsKeyringAvailable.Value) return;
         var store = new GitHubTokenStore(TestPackage, TestService, _testUsername);
         var payload = new GitHubOAuthTokenPayload
         {
@@ -79,6 +102,7 @@ public class GitHubTokenStoreTests : IDisposable
     [Fact]
     public async Task GetTokenAsync_WhenStoredJsonIsCorrupted_ThrowsGitHubAuthenticationException()
     {
+        if (!OsKeyringAvailable.Value) return;
         var store = new GitHubTokenStore(TestPackage, TestService, _testUsername);
         Keyring.SetPassword(TestPackage, TestService, _testUsername, "{not-valid-json");
 
@@ -88,6 +112,7 @@ public class GitHubTokenStoreTests : IDisposable
     [Fact]
     public async Task GetTokenAsync_WhenStoredPayloadHasEmptyAccessToken_ThrowsGitHubAuthenticationException()
     {
+        if (!OsKeyringAvailable.Value) return;
         var store = new GitHubTokenStore(TestPackage, TestService, _testUsername);
         Keyring.SetPassword(TestPackage, TestService, _testUsername, "{\"AccessToken\":\"\"}");
 
@@ -97,6 +122,7 @@ public class GitHubTokenStoreTests : IDisposable
     [Fact]
     public async Task ClearTokenAsync_DeletesStoredCredentialFromKeyring()
     {
+        if (!OsKeyringAvailable.Value) return;
         var store = new GitHubTokenStore(TestPackage, TestService, _testUsername);
         var payload = new GitHubOAuthTokenPayload
         {

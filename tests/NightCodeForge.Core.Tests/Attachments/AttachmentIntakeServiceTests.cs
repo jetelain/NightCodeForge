@@ -302,11 +302,11 @@ public class AttachmentIntakeServiceTests : IDisposable
         _processRunnerMock.Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
             .Callback<ProcessStartSpec, CancellationToken>((spec, _) =>
             {
-                if (spec.ArgumentList?.Contains("ln") == true)
+                if (string.Equals(spec.FileName, "ln", StringComparison.Ordinal) || spec.ArgumentList?.Contains("ln") == true)
                 {
                     capturedSymlinkSpec = spec;
                 }
-                else if (spec.ArgumentList?.Contains("rm") == true)
+                else if (string.Equals(spec.FileName, "rm", StringComparison.Ordinal) || spec.ArgumentList?.Contains("rm") == true)
                 {
                     capturedUnlinkSpec = spec;
                 }
@@ -327,7 +327,7 @@ public class AttachmentIntakeServiceTests : IDisposable
 
         // Verify POSIX ln -sfn was invoked via IProcessRunner (and no NTFS symlink or host companion was created)
         Assert.NotNull(capturedSymlinkSpec);
-        Assert.Contains("ln", capturedSymlinkSpec!.ArgumentList!);
+        Assert.True(string.Equals(capturedSymlinkSpec!.FileName, "ln", StringComparison.Ordinal) || capturedSymlinkSpec.ArgumentList!.Contains("ln"));
         Assert.Contains("-sfn", capturedSymlinkSpec.ArgumentList!);
         Assert.Contains(expectedWslSource, capturedSymlinkSpec.ArgumentList!);
 

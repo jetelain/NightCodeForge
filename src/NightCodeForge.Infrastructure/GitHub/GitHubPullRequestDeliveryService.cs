@@ -875,7 +875,7 @@ public partial class GitHubPullRequestDeliveryService : IGitHubPullRequestDelive
             return true;
         }
 
-        if ((workspace.ExecutionMode == ExecutionMode.ContainerSandbox || RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) &&
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
             (path.StartsWith('/') || path.StartsWith('~')))
         {
             return true;

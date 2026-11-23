@@ -221,13 +221,16 @@ public sealed class MemoryPromptAndNotificationTests : IDisposable
     {
         var events = new List<AgentActivityEvent>();
         using var cts = new CancellationTokenSource();
+        await using var enumerator = streamer.SubscribeAsync(cancellationToken: cts.Token).GetAsyncEnumerator(cts.Token);
+        var nextTask = enumerator.MoveNextAsync().AsTask();
         var reader = Task.Run(async () =>
         {
             try
             {
-                await foreach (var e in streamer.SubscribeAsync(cancellationToken: cts.Token))
+                while (await nextTask.ConfigureAwait(false))
                 {
-                    events.Add(e);
+                    events.Add(enumerator.Current);
+                    nextTask = enumerator.MoveNextAsync().AsTask();
                 }
             }
             catch (OperationCanceledException)
@@ -235,9 +238,8 @@ public sealed class MemoryPromptAndNotificationTests : IDisposable
                 // Expected: the test stops listening.
             }
         });
-        await Task.Delay(50);
         await act();
-        await Task.Delay(100);
+        await Task.Delay(150);
         await cts.CancelAsync();
         await reader;
         return events;

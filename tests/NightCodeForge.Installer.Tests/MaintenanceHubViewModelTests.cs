@@ -205,7 +205,7 @@ public sealed class MaintenanceHubViewModelTests
     [Fact]
     public async Task MaintenanceHub_ExplicitInstallDirPreserved_SourceSwitchClearsStaleUpdates_AndFailedStopKeepsRunningState()
     {
-        const string explicitDir = @"C:\CustomNCF";
+        var explicitDir = OperatingSystem.IsWindows() ? @"C:\CustomNCF" : "/opt/custom-ncf";
         var discovery = CreateInstalledDiscovery(isLegacy: false);
         var detector = new Mock<IInstallationDetector>();
         detector.Setup(d => d.Detect(It.IsAny<string?>(), It.IsAny<string?>())).Returns(discovery);
