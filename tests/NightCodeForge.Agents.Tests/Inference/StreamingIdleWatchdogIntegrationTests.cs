@@ -296,18 +296,14 @@ public class StreamingIdleWatchdogIntegrationTests
     [Fact]
     public async Task ScenarioD_MidStreamPauseExceedsIdleTimeout_UnblocksReadLineAsync_AndThrowsEnrichedTimeout()
     {
-        var firstTokenTimeout = TimeSpan.FromMilliseconds(400);
+        var firstTokenTimeout = TimeSpan.FromSeconds(5);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(150);
         var stream = new ChannelStream();
 
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(50);
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t1"},"done":false}""");
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t2"},"done":false}""");
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t3"},"done":false}""");
-            // Do NOT complete or push any more chunks: holds stream open indefinitely
-        });
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t1"},"done":false}""");
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t2"},"done":false}""");
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t3"},"done":false}""");
+        // Do NOT complete or push any more chunks: holds stream open indefinitely
 
         var innerHandler = new ChunkedStreamingHandler((req, ct) =>
         {
