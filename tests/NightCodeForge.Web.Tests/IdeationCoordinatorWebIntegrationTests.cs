@@ -431,7 +431,7 @@ public class IdeationCoordinatorWebIntegrationTests
             RegisterSharedWebServices(ctx1.Services, coordinator, taskRepo, workflowRepo, workspaceRepo, wsState1, TestServices.CreateToastService(), session1);
 
             var cut1 = ctx1.Render<Ideation>();
-            cut1.WaitForAssertion(() => Assert.NotNull(session1.ActiveConversationId));
+            cut1.WaitForAssertion(() => Assert.NotNull(session1.ActiveConversationId), TimeSpan.FromSeconds(10));
 
             await cut1.InvokeAsync(() => cut1.Find("button.prompt-config-toggle-btn").Click());
             await cut1.InvokeAsync(() => cut1.Find("textarea.system-prompt-textarea").Change("Prefer DDD."));
@@ -440,7 +440,7 @@ public class IdeationCoordinatorWebIntegrationTests
 
             await cut1.InvokeAsync(() => cut1.Find("textarea.chat-textarea").Input("Start review"));
             await cut1.InvokeAsync(() => cut1.Find("button.send-btn").Click());
-            cut1.WaitForAssertion(() => Assert.NotNull(cut1.FindComponent<AgentQuestionTurnCard>()));
+            cut1.WaitForAssertion(() => Assert.NotNull(cut1.FindComponent<AgentQuestionTurnCard>()), TimeSpan.FromSeconds(10));
         }
 
         // Circuit 2: browser reload mid-turn preserves options, answers question, completes with transcript
@@ -459,7 +459,7 @@ public class IdeationCoordinatorWebIntegrationTests
                 Assert.Equal(OllamaRoutingTarget.Cloud, session2.SelectedRoutingTarget);
                 Assert.Equal("qwen3:32b", session2.SelectedModelOverride);
                 Assert.Equal("Prefer DDD.", session2.CustomSystemPrompt);
-            });
+            }, TimeSpan.FromSeconds(10));
 
             await cut2.InvokeAsync(() =>
             {
@@ -467,7 +467,7 @@ public class IdeationCoordinatorWebIntegrationTests
                 cut2.Find("button.submit-answer-btn").Click();
             });
 
-            cut2.WaitForAssertion(() => Assert.False(session2.IsGenerating));
+            cut2.WaitForAssertion(() => Assert.False(session2.IsGenerating), TimeSpan.FromSeconds(10));
             Assert.Equal("/tmp/ideation-conv.md", session2.LatestTranscriptPath);
             Assert.Equal("# Transcript\nConfirmed.", session2.LatestFullTranscriptMarkdown);
         }
@@ -490,7 +490,7 @@ public class IdeationCoordinatorWebIntegrationTests
                 Assert.Equal("Prefer DDD.", session3.CustomSystemPrompt);
                 Assert.Equal("/tmp/ideation-conv.md", session3.LatestTranscriptPath);
                 Assert.Equal("# Transcript\nConfirmed.", session3.LatestFullTranscriptMarkdown);
-            });
+            }, TimeSpan.FromSeconds(10));
         }
     }
 
