@@ -369,4 +369,458 @@ public class CrucibleConversationCoordinatorTests : IDisposable
         Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, transcripts, null!, logger));
         Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, transcripts, gateway, null!));
     }
+
+    [Fact]
+    public void BuildTranscriptEntries_PreservesRealPerTurnTimestamps_InMonotonicOrder()
+    {
+        var t0 = new DateTime(2026, 11, 24, 10, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddSeconds(5);
+        var t2 = t0.AddSeconds(8);
+        var t3 = t0.AddSeconds(14);
+        var t4 = t0.AddSeconds(21);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Inspect codebase"),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new TextReasoningContent("Let me read Program.cs"),
+                new FunctionCallContent("c1", CanonicalToolNames.Read, new Dictionary<string, object?> { ["path"] = "Program.cs" })
+            }),
+            new(ChatRole.Tool, new List<AIContent> { new FunctionResultContent("c1", "class Program {}") }),
+            new(ChatRole.Assistant, "Done.")
+        };
+
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Timestamp = t0 },
+            new() { TurnIndex = 1, Role = StageTurnRole.Thinking, Timestamp = t1 },
+            new() { TurnIndex = 2, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t2 },
+            new() { TurnIndex = 3, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t3 },
+            new() { TurnIndex = 4, Role = StageTurnRole.Assistant, Timestamp = t4 }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            chatHistory,
+            trackedTurns: trackedTurns,
+            stageStartedAtUtc: t0);
+
+        Assert.Equal(5, entries.Count);
+        Assert.Equal(t0, entries[0].Timestamp);
+        Assert.Equal(t1, entries[1].Timestamp);
+        Assert.Equal(t2, entries[2].Timestamp);
+        Assert.Equal(t3, entries[3].Timestamp);
+        Assert.Equal(t4, entries[4].Timestamp);
+
+        for (int i = 1; i < entries.Count; i++)
+        {
+            Assert.True(entries[i].Timestamp >= entries[i - 1].Timestamp);
+        }
+    }
+
+    [Fact]
+    public async Task SaveTranscript_WithInMemoryAndDatabaseCoordinators_RendersNonZeroElapsedOffsets()
+    {
+        var t0 = new DateTime(2026, 11, 24, 12, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddSeconds(7);
+        var t2 = t0.AddSeconds(19);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Start stage"),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new FunctionCallContent("call-1", CanonicalToolNames.Bash, new Dictionary<string, object?> { ["command"] = "dotnet test" })
+            }),
+            new(ChatRole.Tool, new List<AIContent> { new FunctionResultContent("call-1", "Passed") }),
+            new(ChatRole.Assistant, "All green.")
+        };
+
+        // 1. InMemoryCrucibleConversationCoordinator path
+        var inMemDir = Path.Combine(_tempDir, "inmem-transcripts");
+        var targetPath = Path.Combine(inMemDir, "transcript.md");
+        var capture = new InMemoryConversationCapture(targetPath);
+        var inMemCoordinator = new InMemoryCrucibleConversationCoordinator(
+            new SessionTranscriptService(inMemDir),
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+        var context = StageContext(88, workspace: new Workspace { Id = 1, RepositoryPath = _tempDir });
+
+        using (InMemoryCrucibleConversationCoordinator.BeginCapture(capture))
+        {
+            var state = await inMemCoordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+            await state.DrainAsync();
+            state.Conversation.StartedAt = t0;
+            var turns = state.GetTrackedTurnsSnapshot();
+            turns[0].Timestamp = t0;
+            state.TrackPersistedTurn(new ConversationTurn
+            {
+                Id = 9001,
+                TurnIndex = 1,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Bash,
+                MetadataJson = "{\"CallId\":\"call-1\"}",
+                Timestamp = t1
+            });
+            state.TrackPersistedTurn(new ConversationTurn
+            {
+                Id = 9002,
+                TurnIndex = 2,
+                Role = StageTurnRole.ToolResult,
+                ToolName = CanonicalToolNames.Bash,
+                MetadataJson = "{\"CallId\":\"call-1\"}",
+                Timestamp = t1.AddSeconds(3)
+            });
+            state.TrackPersistedTurn(new ConversationTurn
+            {
+                Id = 9003,
+                TurnIndex = 3,
+                Role = StageTurnRole.Assistant,
+                Timestamp = t2
+            });
+
+            await inMemCoordinator.SaveTranscriptAsync(
+                state,
+                new CrucibleTranscriptRequest(context, _tempDir, chatHistory, 19_000, 10, 5, AgentRunStatus.Completed, "done", null, null, null),
+                CancellationToken.None);
+        }
+
+        var inMemMarkdown = await File.ReadAllTextAsync(targetPath);
+        Assert.Contains("### [ 00:00 ]", inMemMarkdown);
+        Assert.Contains("### [ 00:07 ]", inMemMarkdown);
+        Assert.Contains("### [ 00:10 ]", inMemMarkdown);
+        Assert.Contains("### [ 00:19 ]", inMemMarkdown);
+
+        // 2. Database CrucibleConversationCoordinator path
+        var dbDir = Path.Combine(_tempDir, "db-transcripts");
+        var repository = new InMemoryTaskRepository();
+        var dbCoordinator = CreateCoordinator(repository, new SessionTranscriptService(dbDir));
+        var dbState = await dbCoordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+        dbState.Conversation.StartedAt = t0;
+        dbState.GetTrackedTurnsSnapshot()[0].Timestamp = t0;
+        dbState.TrackPersistedTurn(new ConversationTurn
+        {
+            Id = 9101,
+            TurnIndex = 1,
+            Role = StageTurnRole.Tool,
+            ToolName = CanonicalToolNames.Bash,
+            MetadataJson = "{\"CallId\":\"call-1\"}",
+            Timestamp = t1
+        });
+        dbState.TrackPersistedTurn(new ConversationTurn
+        {
+            Id = 9102,
+            TurnIndex = 2,
+            Role = StageTurnRole.ToolResult,
+            ToolName = CanonicalToolNames.Bash,
+            MetadataJson = "{\"CallId\":\"call-1\"}",
+            Timestamp = t1.AddSeconds(3)
+        });
+        dbState.TrackPersistedTurn(new ConversationTurn
+        {
+            Id = 9103,
+            TurnIndex = 3,
+            Role = StageTurnRole.Assistant,
+            Timestamp = t2
+        });
+
+        var fileName = await dbCoordinator.SaveTranscriptAsync(
+            dbState,
+            new CrucibleTranscriptRequest(context, _tempDir, chatHistory, 19_000, 10, 5, AgentRunStatus.Completed, "done", null, null, null),
+            CancellationToken.None);
+        var dbMarkdown = await File.ReadAllTextAsync(Path.Combine(_tempDir, "docs", "transcripts", fileName!));
+
+        Assert.Contains("### [ 00:00 ]", dbMarkdown);
+        Assert.Contains("### [ 00:07 ]", dbMarkdown);
+        Assert.Contains("### [ 00:10 ]", dbMarkdown);
+        Assert.Contains("### [ 00:19 ]", dbMarkdown);
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_WithOnlyChatMessageCreatedAt_PreservesHistoricalTimestamps()
+    {
+        var t0 = new DateTimeOffset(2024, 3, 15, 8, 30, 0, TimeSpan.Zero);
+        var t1 = t0.AddSeconds(12);
+        var t2 = t0.AddSeconds(25);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "First") { CreatedAt = t0 },
+            new(ChatRole.Assistant, [new FunctionCallContent("c1", CanonicalToolNames.Read)]) { CreatedAt = t1 },
+            new(ChatRole.Assistant, "Final") { CreatedAt = t2 }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(chatHistory);
+
+        Assert.Equal(3, entries.Count);
+        Assert.Equal(t0.UtcDateTime, entries[0].Timestamp);
+        Assert.Equal(t1.UtcDateTime, entries[1].Timestamp);
+        Assert.Equal(t2.UtcDateTime, entries[2].Timestamp);
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_AssistantTextWithToolCall_DoesNotStealFutureAssistantTimestamp()
+    {
+        var t0 = new DateTime(2026, 11, 24, 10, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddSeconds(4);
+        var t2 = t0.AddSeconds(9);
+        var t3 = t0.AddSeconds(15);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Go"),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new TextContent("Calling tool now..."),
+                new FunctionCallContent("c1", CanonicalToolNames.Read)
+            }),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", "ok")]),
+            new(ChatRole.Assistant, "All done")
+        };
+
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Timestamp = t0 },
+            new() { TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t1 },
+            new() { TurnIndex = 2, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t2 },
+            new() { TurnIndex = 3, Role = StageTurnRole.Assistant, Timestamp = t3 }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(chatHistory, trackedTurns: trackedTurns, stageStartedAtUtc: t0);
+
+        Assert.Equal(4, entries.Count);
+        Assert.Equal(t0, entries[0].Timestamp);
+        Assert.Equal(t1, entries[1].Timestamp);
+        Assert.Equal(t2, entries[2].Timestamp);
+        Assert.Equal(t3, entries[3].Timestamp);
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_WithTracedEntriesFallback_UsesTrackedTurnsPrecedenceAndResolvesAllRoles()
+    {
+        var t0 = new DateTime(2026, 11, 24, 11, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddSeconds(3);
+        var t2 = t0.AddSeconds(6);
+        var t3 = t0.AddSeconds(10);
+        var t4 = t0.AddSeconds(14);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Run"),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new TextReasoningContent("Thinking..."),
+                new FunctionCallContent("c1", CanonicalToolNames.Bash)
+            }),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", "ok")]),
+            new(ChatRole.Assistant, "Done")
+        };
+
+        var tracedEntries = new List<TranscriptEntry>
+        {
+            new(t0, "USER", "Run"),
+            new(t1, "THINKING", "Thinking..."),
+            new(t2, "TOOL", string.Empty, CanonicalToolNames.Bash, CallId: "c1"),
+            new(t3, "TOOL_RESULT", string.Empty, CanonicalToolNames.Bash, CallId: "c1"),
+            new(t4, "ASSISTANT", "Done")
+        };
+
+        var fromTracedOnly = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            chatHistory,
+            tracedEntries: tracedEntries,
+            stageStartedAtUtc: t0);
+
+        Assert.Equal(5, fromTracedOnly.Count);
+        Assert.Equal([t0, t1, t2, t3, t4], fromTracedOnly.Select(e => e.Timestamp).ToArray());
+
+        // When trackedTurns provides a different timestamp for CallId "c1", trackedTurns takes precedence over tracedEntries.
+        var trackedOverrideTs = t2.AddSeconds(1);
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Bash, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = trackedOverrideTs }
+        };
+
+        var withBoth = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            chatHistory,
+            trackedTurns: trackedTurns,
+            tracedEntries: tracedEntries,
+            stageStartedAtUtc: t0);
+
+        Assert.Equal(trackedOverrideTs, withBoth[2].Timestamp);
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_WithCompactedEarlierToolTurn_DrainsStaleQueueWithoutStealingFutureTimestamps()
+    {
+        var t0 = new DateTime(2026, 11, 24, 13, 0, 0, DateTimeKind.Utc);
+        var tCompacted = t0.AddSeconds(2);
+        var tCall1 = t0.AddSeconds(10);
+        var tCall2 = t0.AddSeconds(20);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Continue"),
+            new(ChatRole.Assistant, [new FunctionCallContent("c1", CanonicalToolNames.Read)]),
+            new(ChatRole.Assistant, [new FunctionCallContent(string.Empty, CanonicalToolNames.Bash)])
+        };
+
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Timestamp = t0 },
+            new() { TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c0\"}", Timestamp = tCompacted },
+            new() { TurnIndex = 2, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = tCall1 },
+            new() { TurnIndex = 3, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Bash, Timestamp = tCall2 }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(chatHistory, trackedTurns: trackedTurns, stageStartedAtUtc: t0);
+
+        Assert.Equal(3, entries.Count);
+        Assert.Equal(t0, entries[0].Timestamp);
+        Assert.Equal(tCall1, entries[1].Timestamp);
+        Assert.Equal(tCall2, entries[2].Timestamp);
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_HostTurnTimestampsTakePrecedenceOverSkewedMessageCreatedAt_AndIgnoresUnixEpoch()
+    {
+        var t0 = new DateTime(2026, 11, 24, 14, 0, 0, DateTimeKind.Utc);
+        var skewedEarly = new DateTimeOffset(t0.AddSeconds(-20), TimeSpan.Zero);
+        var batchedToolMsgCreated = new DateTimeOffset(t0.AddSeconds(2), TimeSpan.Zero);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Run suite") { CreatedAt = DateTimeOffset.UnixEpoch },
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new TextReasoningContent("Planning two commands"),
+                new FunctionCallContent("c1", CanonicalToolNames.Bash),
+                new FunctionCallContent("c2", CanonicalToolNames.Read)
+            })
+            {
+                CreatedAt = skewedEarly
+            },
+            new(ChatRole.Tool, new List<AIContent>
+            {
+                new FunctionResultContent("c1", "ok-1"),
+                new FunctionResultContent("c2", "ok-2")
+            })
+            {
+                CreatedAt = batchedToolMsgCreated
+            }
+        };
+
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Run suite", Timestamp = t0 },
+            new() { TurnIndex = 1, Role = StageTurnRole.Thinking, ThinkingTrace = "Planning two commands", Timestamp = t0.AddSeconds(12) },
+            new() { TurnIndex = 2, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Bash, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t0.AddSeconds(13) },
+            new() { TurnIndex = 3, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c2\"}", Timestamp = t0.AddSeconds(14) },
+            new() { TurnIndex = 4, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Bash, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t0.AddSeconds(35) },
+            new() { TurnIndex = 5, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c2\"}", Timestamp = t0.AddSeconds(38) }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(chatHistory, trackedTurns: trackedTurns);
+
+        Assert.Equal(6, entries.Count);
+        Assert.Equal(
+            [t0, t0.AddSeconds(12), t0.AddSeconds(13), t0.AddSeconds(14), t0.AddSeconds(35), t0.AddSeconds(38)],
+            entries.Select(e => e.Timestamp).ToArray());
+    }
+
+    [Fact]
+    public void BuildTranscriptEntries_WithUnpersistedBootstrapUserPrompt_DoesNotStealLaterContinuationUserTimestamp()
+    {
+        var t0 = new DateTime(2026, 11, 24, 15, 0, 0, DateTimeKind.Utc);
+        var tTool = t0.AddSeconds(9);
+        var tResult = t0.AddSeconds(14);
+        var tNudge = t0.AddSeconds(25);
+        var tFinal = t0.AddSeconds(33);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, CrucibleConversationCoordinator.DefaultBootstrapPrompt),
+            new(ChatRole.Assistant, [new FunctionCallContent("c1", CanonicalToolNames.Read)]),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", "contents")]),
+            new(ChatRole.User, CrucibleAgentHarness.TruncationContinuationPrompt),
+            new(ChatRole.Assistant, "Completed.")
+        };
+
+        // Initial DefaultBootstrapPrompt was not persisted in trackedTurns, only the later continuation prompt.
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = tTool },
+            new() { TurnIndex = 1, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = tResult },
+            new() { TurnIndex = 2, Role = StageTurnRole.User, Content = CrucibleAgentHarness.TruncationContinuationPrompt, Timestamp = tNudge },
+            new() { TurnIndex = 3, Role = StageTurnRole.Assistant, Content = "Completed.", Timestamp = tFinal }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            chatHistory,
+            trackedTurns: trackedTurns,
+            stageStartedAtUtc: t0);
+
+        Assert.Equal(5, entries.Count);
+        Assert.Equal([t0, tTool, tResult, tNudge, tFinal], entries.Select(e => e.Timestamp).ToArray());
+    }
+
+    [Fact]
+    public async Task BuildTranscriptEntries_WithMidStageCompactionAndKeptRecentTurns_PreservesKeptAndPostCompactionTimestamps()
+    {
+        var t0 = new DateTime(2026, 11, 24, 16, 0, 0, DateTimeKind.Utc);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Implement feature"),
+            new(ChatRole.User, "[CONTEXT COMPACTION CHECKPOINT]\nSummarized earlier exploration."),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new TextReasoningContent("Kept recent reasoning"),
+                new FunctionCallContent("c2", CanonicalToolNames.Bash)
+            }),
+            new(ChatRole.Tool, [new FunctionResultContent("c2", "Build succeeded")]),
+            new(ChatRole.Assistant, "Feature complete.")
+        };
+
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Implement feature", Timestamp = t0 },
+            new() { TurnIndex = 1, Role = StageTurnRole.Thinking, ThinkingTrace = "Old compacted thought", Timestamp = t0.AddSeconds(5) },
+            new() { TurnIndex = 2, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t0.AddSeconds(6) },
+            new() { TurnIndex = 3, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = t0.AddSeconds(8) },
+            new() { TurnIndex = 4, Role = StageTurnRole.Assistant, Content = "Old interim note", Timestamp = t0.AddSeconds(12) },
+            new() { TurnIndex = 5, Role = StageTurnRole.Thinking, ThinkingTrace = "Kept recent reasoning", Timestamp = t0.AddSeconds(40) },
+            new() { TurnIndex = 6, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Bash, MetadataJson = "{\"CallId\":\"c2\"}", Timestamp = t0.AddSeconds(42) },
+            new() { TurnIndex = 7, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Bash, MetadataJson = "{\"CallId\":\"c2\"}", Timestamp = t0.AddSeconds(50) },
+            new() { TurnIndex = 8, Role = StageTurnRole.Optimization, Content = "[CONTEXT COMPACTION CHECKPOINT]\nSummarized earlier exploration.", Timestamp = t0.AddSeconds(55) },
+            new() { TurnIndex = 9, Role = StageTurnRole.Assistant, Content = "Feature complete.", Timestamp = t0.AddSeconds(65) }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            chatHistory,
+            trackedTurns: trackedTurns,
+            stageStartedAtUtc: t0);
+
+        Assert.Equal(6, entries.Count);
+        Assert.Equal(t0, entries[0].Timestamp);
+        Assert.Equal(t0.AddSeconds(40), entries[1].Timestamp); // Compaction divider capped at first kept turn
+        Assert.Equal(t0.AddSeconds(40), entries[2].Timestamp); // Kept recent Thinking
+        Assert.Equal(t0.AddSeconds(42), entries[3].Timestamp); // Kept recent Tool c2
+        Assert.Equal(t0.AddSeconds(50), entries[4].Timestamp); // Kept recent ToolResult c2
+        Assert.Equal(t0.AddSeconds(65), entries[5].Timestamp); // Post-compaction Assistant
+
+        // Also verify InMemoryCrucibleConversationCoordinator synthetic priming stamps CallId metadata
+        var inMemCoordinator = new InMemoryCrucibleConversationCoordinator(
+            new SessionTranscriptService(Path.Combine(_tempDir, "inmem-prime")),
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+        var primedContext = StageContext(
+            89,
+            priming: new SyntheticPrimingExecution("stage-1", CanonicalToolNames.Bash, "dotnet build", "ok", IsSuccess: true));
+        var primedState = await inMemCoordinator.BeginAsync(primedContext, StandardHarnessIds.Crucible, CancellationToken.None);
+        await primedState.DrainAsync();
+        var primedTurns = primedState.GetTrackedTurnsSnapshot();
+        var primedToolTurn = Assert.Single(primedTurns, t => t.Role == StageTurnRole.Tool);
+        var primedResultTurn = Assert.Single(primedTurns, t => t.Role == StageTurnRole.ToolResult);
+        var primeCallId = CrucibleConversationCoordinator.ExtractCallId(primedToolTurn);
+        Assert.False(string.IsNullOrWhiteSpace(primeCallId));
+        Assert.Equal(primeCallId, CrucibleConversationCoordinator.ExtractCallId(primedResultTurn));
+    }
 }

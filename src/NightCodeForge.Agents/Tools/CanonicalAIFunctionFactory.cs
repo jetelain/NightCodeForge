@@ -66,7 +66,9 @@ public static class CanonicalAIFunctionFactory
                     continue;
                 }
 
-                var moduleFunctions = module.CreateFunctions();
+                var moduleFunctions = module.CreateFunctions()
+                    .Select(DiagnosticBindingAIFunction.Wrap)
+                    .ToList();
                 dispatcher?.RegisterTools(moduleFunctions);
 
                 foreach (var fn in moduleFunctions)
@@ -97,6 +99,10 @@ public static class CanonicalAIFunctionFactory
         functions.AddRange(ResearchAndSkillsToolModule.CreateFunctions(tools?.ResearchAndSkillsModule));
         functions.AddRange(WorkflowInteractionToolModule.CreateFunctions(tools?.InteractionModule));
         functions.AddRange(BacklogManagementToolModule.CreateFunctions(tools?.BacklogModule));
+        for (int i = 0; i < functions.Count; i++)
+        {
+            functions[i] = DiagnosticBindingAIFunction.Wrap(functions[i]);
+        }
         return functions;
     }
 

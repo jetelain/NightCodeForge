@@ -110,6 +110,7 @@ public static class NightCodeForgeToolDispatcher
         return new LenientToolDispatcherOptions
         {
             EnableParameterCoercion = enableParameterCoercion,
+            UnwrapParameterEnvelopes = true,
             CommandValidator = NightCodeForge.Agents.Tools.ReadOnlyCommandValidator.Instance,
             ValidateTranslationsWithReadOnlyValidator = true,
             PropagatedParameters = new HashSet<string>(["replace_all", "replaceAll"], StringComparer.OrdinalIgnoreCase)

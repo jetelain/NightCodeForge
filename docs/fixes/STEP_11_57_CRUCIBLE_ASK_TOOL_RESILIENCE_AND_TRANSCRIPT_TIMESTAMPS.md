@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Agents`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Core`  
 > **Dependencies:** `Pmad.AI >= 0.0.6`, `WorkflowInteractionToolModule`, `LenientToolDispatcher`, `QuestionItem`, `CrucibleConversationCoordinator`, `SessionTranscriptService`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
@@ -47,8 +47,8 @@ Analysis of the `v1-smoke-Flint-latest-20261123-214242` transcripts exposed thre
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Upgrade `Pmad.AI` to `0.0.6` for built-in top-level `parameters` / `arguments` envelope unwrapping in `LenientToolDispatcher` (and project any new telemetry counter), with NightCodeForge regression tests verifying `ask` binding.
-- [ ] Support both `string` and `{label, description}` object entries for `QuestionItem.Options` in `ask` tool binding/parsing, with unit tests covering mixed/object/string payloads.
-- [ ] Replace opaque `"Error: Function failed."` binding failures with actionable schema/parameter diagnostics returned to the model, with unit tests.
-- [ ] Preserve and render real per-turn elapsed timestamps in Crucible transcripts (`CrucibleConversationCoordinator`, `InMemoryCrucibleConversationCoordinator`, `SessionTranscriptService`), with unit tests verifying monotonic non-zero timestamps.
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Upgrade `Pmad.AI` to `0.0.6` for built-in top-level `parameters` / `arguments` envelope unwrapping in `LenientToolDispatcher` (and project any new telemetry counter), with NightCodeForge regression tests verifying `ask` binding.
+- [x] Support both `string` and `{label, description}` object entries for `QuestionItem.Options` in `ask` tool binding/parsing, with unit tests covering mixed/object/string payloads.
+- [x] Replace opaque `"Error: Function failed."` binding failures with actionable schema/parameter diagnostics returned to the model, with unit tests.
+- [x] Preserve and render real per-turn elapsed timestamps in Crucible transcripts (`CrucibleConversationCoordinator`, `InMemoryCrucibleConversationCoordinator`, `SessionTranscriptService`), with unit tests verifying monotonic non-zero timestamps.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

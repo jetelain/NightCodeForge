@@ -152,6 +152,7 @@ public sealed record ToolCallTelemetryBreakdown
     public int CasingNormalized { get; init; }
     public int EnumValuesSnapped { get; init; }
     public int StringifiedJsonRepaired { get; init; }
+    public int ParameterEnvelopesUnwrapped { get; init; }
     public int OtherDispatcherRepairs { get; init; }
     public int CsNavBashCalls { get; init; }
     public int CodeCondenserBashCalls { get; init; }

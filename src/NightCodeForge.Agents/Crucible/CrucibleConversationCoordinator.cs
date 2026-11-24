@@ -246,6 +246,13 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
     private const string DocsFolder = "docs";
     private const string ForwardPassPrimingType = "ForwardPass";
     private const string LoopbackDiagnosticPrimingType = "LoopbackDiagnostic";
+    private const string UserTranscriptRole = "USER";
+    private const string ThinkingTranscriptRole = "THINKING";
+    private const string AssistantTranscriptRole = "ASSISTANT";
+    private const string ToolTranscriptRole = "TOOL";
+    private const string ToolResultTranscriptRole = "TOOL_RESULT";
+    private const string ToolErrorTranscriptRole = "TOOL_ERROR";
+    private const string OptimizationTranscriptRole = "OPTIMIZATION";
     private const string CompactionRole = "COMPACTION";
     private const string LegacyCompactionMarker = ConversationHistorySerializer.CompactionCheckpointHeader;
     private static readonly TimeSpan SessionTelemetryTimeout = TimeSpan.FromSeconds(5);
@@ -850,7 +857,11 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             var mafConfig = harnessOptions != null
                 ? MafConfigurationSummary.Build(harnessOptions, tracingClient?.DetectedMafConfiguration)
                 : null;
-            var entries = BuildTranscriptEntries(request.ChatHistory);
+            var entries = BuildTranscriptEntries(
+                request.ChatHistory,
+                trackedTurns: state.GetTrackedTurnsSnapshot(),
+                tracedEntries: tracingClient?.CapturedEntries,
+                stageStartedAtUtc: state.Conversation.StartedAt != default ? state.Conversation.StartedAt : null);
 
             TranscriptCompactionMetadata? compactionMeta = null;
             if (harnessOptions?.CompactionStrategy is PiStyleCrucibleCompactionStrategy piCompaction)
@@ -964,21 +975,26 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         }
     }
 
-    public static List<TranscriptEntry> BuildTranscriptEntries(IReadOnlyList<ChatMessage> chatHistory)
+    public static List<TranscriptEntry> BuildTranscriptEntries(
+        IReadOnlyList<ChatMessage> chatHistory,
+        IReadOnlyList<ConversationTurn>? trackedTurns = null,
+        IReadOnlyList<TranscriptEntry>? tracedEntries = null,
+        DateTime? stageStartedAtUtc = null)
     {
         var entries = new List<TranscriptEntry>();
-        var now = DateTime.UtcNow;
+        var timeline = TranscriptTimelineResolver.Create(chatHistory, trackedTurns, tracedEntries, stageStartedAtUtc);
         // Tool result messages only carry the call id: resolve it back to the name of the tool that was called.
         var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        foreach (var msg in chatHistory)
+        for (int msgIndex = 0; msgIndex < chatHistory.Count; msgIndex++)
         {
+            var msg = chatHistory[msgIndex];
             var role = msg.Role.Value;
             var text = msg.Text ?? string.Empty;
             var contents = msg.Contents ?? Array.Empty<AIContent>();
+            var messageCreatedAtUtc = ExtractValidMessageCreatedAtUtc(msg);
 
-            if (text.StartsWith(PiStyleCrucibleCompactionStrategy.CheckpointPreamble, StringComparison.Ordinal)
-                || text.StartsWith(LegacyCompactionMarker, StringComparison.Ordinal))
+            if (IsCompactionMessageText(text))
             {
                 role = CompactionRole;
             }
@@ -989,7 +1005,14 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                 var reasoning = string.Concat(contents.OfType<TextReasoningContent>().Select(r => r.Text));
                 if (!string.IsNullOrWhiteSpace(reasoning))
                 {
-                    entries.Add(new TranscriptEntry(now, "THINKING", reasoning));
+                    var thinkingTimestamp = timeline.NextTimestamp(
+                        TranscriptRoleKind.Thinking,
+                        callId: null,
+                        content: reasoning,
+                        messageCreatedAtUtc,
+                        chatHistory,
+                        msgIndex);
+                    entries.Add(new TranscriptEntry(thinkingTimestamp, ThinkingTranscriptRole, reasoning));
                 }
             }
 
@@ -1009,13 +1032,27 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                         ? JsonSerializer.Serialize(fc.Arguments, new JsonSerializerOptions { WriteIndented = true })
                         : null;
 
+                    var toolTimestamp = timeline.NextTimestamp(
+                        TranscriptRoleKind.ToolCall,
+                        callId: fc.CallId,
+                        content: i == 0 ? text : null,
+                        messageCreatedAtUtc,
+                        chatHistory,
+                        msgIndex);
+
+                    if (i == 0 && msg.Role == ChatRole.Assistant && !string.IsNullOrEmpty(text))
+                    {
+                        timeline.ConsumeOptionalUpTo(TranscriptRoleKind.Assistant, toolTimestamp);
+                    }
+
                     entries.Add(new TranscriptEntry(
-                        now,
+                        toolTimestamp,
                         role,
                         Content: i == 0 ? text : string.Empty,
                         ToolName: fc.Name,
                         ToolArguments: argsJson,
-                        ToolResult: null));
+                        ToolResult: null,
+                        CallId: fc.CallId));
                 }
             }
             else if (functionResults.Count > 0)
@@ -1023,21 +1060,43 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                 foreach (var fr in functionResults)
                 {
                     var resultStr = fr.Result?.ToString() ?? string.Empty;
+                    var resultTimestamp = timeline.NextTimestamp(
+                        TranscriptRoleKind.ToolResult,
+                        callId: fr.CallId,
+                        content: resultStr,
+                        messageCreatedAtUtc,
+                        chatHistory,
+                        msgIndex);
+
                     entries.Add(new TranscriptEntry(
-                        now,
+                        resultTimestamp,
                         role,
                         Content: string.Empty,
                         ToolName: fr.CallId != null && toolNamesByCallId.TryGetValue(fr.CallId, out var calledTool) ? calledTool : fr.CallId,
                         ToolArguments: null,
-                        ToolResult: resultStr));
+                        ToolResult: resultStr,
+                        CallId: fr.CallId));
                 }
             }
             else
             {
                 bool hasImages = contents.Any(c => c is DataContent dc && dc.HasTopLevelMediaType(VisionConstants.TopLevelImageMediaType));
                 var effectiveContent = hasImages ? ThinkingAndActivityTracingChatClient.DescribeMessage(msg) : text;
+                var roleKind = string.Equals(role, CompactionRole, StringComparison.Ordinal)
+                    ? TranscriptRoleKind.Compaction
+                    : (msg.Role == ChatRole.Assistant
+                        ? TranscriptRoleKind.Assistant
+                        : (msg.Role == ChatRole.User ? TranscriptRoleKind.User : TranscriptRoleKind.Other));
+                var entryTimestamp = timeline.NextTimestamp(
+                    roleKind,
+                    callId: null,
+                    content: effectiveContent,
+                    messageCreatedAtUtc,
+                    chatHistory,
+                    msgIndex);
+
                 entries.Add(new TranscriptEntry(
-                    now,
+                    entryTimestamp,
                     role,
                     Content: effectiveContent,
                     ToolName: null,
@@ -1047,6 +1106,595 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         }
 
         return entries;
+    }
+
+    private static bool IsCompactionMessageText(string? text) =>
+        !string.IsNullOrEmpty(text) &&
+        (text.StartsWith(PiStyleCrucibleCompactionStrategy.CheckpointPreamble, StringComparison.Ordinal) ||
+         text.StartsWith(LegacyCompactionMarker, StringComparison.Ordinal));
+
+    private static DateTime? ExtractValidMessageCreatedAtUtc(ChatMessage msg) =>
+        msg.CreatedAt.HasValue && msg.CreatedAt.Value > DateTimeOffset.UnixEpoch
+            ? msg.CreatedAt.Value.UtcDateTime
+            : null;
+
+    private enum TranscriptRoleKind
+    {
+        User,
+        Thinking,
+        Assistant,
+        ToolCall,
+        ToolResult,
+        Compaction,
+        Other
+    }
+
+    private enum TimelineSource
+    {
+        TrackedTurns,
+        TracedEntries
+    }
+
+    private readonly record struct RecordedTurnTimestamp(
+        TimelineSource Source,
+        int SequenceOrder,
+        DateTime TimestampUtc,
+        string? Content,
+        string? CallId);
+
+    private sealed class RoleTimestampStream(List<RecordedTurnTimestamp> items)
+    {
+        public List<RecordedTurnTimestamp> Items { get; } = items;
+        public int Cursor { get; set; }
+    }
+
+    private sealed class TranscriptTimelineResolver
+    {
+        private readonly Dictionary<string, RecordedTurnTimestamp> _toolCallTimestampsByCallId;
+        private readonly Dictionary<string, RecordedTurnTimestamp> _toolResultTimestampsByCallId;
+        private readonly RoleTimestampStream _userStream;
+        private readonly RoleTimestampStream _thinkingStream;
+        private readonly RoleTimestampStream _assistantStream;
+        private readonly RoleTimestampStream _toolCallStream;
+        private readonly RoleTimestampStream _toolResultStream;
+        private readonly RoleTimestampStream _compactionStream;
+        private DateTime _lastTimestamp;
+        private int _minTrackedSeq = -1;
+        private int _minTracedSeq = -1;
+
+        private TranscriptTimelineResolver(
+            DateTime baselineUtc,
+            Dictionary<string, RecordedTurnTimestamp> toolCallTimestampsByCallId,
+            Dictionary<string, RecordedTurnTimestamp> toolResultTimestampsByCallId,
+            RoleTimestampStream userStream,
+            RoleTimestampStream thinkingStream,
+            RoleTimestampStream assistantStream,
+            RoleTimestampStream toolCallStream,
+            RoleTimestampStream toolResultStream,
+            RoleTimestampStream compactionStream)
+        {
+            _lastTimestamp = baselineUtc;
+            _toolCallTimestampsByCallId = toolCallTimestampsByCallId;
+            _toolResultTimestampsByCallId = toolResultTimestampsByCallId;
+            _userStream = userStream;
+            _thinkingStream = thinkingStream;
+            _assistantStream = assistantStream;
+            _toolCallStream = toolCallStream;
+            _toolResultStream = toolResultStream;
+            _compactionStream = compactionStream;
+        }
+
+        public static TranscriptTimelineResolver Create(
+            IReadOnlyList<ChatMessage> chatHistory,
+            IReadOnlyList<ConversationTurn>? trackedTurns,
+            IReadOnlyList<TranscriptEntry>? tracedEntries,
+            DateTime? stageStartedAtUtc)
+        {
+            var orderedTurns = trackedTurns is { Count: > 0 }
+                ? trackedTurns.OrderBy(t => t.TurnIndex).ToList()
+                : new List<ConversationTurn>();
+
+            var toolCallByCallId = new Dictionary<string, RecordedTurnTimestamp>(StringComparer.Ordinal);
+            var toolResultByCallId = new Dictionary<string, RecordedTurnTimestamp>(StringComparer.Ordinal);
+            var userList = new List<RecordedTurnTimestamp>();
+            var thinkingList = new List<RecordedTurnTimestamp>();
+            var assistantList = new List<RecordedTurnTimestamp>();
+            var toolCallList = new List<RecordedTurnTimestamp>();
+            var toolResultList = new List<RecordedTurnTimestamp>();
+            var compactionList = new List<RecordedTurnTimestamp>();
+
+            int trackedSeq = 0;
+            foreach (var turn in orderedTurns)
+            {
+                if (turn.Timestamp == default)
+                {
+                    continue;
+                }
+
+                var ts = NormalizeUtc(turn.Timestamp);
+                int seq = trackedSeq++;
+                switch (turn.Role)
+                {
+                    case StageTurnRole.User:
+                        userList.Add(new RecordedTurnTimestamp(TimelineSource.TrackedTurns, seq, ts, turn.Content, null));
+                        break;
+                    case StageTurnRole.Thinking:
+                        thinkingList.Add(new RecordedTurnTimestamp(TimelineSource.TrackedTurns, seq, ts, turn.ThinkingTrace ?? turn.Content, null));
+                        break;
+                    case StageTurnRole.Assistant:
+                        assistantList.Add(new RecordedTurnTimestamp(TimelineSource.TrackedTurns, seq, ts, turn.Content, null));
+                        break;
+                    case StageTurnRole.Optimization:
+                        compactionList.Add(new RecordedTurnTimestamp(TimelineSource.TrackedTurns, seq, ts, turn.Content, null));
+                        break;
+                    case StageTurnRole.Tool:
+                        var toolCallId = ExtractCallId(turn);
+                        var toolRecord = new RecordedTurnTimestamp(TimelineSource.TrackedTurns, seq, ts, turn.Content, toolCallId);
+                        toolCallList.Add(toolRecord);
+                        if (!string.IsNullOrEmpty(toolCallId))
+                        {
+                            toolCallByCallId.TryAdd(toolCallId, toolRecord);
+                        }
+                        break;
+                    case StageTurnRole.ToolResult:
+                        var resultCallId = ExtractCallId(turn);
+                        var resultRecord = new RecordedTurnTimestamp(TimelineSource.TrackedTurns, seq, ts, turn.ToolResult ?? turn.Content, resultCallId);
+                        toolResultList.Add(resultRecord);
+                        if (!string.IsNullOrEmpty(resultCallId))
+                        {
+                            toolResultByCallId.TryAdd(resultCallId, resultRecord);
+                        }
+                        break;
+                }
+            }
+
+            if (tracedEntries is { Count: > 0 })
+            {
+                var tracedUsers = new List<RecordedTurnTimestamp>();
+                var tracedThinking = new List<RecordedTurnTimestamp>();
+                var tracedAssistant = new List<RecordedTurnTimestamp>();
+                var tracedToolCalls = new List<RecordedTurnTimestamp>();
+                var tracedToolResults = new List<RecordedTurnTimestamp>();
+                var tracedCompactions = new List<RecordedTurnTimestamp>();
+
+                int tracedSeq = 0;
+                foreach (var entry in tracedEntries)
+                {
+                    if (entry.Timestamp == default)
+                    {
+                        continue;
+                    }
+
+                    var ts = NormalizeUtc(entry.Timestamp);
+                    int seq = tracedSeq++;
+                    if (string.Equals(entry.Role, UserTranscriptRole, StringComparison.OrdinalIgnoreCase))
+                    {
+                        tracedUsers.Add(new RecordedTurnTimestamp(TimelineSource.TracedEntries, seq, ts, entry.Content, null));
+                    }
+                    else if (string.Equals(entry.Role, ThinkingTranscriptRole, StringComparison.OrdinalIgnoreCase))
+                    {
+                        tracedThinking.Add(new RecordedTurnTimestamp(TimelineSource.TracedEntries, seq, ts, entry.Content, null));
+                    }
+                    else if (string.Equals(entry.Role, AssistantTranscriptRole, StringComparison.OrdinalIgnoreCase))
+                    {
+                        tracedAssistant.Add(new RecordedTurnTimestamp(TimelineSource.TracedEntries, seq, ts, entry.Content, null));
+                    }
+                    else if (string.Equals(entry.Role, OptimizationTranscriptRole, StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(entry.Role, CompactionRole, StringComparison.OrdinalIgnoreCase))
+                    {
+                        tracedCompactions.Add(new RecordedTurnTimestamp(TimelineSource.TracedEntries, seq, ts, entry.Content, null));
+                    }
+                    else if (string.Equals(entry.Role, ToolTranscriptRole, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var record = new RecordedTurnTimestamp(TimelineSource.TracedEntries, seq, ts, entry.Content, entry.CallId);
+                        tracedToolCalls.Add(record);
+                        if (!string.IsNullOrEmpty(entry.CallId))
+                        {
+                            toolCallByCallId.TryAdd(entry.CallId, record);
+                        }
+                    }
+                    else if (string.Equals(entry.Role, ToolResultTranscriptRole, StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(entry.Role, ToolErrorTranscriptRole, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var record = new RecordedTurnTimestamp(TimelineSource.TracedEntries, seq, ts, entry.ToolResult ?? entry.Content, entry.CallId);
+                        tracedToolResults.Add(record);
+                        if (!string.IsNullOrEmpty(entry.CallId))
+                        {
+                            toolResultByCallId.TryAdd(entry.CallId, record);
+                        }
+                    }
+                }
+
+                if (userList.Count == 0 && tracedUsers.Count > 0)
+                {
+                    userList = tracedUsers;
+                }
+                if (thinkingList.Count == 0 && tracedThinking.Count > 0)
+                {
+                    thinkingList = tracedThinking;
+                }
+                if (assistantList.Count == 0 && tracedAssistant.Count > 0)
+                {
+                    assistantList = tracedAssistant;
+                }
+                if (toolCallList.Count == 0 && tracedToolCalls.Count > 0)
+                {
+                    toolCallList = tracedToolCalls;
+                }
+                if (toolResultList.Count == 0 && tracedToolResults.Count > 0)
+                {
+                    toolResultList = tracedToolResults;
+                }
+                if (compactionList.Count == 0 && tracedCompactions.Count > 0)
+                {
+                    compactionList = tracedCompactions;
+                }
+            }
+
+            var baseline = ResolveBaselineUtc(stageStartedAtUtc, chatHistory, orderedTurns, tracedEntries);
+            return new TranscriptTimelineResolver(
+                baseline,
+                toolCallByCallId,
+                toolResultByCallId,
+                new RoleTimestampStream(userList),
+                new RoleTimestampStream(thinkingList),
+                new RoleTimestampStream(assistantList),
+                new RoleTimestampStream(toolCallList),
+                new RoleTimestampStream(toolResultList),
+                new RoleTimestampStream(compactionList));
+        }
+
+        public void ConsumeOptionalUpTo(TranscriptRoleKind kind, DateTime maxTimestampUtc)
+        {
+            var stream = GetStream(kind);
+            if (stream == null)
+            {
+                return;
+            }
+
+            AdvancePastPruned(stream);
+            if (stream.Cursor < stream.Items.Count && stream.Items[stream.Cursor].TimestampUtc <= maxTimestampUtc)
+            {
+                stream.Cursor++;
+            }
+        }
+
+        public DateTime NextTimestamp(
+            TranscriptRoleKind kind,
+            string? callId,
+            string? content,
+            DateTime? messageCreatedAtUtc,
+            IReadOnlyList<ChatMessage> chatHistory,
+            int msgIndex)
+        {
+            DateTime? resolved = null;
+            var stream = GetStream(kind);
+
+            // 1. Host-recorded CallId lookup takes strict precedence over remote ChatMessage.CreatedAt.
+            if (!string.IsNullOrEmpty(callId))
+            {
+                if (kind == TranscriptRoleKind.ToolCall && _toolCallTimestampsByCallId.TryGetValue(callId, out var callRecord))
+                {
+                    resolved = callRecord.TimestampUtc;
+                    PruneBefore(callRecord.Source, callRecord.SequenceOrder);
+                    ConsumeStreamThroughRecord(stream, callRecord);
+                }
+                else if (kind == TranscriptRoleKind.ToolResult && _toolResultTimestampsByCallId.TryGetValue(callId, out var resRecord))
+                {
+                    resolved = resRecord.TimestampUtc;
+                    PruneBefore(resRecord.Source, resRecord.SequenceOrder);
+                    ConsumeStreamThroughRecord(stream, resRecord);
+                }
+            }
+
+            // 2. Host-recorded role stream (with content-aware alignment across compacted or unpersisted turns).
+            if (!resolved.HasValue && stream != null)
+            {
+                AdvancePastPruned(stream);
+                if (stream.Cursor < stream.Items.Count)
+                {
+                    var head = stream.Items[stream.Cursor];
+                    if (kind == TranscriptRoleKind.User &&
+                        !string.IsNullOrWhiteSpace(content) &&
+                        !string.IsNullOrWhiteSpace(head.Content) &&
+                        !ContentMatches(head.Content, content) &&
+                        LaterUserMessageMatches(chatHistory, msgIndex + 1, head.Content))
+                    {
+                        // Current message is an unpersisted earlier prompt (e.g. DefaultBootstrapPrompt);
+                        // keep head reserved for the matching later User turn so we do not steal its timestamp.
+                    }
+                    else
+                    {
+                        int matchIndex = stream.Cursor;
+                        if (kind is TranscriptRoleKind.Thinking or TranscriptRoleKind.Assistant or TranscriptRoleKind.User or TranscriptRoleKind.Compaction &&
+                            !string.IsNullOrWhiteSpace(content) &&
+                            !string.IsNullOrWhiteSpace(head.Content) &&
+                            !ContentMatches(head.Content, content))
+                        {
+                            for (int i = stream.Cursor + 1; i < stream.Items.Count; i++)
+                            {
+                                if (ContentMatches(stream.Items[i].Content, content))
+                                {
+                                    matchIndex = i;
+                                    break;
+                                }
+                            }
+                        }
+
+                        var chosen = stream.Items[matchIndex];
+                        stream.Cursor = matchIndex + 1;
+                        resolved = chosen.TimestampUtc;
+                        if (kind != TranscriptRoleKind.Compaction)
+                        {
+                            PruneBefore(chosen.Source, chosen.SequenceOrder);
+                        }
+                    }
+                }
+            }
+
+            // 3. Fallback to ChatMessage.CreatedAt when no host turn/trace timestamp was recorded.
+            resolved ??= messageCreatedAtUtc;
+
+            // 4. Compaction checkpoints sit synthetically before kept-recent messages in chatHistory even though
+            //    StageTurnRole.Optimization was persisted after those kept-recent turns executed. Cap the checkpoint's
+            //    positional timestamp at the earliest kept turn following it so kept turns retain real timestamps.
+            if (kind == TranscriptRoleKind.Compaction && resolved.HasValue && msgIndex + 1 < chatHistory.Count)
+            {
+                var nextFollowingTs = PeekEarliestFollowingTimestamp(chatHistory, msgIndex + 1);
+                if (nextFollowingTs.HasValue && resolved.Value > nextFollowingTs.Value)
+                {
+                    resolved = nextFollowingTs.Value;
+                }
+            }
+
+            var effective = resolved ?? _lastTimestamp;
+            if (effective < _lastTimestamp)
+            {
+                effective = _lastTimestamp;
+            }
+
+            _lastTimestamp = effective;
+            return effective;
+        }
+
+        private DateTime? PeekEarliestFollowingTimestamp(IReadOnlyList<ChatMessage> chatHistory, int startIndex)
+        {
+            for (int idx = startIndex; idx < chatHistory.Count; idx++)
+            {
+                var msg = chatHistory[idx];
+                var contents = msg.Contents ?? Array.Empty<AIContent>();
+
+                if (msg.Role == ChatRole.Assistant)
+                {
+                    var reasoning = string.Concat(contents.OfType<TextReasoningContent>().Select(r => r.Text));
+                    if (!string.IsNullOrWhiteSpace(reasoning))
+                    {
+                        var thinkingTs = PeekStreamTimestamp(_thinkingStream, reasoning);
+                        if (thinkingTs.HasValue)
+                        {
+                            return thinkingTs.Value;
+                        }
+                    }
+                }
+
+                foreach (var fc in contents.OfType<FunctionCallContent>())
+                {
+                    if (!string.IsNullOrEmpty(fc.CallId) && _toolCallTimestampsByCallId.TryGetValue(fc.CallId, out var rec))
+                    {
+                        return rec.TimestampUtc;
+                    }
+                }
+
+                foreach (var fr in contents.OfType<FunctionResultContent>())
+                {
+                    if (!string.IsNullOrEmpty(fr.CallId) && _toolResultTimestampsByCallId.TryGetValue(fr.CallId, out var rec))
+                    {
+                        return rec.TimestampUtc;
+                    }
+                }
+
+                var text = msg.Text ?? string.Empty;
+                if (!IsCompactionMessageText(text))
+                {
+                    var stream = msg.Role == ChatRole.Assistant
+                        ? _assistantStream
+                        : (msg.Role == ChatRole.User ? _userStream : null);
+                    if (stream != null)
+                    {
+                        var streamTs = PeekStreamTimestamp(stream, text);
+                        if (streamTs.HasValue)
+                        {
+                            return streamTs.Value;
+                        }
+                    }
+                }
+
+                var createdAt = ExtractValidMessageCreatedAtUtc(msg);
+                if (createdAt.HasValue)
+                {
+                    return createdAt.Value;
+                }
+            }
+
+            return null;
+        }
+
+        private DateTime? PeekStreamTimestamp(RoleTimestampStream stream, string? content)
+        {
+            int idx = stream.Cursor;
+            while (idx < stream.Items.Count && IsPruned(stream.Items[idx]))
+            {
+                idx++;
+            }
+
+            if (idx >= stream.Items.Count)
+            {
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(content) &&
+                !string.IsNullOrWhiteSpace(stream.Items[idx].Content) &&
+                !ContentMatches(stream.Items[idx].Content, content))
+            {
+                for (int i = idx + 1; i < stream.Items.Count; i++)
+                {
+                    if (!IsPruned(stream.Items[i]) && ContentMatches(stream.Items[i].Content, content))
+                    {
+                        return stream.Items[i].TimestampUtc;
+                    }
+                }
+            }
+
+            return stream.Items[idx].TimestampUtc;
+        }
+
+        private static bool LaterUserMessageMatches(IReadOnlyList<ChatMessage> chatHistory, int startIndex, string expectedContent)
+        {
+            for (int i = startIndex; i < chatHistory.Count; i++)
+            {
+                var candidate = chatHistory[i];
+                if (candidate.Role == ChatRole.User &&
+                    !IsCompactionMessageText(candidate.Text) &&
+                    ContentMatches(candidate.Text, expectedContent))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool ContentMatches(string? a, string? b) =>
+            !string.IsNullOrWhiteSpace(a) &&
+            !string.IsNullOrWhiteSpace(b) &&
+            string.Equals(a.Trim(), b.Trim(), StringComparison.Ordinal);
+
+        private void PruneBefore(TimelineSource source, int sequenceOrder)
+        {
+            if (source == TimelineSource.TrackedTurns)
+            {
+                if (sequenceOrder > _minTrackedSeq)
+                {
+                    _minTrackedSeq = sequenceOrder;
+                }
+            }
+            else if (sequenceOrder > _minTracedSeq)
+            {
+                _minTracedSeq = sequenceOrder;
+            }
+        }
+
+        private bool IsPruned(RecordedTurnTimestamp item) =>
+            item.Source == TimelineSource.TrackedTurns
+                ? item.SequenceOrder < _minTrackedSeq
+                : item.SequenceOrder < _minTracedSeq;
+
+        private void AdvancePastPruned(RoleTimestampStream stream)
+        {
+            while (stream.Cursor < stream.Items.Count && IsPruned(stream.Items[stream.Cursor]))
+            {
+                stream.Cursor++;
+            }
+        }
+
+        private void ConsumeStreamThroughRecord(RoleTimestampStream? stream, RecordedTurnTimestamp matched)
+        {
+            if (stream == null)
+            {
+                return;
+            }
+
+            AdvancePastPruned(stream);
+            while (stream.Cursor < stream.Items.Count)
+            {
+                var current = stream.Items[stream.Cursor];
+                if (current.Source == matched.Source && current.SequenceOrder <= matched.SequenceOrder)
+                {
+                    stream.Cursor++;
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(matched.CallId) &&
+                    string.Equals(current.CallId, matched.CallId, StringComparison.Ordinal))
+                {
+                    stream.Cursor++;
+                    break;
+                }
+
+                if (current.TimestampUtc <= matched.TimestampUtc && string.IsNullOrEmpty(current.CallId))
+                {
+                    stream.Cursor++;
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        private RoleTimestampStream? GetStream(TranscriptRoleKind kind) => kind switch
+        {
+            TranscriptRoleKind.User => _userStream,
+            TranscriptRoleKind.Thinking => _thinkingStream,
+            TranscriptRoleKind.Assistant => _assistantStream,
+            TranscriptRoleKind.ToolCall => _toolCallStream,
+            TranscriptRoleKind.ToolResult => _toolResultStream,
+            TranscriptRoleKind.Compaction => _compactionStream,
+            _ => null
+        };
+
+        private static DateTime ResolveBaselineUtc(
+            DateTime? stageStartedAtUtc,
+            IReadOnlyList<ChatMessage> chatHistory,
+            IReadOnlyList<ConversationTurn> orderedTurns,
+            IReadOnlyList<TranscriptEntry>? tracedEntries)
+        {
+            if (stageStartedAtUtc.HasValue && stageStartedAtUtc.Value != default)
+            {
+                return NormalizeUtc(stageStartedAtUtc.Value);
+            }
+
+            DateTime? earliest = null;
+            foreach (var turn in orderedTurns)
+            {
+                if (turn.Timestamp != default)
+                {
+                    var ts = NormalizeUtc(turn.Timestamp);
+                    if (!earliest.HasValue || ts < earliest.Value)
+                    {
+                        earliest = ts;
+                    }
+                }
+            }
+
+            if (tracedEntries != null)
+            {
+                foreach (var entry in tracedEntries)
+                {
+                    if (entry.Timestamp != default)
+                    {
+                        var ts = NormalizeUtc(entry.Timestamp);
+                        if (!earliest.HasValue || ts < earliest.Value)
+                        {
+                            earliest = ts;
+                        }
+                    }
+                }
+            }
+
+            foreach (var msg in chatHistory)
+            {
+                var createdAt = ExtractValidMessageCreatedAtUtc(msg);
+                if (createdAt.HasValue && (!earliest.HasValue || createdAt.Value < earliest.Value))
+                {
+                    earliest = createdAt.Value;
+                }
+            }
+
+            return earliest ?? DateTime.UtcNow;
+        }
+
+        private static DateTime NormalizeUtc(DateTime value) =>
+            value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : DateTime.SpecifyKind(value, DateTimeKind.Utc);
     }
 
     public static string? ExtractCallId(ConversationTurn? turn)

@@ -169,7 +169,11 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
         var mafConfig = harnessOptions != null
             ? MafConfigurationSummary.Build(harnessOptions, tracingClient?.DetectedMafConfiguration)
             : null;
-        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(request.ChatHistory);
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            request.ChatHistory,
+            trackedTurns: state.GetTrackedTurnsSnapshot(),
+            tracedEntries: tracingClient?.CapturedEntries,
+            stageStartedAtUtc: state.Conversation.StartedAt != default ? state.Conversation.StartedAt : null);
 
         TranscriptCompactionMetadata? compactionMeta = null;
         if (harnessOptions?.CompactionStrategy is PiStyleCrucibleCompactionStrategy piCompaction)
@@ -289,12 +293,15 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
             new FunctionResultContent(primeCallId, filtered)
         }));
 
+        var primingMeta = JsonSerializer.Serialize(new { CallId = primeCallId });
+
         state.EnqueueTurn(
             StageTurnRole.Tool,
             $"Failed to record primed Tool turn for in-memory conversation #{state.Conversation.Id}",
             content: $"Execute {priming.Command}",
             toolName: CanonicalToolNames.Bash,
             toolArguments: JsonSerializer.Serialize(new { command = priming.Command }),
+            metadataJson: primingMeta,
             durationMs: priming.DurationMs);
 
         state.EnqueueTurn(
@@ -304,6 +311,7 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
             toolName: CanonicalToolNames.Bash,
             toolResult: filtered,
             isError: !priming.IsSuccess,
+            metadataJson: primingMeta,
             durationMs: priming.DurationMs);
 
         if (!priming.IsSuccess)

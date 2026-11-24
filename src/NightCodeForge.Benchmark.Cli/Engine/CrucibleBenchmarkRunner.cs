@@ -1103,7 +1103,8 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             + dispatchSnapshot.NamespacesStripped
             + dispatchSnapshot.CasingNormalized
             + dispatchSnapshot.EnumValuesSnapped
-            + dispatchSnapshot.StringifiedJsonRepaired;
+            + dispatchSnapshot.StringifiedJsonRepaired
+            + dispatchSnapshot.ParameterEnvelopesUnwrapped;
         int otherDispatcherRepairs = Math.Max(0, dispatchSnapshot.TotalHits - accountedRepairs);
 
         return new ToolCallTelemetryBreakdown
@@ -1124,6 +1125,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             CasingNormalized = dispatchSnapshot.CasingNormalized,
             EnumValuesSnapped = dispatchSnapshot.EnumValuesSnapped,
             StringifiedJsonRepaired = dispatchSnapshot.StringifiedJsonRepaired,
+            ParameterEnvelopesUnwrapped = dispatchSnapshot.ParameterEnvelopesUnwrapped,
             OtherDispatcherRepairs = otherDispatcherRepairs,
             CsNavBashCalls = csNavBashCalls,
             CodeCondenserBashCalls = codeCondenserBashCalls

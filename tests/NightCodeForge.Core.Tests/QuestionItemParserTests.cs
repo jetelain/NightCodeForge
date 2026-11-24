@@ -412,4 +412,266 @@ public class QuestionItemParserTests
         Assert.Equal("Configuration", items[0].Rationale);
         Assert.Equal(["net9.0", "net10.0"], items[0].Options);
     }
+
+    [Fact]
+    public void Parse_WithObjectOptionsContainingLabelAndDescription_FormatsHumanReadableStrings()
+    {
+        var json = """
+        {
+            "questions": [
+                {
+                    "prompt": "Select request timeout",
+                    "rationale": "Retry budget",
+                    "options": [
+                        { "label": "5 seconds", "description": "5000 ms" },
+                        { "label": "10 seconds", "description": "" },
+                        { "label": "30 seconds" },
+                        "Custom value"
+                    ]
+                }
+            ]
+        }
+        """;
+
+        var questions = QuestionItemParser.Parse(json);
+
+        var q = Assert.Single(questions);
+        Assert.Equal("Select request timeout", q.Prompt);
+        Assert.Equal("Retry budget", q.Rationale);
+        Assert.Equal(
+            ["5 seconds — 5000 ms", "10 seconds", "30 seconds", "Custom value"],
+            q.Options);
+    }
+
+    [Fact]
+    public void ParseFromObject_WithMixedObjectListOptionsAndBlanks_NormalizesCleanly()
+    {
+        var raw = new List<object?>
+        {
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "Which verbs?",
+                ["rationale"] = "HTTP safety",
+                ["options"] = new List<object?>
+                {
+                    "  Idempotent verbs only  ",
+                    "   ",
+                    new Dictionary<string, object?> { ["label"] = "All verbs", ["description"] = "Includes POST/PATCH" },
+                    new Dictionary<string, object?> { ["label"] = "GET only", ["description"] = null }
+                }
+            }
+        };
+
+        var parsed = QuestionItemParser.ParseFromObject(raw);
+
+        Assert.NotNull(parsed);
+        var q = Assert.Single(parsed);
+        Assert.Equal("Which verbs?", q.Prompt);
+        Assert.Equal("HTTP safety", q.Rationale);
+        Assert.Equal(
+            ["Idempotent verbs only", "All verbs — Includes POST/PATCH", "GET only"],
+            q.Options);
+    }
+
+    [Fact]
+    public void Normalize_WithWhitespaceAndBlankOptions_TrimsAndFiltersWhilePreservingPromptAndRationale()
+    {
+        var input = new List<QuestionItem>
+        {
+            new("Choose mode", "Stability", ["  Fast  ", "", "  Safe ", "   "]),
+            new("Blank options", "Notes", ["   "])
+        };
+
+        var normalized = QuestionItemParser.Normalize(input);
+
+        Assert.Equal(2, normalized.Count);
+        Assert.Equal("Choose mode", normalized[0].Prompt);
+        Assert.Equal("Stability", normalized[0].Rationale);
+        Assert.Equal(["Fast", "Safe"], normalized[0].Options);
+
+        Assert.Equal("Blank options", normalized[1].Prompt);
+        Assert.Equal("Notes", normalized[1].Rationale);
+        Assert.Null(normalized[1].Options);
+    }
+
+    [Fact]
+    public void Parse_WithUpperCaseKeysAndQuestionFieldWithOptions_ParsesCaseInsensitivelyAndPreservesOptions()
+    {
+        var json = """
+        {
+            "Questions": [
+                {
+                    "QUESTION": "Which database should we use?",
+                    "RATIONALE": "Persistence",
+                    "OPTIONS": [
+                        { "LABEL": "SQLite", "DESCRIPTION": "Embedded" },
+                        { "Label": "Postgres", "Desc": "Server" }
+                    ]
+                }
+            ]
+        }
+        """;
+
+        var questions = QuestionItemParser.Parse(json);
+
+        var q = Assert.Single(questions);
+        Assert.Equal("Which database should we use?", q.Prompt);
+        Assert.Equal("Persistence", q.Rationale);
+        Assert.Equal(["SQLite — Embedded", "Postgres — Server"], q.Options);
+    }
+
+    [Fact]
+    public void ParseAndParseFromObject_SingleObjectWithQuestionAndOptions_PreservesRationaleAndOptions()
+    {
+        var json = """
+        {
+            "question": "Select deployment target",
+            "rationale": "Environment",
+            "options": ["Staging", "Production"]
+        }
+        """;
+
+        var fromJson = QuestionItemParser.Parse(json);
+        var qJson = Assert.Single(fromJson);
+        Assert.Equal("Select deployment target", qJson.Prompt);
+        Assert.Equal("Environment", qJson.Rationale);
+        Assert.Equal(["Staging", "Production"], qJson.Options);
+
+        var dict = new Dictionary<string, object?>
+        {
+            ["question"] = "Select deployment target",
+            ["rationale"] = "Environment",
+            ["options"] = new List<object?> { "Staging", "Production" }
+        };
+
+        var fromDict = QuestionItemParser.ParseFromObject(dict);
+        Assert.NotNull(fromDict);
+        var qDict = Assert.Single(fromDict);
+        Assert.Equal("Select deployment target", qDict.Prompt);
+        Assert.Equal("Environment", qDict.Rationale);
+        Assert.Equal(["Staging", "Production"], qDict.Options);
+    }
+
+    [Fact]
+    public void ParseFromObject_WithStringDictionaryOptionsAndNestedNonScalars_FormatsWithoutTypeNames()
+    {
+        var raw = new List<object?>
+        {
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "Choose tier",
+                ["options"] = new List<object?>
+                {
+                    new Dictionary<string, string> { ["label"] = "Fast", ["description"] = "Low latency" },
+                    new Dictionary<string, object?>
+                    {
+                        ["label"] = "Balanced",
+                        ["description"] = new Dictionary<string, object?> { ["nested"] = 1 }
+                    },
+                    new List<string> { "unexpected-nested-list" }
+                }
+            }
+        };
+
+        var parsed = QuestionItemParser.ParseFromObject(raw);
+
+        Assert.NotNull(parsed);
+        var q = Assert.Single(parsed);
+        Assert.Equal(["Fast — Low latency", "Balanced"], q.Options);
+    }
+
+    [Fact]
+    public void Normalize_WithEmptyOptionsCollection_NormalizesOptionsToNull()
+    {
+        var input = new List<QuestionItem>
+        {
+            new("Empty options", "Notes", Array.Empty<string>())
+        };
+
+        var normalized = QuestionItemParser.Normalize(input);
+
+        var q = Assert.Single(normalized);
+        Assert.Equal("Empty options", q.Prompt);
+        Assert.Equal("Notes", q.Rationale);
+        Assert.Null(q.Options);
+    }
+
+    [Fact]
+    public void ParseFromObject_WithNonScalarPromptOrRationaleAndJsonNull_DoesNotEmitClrTypeNames()
+    {
+        using var nullDoc = System.Text.Json.JsonDocument.Parse("null");
+        using var objDoc = System.Text.Json.JsonDocument.Parse("""{"nested": true}""");
+
+        var invalidDict = new Dictionary<string, object?>
+        {
+            ["prompt"] = new Dictionary<string, object?> { ["bad"] = 1 },
+            ["rationale"] = new List<object?> { "nested" }
+        };
+        Assert.Null(QuestionItemParser.ParseFromObject(invalidDict));
+
+        var validWithJsonNullRationale = new Dictionary<string, object?>
+        {
+            ["prompt"] = "Select cache backend",
+            ["rationale"] = nullDoc.RootElement,
+            ["options"] = new List<object?>
+            {
+                new Dictionary<string, object?> { ["choice"] = "Redis", ["reason"] = "Shared cluster" },
+                new Dictionary<string, object?> { ["mode"] = "InMemory" },
+                new Dictionary<string, object?> { ["nestedOnly"] = objDoc.RootElement }
+            }
+        };
+
+        var parsed = QuestionItemParser.ParseFromObject(validWithJsonNullRationale);
+        Assert.NotNull(parsed);
+        var item = Assert.Single(parsed);
+        Assert.Equal("Select cache backend", item.Prompt);
+        Assert.Null(item.Rationale);
+        Assert.Equal(["Redis — Shared cluster", "InMemory"], item.Options);
+    }
+
+    [Fact]
+    public void TryBindAskQuestions_PreservesBlankPromptEntries_AndRejectsMalformedQuestionItems()
+    {
+        var withBlankFirst = new List<object?>
+        {
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "   ",
+                ["rationale"] = "Missing text",
+                ["options"] = new List<object?>
+                {
+                    new Dictionary<string, object?> { ["label"] = "5s", ["description"] = "Fast" }
+                }
+            },
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "Which DB?",
+                ["options"] = new List<object?> { "SQLite", "Postgres" }
+            }
+        };
+
+        Assert.True(QuestionItemParser.TryBindAskQuestions(withBlankFirst, out var bound));
+        Assert.NotNull(bound);
+        Assert.Equal(2, bound.Count);
+        Assert.Equal("   ", bound[0].Prompt);
+        Assert.Equal(["5s — Fast"], bound[0].Options);
+        Assert.Equal("Which DB?", bound[1].Prompt);
+
+        var mixedInvalid = new List<object?>
+        {
+            new Dictionary<string, object?> { ["prompt"] = "Valid?" },
+            123
+        };
+        Assert.False(QuestionItemParser.TryBindAskQuestions(mixedInvalid, out _));
+
+        var invalidOptionsScalar = new List<object?>
+        {
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "Valid?",
+                ["options"] = 123
+            }
+        };
+        Assert.False(QuestionItemParser.TryBindAskQuestions(invalidOptionsScalar, out _));
+    }
 }

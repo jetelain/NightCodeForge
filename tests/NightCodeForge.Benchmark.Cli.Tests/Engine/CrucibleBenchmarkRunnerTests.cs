@@ -1046,19 +1046,21 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         telemetry.Record(LenientDispatchEventType.CasingNormalized, "READ", CanonicalToolNames.Read);
         telemetry.Record(LenientDispatchEventType.EnumValueSnapped, "FULL", "full");
         telemetry.Record(LenientDispatchEventType.StringifiedJsonRepaired, CanonicalToolNames.Edit, "edits");
+        telemetry.Record(LenientDispatchEventType.ParameterEnvelopeUnwrapped, CanonicalToolNames.Ask, "parameters");
         // EnumValueUnmatched is not counted in LenientDispatchTelemetrySnapshot.TotalHits
         telemetry.Record(LenientDispatchEventType.EnumValueUnmatched, "invalid", "invalid");
 
         var snapshot = telemetry.CreateSnapshot();
         var breakdown = CrucibleBenchmarkRunner.BuildTelemetryBreakdown(Array.Empty<ConversationTurn>(), snapshot);
 
-        Assert.Equal(6, breakdown.DispatcherRepairs);
+        Assert.Equal(7, breakdown.DispatcherRepairs);
         Assert.Equal(1, breakdown.ToolAliasesResolved);
         Assert.Equal(1, breakdown.ParameterAliasesResolved);
         Assert.Equal(1, breakdown.NamespacesStripped);
         Assert.Equal(1, breakdown.CasingNormalized);
         Assert.Equal(1, breakdown.EnumValuesSnapped);
         Assert.Equal(1, breakdown.StringifiedJsonRepaired);
+        Assert.Equal(1, breakdown.ParameterEnvelopesUnwrapped);
         Assert.Equal(0, breakdown.OtherDispatcherRepairs);
 
         int sumOfCategories = breakdown.ToolAliasesResolved
@@ -1067,6 +1069,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             + breakdown.CasingNormalized
             + breakdown.EnumValuesSnapped
             + breakdown.StringifiedJsonRepaired
+            + breakdown.ParameterEnvelopesUnwrapped
             + breakdown.OtherDispatcherRepairs;
         Assert.Equal(breakdown.DispatcherRepairs, sumOfCategories);
 
@@ -1394,6 +1397,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             CasingNormalized = 1,
             EnumValuesSnapped = 1,
             StringifiedJsonRepaired = 1,
+            ParameterEnvelopesUnwrapped = 2,
             OtherDispatcherRepairs = 1
         };
 
@@ -1411,6 +1415,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.Contains("\"namespaces_stripped\":1", json);
         Assert.Contains("\"casing_normalized\":1", json);
         Assert.Contains("\"enum_values_snapped\":1", json);
+        Assert.Contains("\"parameter_envelopes_unwrapped\":2", json);
         Assert.Contains("\"other_dispatcher_repairs\":1", json);
     }
 }

@@ -951,6 +951,79 @@ public class LenientToolDispatcherTests
         Assert.Equal(1, first["priority"]);
     }
 
+    [Theory]
+    [InlineData("""{"parameters": {"questions": [{"prompt": "Which DB?", "options": ["SQLite", "Postgres"]}]}}""")]
+    [InlineData("""{"arguments": {"questions": [{"prompt": "Which DB?", "options": ["SQLite", "Postgres"]}]}}""")]
+    [InlineData("""{"parameters": "{\"questions\": [{\"prompt\": \"Which DB?\", \"options\": [\"SQLite\", \"Postgres\"]}]}"}""")]
+    public async Task AskTool_WithParameterEnvelopeAndStringifiedVariants_UnwrapsAndExecutesViaDispatcher(string rawArgsJson)
+    {
+        var telemetry = new LenientDispatchTelemetry();
+        var canonical = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? capturedQuestions = null;
+        canonical.InteractionModule.AskHandler = (questions, _) =>
+        {
+            capturedQuestions = questions;
+            return Task.FromResult("Answered: SQLite");
+        };
+
+        var dispatcher = NightCodeForgeToolDispatcher.Create(canonical, telemetry: telemetry);
+        var call = dispatcher.NormalizeCall(CanonicalToolNames.Ask, rawArgsJson);
+
+        Assert.Equal(CanonicalToolNames.Ask, call.CanonicalToolName);
+        Assert.True(call.Arguments.ContainsKey("questions"));
+
+        var snapshot = telemetry.CreateSnapshot();
+        Assert.True(snapshot.ParameterEnvelopesUnwrapped >= 1);
+
+        var result = await dispatcher.ExecuteAsync(call.CanonicalToolName, call.Arguments);
+
+        Assert.Equal("Answered: SQLite", result?.ToString());
+        Assert.NotNull(capturedQuestions);
+        Assert.Single(capturedQuestions);
+        Assert.Equal("Which DB?", capturedQuestions[0].Prompt);
+        Assert.Equal(["SQLite", "Postgres"], capturedQuestions[0].Options);
+    }
+
+    [Fact]
+    public async Task AskTool_WithParametersEnvelopeAndStructuredObjectOptions_NormalizesAndExecutesCleanly()
+    {
+        var canonical = TestCanonicalToolsBuilder.Create(Path.GetTempPath(), pathResolver: TestPathResolver.Create());
+        IReadOnlyList<QuestionItem>? capturedQuestions = null;
+        canonical.InteractionModule.AskHandler = (questions, _) =>
+        {
+            capturedQuestions = questions;
+            return Task.FromResult("Answered");
+        };
+
+        var dispatcher = NightCodeForgeToolDispatcher.Create(canonical);
+        var rawJson = """
+        {
+            "parameters": {
+                "questions": [
+                    {
+                        "prompt": "Timeout duration?",
+                        "rationale": "Avoid premature aborts",
+                        "options": [
+                            { "label": "5 seconds", "description": "5000 ms" },
+                            { "label": "10 seconds" }
+                        ]
+                    }
+                ]
+            }
+        }
+        """;
+
+        var call = dispatcher.NormalizeCall(CanonicalToolNames.Ask, rawJson);
+        var result = await dispatcher.ExecuteAsync(call.CanonicalToolName, call.Arguments);
+
+        Assert.Equal("Answered", result?.ToString());
+        Assert.NotNull(capturedQuestions);
+        Assert.Single(capturedQuestions);
+        Assert.Equal("Timeout duration?", capturedQuestions[0].Prompt);
+        Assert.Equal("Avoid premature aborts", capturedQuestions[0].Rationale);
+        Assert.Equal(["5 seconds — 5000 ms", "10 seconds"], capturedQuestions[0].Options);
+    }
+
     private sealed class FakeHallucinatingChatClient(params FunctionCallContent[] toolCalls) : IChatClient
     {
         public ChatClientMetadata Metadata { get; } = new("FakeHallucinatingChatClient");

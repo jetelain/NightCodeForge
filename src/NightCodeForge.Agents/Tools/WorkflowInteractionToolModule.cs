@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
@@ -40,9 +41,9 @@ public sealed class WorkflowInteractionToolModule : IAgentToolModule
 
     public IReadOnlyList<AIFunction> CreateFunctions() => CreateFunctions(this);
 
-    public static IReadOnlyList<AIFunction> CreateFunctions(WorkflowInteractionToolModule? module) =>
-    [
-        AIFunctionFactory.Create(
+    public static IReadOnlyList<AIFunction> CreateFunctions(WorkflowInteractionToolModule? module)
+    {
+        var rawAskFn = AIFunctionFactory.Create(
             ([Description("Consolidate ALL clarifying questions into this single list. Each question must include a prompt, with optional technical rationale and choice options.")]
              IReadOnlyList<QuestionItem>? questions = null,
              CancellationToken ct = default) =>
@@ -50,17 +51,113 @@ public sealed class WorkflowInteractionToolModule : IAgentToolModule
                     ? module.AskAsync(questions ?? Array.Empty<QuestionItem>(), ct)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.Ask,
-            "Asks clarifying questions to the human user when blocked. Consolidate all requirements, ambiguities, and architectural questions into a single batched call."),
+            "Asks clarifying questions to the human user when blocked. Consolidate all requirements, ambiguities, and architectural questions into a single batched call.");
 
-        AIFunctionFactory.Create(
+        var askFn = new LenientAskAIFunction(DiagnosticBindingAIFunction.Wrap(rawAskFn));
+
+        var requestChangesFn = DiagnosticBindingAIFunction.Wrap(AIFunctionFactory.Create(
             ([Description("Detailed critique and rework feedback for the implementation agent")] string feedback,
              [Description("Summary reason for rejection")] string? reason = null) =>
                 module != null
                     ? module.RequestChanges(feedback, reason)
                     : throw new InvalidOperationException(MissingModuleInstanceMessage),
             CanonicalToolNames.RequestChanges,
-            "Rejects implementation and sends task back to the implementation agent for rework.")
-    ];
+            "Rejects implementation and sends task back to the implementation agent for rework."));
+
+        return [askFn, requestChangesFn];
+    }
+
+    private sealed class LenientAskAIFunction : DelegatingAIFunction
+    {
+        private const string QuestionsParameterName = "questions";
+
+        public LenientAskAIFunction(AIFunction innerFunction)
+            : base(innerFunction)
+        {
+        }
+
+        protected override ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments,
+            CancellationToken cancellationToken)
+        {
+            if (TryFindQuestionsArgument(arguments, out var matchedKey, out var rawQuestions))
+            {
+                object? effectiveQuestions = null;
+                bool shouldRewrite = false;
+
+                if (IsCandidateForLenientQuestionParsing(rawQuestions))
+                {
+                    if (QuestionItemParser.TryBindAskQuestions(rawQuestions, out var boundQuestions))
+                    {
+                        effectiveQuestions = boundQuestions;
+                        shouldRewrite = true;
+                    }
+                }
+                else if (!string.Equals(matchedKey, QuestionsParameterName, StringComparison.Ordinal) &&
+                         (rawQuestions is null || rawQuestions is IEnumerable<QuestionItem>))
+                {
+                    effectiveQuestions = rawQuestions is IEnumerable<QuestionItem> typed
+                        ? QuestionItemParser.Normalize(typed)
+                        : null;
+                    shouldRewrite = true;
+                }
+
+                if (shouldRewrite)
+                {
+                    var normalizedArguments = new AIFunctionArguments
+                    {
+                        Services = arguments.Services,
+                        Context = arguments.Context
+                    };
+                    foreach (var pair in arguments)
+                    {
+                        if (!string.Equals(pair.Key, matchedKey, StringComparison.Ordinal))
+                        {
+                            normalizedArguments[pair.Key] = pair.Value;
+                        }
+                    }
+
+                    normalizedArguments[QuestionsParameterName] = effectiveQuestions;
+                    return base.InvokeCoreAsync(normalizedArguments, cancellationToken);
+                }
+            }
+
+            return base.InvokeCoreAsync(arguments, cancellationToken);
+        }
+
+        private static bool TryFindQuestionsArgument(
+            AIFunctionArguments arguments,
+            out string matchedKey,
+            out object? rawQuestions)
+        {
+            foreach (var pair in arguments)
+            {
+                if (string.Equals(pair.Key, QuestionsParameterName, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedKey = pair.Key;
+                    rawQuestions = pair.Value;
+                    return true;
+                }
+            }
+
+            matchedKey = QuestionsParameterName;
+            rawQuestions = null;
+            return false;
+        }
+
+        private static bool IsCandidateForLenientQuestionParsing(object? rawQuestions) =>
+            rawQuestions switch
+            {
+                null => false,
+                IReadOnlyList<QuestionItem> => false,
+                IEnumerable<QuestionItem> => false,
+                JsonElement je => je.ValueKind is JsonValueKind.Array or JsonValueKind.Object or JsonValueKind.String,
+                IDictionary<string, object?> => true,
+                IEnumerable<object?> => true,
+                string => true,
+                _ => false
+            };
+    }
 
     public async Task<string> AskAsync(IReadOnlyList<QuestionItem>? questions, CancellationToken cancellationToken = default)
     {
