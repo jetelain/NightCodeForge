@@ -82,7 +82,7 @@
       "language": "typescript",
       "repo": "vuejs/core",
       "test_result_format": "JUnitXml",
-      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+      "custom_test_command": "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
     },
     {
       "instance_id": "facebook__docusaurus-9897",
@@ -334,7 +334,7 @@
       "language": "typescript",
       "repo": "vuejs/core",
       "test_result_format": "JUnitXml",
-      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+      "custom_test_command": "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
     },
     {
       "instance_id": "vuejs__core-11589",
@@ -343,7 +343,7 @@
       "language": "typescript",
       "repo": "vuejs/core",
       "test_result_format": "JUnitXml",
-      "custom_test_command": "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+      "custom_test_command": "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
     },
     {
       "instance_id": "facebook__docusaurus-10130",

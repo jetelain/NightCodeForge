@@ -183,4 +183,77 @@ public sealed class TestResultParsersTests
         Assert.Equal("parser::tests::panics_wrong", outcomes[2].Name);
         Assert.False(outcomes[2].Passed);
     }
+
+    [Fact]
+    public void TestAssertionEvaluator_MatchesVitestAngleBracketHierarchyAgainstJUnitXml()
+    {
+        const string junitXml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <testsuites>
+              <testsuite name="packages/compiler-core/__tests__/parse.spec.ts" tests="3" failures="1">
+                <testcase classname="packages/compiler-core/__tests__/parse.spec.ts" name="compiler: parse &gt; Element &gt; simple div" time="0.01" />
+                <testcase classname="packages/compiler-core/__tests__/parse.spec.ts" name="compiler: parse &gt; Element &gt; v-pre with half-open interpolation" time="0.01" />
+                <testcase classname="packages/compiler-core/__tests__/parse.spec.ts" name="compiler: parse &gt; Element &gt; broken tag" time="0.01">
+                  <failure message="AssertionError">mismatch</failure>
+                </testcase>
+              </testsuite>
+            </testsuites>
+            """;
+
+        var outcomes = JUnitXmlTestResultParser.Parse(junitXml);
+
+        var passEval = TestAssertionEvaluator.Evaluate(
+            [
+                "packages/compiler-core/__tests__/parse.spec.ts > compiler: parse > Element > simple div",
+                "compiler: parse > Element > v-pre with half-open interpolation"
+            ],
+            [],
+            outcomes);
+        Assert.True(passEval.AllPassed);
+        Assert.Equal(2, passEval.FailToPassPassed);
+
+        var failEval = TestAssertionEvaluator.Evaluate(
+            ["packages/compiler-core/__tests__/parse.spec.ts > compiler: parse > Element > broken tag"],
+            [],
+            outcomes);
+        Assert.False(failEval.AllPassed);
+        Assert.Equal(["packages/compiler-core/__tests__/parse.spec.ts > compiler: parse > Element > broken tag"], failEval.FailedTests);
+    }
+
+    [Fact]
+    public void TestAssertionEvaluator_MatchesVitestLeafNamesBackslashClassnamesAndSkippedTests()
+    {
+        const string junitXml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <testsuites>
+              <testsuite name="suite" tests="3" skipped="1">
+                <testcase classname="packages\compiler-core\__tests__\parse.spec.ts" name="compiler: parse &gt; Element &gt; simple div" time="0.01" />
+                <testcase classname="packages\compiler-core\__tests__\parse.spec.ts" name="renders" time="0.01" />
+                <testcase classname="packages/compiler-core/__tests__/parse.spec.ts" name="compiler: parse &gt; Element &gt; skipped case" time="0.01">
+                  <skipped />
+                </testcase>
+              </testsuite>
+            </testsuites>
+            """;
+
+        var outcomes = JUnitXmlTestResultParser.Parse(junitXml);
+
+        // Leaf test name (no separator) matching an outcome containing " > " and backslashes
+        var leafEval = TestAssertionEvaluator.Evaluate(["simple div"], [], outcomes);
+        Assert.True(leafEval.AllPassed);
+
+        // Dot-delimited expected identifier matching backslash-separated classname in outcome
+        var backslashEval = TestAssertionEvaluator.Evaluate(
+            ["packages.compiler-core.__tests__.parse.spec.ts.renders"],
+            [],
+            outcomes);
+        Assert.True(backslashEval.AllPassed);
+
+        // Skipped Vitest test must not be counted as passed
+        var skippedEval = TestAssertionEvaluator.Evaluate(
+            ["packages/compiler-core/__tests__/parse.spec.ts > compiler: parse > Element > skipped case"],
+            [],
+            outcomes);
+        Assert.False(skippedEval.AllPassed);
+    }
 }

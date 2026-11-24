@@ -165,6 +165,16 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         await _stdin.WriteLineAsync("export LC_ALL=en_US.UTF-8");
         await _stdin.WriteLineAsync($"mkdir -p {ContainerExecutorOptions.ContainerHomePath}/.dotnet 2>/dev/null || true");
         await _stdin.WriteLineAsync($"if [ ! -w {ContainerExecutorOptions.ContainerHomePath} ] || [ ! -w {ContainerExecutorOptions.ContainerHomePath}/.dotnet ]; then export HOME=\"{FallbackHomePathExpression}\"; mkdir -p \"$HOME/.dotnet\" 2>/dev/null || true; else export HOME=\"{ContainerExecutorOptions.ContainerHomePath}\"; fi");
+        if (!hasCustomPath)
+        {
+            await _stdin.WriteLineAsync("if [ -d \"$HOME/.cargo/bin\" ]; then case \":$PATH:\" in *\":$HOME/.cargo/bin:\"*) ;; *) export PATH=\"$HOME/.cargo/bin:$PATH\" ;; esac; fi");
+        }
+        var rustupHome = ContainerMountAndDriftBuilder.ResolveRustupHomePath(_options);
+        if (!string.IsNullOrWhiteSpace(rustupHome) &&
+            (environmentVariables == null || !environmentVariables.ContainsKey("RUSTUP_HOME")))
+        {
+            await _stdin.WriteLineAsync($"export RUSTUP_HOME={ShellQuoting.QuotePosix(rustupHome)}");
+        }
         await _stdin.WriteLineAsync($"mkdir -p \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" 2>/dev/null || true");
         await _stdin.WriteLineAsync($"if [ -d \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ] && [ -w \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ]; then export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\"; else export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{FallbackHomePathExpression}/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\"; mkdir -p \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" 2>/dev/null || true; fi");
         await _stdin.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");

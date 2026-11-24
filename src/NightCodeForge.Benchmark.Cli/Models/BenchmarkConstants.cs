@@ -106,6 +106,7 @@ public static class BenchmarkDefaults
     public const string DefaultTaskDifficulty = "standard";
     public const string DotNetRollForwardEnvVar = "DOTNET_ROLL_FORWARD";
     public const string DotNetRollForwardLatestMajor = "LatestMajor";
+    public const string DotNetSdkRollForwardLatestMajor = "latestMajor";
 
     public static readonly IReadOnlyList<string> BlockedAntiCheatHosts =
     [
@@ -156,9 +157,17 @@ public static class BenchmarkDefaults
         ":(exclude)*.trx",
         ":(exclude)docs/transcripts",
         ":(exclude).ncf-bench-results",
+        ":(exclude)node_modules",
+        ":(exclude).venv",
+        ":(exclude)__pycache__",
+        ":(exclude).pytest_cache",
         ":(glob,exclude)**/bin/**",
         ":(glob,exclude)**/obj/**",
         ":(glob,exclude)**/TestResults/**",
-        ":(glob,exclude)**/*.trx"
+        ":(glob,exclude)**/*.trx",
+        ":(glob,exclude)**/node_modules/**",
+        ":(glob,exclude)**/.venv/**",
+        ":(glob,exclude)**/__pycache__/**",
+        ":(glob,exclude)**/.pytest_cache/**"
     ];
 }

@@ -18,7 +18,7 @@ param(
     [string]$Dataset = "",
     [string]$Provider = "ollama-router",
     [string]$Endpoint = "http://localhost:11434",
-    [int]$Timeout = 1200,
+    [int]$Timeout = 1800,
     [int]$Concurrency = 1,
     [string]$Category = "",
     [string]$OutDir = "",
@@ -67,6 +67,7 @@ if ($NoBuild) {
 
 $dotnetArgs += @(
     "--project", $projectPath,
+    "-c", "Release",
     "--", "run",
     "--dataset", $Dataset,
     "--suite", $Suite,

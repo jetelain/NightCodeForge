@@ -778,7 +778,8 @@ public class ContainerMountAndDriftBuilder
                     trimmedSdk.Equals("/usr/lib/x86_64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/usr/lib/aarch64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/usr/lib/snapd", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.StartsWith("/snap", StringComparison.OrdinalIgnoreCase))
+                    trimmedSdk.StartsWith("/snap", StringComparison.OrdinalIgnoreCase) ||
+                    IsRustupHomePath(trimmedSdk))
                 {
                     continue;
                 }
@@ -891,6 +892,7 @@ public class ContainerMountAndDriftBuilder
             pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools");
         }
         pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.local/bin");
+        pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.cargo/bin");
         if (options.MountHostDotnetTools)
         {
             pathEntries.Add("/root/.dotnet/tools");
@@ -919,6 +921,35 @@ public class ContainerMountAndDriftBuilder
         return string.Join(":", distinct);
     }
 
+    public static string? ResolveRustupHomePath(ContainerExecutorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.MountHostSdks || options.SdkMountPaths == null)
+        {
+            return null;
+        }
+
+        foreach (var sdk in options.SdkMountPaths)
+        {
+            if (string.IsNullOrWhiteSpace(sdk))
+            {
+                continue;
+            }
+
+            var trimmed = sdk.Trim().TrimEnd('/');
+            if (IsRustupHomePath(trimmed))
+            {
+                return trimmed;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsRustupHomePath(string trimmedPath) =>
+        trimmedPath.EndsWith("/.rustup", StringComparison.OrdinalIgnoreCase) ||
+        trimmedPath.EndsWith("/rustup", StringComparison.OrdinalIgnoreCase);
+
     public static List<string> BuildDockerRunArgs(ContainerExecutorOptions options)
     {
         var args = new List<string> { "run", "-d" };
@@ -946,6 +977,12 @@ public class ContainerMountAndDriftBuilder
                 : null)
             ?? "/usr/share/dotnet";
         args.AddRange(["-e", $"DOTNET_ROOT={dotnetSdkPath}"]);
+
+        var rustupHome = ResolveRustupHomePath(options);
+        if (!string.IsNullOrWhiteSpace(rustupHome))
+        {
+            args.AddRange(["-e", $"RUSTUP_HOME={rustupHome}"]);
+        }
 
         if (options.MountPackageCaches)
         {

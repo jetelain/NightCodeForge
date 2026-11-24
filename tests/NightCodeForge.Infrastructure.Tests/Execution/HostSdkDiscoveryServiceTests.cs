@@ -356,6 +356,7 @@ ANDROID_HOME=/opt/android-sdk
         Assert.Contains(".profile", script);
         Assert.Contains(".dotnet/tools", script);
         Assert.Contains(".cargo/bin", script);
+        Assert.Contains(".rustup", script);
         Assert.Contains("csnav", script);
         Assert.Contains("codecondenser", script);
         Assert.Contains("mdfetch", script);

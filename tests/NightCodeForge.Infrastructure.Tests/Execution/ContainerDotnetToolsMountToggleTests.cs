@@ -1,3 +1,6 @@
+using System.Text;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
@@ -112,5 +115,100 @@ public sealed class ContainerDotnetToolsMountToggleTests
         Assert.Equal("none", offlineArgs[netIdx + 1]);
         Assert.DoesNotContain("--read-only", offlineArgs);
         Assert.DoesNotContain("--add-host", offlineArgs);
+    }
+
+    [Fact]
+    public void ComputePathAndBuildDockerRunArgs_IncludeContainerCargoBinAndRustupHomeWithoutLeakingRustupToPath()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = false,
+            MountHostSdks = true,
+            SdkMountPaths = ["/usr/share/dotnet", "/home/user/.cargo", "/home/user/.rustup"]
+        };
+
+        var pathEntries = ContainerMountAndDriftBuilder.ComputePathEnvironmentVariable(options).Split(':');
+        Assert.Contains($"{ContainerExecutorOptions.ContainerHomePath}/.cargo/bin", pathEntries);
+        Assert.Contains("/home/user/.cargo/bin", pathEntries);
+        Assert.DoesNotContain("/home/user/.rustup", pathEntries);
+
+        var dockerArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(options);
+        Assert.Contains("RUSTUP_HOME=/home/user/.rustup", dockerArgs);
+
+        var mounts = ContainerMountAndDriftBuilder.BuildVolumeMounts(options);
+        Assert.Contains(mounts, m => m.ContainerPath == "/home/user/.cargo" && m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/home/user/.rustup" && m.IsReadOnly);
+    }
+
+    [Fact]
+    public void ComputePathAndBuildDockerRunArgs_HandleCustomRustupDirectoryWithoutLeakingToPath()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = false,
+            MountHostSdks = true,
+            SdkMountPaths = ["/usr/share/dotnet", "/usr/local/cargo", "/usr/local/rustup"]
+        };
+
+        var pathEntries = ContainerMountAndDriftBuilder.ComputePathEnvironmentVariable(options).Split(':');
+        Assert.Contains("/usr/local/cargo/bin", pathEntries);
+        Assert.DoesNotContain("/usr/local/rustup", pathEntries);
+
+        var dockerArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(options);
+        Assert.Contains("RUSTUP_HOME=/usr/local/rustup", dockerArgs);
+    }
+
+    [Fact]
+    public async Task PersistentContainerShellSession_WriteEnvironmentPreambleAsync_ConfiguresCargoPathAndQuotedRustupHome()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-preamble-test",
+            MountPackageCaches = false,
+            MountHostSdks = true,
+            SdkMountPaths = ["/usr/share/dotnet", "/opt/my's/.rustup"]
+        };
+
+        var runnerMock = new Mock<IProcessRunner>();
+        var telemetryMock = new Mock<IOperationsTelemetryService>();
+
+        async Task<string> CapturePreambleAsync(IReadOnlyDictionary<string, string>? envVars)
+        {
+            using var stdinBuffer = new MemoryStream();
+            using var stdinWriter = new StreamWriter(stdinBuffer, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+            using var stdoutStream = new MemoryStream();
+            using var stdoutReader = new StreamReader(stdoutStream);
+
+            var streamSession = new Mock<IProcessStreamSession>();
+            streamSession.SetupGet(s => s.StandardInput).Returns(stdinWriter);
+            streamSession.SetupGet(s => s.StandardOutput).Returns(stdoutReader);
+            streamSession.SetupGet(s => s.HasExited).Returns(false);
+
+            runnerMock.Setup(r => r.StartSession(It.IsAny<ProcessStartSpec>())).Returns(streamSession.Object);
+
+            using var session = new PersistentContainerShellSession(options, runnerMock.Object, telemetryMock.Object, NullLogger.Instance);
+            session.Start();
+            await session.WriteEnvironmentPreambleAsync(envVars);
+            await stdinWriter.FlushAsync();
+
+            stdinBuffer.Position = 0;
+            using var reader = new StreamReader(stdinBuffer, Encoding.UTF8);
+            return await reader.ReadToEndAsync();
+        }
+
+        var defaultPreamble = await CapturePreambleAsync(null);
+        Assert.Contains("if [ -d \"$HOME/.cargo/bin\" ]", defaultPreamble);
+        Assert.Contains("export RUSTUP_HOME='/opt/my'\\''s/.rustup'", defaultPreamble);
+
+        var customEnvPreamble = await CapturePreambleAsync(new Dictionary<string, string>
+        {
+            ["PATH"] = "/custom/bin",
+            ["RUSTUP_HOME"] = "/custom/rustup"
+        });
+        Assert.DoesNotContain("if [ -d \"$HOME/.cargo/bin\" ]", customEnvPreamble);
+        Assert.DoesNotContain("export RUSTUP_HOME='/opt/my'\\''s/.rustup'", customEnvPreamble);
+        Assert.Contains("export RUSTUP_HOME='/custom/rustup'", customEnvPreamble);
     }
 }

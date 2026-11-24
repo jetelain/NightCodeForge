@@ -20,6 +20,9 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
 | :--- | :--- | :--- | :--- |
 | **11.43C** | [⚡ Step 11.43C: `Pmad.AI` Opt-In SLM Delegating Chat Clients (`ToolCallHealing`, `ToolLoopCircuitBreaker`, `ThinkingTraceCompaction` & `ToolResultCompaction`)](STEP_11_43C_PMAD_AI_SLM_DELEGATING_CHAT_CLIENTS_OPT_IN.md) | Expose four opt-in (`default: false`) flags on `LocalOptimizationFlags` (`ToolCallHealing`, `ToolLoopCircuitBreaker`, `ThinkingTraceCompaction`, `ToolResultCompaction`) tailored for small local LLMs ($\le 8\text{B}$–$14\text{B}$), wiring `ToolCallHealingChatClient`, `ToolLoopCircuitBreakerChatClient`, `ThinkingTraceCompactionChatClient`, and `ToolResultCompactionChatClient` into the `IChatClient` pipeline (`MutateInPlace = false`) alongside Settings UI toggles and transcript frontmatter metadata. | Deferred (v0.2) |
 | **11.49B** | [🧹 Step 11.49B: Retire `CancellationAwareStream` Workaround Upon `OllamaSharp` PR #400 Upgrade](STEP_11_49B_RETIRE_OLLAMASHARP_STREAM_CANCELLATION_WORKAROUND.md) | Once upstream [awaescher/OllamaSharp#400](https://github.com/awaescher/OllamaSharp/pull/400) (passing `CancellationToken` to `StreamReader.ReadLineAsync` on `.NET 7+`) is released on NuGet, upgrade `OllamaSharp`, delete `CancellationAwareStream` / `CancellationAwareHttpContent`, remove ambient `CancellationToken` propagation from `StreamingCancellationScope`, and verify `StreamingIdleWatchdogIntegrationTests` pass natively. | Proposed (Blocked on upstream release) |
+| **11.55** | [🛡️ Step 11.55: Benchmark Verification Environment Parity, .NET SDK Resilience & Vitest Matching](STEP_11_55_BENCHMARK_VERIFICATION_ENVIRONMENT_AND_DOTNET_SDK_RESILIENCE.md) | Fix benchmark false negatives by configuring `core.longpaths true` on Windows checkouts, ensuring Python/Node/Rust verification dependency & `PATH` parity, handling `.NET` `global.json` SDK roll-forward without polluting patches, discovering subdirectory `.sln`/test projects, and normalizing Vitest ` > ` identifiers in `TestResultParsers`. | Proposed |
+| **11.56** | [📊 Step 11.56: Benchmark Timeout Telemetry Preservation, Summary Aggregation & Language-Scoped Skills](STEP_11_56_BENCHMARK_TIMEOUT_TELEMETRY_AND_LANGUAGE_SCOPED_SKILLS.md) | Preserve accumulated token metrics on benchmark timeouts, exclude unstarted zero-token error runs from `AverageTokensPerSecond`, scope C#-only stack skills (`csharp-nav`, `codecondenser`) to C# repositories, and reconcile `DispatcherRepairs` telemetry with breakdown sub-counters. | Proposed |
+| **11.57** | [🔧 Step 11.57: Crucible `ask` Tool Lenient Parsing, Error Diagnostics & Transcript Turn Timestamps](STEP_11_57_CRUCIBLE_ASK_TOOL_RESILIENCE_AND_TRANSCRIPT_TIMESTAMPS.md) | Upgrade `Pmad.AI` to `0.0.6` for `parameters`/`arguments` envelope unwrapping in `LenientToolDispatcher`, accept `{label, description}` objects in `QuestionItem.Options`, surface actionable tool binding diagnostics instead of `"Error: Function failed."`, and preserve real per-turn elapsed timestamps in Crucible transcripts. | Proposed |
 
 ---
 
@@ -38,6 +41,28 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
   - [ ] Remove ambient `CancellationToken` propagation from `StreamingCancellationScope`, keeping only attempt/header lifecycle tracking for `PreHeaderPrefill` vs. `FirstTokenPrefill` diagnostics.
   - [ ] Remove `docs/fixes/OLLAMASHARP_STREAMING_CANCELLATION_PR_SPEC.md`.
   - [ ] Verify all `StreamingIdleWatchdogIntegrationTests` and non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+- [ ] **Step 11.55 (Benchmark Verification Environment Parity, .NET SDK Resilience & Vitest Matching):**
+  - [ ] Configure `core.longpaths true` in `BenchmarkWorkspaceManager.ProvisionAsync` before `git checkout --detach FETCH_HEAD`.
+  - [ ] Support deterministic per-stack dependency provisioning / container parity for Python, Node (JS/TS), and Rust (with `$HOME/.cargo/bin` on default `PATH`) without contaminating `model_patch`.
+  - [ ] Add `.NET` `global.json` SDK roll-forward resilience for C# execution and verification without polluting `git diff` patches.
+  - [ ] Support subdirectory `.sln`/test `.csproj` discovery in C# verification command resolution and repository-specific test config flags.
+  - [ ] Normalize ` > ` in `TestAssertionEvaluator.NormalizeTestIdentifier` for Vitest JUnit XML matching.
+  - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+- [ ] **Step 11.56 (Benchmark Timeout Telemetry Preservation, Summary Aggregation & Language-Scoped Skills):**
+  - [ ] Propagate real accumulated `PromptTokens`, `CompletionTokens`, `TotalTokens`, and `TokensPerSecond` on benchmark timeout / abnormal termination into `BenchmarkInstanceResult`.
+  - [ ] Update `BenchmarkSummaryAggregator` so unstarted / zero-token error runs do not depress `AverageTokensPerSecond`.
+  - [ ] Scope C# stack skills (`csharp-nav`, `codecondenser`) to C# repositories in benchmark policy/skill resolution.
+  - [ ] Reconcile `DispatcherRepairs` (`TotalHits`) with explicit breakdown counters in `LenientDispatchTelemetry` / `ToolCallTelemetryBreakdown`.
+  - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+- [ ] **Step 11.57 (Crucible `ask` Tool Lenient Parsing, Error Diagnostics & Transcript Turn Timestamps):**
+  - [ ] Upgrade `Pmad.AI` to `0.0.6` for built-in top-level `parameters` / `arguments` envelope unwrapping in `LenientToolDispatcher` (and project any new telemetry counter), with NightCodeForge regression tests for `ask`.
+  - [ ] Support both `string` and `{label, description}` object entries for `QuestionItem.Options` in `ask` tool binding/parsing.
+  - [ ] Surface actionable schema/parameter binding error diagnostics to the model instead of `"Error: Function failed."`.
+  - [ ] Preserve and render real per-turn elapsed timestamps in Crucible transcripts (`CrucibleConversationCoordinator`, `InMemoryCrucibleConversationCoordinator`, `SessionTranscriptService`).
+  - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 
 ---
 

@@ -1046,4 +1046,342 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.False(scope.DisableNetwork);
         Assert.Equal(BenchmarkDefaults.BlockedAntiCheatHosts, scope.BlockedHosts);
     }
+
+    [Fact]
+    public void DotNetGlobalJsonResilienceScope_RelaxesSdkRollForwardPreservesOtherKeysAndRestoresExactBytes()
+    {
+        var wks = Path.Combine(_tempDir, "wks-global-json");
+        Directory.CreateDirectory(wks);
+        var subDir = Path.Combine(wks, "nested");
+        Directory.CreateDirectory(subDir);
+
+        var rootGlobalJson = Path.Combine(wks, "global.json");
+        const string originalRootContent = "{\r\n  \"sdk\": {\r\n    \"version\": \"7.0.102\",\r\n    \"rollForward\": \"latestFeature\"\r\n  },\r\n  \"msbuild-sdks\": {\r\n    \"My.Sdk\": \"1.0.0\"\r\n  }\r\n}\r\n";
+        File.WriteAllText(rootGlobalJson, originalRootContent);
+
+        var nestedGlobalJson = Path.Combine(subDir, "global.json");
+        const string originalNestedContent = "{\n  \"sdk\": {\n    \"version\": \"8.0.100\"\n  }\n}\n";
+        File.WriteAllText(nestedGlobalJson, originalNestedContent);
+
+        // Non-C# languages must be a no-op
+        using (var pyScope = DotNetGlobalJsonResilienceScope.Apply(wks, BenchmarkLanguages.Python, NullLogger.Instance))
+        {
+            Assert.Equal(0, pyScope.ModifiedFileCount);
+            Assert.Equal(originalRootContent, File.ReadAllText(rootGlobalJson));
+        }
+
+        using (var csScope = DotNetGlobalJsonResilienceScope.Apply(wks, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(2, csScope.ModifiedFileCount);
+            var relaxedRoot = File.ReadAllText(rootGlobalJson);
+            Assert.Contains("\"latestMajor\"", relaxedRoot);
+            Assert.Contains("\"7.0.102\"", relaxedRoot);
+            Assert.Contains("\"msbuild-sdks\"", relaxedRoot);
+            Assert.Contains("\"latestMajor\"", File.ReadAllText(nestedGlobalJson));
+        }
+
+        // Exact original bytes (including CRLF formatting) restored on dispose
+        Assert.Equal(originalRootContent, File.ReadAllText(rootGlobalJson));
+        Assert.Equal(originalNestedContent, File.ReadAllText(nestedGlobalJson));
+    }
+
+    [Fact]
+    public void BenchmarkTestCommandResolver_DiscoversSubdirectorySolutionsTestProjectsAndVitestConfigs()
+    {
+        var slnWorkspace = Path.Combine(_tempDir, "wks-sub-sln");
+        Directory.CreateDirectory(Path.Combine(slnWorkspace, "src"));
+        File.WriteAllText(Path.Combine(slnWorkspace, "src", "Spectre.Console.sln"), "");
+
+        var csharpDefaultInstance = new BenchmarkInstance
+        {
+            InstanceId = "spectre-1",
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "spectreconsole/spectre.console",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix"
+        };
+        var defaultSlnCmd = BenchmarkVerifier.ResolveTestCommand(csharpDefaultInstance, slnWorkspace, ExecutionMode.ContainerSandbox);
+        Assert.Contains("dotnet build src/Spectre.Console.sln --nologo", defaultSlnCmd);
+        Assert.Contains("dotnet test src/Spectre.Console.sln --no-build --logger trx --results-directory /workspace/.ncf-bench-results", defaultSlnCmd);
+
+        var bareCustomSlnInstance = csharpDefaultInstance with
+        {
+            CustomTestCommand = "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+        };
+        var customSlnCmd = BenchmarkVerifier.ResolveTestCommand(bareCustomSlnInstance, slnWorkspace, ExecutionMode.ContainerSandbox);
+        Assert.Equal("dotnet test src/Spectre.Console.sln --nologo --logger trx --results-directory /workspace/.ncf-bench-results", customSlnCmd);
+
+        // Fallback to test .csproj discovery when no .sln exists
+        var csprojWorkspace = Path.Combine(_tempDir, "wks-sub-csproj");
+        Directory.CreateDirectory(Path.Combine(csprojWorkspace, "src", "Lib"));
+        Directory.CreateDirectory(Path.Combine(csprojWorkspace, "test", "Lib.Tests"));
+        File.WriteAllText(Path.Combine(csprojWorkspace, "src", "Lib", "Lib.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(csprojWorkspace, "test", "Lib.Tests", "Lib.Tests.csproj"), "<Project />");
+
+        var csprojCmd = BenchmarkVerifier.ResolveTestCommand(csharpDefaultInstance, csprojWorkspace, ExecutionMode.BareHost);
+        Assert.Contains("dotnet build test/Lib.Tests/Lib.Tests.csproj --nologo", csprojCmd);
+        Assert.DoesNotContain("Lib.csproj --nologo", csprojCmd);
+
+        // Vitest unit config injection for both default and bare custom commands
+        var vueWorkspace = Path.Combine(_tempDir, "wks-vue");
+        Directory.CreateDirectory(vueWorkspace);
+        File.WriteAllText(Path.Combine(vueWorkspace, "package.json"), "{\"devDependencies\":{\"vitest\":\"^2.0.0\"}}");
+        File.WriteAllText(Path.Combine(vueWorkspace, "vitest.unit.config.ts"), "export default {}");
+
+        var vitestDefaultInstance = new BenchmarkInstance
+        {
+            InstanceId = "vue-1",
+            Language = BenchmarkLanguages.TypeScript,
+            Repo = "vuejs/core",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix"
+        };
+        var vitestDefaultCmd = BenchmarkVerifier.ResolveTestCommand(vitestDefaultInstance, vueWorkspace, ExecutionMode.ContainerSandbox);
+        Assert.Contains("npx vitest run -c vitest.unit.config.ts --reporter=junit", vitestDefaultCmd);
+
+        var vitestCustomInstance = vitestDefaultInstance with
+        {
+            CustomTestCommand = "npx vitest run --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+        };
+        var vitestCustomCmd = BenchmarkVerifier.ResolveTestCommand(vitestCustomInstance, vueWorkspace, ExecutionMode.ContainerSandbox);
+        Assert.Equal("npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml", vitestCustomCmd);
+
+        // Explicit -c / --config must be preserved without duplication
+        var vitestExplicitConfigInstance = vitestDefaultInstance with
+        {
+            CustomTestCommand = "npx vitest run -c vitest.e2e.config.ts --reporter=junit"
+        };
+        Assert.Equal(
+            "npx vitest run -c vitest.e2e.config.ts --reporter=junit",
+            BenchmarkVerifier.ResolveTestCommand(vitestExplicitConfigInstance, vueWorkspace, ExecutionMode.ContainerSandbox));
+    }
+
+    [Fact]
+    public async Task VerifyAsync_ContainerSandbox_WrapsPythonAndNodeDependencySetup_AndRestoresGlobalJson()
+    {
+        var pyWks = Path.Combine(_tempDir, "wks-wrap-py");
+        var nodeWks = Path.Combine(_tempDir, "wks-wrap-node");
+        var csWks = Path.Combine(_tempDir, "wks-wrap-cs");
+        Directory.CreateDirectory(pyWks);
+        Directory.CreateDirectory(nodeWks);
+        Directory.CreateDirectory(csWks);
+
+        var globalJsonPath = Path.Combine(csWks, "global.json");
+        const string originalGlobalJson = "{\"sdk\":{\"version\":\"7.0.102\",\"rollForward\":\"latestFeature\"}}";
+        await File.WriteAllTextAsync(globalJsonPath, originalGlobalJson);
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var judge = new Mock<IBenchmarkLlmJudge>();
+
+        containerFactory
+            .Setup(f => f.CreateContainerEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        string? capturedCmd = null;
+        string? globalJsonDuringExec = null;
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string?, int?, IReadOnlyDictionary<string, string>?, CancellationToken>((cmd, _, _, _, _) =>
+            {
+                capturedCmd = cmd;
+                if (File.Exists(globalJsonPath))
+                {
+                    globalJsonDuringExec = File.ReadAllText(globalJsonPath);
+                }
+            })
+            .ReturnsAsync(new CommandResult(0, "ok", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            containerFactory.Object,
+            envProvider.Object,
+            judge.Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        await verifier.VerifyAsync(
+            new BenchmarkInstance { InstanceId = "py-wrap", Language = BenchmarkLanguages.Python, Repo = "psf/requests", BaseCommit = "c", ProblemStatement = "p" },
+            new BenchmarkWorkspaceHandle { InstanceId = "py-wrap", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = pyWks, BaseCommit = "c" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.ContainerSandbox,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.Contains("/tmp/ncf-bench-venv", capturedCmd);
+        Assert.Contains("pip install -q pytest", capturedCmd);
+        Assert.Contains("pytest --junitxml=/workspace/.ncf-bench-results/junit.xml", capturedCmd);
+
+        await verifier.VerifyAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "node-wrap",
+                Language = BenchmarkLanguages.JavaScript,
+                Repo = "axios/axios",
+                BaseCommit = "c",
+                ProblemStatement = "p",
+                CustomTestCommand = "npm run test:mocha",
+                TestResultFormat = TestResultFormat.ExitCode
+            },
+            new BenchmarkWorkspaceHandle { InstanceId = "node-wrap", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = nodeWks, BaseCommit = "c" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.ContainerSandbox,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.Contains("pnpm-lock.yaml", capturedCmd);
+        Assert.Contains("npm ci || npm install", capturedCmd);
+        Assert.EndsWith("&& { npm run test:mocha; }", capturedCmd);
+
+        await verifier.VerifyAsync(
+            new BenchmarkInstance { InstanceId = "cs-wrap", Language = BenchmarkLanguages.CSharp, Repo = "serilog/serilog", BaseCommit = "c", ProblemStatement = "p" },
+            new BenchmarkWorkspaceHandle { InstanceId = "cs-wrap", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = csWks, BaseCommit = "c" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.ContainerSandbox,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.NotNull(globalJsonDuringExec);
+        Assert.Contains("\"latestMajor\"", globalJsonDuringExec);
+        Assert.Equal(originalGlobalJson, await File.ReadAllTextAsync(globalJsonPath));
+    }
+
+    [Fact]
+    public void BenchmarkTestCommandResolver_HandlesPriorityMultipleTargetsShellGuardsAndQuoting()
+    {
+        // Low-priority solutions/test projects must not beat real deeper solutions/test projects
+        var prioritySlnWks = Path.Combine(_tempDir, "wks-prio-sln");
+        Directory.CreateDirectory(Path.Combine(prioritySlnWks, "samples"));
+        Directory.CreateDirectory(Path.Combine(prioritySlnWks, "src", "MyLib"));
+        File.WriteAllText(Path.Combine(prioritySlnWks, "samples", "Demo.sln"), "");
+        File.WriteAllText(Path.Combine(prioritySlnWks, "src", "MyLib", "MyLib.sln"), "");
+
+        var csharpInstance = new BenchmarkInstance
+        {
+            InstanceId = "cs-prio",
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "owner/mylib",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix"
+        };
+
+        var slnCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, prioritySlnWks, ExecutionMode.ContainerSandbox);
+        Assert.Contains("src/MyLib/MyLib.sln", slnCmd);
+        Assert.DoesNotContain("samples/Demo.sln", slnCmd);
+
+        // Multi-target test project discovery: exclude low-priority sample tests and run all remaining test projects
+        var multiProjWks = Path.Combine(_tempDir, "wks-multi-proj");
+        Directory.CreateDirectory(Path.Combine(multiProjWks, "samples", "Sample.Tests"));
+        Directory.CreateDirectory(Path.Combine(multiProjWks, "test", "Core.Tests"));
+        Directory.CreateDirectory(Path.Combine(multiProjWks, "test", "Ext.Tests"));
+        File.WriteAllText(Path.Combine(multiProjWks, "samples", "Sample.Tests", "Sample.Tests.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(multiProjWks, "test", "Core.Tests", "Core.Tests.csproj"), "<Project />");
+        File.WriteAllText(Path.Combine(multiProjWks, "test", "Ext.Tests", "Ext.Tests.csproj"), "<Project />");
+
+        var posixMultiCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, multiProjWks, ExecutionMode.ContainerSandbox);
+        Assert.Contains("ncf_rc=0;", posixMultiCmd);
+        Assert.Contains("test/Core.Tests/Core.Tests.csproj", posixMultiCmd);
+        Assert.Contains("test/Ext.Tests/Ext.Tests.csproj", posixMultiCmd);
+        Assert.DoesNotContain("Sample.Tests.csproj", posixMultiCmd);
+
+        var bareMultiCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, multiProjWks, ExecutionMode.BareHost);
+        Assert.DoesNotContain("ncf_rc=0", bareMultiCmd);
+        Assert.Contains(" && ", bareMultiCmd);
+
+        // Custom command guards: positional target or unquoted shell operator is preserved; quoted filter '|' is rewritten
+        var positionalCustom = csharpInstance with { CustomTestCommand = "dotnet test tests/UnitTests --logger trx" };
+        Assert.Equal(
+            "dotnet test tests/UnitTests --logger trx",
+            BenchmarkTestCommandResolver.ResolveTestCommand(positionalCustom, prioritySlnWks, ExecutionMode.ContainerSandbox));
+
+        var chainedCustom = csharpInstance with { CustomTestCommand = "dotnet test --nologo && echo done" };
+        Assert.Equal(
+            "dotnet test --nologo && echo done",
+            BenchmarkTestCommandResolver.ResolveTestCommand(chainedCustom, prioritySlnWks, ExecutionMode.ContainerSandbox));
+
+        var quotedFilterCustom = csharpInstance with { CustomTestCommand = "dotnet test --nologo --filter \"Name~A|Name~B\"" };
+        Assert.Equal(
+            "dotnet test src/MyLib/MyLib.sln --nologo --filter \"Name~A|Name~B\"",
+            BenchmarkTestCommandResolver.ResolveTestCommand(quotedFilterCustom, prioritySlnWks, ExecutionMode.ContainerSandbox));
+
+        // Node wrapping: isolated jest-junit prefix + NODE_PATH, global npm bin guard, and safe compound grouping
+        var wrappedJest = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results npx jest --reporters=jest-junit; ",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        Assert.Contains("/tmp/ncf-npm-global/bin", wrappedJest);
+        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --no-save jest-junit", wrappedJest);
+        Assert.Contains("NODE_PATH=\"/tmp/ncf-jest-junit/node_modules", wrappedJest);
+        Assert.DoesNotContain("npm install --no-save jest-junit", wrappedJest);
+        Assert.EndsWith("&& { JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results npx jest --reporters=jest-junit; }", wrappedJest);
+
+        // Python wrapping: safe compound grouping
+        var wrappedPy = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "pytest -q; ",
+            BenchmarkLanguages.Python,
+            ExecutionMode.ContainerSandbox);
+        Assert.EndsWith("&& { pytest -q; }", wrappedPy);
+
+        // Safe quoting for spaces and shell metacharacters
+        Assert.Equal("\"dir with spaces/My App.sln\"", BenchmarkTestCommandResolver.QuotePathArgument("dir with spaces/My App.sln"));
+        Assert.Equal("\"dir/App\\$1.sln\"", BenchmarkTestCommandResolver.QuotePathArgument("dir/App$1.sln"));
+        Assert.Equal("src/App.sln", BenchmarkTestCommandResolver.QuotePathArgument("src/App.sln"));
+    }
+
+    [Fact]
+    public void DotNetGlobalJsonResilienceScope_HandlesBomCommentsEdgeCasesAndAgentEdits()
+    {
+        var wks = Path.Combine(_tempDir, "wks-gj-edge");
+        Directory.CreateDirectory(wks);
+        Directory.CreateDirectory(Path.Combine(wks, "bom"));
+        Directory.CreateDirectory(Path.Combine(wks, "already"));
+        Directory.CreateDirectory(Path.Combine(wks, "agent-edited"));
+        Directory.CreateDirectory(Path.Combine(wks, "agent-deleted"));
+        Directory.CreateDirectory(Path.Combine(wks, "invalid"));
+        Directory.CreateDirectory(Path.Combine(wks, "duplicate"));
+        Directory.CreateDirectory(Path.Combine(wks, "bin", "Debug"));
+        Directory.CreateDirectory(Path.Combine(wks, "node_modules", "pkg"));
+
+        var bomPath = Path.Combine(wks, "bom", "global.json");
+        var bomBytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(
+            System.Text.Encoding.UTF8.GetBytes("{\n  // pinned sdk\n  \"sdk\": { \"version\": \"6.0.400\", \"rollForward\": \"patch\", }\n}\n"))
+            .ToArray();
+        File.WriteAllBytes(bomPath, bomBytes);
+
+        var alreadyPath = Path.Combine(wks, "already", "global.json");
+        const string alreadyContent = "{\"sdk\":{\"version\":\"9.0.100\",\"rollForward\":\"latestMajor\"}}";
+        File.WriteAllText(alreadyPath, alreadyContent);
+
+        var agentEditedPath = Path.Combine(wks, "agent-edited", "global.json");
+        File.WriteAllText(agentEditedPath, "{\"sdk\":{\"version\":\"7.0.100\"}}");
+
+        var agentDeletedPath = Path.Combine(wks, "agent-deleted", "global.json");
+        File.WriteAllText(agentDeletedPath, "{\"sdk\":{\"version\":\"7.0.100\"}}");
+
+        File.WriteAllText(Path.Combine(wks, "invalid", "global.json"), "{ not valid json");
+        File.WriteAllText(Path.Combine(wks, "duplicate", "global.json"), "{\"sdk\":{\"version\":\"7.0.100\",\"version\":\"8.0.100\"}}");
+        var binIgnoredPath = Path.Combine(wks, "bin", "Debug", "global.json");
+        const string binOriginal = "{\"sdk\":{\"version\":\"7.0.100\"}}";
+        File.WriteAllText(binIgnoredPath, binOriginal);
+        var nodeModulesIgnoredPath = Path.Combine(wks, "node_modules", "pkg", "global.json");
+        File.WriteAllText(nodeModulesIgnoredPath, binOriginal);
+
+        const string agentReplacement = "{\"sdk\":{\"version\":\"10.0.100\",\"rollForward\":\"minor\"}}";
+        using (var scope = DotNetGlobalJsonResilienceScope.Apply(wks, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(3, scope.ModifiedFileCount);
+            Assert.Contains("\"latestMajor\"", File.ReadAllText(bomPath));
+            Assert.Equal(alreadyContent, File.ReadAllText(alreadyPath));
+            Assert.Equal(binOriginal, File.ReadAllText(binIgnoredPath));
+            Assert.Equal(binOriginal, File.ReadAllText(nodeModulesIgnoredPath));
+
+            // Simulate agent modifying one file and deleting another
+            File.WriteAllText(agentEditedPath, agentReplacement);
+            File.Delete(agentDeletedPath);
+        }
+
+        Assert.Equal(bomBytes, File.ReadAllBytes(bomPath));
+        Assert.Equal(agentReplacement, File.ReadAllText(agentEditedPath));
+        Assert.False(File.Exists(agentDeletedPath));
+    }
 }

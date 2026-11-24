@@ -211,12 +211,14 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         var containerName = $"ncf-bench-verify-{Guid.NewGuid():N}"[..32];
         var scope = CreateVerificationScope(workspacePath, instance.CustomContainerImage, executionMode, containerName);
         var testCommand = ResolveTestCommand(instance, workspacePath, executionMode);
+        var effectiveCommand = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(testCommand, instance.Language, executionMode);
         var format = instance.ResolveEffectiveTestResultFormat();
         var testRunStartedUtc = DateTime.UtcNow;
 
         CommandResult cmdResult;
         try
         {
+            using var globalJsonScope = DotNetGlobalJsonResilienceScope.Apply(workspacePath, instance.Language, _logger);
             IExecutionEnvironment env;
             try
             {
@@ -244,7 +246,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                         ? new Dictionary<string, string> { [BenchmarkDefaults.DotNetRollForwardEnvVar] = BenchmarkDefaults.DotNetRollForwardLatestMajor }
                         : null;
                 cmdResult = await env.ExecuteAsync(
-                    testCommand,
+                    effectiveCommand,
                     workingDirectory: executionMode == ExecutionMode.ContainerSandbox ? null : workspacePath,
                     timeoutSeconds: BenchmarkDefaults.DefaultVerificationTimeoutSeconds,
                     environmentVariables: environmentVariables,
@@ -748,52 +750,8 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     internal static string ResolveTestCommand(
         BenchmarkInstance instance,
         string workspacePath,
-        ExecutionMode executionMode = ExecutionMode.ContainerSandbox)
-    {
-        if (!string.IsNullOrWhiteSpace(instance.CustomTestCommand))
-        {
-            return instance.CustomTestCommand.Trim();
-        }
-
-        var resultsDir = executionMode == ExecutionMode.ContainerSandbox
-            ? BenchmarkPaths.ContainerResultsDir
-            : BenchmarkPaths.BenchmarkResultDirRelative;
-
-        return BenchmarkLanguages.Normalize(instance.Language) switch
-        {
-            BenchmarkLanguages.CSharp =>
-                $"dotnet build --nologo && dotnet test --no-build --logger trx --results-directory {resultsDir}",
-            BenchmarkLanguages.Python =>
-                $"pytest --junitxml={resultsDir}/{BenchmarkPaths.JUnitFileName}",
-            BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript =>
-                ResolveNodeTestCommand(workspacePath, resultsDir),
-            BenchmarkLanguages.Rust =>
-                "cargo test --no-fail-fast",
-            _ => throw new BenchmarkVerificationException(
-                $"No default test command configured for language '{instance.Language}'. Provide custom_test_command.",
-                instance.InstanceId)
-        };
-    }
-
-    private static string ResolveNodeTestCommand(string workspacePath, string resultsDir)
-    {
-        var pkgJsonPath = Path.Combine(workspacePath, "package.json");
-        if (File.Exists(pkgJsonPath))
-        {
-            var content = File.ReadAllText(pkgJsonPath);
-            if (content.Contains("vitest", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"npx vitest run --reporter=junit --outputFile={resultsDir}/{BenchmarkPaths.JUnitFileName}";
-            }
-
-            if (content.Contains("jest", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"JEST_JUNIT_OUTPUT_DIR={resultsDir} JEST_JUNIT_OUTPUT_NAME={BenchmarkPaths.JUnitFileName} npx jest --ci --reporters=default --reporters=jest-junit";
-            }
-        }
-
-        return "npm test";
-    }
+        ExecutionMode executionMode = ExecutionMode.ContainerSandbox) =>
+        BenchmarkTestCommandResolver.ResolveTestCommand(instance, workspacePath, executionMode);
 
     private IReadOnlyList<ParsedTestOutcome> ParseStructuredOutcomes(
         TestResultFormat format,
@@ -849,6 +807,9 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     {
         ".git",
         "node_modules",
+        ".venv",
+        "__pycache__",
+        ".pytest_cache",
         "bin",
         "obj"
     };

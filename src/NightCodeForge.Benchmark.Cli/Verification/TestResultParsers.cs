@@ -250,7 +250,10 @@ public static class TestAssertionEvaluator
 
         var normalizedExpected = NormalizeTestIdentifier(trimmed);
         if (!string.Equals(normalizedExpected, trimmed, StringComparison.Ordinal) ||
-            outcomes.Any(o => o.Name.Contains("::", StringComparison.Ordinal) || o.Name.Contains('/', StringComparison.Ordinal)))
+            outcomes.Any(o => o.Name.Contains("::", StringComparison.Ordinal) ||
+                              o.Name.Contains('/', StringComparison.Ordinal) ||
+                              o.Name.Contains('\\', StringComparison.Ordinal) ||
+                              o.Name.Contains(" > ", StringComparison.Ordinal)))
         {
             return MatchesExpectedIdentifier(normalizedExpected, outcomes, static o => NormalizeTestIdentifier(o.Name));
         }
@@ -311,6 +314,7 @@ public static class TestAssertionEvaluator
         var normalized = name.Trim().Replace('\\', '/');
         normalized = normalized.Replace(".py::", ".", StringComparison.OrdinalIgnoreCase);
         normalized = normalized.Replace("::", ".", StringComparison.Ordinal);
+        normalized = normalized.Replace(" > ", ".", StringComparison.Ordinal);
         normalized = normalized.Replace('/', '.');
         return normalized.TrimStart('.');
     }

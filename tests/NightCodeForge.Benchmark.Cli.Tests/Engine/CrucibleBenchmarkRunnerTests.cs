@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using NightCodeForge.Agents.Crucible;
+using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Benchmark.Cli.Engine;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
@@ -804,5 +805,150 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.True(trScope.DisableNetwork);
         Assert.Empty(trScope.BlockedHosts);
         Assert.False(trScope.MountAcpHostPaths);
+    }
+
+    [Fact]
+    public async Task RunAsync_CSharpGlobalJson_IsRelaxedDuringExecutionAndRestoredBeforeExtractPatch()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-globaljson.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cs-gj-1","language":"csharp","repo":"serilog/serilog","base_commit":"c1","problem_statement":"Fix bug"}""");
+
+        var wks = Path.Combine(_tempDir, "wks-gj");
+        Directory.CreateDirectory(wks);
+        var globalJsonPath = Path.Combine(wks, "global.json");
+        const string originalGlobalJson = "{\"sdk\":{\"version\":\"7.0.102\",\"rollForward\":\"latestFeature\"}}";
+        await File.WriteAllTextAsync(globalJsonPath, originalGlobalJson);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-gj-1", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks, BaseCommit = "c1" });
+
+        string? globalJsonDuringAgent = null;
+        string? globalJsonAtExtract = null;
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks, "c1", It.IsAny<CancellationToken>()))
+            .Returns<string, string, CancellationToken>((_, _, _) =>
+            {
+                globalJsonAtExtract = File.ReadAllText(globalJsonPath);
+                return Task.FromResult("diff --git a/Fix.cs b/Fix.cs\n+fix");
+            });
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>((_, _) =>
+            {
+                globalJsonDuringAgent = File.ReadAllText(globalJsonPath);
+                return Task.FromResult(AgentRunResult.Completed(new AgentRunMetrics(DurationMs: 50, PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20), summary: "Ok"));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "gj",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-gj"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        Assert.Single(report.Results);
+        Assert.NotNull(globalJsonDuringAgent);
+        Assert.Contains("\"latestMajor\"", globalJsonDuringAgent);
+        Assert.Equal(originalGlobalJson, globalJsonAtExtract);
+    }
+
+    [Fact]
+    public async Task RunAsync_CSharpTimeout_RestoresGlobalJsonAndDrainsPendingConversationTurns()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-timeout-drain.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cs-to-1","language":"csharp","repo":"serilog/serilog","base_commit":"c1","problem_statement":"Fix bug"}""");
+
+        var wks = Path.Combine(_tempDir, "wks-to");
+        Directory.CreateDirectory(wks);
+        var globalJsonPath = Path.Combine(wks, "global.json");
+        const string originalGlobalJson = "{\"sdk\":{\"version\":\"7.0.102\",\"rollForward\":\"latestFeature\"}}";
+        await File.WriteAllTextAsync(globalJsonPath, originalGlobalJson);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-to-1", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks, BaseCommit = "c1" });
+
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            new SessionTranscriptService(_tempDir),
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                var state = await coordinator.BeginAsync(ctx, StandardHarnessIds.Crucible, ct);
+                var capture = InMemoryCrucibleConversationCoordinator.CurrentCapture!;
+                state.EnqueueWrite(
+                    async () =>
+                    {
+                        await Task.Delay(120);
+                        await capture.TurnSink.AddTurnAsync(
+                            state.Conversation.Id,
+                            StageTurnRole.Tool,
+                            toolName: CanonicalToolNames.Read,
+                            toolArguments: """{"path":"Fix.cs"}""",
+                            cancellationToken: CancellationToken.None);
+                    },
+                    "delayed test turn");
+
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return AgentRunResult.Completed(new AgentRunMetrics(), summary: "unreachable");
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "to-drain",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-to"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1", InstanceTimeoutSeconds = 1 }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Timeout, result.Outcome);
+        Assert.Equal(originalGlobalJson, await File.ReadAllTextAsync(globalJsonPath));
+        Assert.Equal(1, result.Turns);
+        Assert.Equal(1, result.Telemetry.ReadCalls);
     }
 }

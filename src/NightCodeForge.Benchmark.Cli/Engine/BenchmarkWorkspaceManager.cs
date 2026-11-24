@@ -184,6 +184,7 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
             await _gitCliRunner.ExecuteAsync(workspacePath, ["init"], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "core.autocrlf", "false"], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "core.quotepath", "false"], cancellationToken: cancellationToken).ConfigureAwait(false);
+            await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "core.longpaths", "true"], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "commit.gpgsign", "false"], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "user.email", BenchmarkPaths.GitEmail], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "user.name", BenchmarkPaths.GitUserName], cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -989,6 +990,10 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
             if (string.Equals(part, "bin", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, "obj", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, "TestResults", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, "node_modules", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, ".venv", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, "__pycache__", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, ".pytest_cache", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, BenchmarkPaths.BenchmarkResultDirRelative, StringComparison.OrdinalIgnoreCase))
             {
                 return true;

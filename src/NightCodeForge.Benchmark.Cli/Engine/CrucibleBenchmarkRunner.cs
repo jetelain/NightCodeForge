@@ -406,6 +406,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             {
                 using var _ = CrucibleDispatchTelemetryScope.Begin(dispatchTelemetry);
                 using var __ = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+                using var ___ = Verification.DotNetGlobalJsonResilienceScope.Apply(workspace.WorkspacePath, instance.Language, _logger);
                 runResult = await crucibleHarness.RunStageAsync(sessionContext, linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)

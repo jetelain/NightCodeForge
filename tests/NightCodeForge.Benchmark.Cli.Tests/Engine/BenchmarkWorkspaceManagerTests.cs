@@ -186,6 +186,16 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "obj", "cache.txt"), "obj");
         Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "TestResults"));
         await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "TestResults", "results.trx"), "<trx/>");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "node_modules", "pkg"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "node_modules", "pkg", "index.js"), "module.exports = 1;");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, ".venv", "bin"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, ".venv", "bin", "pytest"), "#!/bin/sh");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "__pycache__"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "__pycache__", "mod.cpython-312.pyc"), "pyc");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, ".pytest_cache", "v", "cache"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, ".pytest_cache", "v", "cache", "lastfailed"), "{}");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "packages", "app", ".pytest_cache"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "packages", "app", ".pytest_cache", "README.md"), "cache");
 
         var patch = await _manager.ExtractPatchAsync(handle.WorkspacePath, handle.BaseCommit);
 
@@ -193,6 +203,51 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         Assert.DoesNotContain("bin/Debug/out.dll", patch);
         Assert.DoesNotContain("obj/cache.txt", patch);
         Assert.DoesNotContain("results.trx", patch);
+        Assert.DoesNotContain("node_modules/pkg/index.js", patch);
+        Assert.DoesNotContain(".venv/bin/pytest", patch);
+        Assert.DoesNotContain("__pycache__/mod.cpython-312.pyc", patch);
+        Assert.DoesNotContain(".pytest_cache/v/cache/lastfailed", patch);
+        Assert.DoesNotContain("packages/app/.pytest_cache/README.md", patch);
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_EnablesCoreLongpathsAndChecksOutDeepNestedPaths()
+    {
+        RunGit(_sourceRepoDir, "config core.longpaths true");
+        var deepDir = Path.Combine(
+            _sourceRepoDir,
+            "packages",
+            "docusaurus-plugin-content-docs",
+            "src",
+            "__tests__",
+            "__fixtures__",
+            "versioned-docs-with-long-subpath-segment-alpha",
+            "versioned_docs",
+            "version-1.0.0-beta.long-segment-bravo",
+            "nested-category-charlie-delta-echo");
+        Directory.CreateDirectory(deepDir);
+        var deepFile = Path.Combine(deepDir, "very-long-fixture-file-name-for-windows-max-path-verification.md");
+        await File.WriteAllTextAsync(deepFile, "# Deep fixture\n");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Deep fixture path\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "longpaths-001",
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Test long paths"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        var longPathsSetting = RunGit(handle.WorkspacePath, "config --get core.longpaths").Trim();
+        Assert.Equal("true", longPathsSetting);
+
+        var relPath = Path.GetRelativePath(_sourceRepoDir, deepFile);
+        var checkedOutFile = Path.Combine(handle.WorkspacePath, relPath);
+        Assert.True(File.Exists(checkedOutFile));
     }
 
     [Fact]
