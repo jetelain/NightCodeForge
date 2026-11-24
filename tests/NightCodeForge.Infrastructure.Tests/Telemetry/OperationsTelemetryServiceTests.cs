@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -188,8 +189,14 @@ public class OperationsTelemetryServiceTests
     }
 
     [Fact]
-    public void RecordActiveTask_AndClear_ManagesActiveTaskState()
+    public async Task RecordActiveTask_AndClear_ManagesActiveTaskState()
     {
+        var receivedBroadcasts = Channel.CreateUnbounded<ActiveTaskSummary?>();
+        _mockHubClient
+            .Setup(c => c.ReceiveActiveTask(It.IsAny<ActiveTaskSummary?>()))
+            .Callback<ActiveTaskSummary?>(payload => receivedBroadcasts.Writer.TryWrite(payload))
+            .Returns(Task.CompletedTask);
+
         var summary = new ActiveTaskSummary(
             TaskId: 42,
             TaskTitle: "Implement In-Flight Hero",
@@ -214,7 +221,8 @@ public class OperationsTelemetryServiceTests
         Assert.Equal("Implement In-Flight Hero", active.TaskTitle);
         Assert.Equal("stage-implementation", active.CurrentStageId);
         Assert.Equal(1, eventFiredCount);
-        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Any(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)), 5000));
+        var firstBroadcast = await receivedBroadcasts.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(summary, firstBroadcast);
         _mockHubClient.Verify(c => c.ReceiveActiveTask(summary), Times.Once);
 
         // Clearing with mismatched ID does not clear
@@ -227,7 +235,8 @@ public class OperationsTelemetryServiceTests
         Assert.Null(_service.GetActiveTask());
         Assert.Equal(2, eventFiredCount);
         Assert.Null(eventPayload);
-        Assert.True(SpinWait.SpinUntil(() => _mockHubClient.Invocations.Count(i => i.Method.Name == nameof(IOrchestratorHubClient.ReceiveActiveTask)) >= 2, 5000));
+        var secondBroadcast = await receivedBroadcasts.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Null(secondBroadcast);
         _mockHubClient.Verify(c => c.ReceiveActiveTask(null), Times.Once);
     }
 

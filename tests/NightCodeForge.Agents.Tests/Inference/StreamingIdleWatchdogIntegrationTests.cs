@@ -34,8 +34,11 @@ public class StreamingIdleWatchdogIntegrationTests
     private sealed class ChannelStream : Stream
     {
         private readonly Channel<byte[]> _channel = Channel.CreateUnbounded<byte[]>();
+        private readonly TaskCompletionSource<bool> _readerWaitingTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private byte[]? _currentChunk;
         private int _chunkOffset;
+
+        public Task WaitForReaderAsync(TimeSpan timeout) => _readerWaitingTcs.Task.WaitAsync(timeout);
 
         public void PushChunk(string ndjsonLine)
         {
@@ -52,6 +55,11 @@ public class StreamingIdleWatchdogIntegrationTests
         {
             while (_currentChunk == null || _chunkOffset >= _currentChunk.Length)
             {
+                if (!_channel.Reader.TryPeek(out _))
+                {
+                    _readerWaitingTcs.TrySetResult(true);
+                }
+
                 if (!await _channel.Reader.WaitToReadAsync(cancellationToken))
                 {
                     return 0; // EOF
@@ -160,23 +168,8 @@ public class StreamingIdleWatchdogIntegrationTests
     {
         var firstTokenTimeout = TimeSpan.FromMilliseconds(400);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(150);
+        var timeProvider = new ManualControllableTimeProvider();
         var stream = new ChannelStream();
-
-        // Background producer: 220ms initial wait (< 400ms prefill, > 150ms idle), then 10 tokens 40ms apart (total ~620ms > 400ms)
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(220);
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"token0"},"done":false}""");
-
-            for (int i = 1; i <= 10; i++)
-            {
-                await Task.Delay(40);
-                stream.PushChunk($$"""{"model":"test-model","message":{"role":"assistant","content":"token{{i}}"},"done":false}""");
-            }
-
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":""},"done":true}""");
-            stream.Complete();
-        });
 
         var innerHandler = new ChunkedStreamingHandler((req, ct) =>
         {
@@ -188,18 +181,47 @@ public class StreamingIdleWatchdogIntegrationTests
             return Task.FromResult(response);
         });
 
-        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout);
+        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout, timeProvider);
 
         var tokens = new List<string>();
         var chatOptions = new ChatOptions { MaxOutputTokens = 16384 };
+        using var tokenReceived = new SemaphoreSlim(0);
 
-        await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")], chatOptions))
+        var enumerationTask = Task.Run(async () =>
         {
-            if (!string.IsNullOrEmpty(update.Text))
+            await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")], chatOptions))
             {
-                tokens.Add(update.Text);
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    tokens.Add(update.Text);
+                    tokenReceived.Release();
+                }
             }
+        });
+
+        await stream.WaitForReaderAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
+
+        // 220ms initial wait (< 400ms prefill, > 150ms idle)
+        timeProvider.Advance(TimeSpan.FromMilliseconds(220));
+        var timerCount = timeProvider.CreatedTimerCount;
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"token0"},"done":false}""");
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // 10 tokens 40ms apart (total ~620ms > 400ms prefill)
+        for (int i = 1; i <= 10; i++)
+        {
+            await timeProvider.WaitForTimerCreatedAfterAsync(timerCount, TimeSpan.FromSeconds(10));
+            timeProvider.Advance(TimeSpan.FromMilliseconds(40));
+            timerCount = timeProvider.CreatedTimerCount;
+            stream.PushChunk($$"""{"model":"test-model","message":{"role":"assistant","content":"token{{i}}"},"done":false}""");
+            await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
         }
+
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":""},"done":true}""");
+        stream.Complete();
+
+        await enumerationTask.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(11, tokens.Count);
         Assert.Equal("token0", tokens[0]);
@@ -211,15 +233,8 @@ public class StreamingIdleWatchdogIntegrationTests
     {
         var firstTokenTimeout = TimeSpan.FromMilliseconds(300);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(120);
+        var timeProvider = new ManualControllableTimeProvider();
         var stream = new ChannelStream();
-
-        // Producer delays 600ms (> 300ms prefill) before emitting any chunk
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(600);
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"too_late"},"done":false}""");
-            stream.Complete();
-        });
 
         var innerHandler = new ChunkedStreamingHandler((req, ct) =>
         {
@@ -231,12 +246,20 @@ public class StreamingIdleWatchdogIntegrationTests
             return Task.FromResult(response);
         });
 
-        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout);
+        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout, timeProvider);
 
-        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(async () =>
+        var enumerationTask = Task.Run(async () =>
         {
             await foreach (var _ in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")])) { }
         });
+
+        await stream.WaitForReaderAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
+
+        // Advance past 300ms prefill timeout before emitting any chunk
+        timeProvider.Advance(TimeSpan.FromMilliseconds(350));
+
+        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(() => enumerationTask.WaitAsync(TimeSpan.FromSeconds(10)));
 
         Assert.True(TransientErrorDetector.IsHttpTimeout(ex));
         Assert.Equal(StreamTimeoutPhase.FirstTokenPrefill, ex.Diagnostics.Phase);
@@ -249,23 +272,8 @@ public class StreamingIdleWatchdogIntegrationTests
     {
         var firstTokenTimeout = TimeSpan.FromMilliseconds(400);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(200);
+        var timeProvider = new ManualControllableTimeProvider();
         var stream = new ChannelStream();
-
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(50);
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t1"},"done":false}""");
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t2"},"done":false}""");
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t3"},"done":false}""");
-
-            // Pause within idle timeout (100ms < 200ms)
-            await Task.Delay(100);
-
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t4"},"done":false}""");
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t5"},"done":false}""");
-            stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":""},"done":true}""");
-            stream.Complete();
-        });
 
         var innerHandler = new ChunkedStreamingHandler((req, ct) =>
         {
@@ -277,16 +285,47 @@ public class StreamingIdleWatchdogIntegrationTests
             return Task.FromResult(response);
         });
 
-        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout);
+        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout, timeProvider);
 
         var tokens = new List<string>();
-        await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")]))
+        using var tokenReceived = new SemaphoreSlim(0);
+
+        var enumerationTask = Task.Run(async () =>
         {
-            if (!string.IsNullOrEmpty(update.Text))
+            await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")]))
             {
-                tokens.Add(update.Text);
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    tokens.Add(update.Text);
+                    tokenReceived.Release();
+                }
             }
-        }
+        });
+
+        await stream.WaitForReaderAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(50));
+        var timerCount = timeProvider.CreatedTimerCount;
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t1"},"done":false}""");
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t2"},"done":false}""");
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t3"},"done":false}""");
+
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await timeProvider.WaitForTimerCreatedAfterAsync(timerCount, TimeSpan.FromSeconds(10));
+
+        // Pause within idle timeout (100ms < 200ms)
+        timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t4"},"done":false}""");
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t5"},"done":false}""");
+        stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":""},"done":true}""");
+        stream.Complete();
+
+        await enumerationTask.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(5, tokens.Count);
         Assert.Equal("t1", tokens[0]);
@@ -298,6 +337,7 @@ public class StreamingIdleWatchdogIntegrationTests
     {
         var firstTokenTimeout = TimeSpan.FromSeconds(5);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(150);
+        var timeProvider = new ManualControllableTimeProvider();
         var stream = new ChannelStream();
 
         stream.PushChunk("""{"model":"test-model","message":{"role":"assistant","content":"t1"},"done":false}""");
@@ -315,12 +355,30 @@ public class StreamingIdleWatchdogIntegrationTests
             return Task.FromResult(response);
         });
 
-        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout);
+        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout, timeProvider);
 
-        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(async () =>
+        using var tokenReceived = new SemaphoreSlim(0);
+        var enumerationTask = Task.Run(async () =>
         {
-            await foreach (var _ in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")])) { }
+            await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")]))
+            {
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    tokenReceived.Release();
+                }
+            }
         });
+
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+        await tokenReceived.WaitAsync(TimeSpan.FromSeconds(10));
+        await stream.WaitForReaderAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
+
+        // Advance past 150ms idle timeout
+        timeProvider.Advance(TimeSpan.FromMilliseconds(200));
+
+        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(() => enumerationTask.WaitAsync(TimeSpan.FromSeconds(10)));
 
         Assert.True(TransientErrorDetector.IsHttpTimeout(ex));
         Assert.Equal(StreamTimeoutPhase.MidStreamIdleStall, ex.Diagnostics.Phase);
@@ -465,20 +523,31 @@ public class StreamingIdleWatchdogIntegrationTests
     {
         var firstTokenTimeout = TimeSpan.FromMilliseconds(250);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(120);
+        var timeProvider = new ManualControllableTimeProvider();
+        var handlerEnteredTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Handler stalls before returning HTTP 200 OK headers
         var innerHandler = new ChunkedStreamingHandler(async (req, ct) =>
         {
-            await Task.Delay(TimeSpan.FromSeconds(5), ct);
-            return new HttpResponseMessage(HttpStatusCode.OK);
+            var stallTcs = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var reg = ct.Register(() => stallTcs.TrySetCanceled(ct));
+            handlerEnteredTcs.TrySetResult(true);
+            return await stallTcs.Task;
         });
 
-        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout);
+        var (client, _) = CreateTestPipeline(innerHandler, firstTokenTimeout, streamIdleTimeout, timeProvider);
 
-        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(async () =>
+        var enumerationTask = Task.Run(async () =>
         {
             await foreach (var _ in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")])) { }
         });
+
+        await handlerEnteredTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(300));
+
+        var ex = await Assert.ThrowsAsync<LlmStreamTimeoutException>(() => enumerationTask.WaitAsync(TimeSpan.FromSeconds(10)));
 
         Assert.True(TransientErrorDetector.IsHttpTimeout(ex));
         Assert.Equal(StreamTimeoutPhase.PreHeaderPrefill, ex.Diagnostics.Phase);
@@ -618,6 +687,9 @@ public class StreamingIdleWatchdogIntegrationTests
     {
         var firstTokenTimeout = TimeSpan.FromMilliseconds(200);
         var streamIdleTimeout = TimeSpan.FromMilliseconds(150);
+        var timeProvider = new ManualControllableTimeProvider();
+        var attempt1EnteredTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retryBackoffStartedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         int handlerAttempts = 0;
 
         var innerHandler = new ChunkedStreamingHandler(async (req, ct) =>
@@ -626,7 +698,10 @@ public class StreamingIdleWatchdogIntegrationTests
             if (currentAttempt == 1)
             {
                 // Attempt 1 stalls before HTTP 200 OK headers -> triggers TransientHttpErrorRetryHandler PerAttemptTimeout
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                var stallTcs = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var reg = ct.Register(() => stallTcs.TrySetCanceled(ct));
+                attempt1EnteredTcs.TrySetResult(true);
+                return await stallTcs.Task;
             }
 
             var stream = new ChannelStream();
@@ -656,14 +731,15 @@ public class StreamingIdleWatchdogIntegrationTests
             BaseDelay = TimeSpan.FromMilliseconds(20),
             MaxDelay = TimeSpan.FromMilliseconds(50),
             MaxRetryDuration = TimeSpan.FromSeconds(10),
-            PerAttemptTimeout = firstTokenTimeout
+            PerAttemptTimeout = firstTokenTimeout,
+            OnRetry = _ => retryBackoffStartedTcs.TrySetResult(true)
         };
 
         var rawClient = OllamaChatClientFactory.CreateOllama(
             options,
             "test-model",
             NullLogger.Instance,
-            TimeProvider.System,
+            timeProvider,
             retryOptions,
             OllamaRoutingTarget.Auto,
             innerHandler,
@@ -678,18 +754,34 @@ public class StreamingIdleWatchdogIntegrationTests
             NullLogger<TelemetryChatClient>.Instance,
             options.Endpoint,
             sessionId: null,
-            TimeProvider.System,
+            timeProvider,
             firstTokenTimeout,
             streamIdleTimeout);
 
         var received = new List<string>();
-        await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")]))
+        var enumerationTask = Task.Run(async () =>
         {
-            if (!string.IsNullOrEmpty(update.Text))
+            await foreach (var update in client.GetStreamingResponseAsync([new(ChatRole.User, "hi")]))
             {
-                received.Add(update.Text);
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    received.Add(update.Text);
+                }
             }
-        }
+        });
+
+        await attempt1EnteredTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForActiveTimerAsync(TimeSpan.FromSeconds(10));
+
+        var timerCountBeforeTimeout = timeProvider.CreatedTimerCount;
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+
+        await retryBackoffStartedTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await timeProvider.WaitForTimerCreatedAfterAsync(timerCountBeforeTimeout, TimeSpan.FromSeconds(10));
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(100));
+
+        await enumerationTask.WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(2, handlerAttempts);
         Assert.Single(received);
@@ -841,8 +933,17 @@ public class StreamingIdleWatchdogIntegrationTests
         private readonly Lock _sync = new();
         private DateTimeOffset _utcNow = new(2026, 11, 10, 8, 0, 0, TimeSpan.Zero);
         private long _timestampTicks;
+        private int _createdTimerCount;
         private readonly List<ControllableTimer> _timers = new();
         private TaskCompletionSource<bool> _timerRegisteredTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int CreatedTimerCount
+        {
+            get
+            {
+                lock (_sync) return _createdTimerCount;
+            }
+        }
 
         public async Task WaitForActiveTimerAsync(TimeSpan timeout)
         {
@@ -859,6 +960,33 @@ public class StreamingIdleWatchdogIntegrationTests
             }
 
             await waitTask.WaitAsync(timeout);
+        }
+
+        public async Task WaitForTimerCreatedAfterAsync(int previousCount, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (true)
+            {
+                Task waitTask;
+                lock (_sync)
+                {
+                    if (_createdTimerCount > previousCount && _timers.Any(t => !t.IsDisposed))
+                    {
+                        return;
+                    }
+
+                    _timerRegisteredTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    waitTask = _timerRegisteredTcs.Task;
+                }
+
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero)
+                {
+                    throw new TimeoutException($"Timed out waiting for timer creation after count {previousCount}.");
+                }
+
+                await waitTask.WaitAsync(remaining);
+            }
         }
 
         public override DateTimeOffset GetUtcNow()
@@ -905,6 +1033,7 @@ public class StreamingIdleWatchdogIntegrationTests
             {
                 var timer = new ControllableTimer(this, callback, state, dueTime);
                 _timers.Add(timer);
+                _createdTimerCount++;
                 _timerRegisteredTcs.TrySetResult(true);
                 return timer;
             }
