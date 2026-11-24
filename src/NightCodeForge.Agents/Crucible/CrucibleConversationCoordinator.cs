@@ -378,7 +378,8 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         var effectiveSerializedStateJson = ResolveSerializedState(context, conversation, hadPersistedTurnsBeforeResume);
         state.IsResumedConversation = hadPersistedTurnsBeforeResume
             || !string.IsNullOrWhiteSpace(context.SerializedStateJson);
-        state.ChatHistory = RestoreChatHistory(context, effectiveSerializedStateJson);
+        state.ChatHistory = RestoreChatHistory(context, effectiveSerializedStateJson, _logger);
+        SeedRecordedToolCallsFromHistory(state);
 
         if (conversation.Turns != null)
         {
@@ -394,17 +395,17 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
         if (string.IsNullOrEmpty(effectiveSerializedStateJson) && !hadPersistedTurnsBeforeResume && context.SyntheticPriming != null)
         {
-            var effectivePriming = FilterSyntheticPriming(
+            ApplyFilteredSyntheticPriming(
+                state,
                 context.SyntheticPriming,
                 context.OptimizationFlags ?? context.Profile?.OptimizationFlags,
                 context.WorkspacePath);
-            ApplySyntheticPriming(state, effectivePriming);
         }
 
         if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
         {
             var resumedWaitingConversation = ReferenceEquals(conversation, waitingConversation);
-            ApplyPendingHumanAnswer(state, context, resumedWaitingConversation);
+            ApplyPendingHumanAnswer(state, context, resumedWaitingConversation, _logger);
         }
 
         var sessionId = persistedTaskId.HasValue
@@ -488,7 +489,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         return effectiveSerializedStateJson;
     }
 
-    private List<ChatMessage> RestoreChatHistory(AgentSessionContext context, string? effectiveSerializedStateJson)
+    internal static List<ChatMessage> RestoreChatHistory(AgentSessionContext context, string? effectiveSerializedStateJson, ILogger logger)
     {
         // The system prompt is NOT part of the history: it is supplied to HarnessAgent as HarnessInstructions
         // (ChatOptions.Instructions), so adding it as a System message too would send it to the model twice.
@@ -502,7 +503,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                 effectiveSerializedStateJson,
                 resolveHostPath,
                 trackUnresolvedRefs: true,
-                _logger);
+                logger);
             // Legacy checkpoints stored the system prompt as the first message; strip it while preserving system notices
             chatHistory.RemoveAll(m => m.Role == ChatRole.System && (m.Text == null || !m.Text.Contains(SystemNoticeMarker, StringComparison.OrdinalIgnoreCase)));
         }
@@ -572,6 +573,16 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
             return null;
         };
+    }
+
+    internal static void ApplyFilteredSyntheticPriming(
+        CrucibleConversationState state,
+        SyntheticPrimingExecution priming,
+        LocalOptimizationFlags? optimizationFlags,
+        string? workspaceRoot)
+    {
+        var effectivePriming = FilterSyntheticPriming(priming, optimizationFlags, workspaceRoot);
+        ApplySyntheticPriming(state, effectivePriming);
     }
 
     private static SyntheticPrimingExecution FilterSyntheticPriming(
@@ -648,8 +659,26 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         }
     }
 
+    internal static void SeedRecordedToolCallsFromHistory(CrucibleConversationState state)
+    {
+        foreach (var msg in state.ChatHistory)
+        {
+            foreach (var content in msg.Contents)
+            {
+                if (content is FunctionCallContent fcc && !string.IsNullOrEmpty(fcc.CallId))
+                {
+                    state.TryRecordToolCall(fcc.CallId);
+                }
+            }
+        }
+    }
+
     /// <summary>Completes the pending <c>ask</c> tool call with the human answers as its tool result.</summary>
-    private void ApplyPendingHumanAnswer(CrucibleConversationState state, AgentSessionContext context, bool resumedWaitingConversation)
+    internal static void ApplyPendingHumanAnswer(
+        CrucibleConversationState state,
+        AgentSessionContext context,
+        bool resumedWaitingConversation,
+        ILogger logger)
     {
         var chatHistory = state.ChatHistory;
         var conversation = state.Conversation;
@@ -772,7 +801,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                     $"Failed to record ToolResult turn for conversation #{convId}",
                     toolName: CanonicalToolNames.Ask,
                     toolResult: pendingAnswer,
-                    metadataJson: BuildToolResultMetadata(callId, context.PendingHumanAnswerJson));
+                    metadataJson: BuildToolResultMetadata(callId, context.PendingHumanAnswerJson, logger));
             }
         }
 
@@ -1046,7 +1075,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
 
                     if (i == 0 && msg.Role == ChatRole.Assistant && !string.IsNullOrEmpty(text))
                     {
-                        timeline.ConsumeOptionalUpTo(TranscriptRoleKind.Assistant, toolTimestamp);
+                        timeline.ConsumeOptionalUpTo(TranscriptRoleKind.Assistant, toolTimestamp, text);
                     }
 
                     entries.Add(new TranscriptEntry(
@@ -1348,7 +1377,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                 new RoleTimestampStream(compactionList));
         }
 
-        public void ConsumeOptionalUpTo(TranscriptRoleKind kind, DateTime maxTimestampUtc)
+        public void ConsumeOptionalUpTo(TranscriptRoleKind kind, DateTime maxTimestampUtc, string? expectedContent = null)
         {
             var stream = GetStream(kind);
             if (stream == null)
@@ -1357,9 +1386,16 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             }
 
             AdvancePastPruned(stream);
-            if (stream.Cursor < stream.Items.Count && stream.Items[stream.Cursor].TimestampUtc <= maxTimestampUtc)
+            if (stream.Cursor < stream.Items.Count)
             {
-                stream.Cursor++;
+                var head = stream.Items[stream.Cursor];
+                if (head.TimestampUtc <= maxTimestampUtc &&
+                    (string.IsNullOrWhiteSpace(head.Content) ||
+                     string.IsNullOrWhiteSpace(expectedContent) ||
+                     ContentMatches(head.Content, expectedContent)))
+                {
+                    stream.Cursor++;
+                }
             }
         }
 
@@ -1719,7 +1755,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         return null;
     }
 
-    private string BuildToolResultMetadata(string callId, string? structuredAnswerJson)
+    private static string BuildToolResultMetadata(string callId, string? structuredAnswerJson, ILogger logger)
     {
         var metaDict = new Dictionary<string, object?> { [CallIdMetadataKey] = callId };
         if (!string.IsNullOrWhiteSpace(structuredAnswerJson))
@@ -1731,7 +1767,7 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
             }
             catch (JsonException ex)
             {
-                _logger.LogWarning(ex, "Ignoring malformed structured human answer JSON for call {CallId}", callId);
+                logger.LogWarning(ex, "Ignoring malformed structured human answer JSON for call {CallId}", callId);
             }
         }
         return JsonSerializer.Serialize(metaDict);

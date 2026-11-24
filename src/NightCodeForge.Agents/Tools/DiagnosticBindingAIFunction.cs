@@ -17,6 +17,7 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
     private const int MaxEnumPreviewCount = 6;
     private const string SchemaPropertiesKey = "properties";
     private const string SchemaRequiredKey = "required";
+    private const string SchemaAdditionalPropertiesKey = "additionalProperties";
     private const string SchemaTypeKey = "type";
     private const string SchemaItemsKey = "items";
     private const string SchemaEnumKey = "enum";
@@ -24,6 +25,10 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
     private const string SchemaOneOfKey = "oneOf";
     private const string SchemaRefKey = "$ref";
     private const string SchemaNullType = "null";
+    private const string SchemaBooleanType = "boolean";
+    private const string SchemaIntegerType = "integer";
+    private const string SchemaNumberType = "number";
+    private const string SchemaStringType = "string";
     private const string SchemaArrayType = "array";
     private const string SchemaObjectType = "object";
     private const string FallbackAnyType = "any";
@@ -97,8 +102,8 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
             return false;
         }
 
-        failingParam = ResolveFailingParameterFromSchema(candidate, arguments, function.JsonSchema);
-        return true;
+        failingParam = ResolveFailingParameterFromSchema(candidate, arguments, function.JsonSchema, out var isSchemaBindingFailure);
+        return failingParam != null || isSchemaBindingFailure;
     }
 
     private static Exception? UnwrapBindingException(Exception ex)
@@ -299,32 +304,52 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
     private static string? ResolveFailingParameterFromSchema(
         Exception bindingEx,
         AIFunctionArguments arguments,
-        JsonElement schema)
+        JsonElement schema,
+        out bool isSchemaBindingFailure)
     {
-        var declaredProperties = new HashSet<string>(StringComparer.Ordinal);
-        if (schema.ValueKind == JsonValueKind.Object &&
-            schema.TryGetProperty(SchemaPropertiesKey, out var props) &&
-            props.ValueKind == JsonValueKind.Object)
+        var resolvedRoot = ResolveLocalSchemaRef(schema, schema);
+        if (resolvedRoot.ValueKind != JsonValueKind.Object ||
+            !resolvedRoot.TryGetProperty(SchemaPropertiesKey, out var props) ||
+            props.ValueKind != JsonValueKind.Object)
         {
-            foreach (var prop in props.EnumerateObject())
-            {
-                declaredProperties.Add(prop.Name);
-            }
+            isSchemaBindingFailure = bindingEx is JsonException;
+            return null;
+        }
 
-            if (schema.TryGetProperty(SchemaRequiredKey, out var required) && required.ValueKind == JsonValueKind.Array)
+        isSchemaBindingFailure = false;
+        var declaredProperties = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var prop in props.EnumerateObject())
+        {
+            declaredProperties.Add(prop.Name);
+        }
+
+        if (resolvedRoot.TryGetProperty(SchemaRequiredKey, out var required) && required.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var reqItem in required.EnumerateArray())
             {
-                foreach (var reqItem in required.EnumerateArray())
+                if (reqItem.ValueKind != JsonValueKind.String)
                 {
-                    if (reqItem.ValueKind != JsonValueKind.String)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    var reqName = reqItem.GetString();
-                    if (!string.IsNullOrWhiteSpace(reqName) && !arguments.ContainsKey(reqName))
-                    {
-                        return reqName;
-                    }
+                var reqName = reqItem.GetString();
+                if (!string.IsNullOrWhiteSpace(reqName) && !arguments.ContainsKey(reqName))
+                {
+                    isSchemaBindingFailure = true;
+                    return reqName;
+                }
+            }
+        }
+
+        if (resolvedRoot.TryGetProperty(SchemaAdditionalPropertiesKey, out var addProps) &&
+            addProps.ValueKind == JsonValueKind.False)
+        {
+            foreach (var key in arguments.Keys)
+            {
+                if (!declaredProperties.Contains(key))
+                {
+                    isSchemaBindingFailure = true;
+                    return key;
                 }
             }
         }
@@ -333,6 +358,7 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
             !string.IsNullOrWhiteSpace(argEx.ParamName) &&
             declaredProperties.Contains(argEx.ParamName))
         {
+            isSchemaBindingFailure = true;
             return argEx.ParamName;
         }
 
@@ -340,13 +366,234 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
         if (!string.IsNullOrWhiteSpace(jsonPath))
         {
             var rootProperty = ExtractRootPropertyFromJsonPath(jsonPath);
-            if (!string.IsNullOrWhiteSpace(rootProperty) && declaredProperties.Contains(rootProperty))
+            if (!string.IsNullOrWhiteSpace(rootProperty))
             {
-                return rootProperty;
+                if (declaredProperties.Contains(rootProperty) || arguments.ContainsKey(rootProperty))
+                {
+                    isSchemaBindingFailure = true;
+                    return rootProperty;
+                }
+
+                return null;
+            }
+        }
+
+        foreach (var (argName, rawValue) in arguments)
+        {
+            if (props.TryGetProperty(argName, out var propSchema) &&
+                !IsArgumentCompatibleWithSchema(rawValue, propSchema, schema))
+            {
+                isSchemaBindingFailure = true;
+                return argName;
             }
         }
 
         return null;
+    }
+
+    private static bool IsArgumentCompatibleWithSchema(
+        object? rawValue,
+        JsonElement propSchema,
+        JsonElement rootSchema)
+    {
+        if (rawValue is null)
+        {
+            using var nullDoc = JsonDocument.Parse("null");
+            return IsJsonElementCompatibleWithSchema(nullDoc.RootElement, propSchema, rootSchema, depth: 0);
+        }
+
+        try
+        {
+            return rawValue switch
+            {
+                JsonElement je => IsJsonElementCompatibleWithSchema(je, propSchema, rootSchema, depth: 0),
+                JsonDocument jd => IsJsonElementCompatibleWithSchema(jd.RootElement, propSchema, rootSchema, depth: 0),
+                _ => IsJsonElementCompatibleWithSchema(
+                    JsonSerializer.SerializeToElement(rawValue, rawValue.GetType(), AIJsonUtilities.DefaultOptions),
+                    propSchema,
+                    rootSchema,
+                    depth: 0)
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsJsonElementCompatibleWithSchema(
+        JsonElement value,
+        JsonElement schema,
+        JsonElement rootSchema,
+        int depth)
+    {
+        if (depth > MaxSchemaDepth || schema.ValueKind != JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        var resolved = ResolveLocalSchemaRef(schema, rootSchema);
+        if (resolved.ValueKind != JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        if ((resolved.TryGetProperty(SchemaAnyOfKey, out var union) || resolved.TryGetProperty(SchemaOneOfKey, out union)) &&
+            union.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var branch in union.EnumerateArray())
+            {
+                if (IsJsonElementCompatibleWithSchema(value, branch, rootSchema, depth + 1))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (resolved.TryGetProperty(SchemaEnumKey, out var enumEl) && enumEl.ValueKind == JsonValueKind.Array)
+        {
+            bool matchedEnum = false;
+            foreach (var candidate in enumEl.EnumerateArray())
+            {
+                if (JsonElement.DeepEquals(candidate, value))
+                {
+                    matchedEnum = true;
+                    break;
+                }
+            }
+
+            if (!matchedEnum)
+            {
+                return false;
+            }
+        }
+
+        if (resolved.TryGetProperty(SchemaTypeKey, out var typeEl) && !MatchesAllowedSchemaTypes(value, typeEl))
+        {
+            return false;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array &&
+            resolved.TryGetProperty(SchemaItemsKey, out var itemsSchema) &&
+            itemsSchema.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                if (!IsJsonElementCompatibleWithSchema(item, itemsSchema, rootSchema, depth + 1))
+                {
+                    return false;
+                }
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Object)
+        {
+            if (resolved.TryGetProperty(SchemaRequiredKey, out var reqEl) && reqEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var reqItem in reqEl.EnumerateArray())
+                {
+                    if (reqItem.ValueKind == JsonValueKind.String &&
+                        reqItem.GetString() is { Length: > 0 } reqName &&
+                        !value.TryGetProperty(reqName, out _))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            if (resolved.TryGetProperty(SchemaPropertiesKey, out var objProps) && objProps.ValueKind == JsonValueKind.Object)
+            {
+                var checkAdditional = resolved.TryGetProperty(SchemaAdditionalPropertiesKey, out var addProps) &&
+                                      addProps.ValueKind == JsonValueKind.False;
+
+                foreach (var prop in value.EnumerateObject())
+                {
+                    if (objProps.TryGetProperty(prop.Name, out var subSchema))
+                    {
+                        if (!IsJsonElementCompatibleWithSchema(prop.Value, subSchema, rootSchema, depth + 1))
+                        {
+                            return false;
+                        }
+                    }
+                    else if (checkAdditional)
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool MatchesAllowedSchemaTypes(JsonElement value, JsonElement typeEl)
+    {
+        if (typeEl.ValueKind == JsonValueKind.String)
+        {
+            return MatchesSingleSchemaType(value, typeEl.GetString());
+        }
+
+        if (typeEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in typeEl.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String && MatchesSingleSchemaType(value, item.GetString()))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool MatchesSingleSchemaType(JsonElement value, string? schemaType)
+    {
+        if (string.IsNullOrWhiteSpace(schemaType))
+        {
+            return true;
+        }
+
+        if (string.Equals(schemaType, SchemaNullType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined;
+        }
+
+        if (string.Equals(schemaType, SchemaStringType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind == JsonValueKind.String;
+        }
+
+        if (string.Equals(schemaType, SchemaBooleanType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind is JsonValueKind.True or JsonValueKind.False;
+        }
+
+        if (string.Equals(schemaType, SchemaIntegerType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind == JsonValueKind.Number &&
+                   (value.TryGetInt64(out _) || (value.TryGetDecimal(out var dec) && dec == Math.Truncate(dec)));
+        }
+
+        if (string.Equals(schemaType, SchemaNumberType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind == JsonValueKind.Number;
+        }
+
+        if (string.Equals(schemaType, SchemaArrayType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind == JsonValueKind.Array;
+        }
+
+        if (string.Equals(schemaType, SchemaObjectType, StringComparison.OrdinalIgnoreCase))
+        {
+            return value.ValueKind == JsonValueKind.Object;
+        }
+
+        return true;
     }
 
     private static string? ExtractRootPropertyFromJsonPath(string jsonPath)

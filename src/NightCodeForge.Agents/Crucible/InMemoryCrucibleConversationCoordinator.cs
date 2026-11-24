@@ -1,11 +1,9 @@
-using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Agents.Compaction;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
-using NightCodeForge.Core.Workflow.Filtering;
 
 namespace NightCodeForge.Agents.Crucible;
 
@@ -93,26 +91,45 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
             Turns = new List<ConversationTurn>()
         };
 
-        var sink = _activeCapture.Value?.TurnSink ?? new InMemoryConversationTurnSink();
+        var sink = new InMemoryConversationTurnSink();
+        var isResumed = !string.IsNullOrWhiteSpace(context.SerializedStateJson);
         var state = new CrucibleConversationState(conversation, attemptIndex: 1, sink, _logger)
         {
             SessionId = $"inmem-{Guid.NewGuid():N}",
-            IsResumedConversation = !string.IsNullOrWhiteSpace(context.SerializedStateJson)
+            IsResumedConversation = isResumed
         };
 
-        var initialPrompt = !string.IsNullOrWhiteSpace(context.BootstrapPrompt)
-            ? context.BootstrapPrompt
-            : CrucibleConversationCoordinator.DefaultBootstrapPrompt;
+        state.ChatHistory = CrucibleConversationCoordinator.RestoreChatHistory(context, context.SerializedStateJson, _logger);
+        CrucibleConversationCoordinator.SeedRecordedToolCallsFromHistory(state);
 
-        state.ChatHistory = new List<ChatMessage> { new(ChatRole.User, initialPrompt) };
-        state.EnqueueTurn(
-            StageTurnRole.User,
-            $"Failed to record initial prompt turn for in-memory conversation #{conversationId}",
-            content: initialPrompt);
-
-        if (context.SyntheticPriming != null)
+        if (!isResumed)
         {
-            ApplySyntheticPriming(state, context.SyntheticPriming, context.OptimizationFlags ?? context.Profile.OptimizationFlags, context.WorkspacePath);
+            var initialPrompt = !string.IsNullOrWhiteSpace(context.BootstrapPrompt)
+                ? context.BootstrapPrompt
+                : CrucibleConversationCoordinator.DefaultBootstrapPrompt;
+
+            state.EnqueueTurn(
+                StageTurnRole.User,
+                $"Failed to record initial prompt turn for in-memory conversation #{conversationId}",
+                content: initialPrompt);
+
+            if (context.SyntheticPriming != null)
+            {
+                CrucibleConversationCoordinator.ApplyFilteredSyntheticPriming(
+                    state,
+                    context.SyntheticPriming,
+                    context.OptimizationFlags ?? context.Profile.OptimizationFlags,
+                    context.WorkspacePath);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(context.PendingHumanAnswer))
+        {
+            CrucibleConversationCoordinator.ApplyPendingHumanAnswer(
+                state,
+                context,
+                resumedWaitingConversation: isResumed,
+                _logger);
         }
 
         if (_activeCapture.Value is { } capture)
@@ -210,16 +227,20 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
         string savedPath;
         if (!string.IsNullOrWhiteSpace(capture?.TargetTranscriptPath))
         {
-            var destDir = Path.GetDirectoryName(capture.TargetTranscriptPath)
-                ?? Path.Combine(request.WorkspacePath, DocsFolder, TranscriptsFolder);
+            var rawTargetPath = capture.TargetTranscriptPath.Trim();
+            var rawTargetDir = Path.GetDirectoryName(rawTargetPath);
+            var resolvedTargetPath = string.IsNullOrWhiteSpace(rawTargetDir)
+                ? Path.Combine(request.WorkspacePath, DocsFolder, TranscriptsFolder, rawTargetPath)
+                : Path.GetFullPath(rawTargetPath);
+            var destDir = Path.GetDirectoryName(resolvedTargetPath)!;
             Directory.CreateDirectory(destDir);
             var tempDir = Path.Combine(destDir, $".tmp-{Guid.NewGuid():N}");
             Directory.CreateDirectory(tempDir);
             try
             {
                 var generatedPath = await _transcriptService.SaveTranscriptAsync(meta, entries, tempDir, cancellationToken).ConfigureAwait(false);
-                File.Move(generatedPath, capture.TargetTranscriptPath, overwrite: true);
-                savedPath = capture.TargetTranscriptPath;
+                File.Move(generatedPath, resolvedTargetPath, overwrite: true);
+                savedPath = resolvedTargetPath;
             }
             finally
             {
@@ -265,64 +286,6 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
 
     public Task ReleaseSessionAffinityAsync(string? sessionId, CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
-
-    private static void ApplySyntheticPriming(
-        CrucibleConversationState state,
-        SyntheticPrimingExecution priming,
-        LocalOptimizationFlags? optimizationFlags,
-        string? workspaceRoot)
-    {
-        var filtered = CliOutputFilterHelpers.FilterPrimingOutput(
-            CliOutputFilterRegistry.Default,
-            priming.Command,
-            priming.Output,
-            priming.IsSuccess,
-            workspaceRoot ?? string.Empty,
-            smartFilteringEnabled: optimizationFlags?.SmartCliOutputFiltering ?? true,
-            Core.Workflow.WorkflowDefaults.MaxToolInlineChars);
-
-        var primeCallId = $"prime_{Guid.NewGuid():N}";
-        state.TryRecordToolCall(primeCallId);
-
-        state.ChatHistory.Add(new ChatMessage(ChatRole.Assistant, new List<AIContent>
-        {
-            new FunctionCallContent(primeCallId, CanonicalToolNames.Bash, new Dictionary<string, object?> { ["command"] = priming.Command })
-        }));
-        state.ChatHistory.Add(new ChatMessage(ChatRole.Tool, new List<AIContent>
-        {
-            new FunctionResultContent(primeCallId, filtered)
-        }));
-
-        var primingMeta = JsonSerializer.Serialize(new { CallId = primeCallId });
-
-        state.EnqueueTurn(
-            StageTurnRole.Tool,
-            $"Failed to record primed Tool turn for in-memory conversation #{state.Conversation.Id}",
-            content: $"Execute {priming.Command}",
-            toolName: CanonicalToolNames.Bash,
-            toolArguments: JsonSerializer.Serialize(new { command = priming.Command }),
-            metadataJson: primingMeta,
-            durationMs: priming.DurationMs);
-
-        state.EnqueueTurn(
-            StageTurnRole.ToolResult,
-            $"Failed to record primed ToolResult turn for in-memory conversation #{state.Conversation.Id}",
-            content: filtered,
-            toolName: CanonicalToolNames.Bash,
-            toolResult: filtered,
-            isError: !priming.IsSuccess,
-            metadataJson: primingMeta,
-            durationMs: priming.DurationMs);
-
-        if (!priming.IsSuccess)
-        {
-            state.ChatHistory.Add(new ChatMessage(ChatRole.User, CrucibleConversationCoordinator.FixDirectivePrompt));
-            state.EnqueueTurn(
-                StageTurnRole.User,
-                $"Failed to record fix directive User turn for in-memory conversation #{state.Conversation.Id}",
-                content: CrucibleConversationCoordinator.FixDirectivePrompt);
-        }
-    }
 
     private sealed class CaptureScopeRestore(InMemoryConversationCapture? previous) : IDisposable
     {

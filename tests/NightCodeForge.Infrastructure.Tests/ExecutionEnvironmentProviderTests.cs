@@ -211,5 +211,252 @@ public class ExecutionEnvironmentProviderTests
         Assert.NotSame(first, second);
         disp2.Verify(d => d.Dispose(), Times.Never);
     }
+
+    [Fact]
+    public async Task CleanupScopeEnvironmentAsync_HoldsKeyLockAcrossRemoveContainer_PreventingConcurrentCreationRace()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+
+        var env1 = new Mock<IExecutionEnvironment>();
+        var env2 = new Mock<IExecutionEnvironment>();
+
+        var removeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRemoveFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        var eventsLock = new object();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.SetupSequence(f => f.CreateContainerEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(env1.Object)
+            .Returns(() =>
+            {
+                lock (eventsLock)
+                {
+                    events.Add("create-2");
+                }
+                return Task.FromResult(env2.Object);
+            });
+
+        containerFactory.Setup(f => f.RemoveContainerAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                lock (eventsLock)
+                {
+                    events.Add("remove-start");
+                }
+                removeStarted.TrySetResult();
+                await allowRemoveFinish.Task.ConfigureAwait(false);
+                lock (eventsLock)
+                {
+                    events.Add("remove-end");
+                }
+            });
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var scope = new SandboxScopeDescriptor(
+            scopeKind: SandboxScopeKind.WorkspaceClone,
+            executionMode: ExecutionMode.ContainerSandbox,
+            securityTier: SandboxSecurityTier.Standard,
+            mountTable: SandboxMountTable.ForWorkspace("/tmp/bench-race", isReadOnly: false),
+            containerName: "ncf-bench-race",
+            scopeCacheKey: "bench-run:ncf-bench-race");
+
+        var first = await provider.GetEnvironmentAsync(scope);
+        Assert.Same(env1.Object, first);
+
+        var cleanupTask = provider.CleanupScopeEnvironmentAsync(scope);
+        await removeStarted.Task;
+
+        var concurrentGetTask = provider.GetEnvironmentAsync(scope);
+        await Task.Delay(50);
+        Assert.False(concurrentGetTask.IsCompleted);
+
+        allowRemoveFinish.TrySetResult();
+        await cleanupTask;
+        var second = await concurrentGetTask;
+
+        Assert.Same(env2.Object, second);
+        Assert.Equal(["remove-start", "remove-end", "create-2"], events);
+    }
+
+    [Fact]
+    public async Task CleanupTaskContainerAsync_HoldsTaskLocksAcrossRemoval_SerializingConcurrentGetEnvironment()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+
+        var env1 = new Mock<IExecutionEnvironment>();
+        var disp1 = env1.As<IDisposable>();
+        var env2 = new Mock<IExecutionEnvironment>();
+
+        var removeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRemoveFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        var eventsLock = new object();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.SetupSequence(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                7,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(env1.Object)
+            .Returns(() =>
+            {
+                lock (eventsLock)
+                {
+                    events.Add("create-task-2");
+                }
+                return Task.FromResult(env2.Object);
+            });
+
+        containerFactory.Setup(f => f.RemoveTaskContainerAsync(It.IsAny<Workspace>(), 7, It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                lock (eventsLock)
+                {
+                    events.Add("remove-task-start");
+                }
+                removeStarted.TrySetResult();
+                await allowRemoveFinish.Task.ConfigureAwait(false);
+                lock (eventsLock)
+                {
+                    events.Add("remove-task-end");
+                }
+            });
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var workspace = new Workspace
+        {
+            Id = 11,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            RepositoryPath = "/tmp/ws-11/clone"
+        };
+
+        var first = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 7);
+        Assert.Same(env1.Object, first);
+
+        var cleanupTask = provider.CleanupTaskContainerAsync(workspace, taskId: 7);
+        await removeStarted.Task;
+
+        var concurrentGetTask = provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 7);
+        await Task.Delay(50);
+        Assert.False(concurrentGetTask.IsCompleted);
+
+        allowRemoveFinish.TrySetResult();
+        await cleanupTask;
+        var second = await concurrentGetTask;
+
+        disp1.Verify(d => d.Dispose(), Times.Once);
+        Assert.Same(env2.Object, second);
+        Assert.Equal(["remove-task-start", "remove-task-end", "create-task-2"], events);
+    }
+
+    [Fact]
+    public async Task EvictIdleWorkspaceContainersAsync_HoldsWorkspaceLocksAcrossRemoval_SerializingConcurrentGetEnvironment()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+        var identityResolver = new Mock<IHostUserIdentityResolver>();
+        var telemetry = new Mock<IOperationsTelemetryService>();
+
+        using var initialExecutor = new NightCodeForgeContainerExecutor(
+            new ContainerExecutorOptions { ContainerNameOrId = "ncf-ws-22", HostWorkspacePath = "/tmp/ws-22" },
+            processRunner.Object,
+            NullLogger<NightCodeForgeContainerExecutor>.Instance,
+            identityResolver.Object,
+            telemetry.Object);
+        var replacementEnv = new Mock<IExecutionEnvironment>();
+
+        var removeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRemoveFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = new List<string>();
+        var eventsLock = new object();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.SetupSequence(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(initialExecutor)
+            .Returns(() =>
+            {
+                lock (eventsLock)
+                {
+                    events.Add("create-base-2");
+                }
+                return Task.FromResult(replacementEnv.Object);
+            });
+
+        containerFactory.Setup(f => f.RemoveBaseContainerAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                lock (eventsLock)
+                {
+                    events.Add("remove-base-start");
+                }
+                removeStarted.TrySetResult();
+                await allowRemoveFinish.Task.ConfigureAwait(false);
+                lock (eventsLock)
+                {
+                    events.Add("remove-base-end");
+                }
+            });
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var workspace = new Workspace
+        {
+            Id = 22,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            RepositoryPath = "/tmp/ws-22/clone"
+        };
+
+        var first = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard);
+        Assert.Same(initialExecutor, first);
+
+        var evictTask = provider.EvictIdleWorkspaceContainersAsync(workspace, TimeSpan.Zero);
+        await removeStarted.Task;
+
+        var concurrentGetTask = provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard);
+        await Task.Delay(50);
+        Assert.False(concurrentGetTask.IsCompleted);
+
+        allowRemoveFinish.TrySetResult();
+        var evictedCount = await evictTask;
+        var second = await concurrentGetTask;
+
+        Assert.Equal(1, evictedCount);
+        Assert.Same(replacementEnv.Object, second);
+        Assert.Equal(["remove-base-start", "remove-base-end", "create-base-2"], events);
+    }
 }
 

@@ -552,6 +552,8 @@ public class AttachmentPersistenceAndSandboxMountTests : IDisposable
             .ReturnsAsync(new ProcessExecutionResult(0, "alpine\n", string.Empty));
         runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.Config.User}}")), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(0, ContainerExecutorOptions.RestrictedReadOnlyUserUidGid + "\n", string.Empty));
+        runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, "none\n", string.Empty));
 
         return ContainerMountAndDriftBuilder.DetectContainerDriftAsync(runnerMock.Object, options);
     }

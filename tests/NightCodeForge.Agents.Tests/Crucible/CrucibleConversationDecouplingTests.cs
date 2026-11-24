@@ -170,6 +170,212 @@ public sealed class CrucibleConversationDecouplingTests : IDisposable
     }
 
     [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_ReusingCapture_IsolatesTurnSinkAcrossRuns()
+    {
+        var transcriptService = new SessionTranscriptService(Path.Combine(_tempDir, "default-transcripts"));
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            transcriptService,
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var repoDir = Path.Combine(_tempDir, "repo-sink-reset");
+        Directory.CreateDirectory(repoDir);
+
+        var capture = new InMemoryConversationCapture(Path.Combine(_tempDir, "bench-out", "sink-reset.md"));
+        var context1 = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Run 1", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "First prompt",
+            WorkspacePath = repoDir
+        };
+
+        using var _ = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+        var state1 = await coordinator.BeginAsync(context1, StandardHarnessIds.Crucible, CancellationToken.None);
+        state1.EnqueueTurn(StageTurnRole.Assistant, "err", content: "First answer");
+        await state1.DrainAsync();
+        var firstSink = capture.TurnSink;
+        Assert.Equal(2, firstSink.Turns.Count);
+
+        var context2 = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Run 2", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "Second prompt",
+            WorkspacePath = repoDir
+        };
+
+        var state2 = await coordinator.BeginAsync(context2, StandardHarnessIds.Crucible, CancellationToken.None);
+        await state2.DrainAsync();
+
+        Assert.NotSame(firstSink, capture.TurnSink);
+        var singleTurn = Assert.Single(capture.TurnSink.Turns);
+        Assert.Equal(0, singleTurn.TurnIndex);
+        Assert.Equal("Second prompt", singleTurn.Content);
+    }
+
+    [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_BareFilenameTargetTranscriptPath_WritesUnderWorkspaceTranscriptsWithoutThrowing()
+    {
+        var transcriptService = new SessionTranscriptService(Path.Combine(_tempDir, "default-transcripts"));
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            transcriptService,
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var repoDir = Path.Combine(_tempDir, "repo-bare-name");
+        Directory.CreateDirectory(repoDir);
+
+        var capture = new InMemoryConversationCapture("bare-inst.md");
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Bare path", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "Fix bug",
+            WorkspacePath = repoDir
+        };
+
+        using var _ = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+        var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+
+        var fileName = await coordinator.SaveTranscriptAsync(
+            state,
+            new CrucibleTranscriptRequest(
+                context,
+                repoDir,
+                state.ChatHistory,
+                ElapsedMs: 100,
+                PromptTokens: 10,
+                CompletionTokens: 5,
+                AgentRunStatus.Completed,
+                Summary: "Done",
+                TracingClient: null,
+                HarnessOptions: null,
+                ActiveSkills: null),
+            CancellationToken.None);
+
+        var expectedPath = Path.Combine(repoDir, "docs", "transcripts", "bare-inst.md");
+        Assert.Equal("bare-inst.md", fileName);
+        Assert.Equal(expectedPath, capture.SavedTranscriptPath);
+        Assert.True(File.Exists(expectedPath));
+    }
+
+    [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_PreFilteredPrimingAndSerializedState_AlignWithCoordinator()
+    {
+        var transcriptService = new SessionTranscriptService(Path.Combine(_tempDir, "default-transcripts"));
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            transcriptService,
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var repoDir = Path.Combine(_tempDir, "repo-primed-resumed");
+        Directory.CreateDirectory(repoDir);
+
+        var preFilteredOutput = "Exact pre-filtered output\nLine 2\nLine 3";
+        var primingContext = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Primed", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "Fix build",
+            WorkspacePath = repoDir,
+            SyntheticPriming = new SyntheticPrimingExecution(
+                SourceStageId: StandardStageIds.PreImplementationBaseline,
+                ToolName: CanonicalToolNames.Bash,
+                Command: "dotnet build",
+                Output: preFilteredOutput,
+                IsSuccess: false,
+                DurationMs: 42,
+                IsPreFiltered: true)
+        };
+
+        var primingCapture = new InMemoryConversationCapture();
+        using (InMemoryCrucibleConversationCoordinator.BeginCapture(primingCapture))
+        {
+            var primedState = await coordinator.BeginAsync(primingContext, StandardHarnessIds.Crucible, CancellationToken.None);
+            await primedState.DrainAsync();
+
+            var resultMsg = primedState.ChatHistory
+                .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+                .Single();
+            Assert.Equal(preFilteredOutput, resultMsg.Result?.ToString());
+
+            var toolTurn = Assert.Single(primingCapture.TurnSink.Turns, t => t.Role == StageTurnRole.Tool);
+            using var metaDoc = JsonDocument.Parse(toolTurn.MetadataJson!);
+            Assert.True(metaDoc.RootElement.GetProperty("IsPrimed").GetBoolean());
+            Assert.Equal(StandardStageIds.PreImplementationBaseline, metaDoc.RootElement.GetProperty("SourceStageId").GetString());
+            Assert.Equal("LoopbackDiagnostic", metaDoc.RootElement.GetProperty("PrimingType").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(metaDoc.RootElement.GetProperty("CallId").GetString()));
+        }
+
+        var priorHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Original prompt"),
+            new(ChatRole.Assistant, "Prior step completed")
+        };
+        var serialized = CrucibleAgentHarness.SerializeSession(priorHistory);
+        var resumedContext = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Resumed", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "Should not overwrite",
+            SerializedStateJson = serialized,
+            WorkspacePath = repoDir
+        };
+
+        var resumedState = await coordinator.BeginAsync(resumedContext, StandardHarnessIds.Crucible, CancellationToken.None);
+        Assert.True(resumedState.IsResumedConversation);
+        Assert.Equal(2, resumedState.ChatHistory.Count);
+        Assert.Equal("Original prompt", resumedState.ChatHistory[0].Text);
+        Assert.Equal("Prior step completed", resumedState.ChatHistory[1].Text);
+
+        var waitingHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Clarify DB choice"),
+            new(ChatRole.Assistant, [new FunctionCallContent("call-read-1", CanonicalToolNames.Read)]),
+            new(ChatRole.Tool, [new FunctionResultContent("call-read-1", "appsettings.json")]),
+            new(ChatRole.Assistant, [new FunctionCallContent("call-ask-1", CanonicalToolNames.Ask)]),
+            new(ChatRole.Tool, [new FunctionResultContent("call-ask-1", NightCodeForge.Core.Workflow.ConversationHistorySerializer.InterruptedToolResult)])
+        };
+        var waitingSerialized = CrucibleAgentHarness.SerializeSession(waitingHistory);
+        var resumedAskCapture = new InMemoryConversationCapture();
+        using (InMemoryCrucibleConversationCoordinator.BeginCapture(resumedAskCapture))
+        {
+            var resumedAskContext = new AgentSessionContext
+            {
+                ForgeTask = new ForgeTask { Id = 0, Title = "Resumed Ask", Description = "Desc" },
+                Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+                Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+                StageId = StandardStageIds.Implementation,
+                BootstrapPrompt = "Clarify DB choice",
+                SerializedStateJson = waitingSerialized,
+                PendingHumanAnswer = "Use PostgreSQL",
+                WorkspacePath = repoDir
+            };
+
+            var resumedAskState = await coordinator.BeginAsync(resumedAskContext, StandardHarnessIds.Crucible, CancellationToken.None);
+            await resumedAskState.DrainAsync();
+
+            Assert.True(resumedAskState.IsToolCallRecorded("call-read-1"));
+            Assert.True(resumedAskState.IsToolCallRecorded("call-ask-1"));
+
+            var askResult = resumedAskState.ChatHistory
+                .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+                .Single(r => r.CallId == "call-ask-1");
+            Assert.Equal("Use PostgreSQL", askResult.Result?.ToString());
+            Assert.Equal(ChatRole.User, resumedAskState.ChatHistory[^1].Role);
+            Assert.Contains(resumedAskCapture.TurnSink.Turns, t => t.Role == StageTurnRole.ToolResult && t.ToolName == CanonicalToolNames.Ask && t.ToolResult == "Use PostgreSQL");
+        }
+    }
+
+    [Fact]
     public async Task InMemoryCrucibleConversationCoordinator_ConcurrentSaveTranscript_UsesIsolatedStagingDirsWithoutCollisions()
     {
         var transcriptService = new SessionTranscriptService(Path.Combine(_tempDir, "default-transcripts"));

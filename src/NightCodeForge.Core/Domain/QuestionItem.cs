@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json.Serialization;
 
 namespace NightCodeForge.Core.Domain;
 
@@ -6,6 +7,7 @@ namespace NightCodeForge.Core.Domain;
 /// Structured question definition for multi-question clarifications.
 /// </summary>
 public sealed record QuestionItem(
+    [property: JsonRequired]
     [property: Description("The clarification question prompt to ask the human user.")]
     string Prompt,
 

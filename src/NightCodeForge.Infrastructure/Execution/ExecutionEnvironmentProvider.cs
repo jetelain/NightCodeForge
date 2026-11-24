@@ -51,13 +51,45 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         IExecutionEnvironment Environment,
         SandboxScopeDescriptor? Scope);
 
+    private sealed class RefCountedKeyLock
+    {
+        public SemaphoreSlim Semaphore { get; } = new(1, 1);
+        public int RefCount;
+    }
+
+    private sealed class KeyLockLease : IDisposable
+    {
+        private readonly ExecutionEnvironmentProvider _owner;
+        private readonly string _cacheKey;
+        private readonly RefCountedKeyLock _entry;
+        private int _disposed;
+
+        public KeyLockLease(ExecutionEnvironmentProvider owner, string cacheKey, RefCountedKeyLock entry)
+        {
+            _owner = owner;
+            _cacheKey = cacheKey;
+            _entry = entry;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            _owner.ReleaseKeyLock(_cacheKey, _entry, releaseSemaphore: true);
+        }
+    }
+
     private readonly BareHostExecutionEnvironment _bareHost;
     private readonly IProcessRunner _processRunner;
     private readonly IGitWorkspaceManager _gitWorkspaceManager;
     private readonly IContainerEnvironmentFactory _containerEnvironmentFactory;
     private readonly ILogger<ExecutionEnvironmentProvider> _logger;
     private readonly ConcurrentDictionary<string, CachedEnvironmentEntry> _cachedEnvironments = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new(StringComparer.Ordinal);
+    private readonly object _keyLocksSync = new();
+    private readonly Dictionary<string, RefCountedKeyLock> _keyLocks = new(StringComparer.Ordinal);
 
     [ActivatorUtilitiesConstructor]
     public ExecutionEnvironmentProvider(
@@ -96,21 +128,13 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return cached.Environment;
         }
 
-        var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
-        await keyLock.WaitAsync(cancellationToken);
-        try
+        using var _ = await AcquireKeyLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
+        if (_cachedEnvironments.TryGetValue(cacheKey, out cached))
         {
-            if (_cachedEnvironments.TryGetValue(cacheKey, out cached))
-            {
-                return cached.Environment;
-            }
+            return cached.Environment;
+        }
 
-            return await CreateAndCacheScopeEnvironmentUnderLockAsync(scope, cacheKey, effectiveTaskId, cancellationToken);
-        }
-        finally
-        {
-            keyLock.Release();
-        }
+        return await CreateAndCacheScopeEnvironmentUnderLockAsync(scope, cacheKey, effectiveTaskId, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -136,26 +160,18 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return cached.Environment;
         }
 
-        var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
-        await keyLock.WaitAsync(cancellationToken);
-        try
+        using var _ = await AcquireKeyLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
+        if (_cachedEnvironments.TryGetValue(cacheKey, out cached))
         {
-            if (_cachedEnvironments.TryGetValue(cacheKey, out cached))
-            {
-                return cached.Environment;
-            }
+            return cached.Environment;
+        }
 
-            return await CreateAndCacheWorkspaceEnvironmentUnderLockAsync(
-                workspace,
-                securityTier,
-                cacheKey,
-                effectiveTaskId,
-                cancellationToken);
-        }
-        finally
-        {
-            keyLock.Release();
-        }
+        return await CreateAndCacheWorkspaceEnvironmentUnderLockAsync(
+            workspace,
+            securityTier,
+            cacheKey,
+            effectiveTaskId,
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -175,26 +191,19 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             ? scope.ScopeCacheKey
             : SandboxScopeDescriptor.BuildCacheKey(scope.ScopeKind, scope.WorkspaceId, effectiveTaskId, scope.SecurityTier);
 
-        var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
-        await keyLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (_cachedEnvironments.TryRemove(cacheKey, out var removed) && removed.Environment is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
+        using var _ = await AcquireKeyLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
 
-            if (scope.ExecutionMode == ExecutionMode.ContainerSandbox)
-            {
-                await _containerEnvironmentFactory.RemoveContainerAsync(scope, cancellationToken);
-            }
-
-            return await CreateAndCacheScopeEnvironmentUnderLockAsync(scope, cacheKey, effectiveTaskId, cancellationToken);
-        }
-        finally
+        if (_cachedEnvironments.TryRemove(cacheKey, out var removed) && removed.Environment is IDisposable disposable)
         {
-            keyLock.Release();
+            disposable.Dispose();
         }
+
+        if (scope.ExecutionMode == ExecutionMode.ContainerSandbox)
+        {
+            await _containerEnvironmentFactory.RemoveContainerAsync(scope, cancellationToken);
+        }
+
+        return await CreateAndCacheScopeEnvironmentUnderLockAsync(scope, cacheKey, effectiveTaskId, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -215,32 +224,25 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         var scopeKind = effectiveTaskId.HasValue ? SandboxScopeKind.TaskWorktree : SandboxScopeKind.WorkspaceClone;
         var cacheKey = SandboxScopeDescriptor.BuildCacheKey(scopeKind, workspace.Id, effectiveTaskId, securityTier);
 
-        var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
-        await keyLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (_cachedEnvironments.TryRemove(cacheKey, out var removed) && removed.Environment is IDisposable disposable)
-            {
-                disposable.Dispose();
-            }
+        using var _ = await AcquireKeyLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
 
-            if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox)
-            {
-                var scope = removed?.Scope ?? _containerEnvironmentFactory.BuildWorkspaceScope(workspace, securityTier, effectiveTaskId);
-                await _containerEnvironmentFactory.RemoveContainerAsync(scope, cancellationToken);
-            }
-
-            return await CreateAndCacheWorkspaceEnvironmentUnderLockAsync(
-                workspace,
-                securityTier,
-                cacheKey,
-                effectiveTaskId,
-                cancellationToken);
-        }
-        finally
+        if (_cachedEnvironments.TryRemove(cacheKey, out var removed) && removed.Environment is IDisposable disposable)
         {
-            keyLock.Release();
+            disposable.Dispose();
         }
+
+        if (workspace.ExecutionMode == ExecutionMode.ContainerSandbox)
+        {
+            var scope = removed?.Scope ?? _containerEnvironmentFactory.BuildWorkspaceScope(workspace, securityTier, effectiveTaskId);
+            await _containerEnvironmentFactory.RemoveContainerAsync(scope, cancellationToken);
+        }
+
+        return await CreateAndCacheWorkspaceEnvironmentUnderLockAsync(
+            workspace,
+            securityTier,
+            cacheKey,
+            effectiveTaskId,
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -252,8 +254,9 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return;
         }
 
-        await DiscardCachedTaskEnvironmentsAsync(workspace.Id, taskId, cancellationToken);
-        await _containerEnvironmentFactory.RemoveTaskContainerAsync(workspace, taskId, cancellationToken);
+        using var _ = await AcquireMultiKeyLocksAsync(GetTaskLockKeys(workspace.Id, taskId), cancellationToken).ConfigureAwait(false);
+        DiscardMatchingCachedEnvironmentsUnderLock(e => e.WorkspaceId == workspace.Id && e.TaskId == taskId);
+        await _containerEnvironmentFactory.RemoveTaskContainerAsync(workspace, taskId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -265,14 +268,20 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return;
         }
 
-        await DiscardCachedWorkspaceEnvironmentsAsync(workspace.Id, cancellationToken);
+        var cachedTaskIds = _cachedEnvironments.Values
+            .Where(e => e.WorkspaceId == workspace.Id && e.TaskId is > 0)
+            .Select(e => e.TaskId!.Value);
+        var listedTaskIds = await ListTaskContainerIdsAsync(workspace, cancellationToken).ConfigureAwait(false);
+        var allTaskIds = cachedTaskIds.Concat(listedTaskIds).Distinct().ToList();
 
-        foreach (var taskId in await ListTaskContainerIdsAsync(workspace, cancellationToken))
+        foreach (var taskId in allTaskIds)
         {
-            await CleanupTaskContainerAsync(workspace, taskId, cancellationToken);
+            await CleanupTaskContainerAsync(workspace, taskId, cancellationToken).ConfigureAwait(false);
         }
 
-        await _containerEnvironmentFactory.RemoveBaseContainerAsync(workspace, cancellationToken);
+        using var _ = await AcquireMultiKeyLocksAsync(GetWorkspaceBaseLockKeys(workspace.Id), cancellationToken).ConfigureAwait(false);
+        DiscardMatchingCachedEnvironmentsUnderLock(e => e.WorkspaceId == workspace.Id);
+        await _containerEnvironmentFactory.RemoveBaseContainerAsync(workspace, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -296,8 +305,14 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return 0;
         }
 
-        var now = DateTime.UtcNow;
+        if (!HasOnlyIdleWorkspaceContainerCandidates(workspace.Id, idleTimeout))
+        {
+            return 0;
+        }
 
+        using var _ = await AcquireMultiKeyLocksAsync(GetWorkspaceBaseLockKeys(workspace.Id), cancellationToken).ConfigureAwait(false);
+
+        var now = DateTime.UtcNow;
         var workspaceEntries = _cachedEnvironments.Values
             .Where(e => e.WorkspaceId == workspace.Id && e.TaskId == null)
             .ToList();
@@ -345,7 +360,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return 0;
         }
 
-        await _containerEnvironmentFactory.RemoveBaseContainerAsync(workspace, cancellationToken);
+        await _containerEnvironmentFactory.RemoveBaseContainerAsync(workspace, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation("Evicted idle workspace container for Workspace #{WorkspaceId} (idle duration: {IdleDuration}).",
             workspace.Id, minIdleDuration);
         return 1;
@@ -365,7 +380,12 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             ? scope.ScopeCacheKey
             : SandboxScopeDescriptor.BuildCacheKey(scope.ScopeKind, scope.WorkspaceId, effectiveTaskId, scope.SecurityTier);
 
-        await RemoveCachedKeyUnderLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
+        using var _ = await AcquireKeyLockAsync(cacheKey, cancellationToken).ConfigureAwait(false);
+
+        if (_cachedEnvironments.TryRemove(cacheKey, out var entry) && entry.Environment is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
 
         if (scope.ExecutionMode == ExecutionMode.ContainerSandbox)
         {
@@ -515,46 +535,174 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         }
     }
 
-    private async Task DiscardCachedWorkspaceEnvironmentsAsync(int workspaceId, CancellationToken cancellationToken)
+    private bool HasOnlyIdleWorkspaceContainerCandidates(int workspaceId, TimeSpan idleTimeout)
+    {
+        var now = DateTime.UtcNow;
+        var hasAnyContainerExecutor = false;
+
+        foreach (var entry in _cachedEnvironments.Values)
+        {
+            if (entry.WorkspaceId != workspaceId || entry.TaskId != null)
+            {
+                continue;
+            }
+
+            if (entry.Environment is NightCodeForgeContainerExecutor containerExecutor)
+            {
+                if (containerExecutor.IsExecuting || (now - containerExecutor.LastExecutionTimestampUtc) < idleTimeout)
+                {
+                    return false;
+                }
+
+                hasAnyContainerExecutor = true;
+            }
+        }
+
+        return hasAnyContainerExecutor;
+    }
+
+    private IEnumerable<string> GetTaskLockKeys(int workspaceId, int taskId)
+    {
+        foreach (var tier in Enum.GetValues<SandboxSecurityTier>())
+        {
+            yield return SandboxScopeDescriptor.BuildCacheKey(SandboxScopeKind.TaskWorktree, workspaceId, taskId, tier);
+        }
+
+        foreach (var entry in _cachedEnvironments.Values)
+        {
+            if (entry.WorkspaceId == workspaceId && entry.TaskId == taskId)
+            {
+                yield return entry.CacheKey;
+            }
+        }
+    }
+
+    private IEnumerable<string> GetWorkspaceBaseLockKeys(int workspaceId)
+    {
+        foreach (var tier in Enum.GetValues<SandboxSecurityTier>())
+        {
+            yield return SandboxScopeDescriptor.BuildCacheKey(SandboxScopeKind.WorkspaceClone, workspaceId, null, tier);
+        }
+
+        foreach (var entry in _cachedEnvironments.Values)
+        {
+            if (entry.WorkspaceId == workspaceId && entry.TaskId == null)
+            {
+                yield return entry.CacheKey;
+            }
+        }
+    }
+
+    private void DiscardMatchingCachedEnvironmentsUnderLock(Func<CachedEnvironmentEntry, bool> predicate)
     {
         var matchingKeys = _cachedEnvironments.Values
-            .Where(e => e.WorkspaceId == workspaceId)
+            .Where(predicate)
             .Select(e => e.CacheKey)
             .ToList();
 
         foreach (var key in matchingKeys)
         {
-            await RemoveCachedKeyUnderLockAsync(key, cancellationToken);
-        }
-    }
-
-    private async Task DiscardCachedTaskEnvironmentsAsync(int workspaceId, int taskId, CancellationToken cancellationToken)
-    {
-        var matchingKeys = _cachedEnvironments.Values
-            .Where(e => e.WorkspaceId == workspaceId && e.TaskId == taskId)
-            .Select(e => e.CacheKey)
-            .ToList();
-
-        foreach (var key in matchingKeys)
-        {
-            await RemoveCachedKeyUnderLockAsync(key, cancellationToken);
-        }
-    }
-
-    private async Task RemoveCachedKeyUnderLockAsync(string cacheKey, CancellationToken cancellationToken)
-    {
-        var keyLock = _keyLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
-        await keyLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (_cachedEnvironments.TryRemove(cacheKey, out var entry) && entry.Environment is IDisposable disposable)
+            if (_cachedEnvironments.TryRemove(key, out var entry) && entry.Environment is IDisposable disposable)
             {
                 disposable.Dispose();
             }
         }
-        finally
+    }
+
+    private async Task<IDisposable> AcquireMultiKeyLocksAsync(IEnumerable<string> cacheKeys, CancellationToken cancellationToken)
+    {
+        var orderedKeys = cacheKeys
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToList();
+
+        var acquired = new List<IDisposable>(orderedKeys.Count);
+        try
         {
-            keyLock.Release();
+            foreach (var key in orderedKeys)
+            {
+                acquired.Add(await AcquireKeyLockAsync(key, cancellationToken).ConfigureAwait(false));
+            }
+        }
+        catch
+        {
+            for (var i = acquired.Count - 1; i >= 0; i--)
+            {
+                acquired[i].Dispose();
+            }
+            throw;
+        }
+
+        return new MultiKeyLockLease(acquired);
+    }
+
+    private sealed class MultiKeyLockLease(List<IDisposable> leases) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            for (var i = leases.Count - 1; i >= 0; i--)
+            {
+                leases[i].Dispose();
+            }
+        }
+    }
+
+    private async Task<IDisposable> AcquireKeyLockAsync(string cacheKey, CancellationToken cancellationToken)
+    {
+        RefCountedKeyLock entry;
+        lock (_keyLocksSync)
+        {
+            if (!_keyLocks.TryGetValue(cacheKey, out entry!))
+            {
+                entry = new RefCountedKeyLock();
+                _keyLocks[cacheKey] = entry;
+            }
+
+            entry.RefCount++;
+        }
+
+        try
+        {
+            await entry.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            ReleaseKeyLock(cacheKey, entry, releaseSemaphore: false);
+            throw;
+        }
+
+        return new KeyLockLease(this, cacheKey, entry);
+    }
+
+    private void ReleaseKeyLock(string cacheKey, RefCountedKeyLock entry, bool releaseSemaphore)
+    {
+        if (releaseSemaphore)
+        {
+            entry.Semaphore.Release();
+        }
+
+        bool disposeSemaphore = false;
+        lock (_keyLocksSync)
+        {
+            entry.RefCount--;
+            if (entry.RefCount == 0 && _keyLocks.TryGetValue(cacheKey, out var current) && ReferenceEquals(current, entry))
+            {
+                _keyLocks.Remove(cacheKey);
+                disposeSemaphore = true;
+            }
+        }
+
+        if (disposeSemaphore)
+        {
+            entry.Semaphore.Dispose();
         }
     }
 }

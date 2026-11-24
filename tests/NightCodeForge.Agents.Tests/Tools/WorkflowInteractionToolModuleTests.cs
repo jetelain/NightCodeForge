@@ -472,6 +472,100 @@ public class WorkflowInteractionToolModuleTests
             throw new JsonException("Invalid mode value.");
     }
 
+    [Fact]
+    public async Task AskAIFunction_WithCaseMismatchedQuestionsKeyAndInvalidValue_ReturnsSchemaBindingDiagnostic()
+    {
+        var module = new WorkflowInteractionToolModule();
+        var askFn = module.CreateFunctions().Single(f => f.Name == CanonicalToolNames.Ask);
+
+        var scalarResult = await askFn.InvokeAsync(new AIFunctionArguments { ["Questions"] = 42 });
+        var scalarText = scalarResult?.ToString() ?? string.Empty;
+        Assert.StartsWith("Error: Invalid arguments for tool 'ask' (parameter 'questions'", scalarText);
+        Assert.DoesNotContain("At least one question must be provided", scalarText);
+
+        using var arrayDoc = JsonDocument.Parse("[123]");
+        var arrayResult = await askFn.InvokeAsync(new AIFunctionArguments { ["Questions"] = arrayDoc.RootElement });
+        var arrayText = arrayResult?.ToString() ?? string.Empty;
+        Assert.StartsWith("Error: Invalid arguments for tool 'ask' (parameter 'questions'", arrayText);
+        Assert.DoesNotContain("At least one question must be provided", arrayText);
+    }
+
+    [Fact]
+    public async Task AskAIFunction_AcceptsBracketedProseStrings_AndRejectsUnrecognizedObjectsWithSchemaDiagnostic()
+    {
+        var module = new WorkflowInteractionToolModule();
+        IReadOnlyList<QuestionItem>? captured = null;
+        module.AskHandler = (qs, _) =>
+        {
+            captured = qs;
+            return Task.FromResult("ok");
+        };
+
+        var askFn = module.CreateFunctions().Single(f => f.Name == CanonicalToolNames.Ask);
+
+        using var bracketedDoc = JsonDocument.Parse("""["[Auth] Should we use JWT or cookies?"]""");
+        var proseResult = await askFn.InvokeAsync(new AIFunctionArguments { ["questions"] = bracketedDoc.RootElement });
+        Assert.Equal("ok", proseResult?.ToString());
+        Assert.NotNull(captured);
+        Assert.Equal("[Auth] Should we use JWT or cookies?", Assert.Single(captured).Prompt);
+
+        using var badObjectDoc = JsonDocument.Parse("""[{"foo": "bar"}]""");
+        var badObjectResult = await askFn.InvokeAsync(new AIFunctionArguments { ["questions"] = badObjectDoc.RootElement });
+        var badObjectText = badObjectResult?.ToString() ?? string.Empty;
+        Assert.StartsWith("Error: Invalid arguments for tool 'ask'", badObjectText);
+        Assert.Contains("Expected parameters:", badObjectText);
+    }
+
+    [Fact]
+    public async Task DiagnosticBindingAIFunction_NonReflectionFunction_PropagatesBodyExceptionsWhenSchemaIsValid()
+    {
+        var throwingCustomFn = DiagnosticBindingAIFunction.Wrap(new CustomSchemaBodyThrowingAIFunction(
+            () => throw new NotSupportedException("Unsupported backend operation")));
+        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+            await throwingCustomFn.InvokeAsync(new AIFunctionArguments { ["mode"] = "fast" }));
+
+        var argThrowingCustomFn = DiagnosticBindingAIFunction.Wrap(new CustomSchemaBodyThrowingAIFunction(
+            () => throw new ArgumentException("Internal failure", "internalField")));
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await argThrowingCustomFn.InvokeAsync(new AIFunctionArguments { ["mode"] = "fast" }));
+
+        var jsonBodyThrowingCustomFn = DiagnosticBindingAIFunction.Wrap(new CustomSchemaBodyThrowingAIFunction(
+            () => throw new JsonException("Corrupt upstream payload", "$.upstream.items[0]", lineNumber: 1, bytePositionInLine: 4)));
+        await Assert.ThrowsAsync<JsonException>(async () =>
+            await jsonBodyThrowingCustomFn.InvokeAsync(new AIFunctionArguments { ["mode"] = "fast" }));
+
+        var jsonPathlessBodyThrowingFn = DiagnosticBindingAIFunction.Wrap(new CustomSchemaBodyThrowingAIFunction(
+            () => throw new JsonException("Unexpected EOF reading external file")));
+        await Assert.ThrowsAsync<JsonException>(async () =>
+            await jsonPathlessBodyThrowingFn.InvokeAsync(new AIFunctionArguments { ["mode"] = "fast" }));
+
+        var invalidTypeResult = await jsonPathlessBodyThrowingFn.InvokeAsync(new AIFunctionArguments { ["mode"] = 123 });
+        Assert.StartsWith("Error: Invalid arguments for tool 'custom_schema_tool' (parameter 'mode')", invalidTypeResult?.ToString());
+
+        var missingRequiredResult = await argThrowingCustomFn.InvokeAsync(new AIFunctionArguments());
+        Assert.StartsWith("Error: Invalid arguments for tool 'custom_schema_tool' (parameter 'mode')", missingRequiredResult?.ToString());
+    }
+
+    private sealed class CustomSchemaBodyThrowingAIFunction(Func<object?> body) : AIFunction
+    {
+        private static readonly JsonElement Schema = JsonDocument.Parse("""
+        {
+            "type": "object",
+            "properties": {
+                "mode": { "type": "string" }
+            },
+            "required": ["mode"]
+        }
+        """).RootElement.Clone();
+
+        public override string Name => "custom_schema_tool";
+        public override string Description => "Tests custom AIFunction exception propagation";
+        public override JsonElement JsonSchema => Schema;
+
+        protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(body());
+    }
+
     private sealed class DummyServiceProvider : IServiceProvider
     {
         public object? GetService(Type serviceType) => null;

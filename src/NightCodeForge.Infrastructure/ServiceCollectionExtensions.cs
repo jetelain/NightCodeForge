@@ -54,20 +54,20 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IWorkerStateService, Telemetry.TelemetryWorkerStateService>();
         services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Services.OperationsControlOptions>(
             NightCodeForge.Core.Services.OperationsControlOptions.SectionName);
-        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Resilience.RetryPolicyOptions>(
-            NightCodeForge.Core.Resilience.RetryPolicyOptions.SectionName);
-        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Resilience.LlmRetryPolicyOptions>(
-            NightCodeForge.Core.Resilience.LlmRetryPolicyOptions.SectionName);
         services.TryAddSingleton<IOperationsControlService, OperationsControlService>();
 
         // 3. Concurrency & DAG Engine
-        services.TryAddSingleton<IWorkspaceLockProvider, WorkspaceLockProvider>();
         services.TryAddSingleton<ITaskCancellationManager, TaskCancellationManager>();
         services.TryAddScoped<IDependencyResolutionEngine, DependencyResolutionEngine>();
 
         // 4. Git, Execution Infrastructure & Activity Streamer (DB-free, SignalR-free core)
-        services.TryAddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
         services.AddNightCodeForgeExecutionInfrastructure();
+        var existingTelemetry = services.LastOrDefault(d => d.ServiceType == typeof(IOperationsTelemetryService));
+        if (existingTelemetry == null || existingTelemetry.ImplementationType == typeof(Telemetry.InMemoryOperationsTelemetryService))
+        {
+            services.RemoveAll<IOperationsTelemetryService>();
+            services.AddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
+        }
         services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Domain.LocalDiscoveryOptions>(
             NightCodeForge.Core.Domain.LocalDiscoveryOptions.SectionName);
         services.TryAddSingleton<ILocalRepositoryDiscoveryService, Git.LocalRepositoryDiscoveryService>();

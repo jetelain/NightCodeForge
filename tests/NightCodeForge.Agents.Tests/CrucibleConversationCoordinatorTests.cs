@@ -940,4 +940,42 @@ public class CrucibleConversationCoordinatorTests : IDisposable
         var nullState = await coordinator.BeginAsync(StageContext(41, priming: nullOutputPriming), StandardHarnessIds.Crucible, CancellationToken.None);
         Assert.Contains(nullState.ChatHistory, m => m.Contents.OfType<FunctionResultContent>().Any());
     }
+
+    [Fact]
+    public void BuildTranscriptEntries_AssistantInterimTextWithToolCall_DoesNotConsumeDifferentFinalAssistantTurn()
+    {
+        var t0 = new DateTime(2026, 11, 24, 18, 0, 0, DateTimeKind.Utc);
+        var tTool = t0.AddSeconds(5);
+        var tResult = t0.AddSeconds(7);
+        var tFinal = t0.AddSeconds(15);
+
+        var chatHistory = new List<ChatMessage>
+        {
+            new(ChatRole.User, "Inspect files"),
+            new(ChatRole.Assistant, new List<AIContent>
+            {
+                new TextContent("Let me inspect Program.cs first."),
+                new FunctionCallContent("c1", CanonicalToolNames.Read)
+            }),
+            new(ChatRole.Tool, [new FunctionResultContent("c1", "class Program {}")]),
+            new(ChatRole.Assistant, "All checks passed.")
+        };
+
+        // Only the final assistant message was persisted as an Assistant turn (not the interim text attached to tool call c1)
+        var trackedTurns = new List<ConversationTurn>
+        {
+            new() { TurnIndex = 0, Role = StageTurnRole.User, Content = "Inspect files", Timestamp = t0 },
+            new() { TurnIndex = 1, Role = StageTurnRole.Tool, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = tTool },
+            new() { TurnIndex = 2, Role = StageTurnRole.ToolResult, ToolName = CanonicalToolNames.Read, MetadataJson = "{\"CallId\":\"c1\"}", Timestamp = tResult },
+            new() { TurnIndex = 3, Role = StageTurnRole.Assistant, Content = "All checks passed.", Timestamp = tFinal }
+        };
+
+        var entries = CrucibleConversationCoordinator.BuildTranscriptEntries(
+            chatHistory,
+            trackedTurns: trackedTurns,
+            stageStartedAtUtc: t0);
+
+        Assert.Equal(4, entries.Count);
+        Assert.Equal([t0, tTool, tResult, tFinal], entries.Select(e => e.Timestamp).ToArray());
+    }
 }

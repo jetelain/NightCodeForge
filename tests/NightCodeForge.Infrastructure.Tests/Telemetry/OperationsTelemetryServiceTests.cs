@@ -589,6 +589,37 @@ public class OperationsTelemetryServiceTests
         using var fullProvider = fullServices.BuildServiceProvider();
         var fullTelemetry = fullProvider.GetRequiredService<IOperationsTelemetryService>();
         Assert.Equal(typeof(OperationsTelemetryService), fullTelemetry.GetType());
+
+        // Calling AddNightCodeForgeExecutionInfrastructure() BEFORE AddNightCodeForgeCoreAndInfrastructure()
+        // must still upgrade InMemoryOperationsTelemetryService to SignalR-backed OperationsTelemetryService.
+        var reverseOrderServices = new ServiceCollection();
+        reverseOrderServices.AddLogging();
+        reverseOrderServices.AddNightCodeForgeExecutionInfrastructure();
+        reverseOrderServices.AddNightCodeForgeCoreAndInfrastructure("Data Source=:memory:");
+
+        using var reverseOrderProvider = reverseOrderServices.BuildServiceProvider();
+        var reverseOrderTelemetry = reverseOrderProvider.GetRequiredService<IOperationsTelemetryService>();
+        Assert.Equal(typeof(OperationsTelemetryService), reverseOrderTelemetry.GetType());
+
+        // Explicit custom IOperationsTelemetryService registrations must still be preserved
+        // both before and after AddNightCodeForgeExecutionInfrastructure().
+        var customTelemetry = new Mock<IOperationsTelemetryService>().Object;
+        var customServices = new ServiceCollection();
+        customServices.AddLogging();
+        customServices.AddSingleton(customTelemetry);
+        customServices.AddNightCodeForgeCoreAndInfrastructure("Data Source=:memory:");
+
+        using var customProvider = customServices.BuildServiceProvider();
+        Assert.Same(customTelemetry, customProvider.GetRequiredService<IOperationsTelemetryService>());
+
+        var layeredCustomServices = new ServiceCollection();
+        layeredCustomServices.AddLogging();
+        layeredCustomServices.AddNightCodeForgeExecutionInfrastructure();
+        layeredCustomServices.AddSingleton(customTelemetry);
+        layeredCustomServices.AddNightCodeForgeCoreAndInfrastructure("Data Source=:memory:");
+
+        using var layeredCustomProvider = layeredCustomServices.BuildServiceProvider();
+        Assert.Same(customTelemetry, layeredCustomProvider.GetRequiredService<IOperationsTelemetryService>());
     }
 
     [Fact]

@@ -109,8 +109,11 @@ public static class QuestionItemParser
                     return TryBindAskJsonElement(parsedRoot, isRoot: true, out questions);
                 }
 
-                questions = null;
-                return false;
+                if (LooksLikeMalformedJsonAttempt(str))
+                {
+                    questions = null;
+                    return false;
+                }
             }
 
             questions = new[] { new QuestionItem(str) };
@@ -694,13 +697,17 @@ public static class QuestionItemParser
             }
         }
 
-        if (opts is IEnumerable<object?> objEnum)
+        if (opts is System.Collections.IEnumerable rawEnum && rawEnum is not string and not System.Collections.IDictionary)
         {
-            var list = objEnum
-                .Select(FormatOptionObject)
-                .Where(s => !string.IsNullOrWhiteSpace(s))
-                .Select(s => s!)
-                .ToList();
+            var list = new List<string>();
+            foreach (var opt in rawEnum)
+            {
+                var formatted = FormatOptionObject(opt);
+                if (!string.IsNullOrWhiteSpace(formatted))
+                {
+                    list.Add(formatted);
+                }
+            }
             return list.Count > 0 ? list : null;
         }
 
@@ -877,8 +884,11 @@ public static class QuestionItemParser
                         return TryBindAskJsonElement(innerRoot, isRoot: true, out questions);
                     }
 
-                    questions = null;
-                    return false;
+                    if (LooksLikeMalformedJsonAttempt(str))
+                    {
+                        questions = null;
+                        return false;
+                    }
                 }
 
                 questions = new[] { new QuestionItem(str) };
@@ -943,12 +953,15 @@ public static class QuestionItemParser
         }
 
         string prompt = string.Empty;
+        bool hasPromptKey = false;
         foreach (var pk in PromptKeys)
         {
             if (!TryGetPropertyIgnoreCase(el, pk, out var pProp))
             {
                 continue;
             }
+
+            hasPromptKey = true;
 
             if (pProp.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
             {
@@ -991,6 +1004,12 @@ public static class QuestionItemParser
                 }
             }
 
+            questions = Array.Empty<QuestionItem>();
+            return false;
+        }
+
+        if (!hasPromptKey)
+        {
             questions = Array.Empty<QuestionItem>();
             return false;
         }
@@ -1102,8 +1121,11 @@ public static class QuestionItemParser
                         return true;
                     }
 
-                    questions = Array.Empty<QuestionItem>();
-                    return false;
+                    if (LooksLikeMalformedJsonAttempt(str))
+                    {
+                        questions = Array.Empty<QuestionItem>();
+                        return false;
+                    }
                 }
 
                 questions = new[] { new QuestionItem(str) };
@@ -1190,12 +1212,15 @@ public static class QuestionItemParser
         }
 
         string prompt = string.Empty;
+        bool hasPromptKey = false;
         foreach (var pk in PromptKeys)
         {
             if (!TryGetValueIgnoreCase(dict, pk, out var pVal))
             {
                 continue;
             }
+
+            hasPromptKey = true;
 
             if (pVal is null or JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined })
             {
@@ -1245,6 +1270,12 @@ public static class QuestionItemParser
             }
 
             questions = null;
+            return false;
+        }
+
+        if (!hasPromptKey)
+        {
+            questions = Array.Empty<QuestionItem>();
             return false;
         }
 
@@ -1336,10 +1367,10 @@ public static class QuestionItemParser
                 return false;
             }
 
-            if (rawOpts is IEnumerable<object?> objEnum)
+            if (rawOpts is System.Collections.IEnumerable rawEnum)
             {
                 var list = new List<string>();
-                foreach (var opt in objEnum)
+                foreach (var opt in rawEnum)
                 {
                     if (opt is System.Collections.IEnumerable and not string and not System.Collections.IDictionary and not IEnumerable<KeyValuePair<string, object?>> and not IEnumerable<KeyValuePair<string, string>>)
                     {
@@ -1370,6 +1401,29 @@ public static class QuestionItemParser
     {
         var trimmed = value.AsSpan().TrimStart();
         return trimmed.StartsWith("{") || trimmed.StartsWith("[") || trimmed.StartsWith("```");
+    }
+
+    private static bool LooksLikeMalformedJsonAttempt(string value)
+    {
+        var trimmed = value.AsSpan().TrimStart();
+        if (trimmed.StartsWith("```json", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (trimmed.StartsWith("{"))
+        {
+            var afterBrace = trimmed[1..].TrimStart();
+            return afterBrace.IsEmpty || afterBrace[0] is '"' or '\'' or '}';
+        }
+
+        if (trimmed.StartsWith("["))
+        {
+            var afterBracket = trimmed[1..].TrimStart();
+            return afterBracket.IsEmpty || afterBracket[0] is '{' or '"' or '\'' or '[' or ']';
+        }
+
+        return false;
     }
 
     private static bool HasUnnormalizedOptions(IReadOnlyList<string>? options)

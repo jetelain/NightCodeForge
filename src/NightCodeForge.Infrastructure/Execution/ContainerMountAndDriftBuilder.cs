@@ -21,6 +21,16 @@ public class ContainerMountAndDriftBuilder
     private const int InspectTimeoutSeconds = 5;
     private const string NoSuchContainerMessage = "No such container";
     private const string NoSuchObjectMessage = "No such object";
+    private const string NetworkModeInspectFormat = "{{.HostConfig.NetworkMode}}";
+    private const string ExtraHostsInspectFormat = "{{range .HostConfig.ExtraHosts}}{{.}};{{end}}";
+    private const string TmpfsInspectFormat = "{{range $k, $v := .HostConfig.Tmpfs}}{{$k}}={{$v}};{{end}}";
+    private const string EnvInspectFormat = "{{range .Config.Env}}{{.}}\n{{end}}";
+    private const string NoneNetworkMode = "none";
+    private const string ReadOnlyTmpfsOption = "ro";
+    private const string RustupHomeEnvVarName = "RUSTUP_HOME";
+    private const string BlockedHostLoopbackIp = "127.0.0.1";
+    private const string DotnetDirectorySuffix = "/.dotnet";
+    private const string DotnetToolsDirectorySuffix = "/.dotnet/tools";
 
     /// <summary>
     /// Appends the '-ro' suffix to a container name when the security tier is <see cref="SandboxSecurityTier.RestrictedReadOnly"/>.
@@ -339,7 +349,7 @@ public class ContainerMountAndDriftBuilder
     }
 
     /// <summary>
-    /// Compares the existing container's mounts, image, and user with the expected configuration asynchronously.
+    /// Compares the existing container's mounts, tmpfs masks, image, user, network isolation, and environment with the expected configuration asynchronously.
     /// Returns a description of the drift, or null when the container can be safely reused.
     /// </summary>
     public static async Task<string?> DetectContainerDriftAsync(
@@ -350,59 +360,9 @@ public class ContainerMountAndDriftBuilder
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(options);
 
-        var mountResult = await processRunner.RunAsync(BuildDockerProcessSpec(
-            options,
-            ["inspect", "-f", MountInspectFormat, options.ContainerNameOrId],
-            timeoutSeconds: 5), cancellationToken);
-        if (mountResult.ExitCode != 0)
-        {
-            return $"Failed to inspect mounts of container (exit code {mountResult.ExitCode}): {mountResult.StandardError}";
-        }
-
-        var driftFromMounts = EvaluateMountDrift(mountResult.StandardOutput, options);
-        if (driftFromMounts != null)
-        {
-            return driftFromMounts;
-        }
-
-        var expectedImage = !string.IsNullOrWhiteSpace(options.ContainerImage)
-            ? options.ContainerImage
-            : ContainerExecutorOptions.DefaultAgentBaseImage;
-        var imageResult = await processRunner.RunAsync(BuildDockerProcessSpec(
-            options,
-            ["inspect", "-f", ImageInspectFormat, options.ContainerNameOrId],
-            timeoutSeconds: 5), cancellationToken);
-        if (imageResult.ExitCode != 0)
-        {
-            return $"Failed to inspect image of container (exit code {imageResult.ExitCode}): {imageResult.StandardError}";
-        }
-
-        var actualImage = imageResult.StandardOutput.Trim();
-        if (!IsMatchingImage(actualImage, expectedImage))
-        {
-            return $"Image mismatch: '{actualImage}' vs '{expectedImage}'";
-        }
-
-        var expectedUser = options.IsRestrictedReadOnly ? ContainerExecutorOptions.RestrictedReadOnlyUserUidGid : options.UserUidGid;
-        if (!string.IsNullOrWhiteSpace(expectedUser))
-        {
-            var userResult = await processRunner.RunAsync(BuildDockerProcessSpec(
-                options,
-                ["inspect", "-f", UserInspectFormat, options.ContainerNameOrId],
-                timeoutSeconds: 5), cancellationToken);
-            if (userResult.ExitCode != 0)
-            {
-                return $"Failed to inspect user of container (exit code {userResult.ExitCode}): {userResult.StandardError}";
-            }
-
-            var actualUser = userResult.StandardOutput.Trim();
-            if (!string.Equals(actualUser, expectedUser, StringComparison.Ordinal))
-            {
-                return $"User mismatch: '{actualUser}' vs '{expectedUser}'";
-            }
-        }
-
-        return null;
+        return await DetectContainerDriftCoreAsync(
+            spec => new ValueTask<ProcessExecutionResult>(processRunner.RunAsync(spec, cancellationToken)),
+            options).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -454,7 +414,7 @@ public class ContainerMountAndDriftBuilder
          message.Contains(NoSuchObjectMessage, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
-    /// Compares the existing container's mounts, image, and user with the expected configuration synchronously.
+    /// Compares the existing container's mounts, tmpfs masks, image, user, network isolation, and environment with the expected configuration synchronously.
     /// Returns a description of the drift, or null when the container can be safely reused.
     /// </summary>
     public static string? DetectContainerDrift(IProcessRunner processRunner, ContainerExecutorOptions options)
@@ -462,28 +422,57 @@ public class ContainerMountAndDriftBuilder
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(options);
 
-        var mountResult = processRunner.Run(BuildDockerProcessSpec(
+        var vt = DetectContainerDriftCoreAsync(
+            spec => ValueTask.FromResult(processRunner.Run(spec)),
+            options);
+        return vt.IsCompletedSuccessfully ? vt.Result : vt.AsTask().GetAwaiter().GetResult();
+    }
+
+    private static async ValueTask<string?> DetectContainerDriftCoreAsync(
+        Func<ProcessStartSpec, ValueTask<ProcessExecutionResult>> runInspect,
+        ContainerExecutorOptions options)
+    {
+        var mountResult = await runInspect(BuildDockerProcessSpec(
             options,
             ["inspect", "-f", MountInspectFormat, options.ContainerNameOrId],
-            timeoutSeconds: 5));
+            timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
         if (mountResult.ExitCode != 0)
         {
             return $"Failed to inspect mounts of container (exit code {mountResult.ExitCode}): {mountResult.StandardError}";
         }
 
-        var driftFromMounts = EvaluateMountDrift(mountResult.StandardOutput, options);
+        var driftFromMounts = EvaluateMountDrift(mountResult.StandardOutput, options, out var expectedMounts);
         if (driftFromMounts != null)
         {
             return driftFromMounts;
         }
 
+        var maskedDotnetRoots = GetDotnetRootsRequiringToolsMask(expectedMounts, options);
+        if (maskedDotnetRoots.Count > 0)
+        {
+            var tmpfsResult = await runInspect(BuildDockerProcessSpec(
+                options,
+                ["inspect", "-f", TmpfsInspectFormat, options.ContainerNameOrId],
+                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+            if (tmpfsResult.ExitCode != 0)
+            {
+                return $"Failed to inspect tmpfs mounts of container (exit code {tmpfsResult.ExitCode}): {tmpfsResult.StandardError}";
+            }
+
+            var tmpfsDrift = EvaluateDotnetToolsTmpfsMaskDrift(tmpfsResult.StandardOutput, maskedDotnetRoots);
+            if (tmpfsDrift != null)
+            {
+                return tmpfsDrift;
+            }
+        }
+
         var expectedImage = !string.IsNullOrWhiteSpace(options.ContainerImage)
             ? options.ContainerImage
             : ContainerExecutorOptions.DefaultAgentBaseImage;
-        var imageResult = processRunner.Run(BuildDockerProcessSpec(
+        var imageResult = await runInspect(BuildDockerProcessSpec(
             options,
             ["inspect", "-f", ImageInspectFormat, options.ContainerNameOrId],
-            timeoutSeconds: 5));
+            timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
         if (imageResult.ExitCode != 0)
         {
             return $"Failed to inspect image of container (exit code {imageResult.ExitCode}): {imageResult.StandardError}";
@@ -498,10 +487,10 @@ public class ContainerMountAndDriftBuilder
         var expectedUser = options.IsRestrictedReadOnly ? ContainerExecutorOptions.RestrictedReadOnlyUserUidGid : options.UserUidGid;
         if (!string.IsNullOrWhiteSpace(expectedUser))
         {
-            var userResult = processRunner.Run(BuildDockerProcessSpec(
+            var userResult = await runInspect(BuildDockerProcessSpec(
                 options,
                 ["inspect", "-f", UserInspectFormat, options.ContainerNameOrId],
-                timeoutSeconds: 5));
+                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
             if (userResult.ExitCode != 0)
             {
                 return $"Failed to inspect user of container (exit code {userResult.ExitCode}): {userResult.StandardError}";
@@ -514,10 +503,72 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
+        var networkExpectedNone = options.IsRestrictedReadOnly || options.DisableNetwork;
+        if (networkExpectedNone)
+        {
+            var networkResult = await runInspect(BuildDockerProcessSpec(
+                options,
+                ["inspect", "-f", NetworkModeInspectFormat, options.ContainerNameOrId],
+                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+            if (networkResult == null || networkResult.ExitCode != 0)
+            {
+                return $"Failed to inspect network mode of container (exit code {networkResult?.ExitCode ?? -1}): {networkResult?.StandardError}";
+            }
+
+            var networkDrift = EvaluateNetworkModeDrift(networkResult.StandardOutput);
+            if (networkDrift != null)
+            {
+                return networkDrift;
+            }
+        }
+        else
+        {
+            var blockedHosts = NormalizeBlockedHosts(options.BlockedHosts);
+            if (blockedHosts.Count > 0)
+            {
+                var extraHostsResult = await runInspect(BuildDockerProcessSpec(
+                    options,
+                    ["inspect", "-f", ExtraHostsInspectFormat, options.ContainerNameOrId],
+                    timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+                if (extraHostsResult.ExitCode != 0)
+                {
+                    return $"Failed to inspect extra hosts of container (exit code {extraHostsResult.ExitCode}): {extraHostsResult.StandardError}";
+                }
+
+                var hostsDrift = EvaluateBlockedHostsDrift(extraHostsResult.StandardOutput, blockedHosts);
+                if (hostsDrift != null)
+                {
+                    return hostsDrift;
+                }
+            }
+        }
+
+        var expectedRustupHome = ResolveRustupHomePath(options);
+        if (!string.IsNullOrWhiteSpace(expectedRustupHome))
+        {
+            var envResult = await runInspect(BuildDockerProcessSpec(
+                options,
+                ["inspect", "-f", EnvInspectFormat, options.ContainerNameOrId],
+                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+            if (envResult.ExitCode != 0)
+            {
+                return $"Failed to inspect environment of container (exit code {envResult.ExitCode}): {envResult.StandardError}";
+            }
+
+            var rustupDrift = EvaluateRustupHomeEnvDrift(envResult.StandardOutput, expectedRustupHome);
+            if (rustupDrift != null)
+            {
+                return rustupDrift;
+            }
+        }
+
         return null;
     }
 
-    private static string? EvaluateMountDrift(string mountInspectOutput, ContainerExecutorOptions options)
+    private static string? EvaluateMountDrift(
+        string mountInspectOutput,
+        ContainerExecutorOptions options,
+        out IReadOnlyList<ContainerVolumeMount> expectedMounts)
     {
         var actual = new Dictionary<string, (string Source, bool IsRw)>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in (mountInspectOutput ?? string.Empty).Trim().Split(';', StringSplitOptions.RemoveEmptyEntries))
@@ -530,7 +581,7 @@ public class ContainerMountAndDriftBuilder
             actual[destination] = (NormalizeMountSourcePath(source), isRw);
         }
 
-        var expectedMounts = BuildVolumeMounts(options);
+        expectedMounts = BuildVolumeMounts(options);
         var problems = new List<string>();
         foreach (var expected in expectedMounts)
         {
@@ -638,12 +689,181 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
+        if (!options.MountHostDotnetTools)
+        {
+            var hostToolsDest = NormalizeContainerPath(ContainerExecutorOptions.HostDotnetToolsContainerPath);
+            if (actual.ContainsKey(hostToolsDest))
+            {
+                problems.Add($"{ContainerExecutorOptions.HostDotnetToolsContainerPath} (expected absent)");
+            }
+
+            foreach (var (dest, info) in actual)
+            {
+                if (dest.EndsWith(DotnetToolsDirectorySuffix, StringComparison.OrdinalIgnoreCase) &&
+                    !string.IsNullOrEmpty(info.Source))
+                {
+                    problems.Add($"{dest} (expected absent)");
+                }
+            }
+        }
+
         if (problems.Count > 0)
         {
             return $"Missing/Mismatched mounts: {string.Join(", ", problems)}";
         }
 
         return null;
+    }
+
+    private static string? EvaluateDotnetToolsTmpfsMaskDrift(
+        string tmpfsInspectOutput,
+        IReadOnlyList<string> maskedDotnetRoots)
+    {
+        var actualTmpfs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in (tmpfsInspectOutput ?? string.Empty).Trim().Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separatorIndex = entry.IndexOf('=');
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            var destination = NormalizeContainerPath(entry[..separatorIndex]);
+            var optionsText = entry[(separatorIndex + 1)..].Trim();
+            actualTmpfs[destination] = optionsText;
+        }
+
+        var problems = new List<string>();
+        foreach (var dotnetRoot in maskedDotnetRoots)
+        {
+            var toolsDest = $"{dotnetRoot}/tools";
+            if (!actualTmpfs.TryGetValue(toolsDest, out var mountOpts) ||
+                !HasTmpfsOption(mountOpts, ReadOnlyTmpfsOption))
+            {
+                problems.Add($"{toolsDest} (missing ro tmpfs mask)");
+            }
+        }
+
+        return problems.Count > 0
+            ? $"Missing/Mismatched mounts: {string.Join(", ", problems)}"
+            : null;
+    }
+
+    private static bool HasTmpfsOption(string mountOptions, string expectedOption)
+    {
+        foreach (var part in mountOptions.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (string.Equals(part, expectedOption, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string? EvaluateNetworkModeDrift(string networkInspectOutput)
+    {
+        var actualMode = (networkInspectOutput ?? string.Empty).Trim();
+        return string.Equals(actualMode, NoneNetworkMode, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : $"Network mode mismatch: '{actualMode}' vs '{NoneNetworkMode}'";
+    }
+
+    private static string? EvaluateBlockedHostsDrift(string extraHostsInspectOutput, IReadOnlyList<string> expectedBlockedHosts)
+    {
+        var actualHosts = new HashSet<string>(
+            (extraHostsInspectOutput ?? string.Empty)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase);
+
+        var missing = new List<string>();
+        foreach (var host in expectedBlockedHosts)
+        {
+            var mapping = $"{host}:{BlockedHostLoopbackIp}";
+            if (!actualHosts.Contains(mapping))
+            {
+                missing.Add(mapping);
+            }
+        }
+
+        return missing.Count > 0
+            ? $"Blocked hosts mismatch: missing {string.Join(", ", missing)}"
+            : null;
+    }
+
+    private static string? EvaluateRustupHomeEnvDrift(string envInspectOutput, string expectedRustupHome)
+    {
+        var expectedEntry = $"{RustupHomeEnvVarName}={expectedRustupHome}";
+        var envEntries = (envInspectOutput ?? string.Empty)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var entry in envEntries)
+        {
+            if (string.Equals(entry.Trim(), expectedEntry, StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return $"Environment mismatch: missing {RustupHomeEnvVarName}='{expectedRustupHome}'";
+    }
+
+    private static List<string> NormalizeBlockedHosts(IEnumerable<string>? blockedHosts)
+    {
+        var result = new List<string>();
+        if (blockedHosts == null)
+        {
+            return result;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rawHost in blockedHosts)
+        {
+            if (string.IsNullOrWhiteSpace(rawHost))
+            {
+                continue;
+            }
+
+            var host = rawHost.Trim();
+            if (host.StartsWith('-') ||
+                host.Contains(':') ||
+                host.Contains('/') ||
+                host.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            {
+                throw new ArgumentException($"Invalid blocked host entry '{host}'.", nameof(blockedHosts));
+            }
+
+            if (seen.Add(host))
+            {
+                result.Add(host);
+            }
+        }
+
+        return result;
+    }
+
+    private static IReadOnlyList<string> GetDotnetRootsRequiringToolsMask(
+        IReadOnlyList<ContainerVolumeMount> mounts,
+        ContainerExecutorOptions options)
+    {
+        if (options.MountHostDotnetTools)
+        {
+            return Array.Empty<string>();
+        }
+
+        var roots = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mount in mounts)
+        {
+            var normPath = NormalizeContainerPath(mount.ContainerPath);
+            if (normPath.EndsWith(DotnetDirectorySuffix, StringComparison.OrdinalIgnoreCase) && seen.Add(normPath))
+            {
+                roots.Add(normPath);
+            }
+        }
+
+        return roots;
     }
 
     public static bool IsNonRootUserDotnetRoot(string trimmedPath)
@@ -1051,13 +1271,9 @@ public class ContainerMountAndDriftBuilder
             args.Add(mount.ToString());
         }
 
-        if (!options.MountHostDotnetTools &&
-            mounts.Any(m => string.Equals(
-                NormalizeContainerPath(m.ContainerPath),
-                $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet",
-                StringComparison.OrdinalIgnoreCase)))
+        foreach (var dotnetRoot in GetDotnetRootsRequiringToolsMask(mounts, options))
         {
-            args.AddRange(["--tmpfs", $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools:ro,noexec,nosuid,size=1m"]);
+            args.AddRange(["--tmpfs", $"{dotnetRoot}/tools:ro,noexec,nosuid,size=1m"]);
         }
 
         var workDir = !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
@@ -1096,12 +1312,9 @@ public class ContainerMountAndDriftBuilder
         }
         else if (options.BlockedHosts is { Count: > 0 })
         {
-            foreach (var host in options.BlockedHosts
-                .Where(h => !string.IsNullOrWhiteSpace(h))
-                .Select(h => h.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (var host in NormalizeBlockedHosts(options.BlockedHosts))
             {
-                args.AddRange(["--add-host", $"{host}:127.0.0.1"]);
+                args.AddRange(["--add-host", $"{host}:{BlockedHostLoopbackIp}"]);
             }
         }
 

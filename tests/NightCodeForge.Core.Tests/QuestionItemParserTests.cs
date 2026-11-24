@@ -674,4 +674,54 @@ public class QuestionItemParserTests
         };
         Assert.False(QuestionItemParser.TryBindAskQuestions(invalidOptionsScalar, out _));
     }
+
+    [Fact]
+    public void TryBindAskQuestions_AcceptsBracketOrBracePrefixedProse_AndRejectsMalformedJsonAndUnknownObjects()
+    {
+        Assert.True(QuestionItemParser.TryBindAskQuestions("[Auth] Should we use JWT or cookies?", out var rootProse));
+        Assert.Equal("[Auth] Should we use JWT or cookies?", Assert.Single(rootProse!).Prompt);
+
+        var arrayProse = new List<object?> { "[1] Which DB?", "{tenantId} route param: UUID or int?" };
+        Assert.True(QuestionItemParser.TryBindAskQuestions(arrayProse, out var arrayBound));
+        Assert.Equal(["[1] Which DB?", "{tenantId} route param: UUID or int?"], arrayBound!.Select(q => q.Prompt).ToArray());
+
+        Assert.False(QuestionItemParser.TryBindAskQuestions("{\"prompt\": broken", out _));
+        Assert.False(QuestionItemParser.TryBindAskQuestions("[{bad", out _));
+        Assert.False(QuestionItemParser.TryBindAskQuestions("```json\nnot-json\n```", out _));
+
+        using var unknownObjJson = JsonDocument.Parse("""[{"foo": "bar"}]""");
+        Assert.False(QuestionItemParser.TryBindAskQuestions(unknownObjJson.RootElement, out _));
+
+        var unknownDict = new List<object?> { new Dictionary<string, object?> { ["foo"] = "bar" } };
+        Assert.False(QuestionItemParser.TryBindAskQuestions(unknownDict, out _));
+    }
+
+    [Fact]
+    public void TryBindAskQuestions_And_ParseFromObject_SupportClrValueTypeOptionSequences()
+    {
+        var rawWithArray = new List<object?>
+        {
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "Pick retry count",
+                ["options"] = new[] { 1, 2, 3 }
+            },
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = "Pick timeout seconds",
+                ["options"] = new List<int> { 5, 10 }
+            }
+        };
+
+        Assert.True(QuestionItemParser.TryBindAskQuestions(rawWithArray, out var bound));
+        Assert.NotNull(bound);
+        Assert.Equal(2, bound.Count);
+        Assert.Equal(["1", "2", "3"], bound[0].Options);
+        Assert.Equal(["5", "10"], bound[1].Options);
+
+        var parsed = QuestionItemParser.ParseFromObject(rawWithArray);
+        Assert.NotNull(parsed);
+        Assert.Equal(["1", "2", "3"], parsed[0].Options);
+        Assert.Equal(["5", "10"], parsed[1].Options);
+    }
 }

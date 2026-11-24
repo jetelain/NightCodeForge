@@ -93,12 +93,17 @@ public sealed class WorkflowInteractionToolModule : IAgentToolModule
                         shouldRewrite = true;
                     }
                 }
-                else if (!string.Equals(matchedKey, QuestionsParameterName, StringComparison.Ordinal) &&
-                         (rawQuestions is null || rawQuestions is IEnumerable<QuestionItem>))
+                else if (rawQuestions is IEnumerable<QuestionItem> typed)
                 {
-                    effectiveQuestions = rawQuestions is IEnumerable<QuestionItem> typed
-                        ? QuestionItemParser.Normalize(typed)
-                        : null;
+                    effectiveQuestions = QuestionItemParser.Normalize(typed);
+                    shouldRewrite = !string.Equals(matchedKey, QuestionsParameterName, StringComparison.Ordinal);
+                }
+
+                if (!shouldRewrite &&
+                    !string.Equals(matchedKey, QuestionsParameterName, StringComparison.Ordinal) &&
+                    !arguments.ContainsKey(QuestionsParameterName))
+                {
+                    effectiveQuestions = rawQuestions;
                     shouldRewrite = true;
                 }
 
