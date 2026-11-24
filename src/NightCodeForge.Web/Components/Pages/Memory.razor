@@ -1,0 +1,655 @@
+@page "/memory"
+@page "/w/{WorkspaceId:int}/memory"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Memory
+@using NightCodeForge.Web.Components.Transcripts
+@using NightCodeForge.Web.Components.Workspaces
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+@inject IWorkspaceMemoryUiService MemoryService
+@inject MemoryUpdateTracker UpdateTracker
+@inject ToastService ToastService
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>Agent Memory - NightCodeForge</PageTitle>
+
+<div class="memory-page-container" id="memory-page">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+    else
+    {
+        var activeWorkspace = WorkspaceState.ActiveWorkspace;
+        var activeBudget = ActiveBudget;
+        var quickActions = IdeationMemoryPromptHelper.ComputeQuickActionState(
+            _localFiles,
+            activeBudget,
+            _selectedScope,
+            _selectedPath,
+            isSelectedFileUnsaved: _isNewFile);
+
+        <div class="memory-page-header" id="memory-page-header">
+            <div class="memory-page-title-wrap">
+                <span class="memory-page-icon">🧠</span>
+                <div>
+                    <h1 class="mb-0">Agent Memory Explorer</h1>
+                    <p class="text-secondary mb-0">
+                        Inspect and maintain local workspace memory and committed repository memory for <strong>@activeWorkspace.Name</strong>.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <div class="memory-quick-actions-card" id="memory-quick-actions">
+            <div class="memory-quick-actions-label">Quick Ideation Prompts:</div>
+            <div class="memory-quick-actions-buttons">
+                <button type="button"
+                        id="memory-action-summarize-pinned"
+                        class="forge-btn @(quickActions.EmphasizeSummarizePinned ? "forge-btn-warning memory-action-emphasized" : "forge-btn-secondary") forge-btn-sm"
+                        disabled="@(!quickActions.CanSummarizePinned)"
+                        title="Ask Ideation to condense MEMORY.md and offload details to topic files"
+                        @onclick="() => LaunchIdeationAction(MemoryIdeationAction.SummarizePinnedMemory)">
+                    🗜️ Summarize &amp; Compact @AgentMemoryConstants.PinnedMemoryFileName
+                </button>
+                <button type="button"
+                        id="memory-action-deduplicate-local"
+                        class="forge-btn forge-btn-secondary forge-btn-sm"
+                        disabled="@(!quickActions.CanDeduplicateLocal)"
+                        title="Ask Ideation to audit, deduplicate, and prune local workspace memory"
+                        @onclick="() => LaunchIdeationAction(MemoryIdeationAction.DeduplicateLocalMemory)">
+                    🧹 Deduplicate &amp; Prune Local Memory
+                </button>
+                <button type="button"
+                        id="memory-action-promote-repo"
+                        class="forge-btn forge-btn-secondary forge-btn-sm"
+                        disabled="@(!quickActions.CanPromoteToRepo)"
+                        title="Ask Ideation to compare local memory with repository memory and propose a Stage 2 task for durable rules"
+                        @onclick="() => LaunchIdeationAction(MemoryIdeationAction.PromoteToRepositoryMemory)">
+                    ⬆️ Promote Durable Rules to Repo
+                </button>
+                <button type="button"
+                        id="memory-action-discuss-selected"
+                        class="forge-btn forge-btn-secondary forge-btn-sm"
+                        disabled="@(!quickActions.CanDiscussSelected)"
+                        title="Open Ideation with a focused review prompt for the currently selected memory file"
+                        @onclick="() => LaunchIdeationAction(MemoryIdeationAction.DiscussSelectedFile, _selectedScope, _selectedPath)">
+                    💬 Discuss Selected File in Ideation
+                </button>
+            </div>
+        </div>
+
+        @if (activeBudget != null)
+        {
+            <div class="memory-budget-banner @(activeBudget.IsOverBudget ? "over-budget" : activeBudget.IsNearBudget ? "near-budget" : "within-budget")"
+                 id="memory-budget-meter">
+                <strong>@AgentMemoryConstants.PinnedMemoryFileName Budget:</strong>
+                <span class="font-mono">@activeBudget.Lines / @activeBudget.MaxLines lines · @activeBudget.Bytes / @activeBudget.MaxBytes bytes</span>
+                @if (activeBudget.IsOverBudget)
+                {
+                    <span> — over budget, the pinned memory will be truncated.</span>
+                }
+                else if (activeBudget.IsNearBudget)
+                {
+                    <span> — near budget (≥@MemoryUiConstants.NearBudgetThresholdPercent%), consider compacting @AgentMemoryConstants.PinnedMemoryFileName.</span>
+                }
+            </div>
+        }
+
+        @if (_error != null)
+        {
+            <div class="alert alert-warning" id="memory-error">@_error</div>
+        }
+
+        <div class="memory-explorer-grid">
+            <aside class="memory-sidebar-pane" aria-label="Memory file tiers">
+                <section class="memory-tier-section" id="memory-section-local">
+                    <div class="memory-tier-header">
+                        <h3>Tier 2 · Local Workspace Memory</h3>
+                        <span class="forge-badge badge-teal font-mono">@MemoryUiConstants.ScopeLocalLabel</span>
+                    </div>
+                    <p class="text-muted small mb-2">
+                        Stored outside Git in <code>~/.nightcodeforge/wks/@activeWorkspace.Id/memory/*.md</code>.
+                    </p>
+                    <div class="d-flex gap-1 mb-2">
+                        <input type="text"
+                               id="memory-new-file-name"
+                               class="form-control-dark"
+                               placeholder="new-topic.md"
+                               @bind="_newFileName" />
+                        <button type="button"
+                                id="memory-create-btn"
+                                class="forge-btn forge-btn-secondary forge-btn-sm"
+                                @onclick="CreateNewAsync">
+                            ＋ New
+                        </button>
+                    </div>
+                    @if (_localFiles.Count == 0)
+                    {
+                        <div class="text-muted small" id="memory-local-empty">No local memory files.</div>
+                    }
+                    else
+                    {
+                        <div class="memory-file-list">
+                            @foreach (var file in _localFiles)
+                            {
+                                var isSelected = _selectedScope == AgentMemoryScope.LocalWorkspace &&
+                                                 string.Equals(file.RelativePath, _selectedPath, StringComparison.OrdinalIgnoreCase);
+                                <button type="button"
+                                        class="memory-file-item forge-btn-ghost d-block text-start w-100 @(isSelected ? "active" : "")"
+                                        data-testid="memory-file-item"
+                                        data-memory-scope="local"
+                                        @onclick="() => SelectFileAsync(AgentMemoryScope.LocalWorkspace, file.RelativePath)">
+                                    <div class="font-mono">@file.RelativePath</div>
+                                    @if (!string.IsNullOrEmpty(file.Summary))
+                                    {
+                                        <div class="small text-muted">@file.Summary</div>
+                                    }
+                                    <div class="small text-muted">@file.LineCount lines · @file.SizeBytes B</div>
+                                </button>
+                            }
+                        </div>
+                    }
+                </section>
+
+                <section class="memory-tier-section" id="memory-section-shared">
+                    <div class="memory-tier-header">
+                        <h3>Tier 1 · Committed Repository Memory</h3>
+                        <span class="forge-badge badge-indigo font-mono">@MemoryUiConstants.ScopeSharedLabel</span>
+                    </div>
+                    <div class="text-muted small mb-2" id="memory-committed-readonly-note">
+                        Read-only view of committed files in the repository working tree (<code>AGENTS.md</code>, <code>.agents/AGENTS.md</code>, <code>.agents/memory/*.md</code>). Update via Git or Stage 2 tasks.
+                    </div>
+                    @if (_sharedFiles.Count == 0)
+                    {
+                        <div class="text-muted small" id="memory-shared-empty">No committed repository memory files.</div>
+                    }
+                    else
+                    {
+                        <div class="memory-file-list">
+                            @foreach (var file in _sharedFiles)
+                            {
+                                var isSelected = _selectedScope == AgentMemoryScope.SharedRepository &&
+                                                 string.Equals(file.RelativePath, _selectedPath, StringComparison.OrdinalIgnoreCase);
+                                <button type="button"
+                                        class="memory-file-item forge-btn-ghost d-block text-start w-100 @(isSelected ? "active" : "")"
+                                        data-testid="memory-file-item"
+                                        data-memory-scope="shared"
+                                        @onclick="() => SelectFileAsync(AgentMemoryScope.SharedRepository, file.RelativePath)">
+                                    <div class="font-mono">@file.RelativePath</div>
+                                    @if (!string.IsNullOrEmpty(file.Summary))
+                                    {
+                                        <div class="small text-muted">@file.Summary</div>
+                                    }
+                                    <div class="small text-muted">@file.LineCount lines · @file.SizeBytes B</div>
+                                </button>
+                            }
+                        </div>
+                    }
+                </section>
+            </aside>
+
+            <main class="memory-main-pane">
+                @if (_selectedPath == null)
+                {
+                    <div class="memory-empty-selection text-muted" id="memory-empty-selection">
+                        Select a memory file from either tier to inspect, edit, or discuss it in Ideation.
+                    </div>
+                }
+                else
+                {
+                    <div class="memory-viewer-toolbar">
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <strong class="font-mono" id="memory-selected-path">@_selectedPath</strong>
+                            @if (_selectedScope.HasValue)
+                            {
+                                <span class="forge-badge @(_selectedScope == AgentMemoryScope.LocalWorkspace ? "badge-teal" : "badge-indigo") font-mono" id="memory-selected-scope">
+                                    @MemoryPresentationHelper.FormatScopeLabel(_selectedScope.Value)
+                                </span>
+                            }
+                        </div>
+                        <div class="d-flex gap-1 flex-wrap">
+                            @if (!_isEditing)
+                            {
+                                <button type="button" id="memory-toggle-raw-btn" class="forge-btn forge-btn-secondary forge-btn-sm" @onclick="ToggleRaw">
+                                    @(_showRaw ? "Rendered" : "Raw")
+                                </button>
+                                @if (_selectedScope == AgentMemoryScope.LocalWorkspace)
+                                {
+                                    <button type="button" id="memory-edit-btn" class="forge-btn forge-btn-secondary forge-btn-sm" @onclick="StartEdit">✏️ Edit</button>
+                                    <button type="button" id="memory-delete-btn" class="forge-btn forge-btn-secondary forge-btn-sm" @onclick="() => _confirmDelete = true">🗑️ Delete</button>
+                                }
+                            }
+                        </div>
+                    </div>
+
+                    @if (_confirmDelete)
+                    {
+                        <div class="alert alert-warning" id="memory-delete-confirm">
+                            Delete <code>@_selectedPath</code>?
+                            <button type="button" id="memory-delete-confirm-btn" class="forge-btn forge-btn-warning forge-btn-sm" @onclick="DeleteAsync">Confirm delete</button>
+                            <button type="button" id="memory-delete-cancel-btn" class="forge-btn forge-btn-secondary forge-btn-sm" @onclick="() => _confirmDelete = false">Cancel</button>
+                        </div>
+                    }
+
+                    @if (_isEditing)
+                    {
+                        <textarea id="memory-editor" class="form-control-dark font-mono w-100" rows="20" @bind="_editorContent" @bind:event="oninput"></textarea>
+                        <div class="d-flex gap-2 mt-2">
+                            <button type="button" id="memory-save-btn" class="forge-btn forge-btn-primary" disabled="@_isSaving" @onclick="SaveAsync">💾 Save</button>
+                            <button type="button" id="memory-cancel-edit-btn" class="forge-btn forge-btn-secondary" @onclick="CancelEdit">Cancel</button>
+                        </div>
+                    }
+                    else if (_showRaw)
+                    {
+                        <pre id="memory-raw" class="memory-raw-pre font-mono">@_content</pre>
+                    }
+                    else
+                    {
+                        <div id="memory-rendered" class="markdown-body forge-markdown">@MarkdownHelper.ToMarkupString(_content)</div>
+                    }
+                }
+            </main>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    [SupplyParameterFromQuery(Name = MemoryPresentationHelper.ScopeQueryParameter)]
+    public string? ScopeQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = MemoryPresentationHelper.PathQueryParameter)]
+    public string? PathQuery { get; set; }
+
+    private IReadOnlyList<MemoryFileEntry> _localFiles = [];
+    private IReadOnlyList<MemoryFileEntry> _sharedFiles = [];
+    private AgentMemoryScope? _selectedScope;
+    private string? _selectedPath;
+    private string _content = string.Empty;
+    private string _editorContent = string.Empty;
+    private string _newFileName = string.Empty;
+    private string? _error;
+    private bool _showRaw;
+    private bool _isEditing;
+    private bool _isSaving;
+    private bool _confirmDelete;
+    private bool _isNewFile;
+    private bool _disposed;
+    private int? _loadedWorkspaceId;
+    private string? _lastDeepLinkKey;
+    private MemoryBudget? _selectedBudget;
+    private int _selectionVersion;
+
+    private int? ActiveWorkspaceId => WorkspaceState.ActiveWorkspaceId;
+
+    private bool IsPinnedSelected =>
+        _selectedScope == AgentMemoryScope.LocalWorkspace &&
+        MemoryPresentationHelper.IsPinnedMemoryFile(_selectedPath);
+
+    private MemoryBudget? PinnedListingBudget
+    {
+        get
+        {
+            var pinned = _localFiles.FirstOrDefault(f => MemoryPresentationHelper.IsPinnedMemoryFile(f.RelativePath));
+            return pinned != null ? MemoryPresentationHelper.ComputeBudgetFromEntry(pinned) : null;
+        }
+    }
+
+    private MemoryBudget? ActiveBudget
+    {
+        get
+        {
+            if (IsPinnedSelected)
+            {
+                return _isEditing
+                    ? MemoryPresentationHelper.ComputeBudget(_editorContent)
+                    : (_selectedBudget ?? PinnedListingBudget);
+            }
+
+            return PinnedListingBudget;
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        UpdateTracker.OnMemoryUpdated += HandleMemoryUpdated;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        await LoadWorkspaceMemoryAsync(applyDeepLink: true);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        var activeId = ActiveWorkspaceId;
+        var deepLinkKey = BuildDeepLinkKey(activeId, ScopeQuery, PathQuery);
+
+        if (_loadedWorkspaceId != activeId)
+        {
+            await LoadWorkspaceMemoryAsync(applyDeepLink: true);
+            return;
+        }
+
+        if (!string.Equals(_lastDeepLinkKey, deepLinkKey, StringComparison.Ordinal))
+        {
+            await ApplyDeepLinkAsync();
+        }
+    }
+
+    private static string BuildDeepLinkKey(int? workspaceId, string? scope, string? path) =>
+        $"{workspaceId?.ToString() ?? "none"}|{scope ?? string.Empty}|{path ?? string.Empty}";
+
+    private async Task LoadWorkspaceMemoryAsync(bool applyDeepLink)
+    {
+        var activeId = ActiveWorkspaceId;
+        _loadedWorkspaceId = activeId;
+        ResetSelection();
+
+        if (!activeId.HasValue)
+        {
+            _localFiles = [];
+            _sharedFiles = [];
+            _lastDeepLinkKey = BuildDeepLinkKey(null, ScopeQuery, PathQuery);
+            return;
+        }
+
+        UpdateTracker.Reset(activeId.Value);
+        await RefreshListsAsync(activeId.Value);
+
+        if (applyDeepLink)
+        {
+            await ApplyDeepLinkAsync();
+        }
+    }
+
+    private async Task ApplyDeepLinkAsync()
+    {
+        var activeId = ActiveWorkspaceId;
+        _lastDeepLinkKey = BuildDeepLinkKey(activeId, ScopeQuery, PathQuery);
+
+        if (!activeId.HasValue)
+        {
+            return;
+        }
+
+        var resolution = MemoryPresentationHelper.ResolveDeepLink(ScopeQuery, PathQuery);
+        if (!string.IsNullOrEmpty(resolution.WarningMessage))
+        {
+            ResetSelection();
+            _error = resolution.WarningMessage;
+            return;
+        }
+
+        if (resolution.Scope.HasValue && !string.IsNullOrEmpty(resolution.RelativePath))
+        {
+            await SelectFileAsync(resolution.Scope.Value, resolution.RelativePath);
+        }
+    }
+
+    private async Task RefreshListsAsync(int workspaceId)
+    {
+        await RunAsync(async () =>
+        {
+            var localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
+            var sharedFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.SharedRepository);
+            if (_disposed || ActiveWorkspaceId != workspaceId)
+            {
+                return;
+            }
+
+            _localFiles = localFiles;
+            _sharedFiles = sharedFiles;
+        });
+    }
+
+    private async Task SelectFileAsync(AgentMemoryScope scope, string relativePath)
+    {
+        if (!ActiveWorkspaceId.HasValue)
+        {
+            return;
+        }
+
+        var workspaceId = ActiveWorkspaceId.Value;
+        ResetSelection();
+        var version = _selectionVersion;
+        await RunAsync(async () =>
+        {
+            var file = await MemoryService.ReadAsync(workspaceId, scope, relativePath);
+            if (_disposed || ActiveWorkspaceId != workspaceId || _selectionVersion != version)
+            {
+                return;
+            }
+
+            _selectedScope = scope;
+            _selectedPath = file.Entry.RelativePath;
+            _content = file.Content;
+            _selectedBudget = MemoryPresentationHelper.ComputeBudget(file.Content);
+        });
+    }
+
+    private void ResetSelection()
+    {
+        _selectionVersion++;
+        _selectedScope = null;
+        _selectedPath = null;
+        _content = string.Empty;
+        _editorContent = string.Empty;
+        _isEditing = false;
+        _confirmDelete = false;
+        _isNewFile = false;
+        _selectedBudget = null;
+        _error = null;
+    }
+
+    private void ToggleRaw() => _showRaw = !_showRaw;
+
+    private void StartEdit()
+    {
+        if (_selectedScope != AgentMemoryScope.LocalWorkspace)
+        {
+            return;
+        }
+
+        _confirmDelete = false;
+        _editorContent = _content;
+        _isEditing = true;
+    }
+
+    private void CancelEdit()
+    {
+        _isEditing = false;
+        if (_isNewFile)
+        {
+            ResetSelection();
+        }
+    }
+
+    private async Task CreateNewAsync()
+    {
+        if (!ActiveWorkspaceId.HasValue)
+        {
+            return;
+        }
+
+        _error = null;
+        var candidate = _newFileName.Trim();
+        await RunAsync(() =>
+        {
+            MemoryService.ValidateLocalFileName(candidate);
+            if (_localFiles.Any(f => string.Equals(f.RelativePath, candidate, StringComparison.OrdinalIgnoreCase)))
+            {
+                _error = $"'{candidate}' already exists.";
+                return Task.CompletedTask;
+            }
+
+            ResetSelection();
+            _selectedScope = AgentMemoryScope.LocalWorkspace;
+            _selectedPath = candidate;
+            _isNewFile = true;
+            _editorContent = string.Empty;
+            _isEditing = true;
+            _newFileName = string.Empty;
+            return Task.CompletedTask;
+        });
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!ActiveWorkspaceId.HasValue || _selectedPath == null || _selectedScope != AgentMemoryScope.LocalWorkspace)
+        {
+            return;
+        }
+
+        var workspaceId = ActiveWorkspaceId.Value;
+        var pathToSave = _selectedPath;
+        var contentToSave = _editorContent;
+        _isSaving = true;
+        try
+        {
+            await RunAsync(async () =>
+            {
+                var kind = await MemoryService.SaveLocalAsync(workspaceId, pathToSave, contentToSave);
+                if (_disposed || ActiveWorkspaceId != workspaceId)
+                {
+                    return;
+                }
+
+                ToastService.Show("Memory saved", $"{kind} {pathToSave}", ToastLevel.Success);
+                _content = contentToSave;
+                _selectedBudget = MemoryPresentationHelper.ComputeBudget(_content);
+                _isEditing = false;
+                _isNewFile = false;
+                var localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
+                if (!_disposed && ActiveWorkspaceId == workspaceId)
+                {
+                    _localFiles = localFiles;
+                }
+            });
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (!ActiveWorkspaceId.HasValue || _selectedPath == null || _selectedScope != AgentMemoryScope.LocalWorkspace)
+        {
+            return;
+        }
+
+        var workspaceId = ActiveWorkspaceId.Value;
+        var path = _selectedPath;
+        await RunAsync(async () =>
+        {
+            await MemoryService.DeleteLocalAsync(workspaceId, path);
+            ToastService.Show("Memory deleted", path, ToastLevel.Success);
+            ResetSelection();
+            _localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
+        });
+    }
+
+    private void LaunchIdeationAction(
+        MemoryIdeationAction action,
+        AgentMemoryScope? scope = null,
+        string? relativePath = null)
+    {
+        if (!ActiveWorkspaceId.HasValue)
+        {
+            return;
+        }
+
+        var url = IdeationMemoryPromptHelper.BuildIdeationMemoryActionUrl(
+            ActiveWorkspaceId.Value,
+            action,
+            scope,
+            relativePath);
+        Navigation.NavigateTo(url);
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception ex) when (ex is MemoryValidationException or MemoryFileNotFoundException or MemoryWorkspaceNotFoundException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_loadedWorkspaceId != ActiveWorkspaceId)
+            {
+                await LoadWorkspaceMemoryAsync(applyDeepLink: false);
+                StateHasChanged();
+            }
+        });
+    }
+
+    private void HandleMemoryUpdated(MemoryUpdateNotice notice)
+    {
+        if (_disposed || !ActiveWorkspaceId.HasValue || notice.WorkspaceId != ActiveWorkspaceId.Value)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed || !ActiveWorkspaceId.HasValue || notice.WorkspaceId != ActiveWorkspaceId.Value)
+            {
+                return;
+            }
+
+            var workspaceId = ActiveWorkspaceId.Value;
+            UpdateTracker.Reset(workspaceId);
+            await RefreshListsAsync(workspaceId);
+
+            if (!_isEditing &&
+                _selectedPath != null &&
+                _selectedScope == notice.Scope &&
+                string.Equals(_selectedPath, notice.RelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                if (notice.ChangeKind == AgentMemoryChangeKind.Deleted)
+                {
+                    ResetSelection();
+                }
+                else
+                {
+                    await SelectFileAsync(_selectedScope.Value, _selectedPath);
+                }
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        UpdateTracker.OnMemoryUpdated -= HandleMemoryUpdated;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+}

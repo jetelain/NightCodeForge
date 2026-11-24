@@ -64,6 +64,9 @@ public class WorkspaceUrlRoutingTests : BunitContext
     [InlineData("http://localhost/w/1/review", 2, "/w/2/review")]
     [InlineData("http://localhost/w/1/inspector/15", 2, "/w/2/inspector")]
     [InlineData("http://localhost/w/1/transcripts/session-1.md", 2, "/w/2/transcripts")]
+    [InlineData("http://localhost/w/1/memory?scope=local&path=MEMORY.md", 2, "/w/2/memory")]
+    [InlineData("http://localhost/w/1/ideation?memoryAction=discuss-file&scope=local&path=MEMORY.md", 2, "/w/2/ideation")]
+    [InlineData("http://localhost/w/1/ideation?taskId=15", 2, "/w/2/ideation")]
     [InlineData("http://localhost/backlog", 3, "/w/3/backlog")]
     public void GetTargetUrlForWorkspaceSwitch_RewritesWorkspacePrefixAndDropsTaskSpecificParameters(
         string currentUri, int targetWorkspaceId, string expectedTargetUrl)
@@ -75,6 +78,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
 
     [Theory]
     [InlineData("http://localhost/w/2/backlog", "Backlog & DAG")]
+    [InlineData("http://localhost/w/2/memory", "Agent Memory")]
     [InlineData("http://localhost/w/2/tasks/15", "Tasks")]
     [InlineData("http://localhost/w/2/tasks/create", "Tasks")]
     [InlineData("http://localhost/w/2/review/15", "Review Room")]
@@ -156,11 +160,16 @@ public class WorkspaceUrlRoutingTests : BunitContext
 
         Services.AddSingleton(WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
         Services.AddSingleton(workspaceState);
+        Services.AddSingleton(TestHubConnectionHelper.Create());
+        Services.AddSingleton<MemoryUpdateTracker>();
 
         var cut = Render<NavMenu>();
 
         var backlogLink = cut.Find("a[href='w/9/backlog']");
         Assert.NotNull(backlogLink);
+
+        var memoryLink = cut.Find("a[href='w/9/memory']");
+        Assert.NotNull(memoryLink);
 
         var homeLink = cut.Find("a.brand-logo-wrap[href='']");
         Assert.NotNull(homeLink);
@@ -393,6 +402,8 @@ public class WorkspaceUrlRoutingTests : BunitContext
         Services.AddSingleton(new Mock<IWorkspaceTemplateService>().Object);
         Services.AddSingleton(new Mock<IWorkspaceTemplateUiService>().Object);
         Services.AddSingleton(new Mock<IWebNotificationService>().Object);
+        Services.AddSingleton(TestHubConnectionHelper.Create());
+        Services.AddSingleton<MemoryUpdateTracker>();
         Services.AddSingleton(NullLogger<TopNavBar>.Instance);
     }
 }

@@ -61,7 +61,7 @@ public interface IWorkspaceMemoryUiService
 }
 
 /// <summary>
-/// File listing, reading and atomic CRUD for the Workspace Memory drawer. Local memory is read-write;
+/// File listing, reading and atomic CRUD for the Agent Memory page. Local memory is read-write;
 /// committed repository memory (read from <see cref="Workspace.RepositoryPath"/>) is read-only.
 /// </summary>
 public class WorkspaceMemoryUiService : IWorkspaceMemoryUiService

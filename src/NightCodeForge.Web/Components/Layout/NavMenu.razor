@@ -1,5 +1,6 @@
 @inject WorkerStateService WorkerState
 @inject WorkspaceStateService WorkspaceState
+@inject MemoryUpdateTracker MemoryTracker
 @implements IDisposable
 
 <aside class="forge-sidebar @(IsMobileOpen ? "mobile-open" : "")" id="forge-sidebar" aria-label="Main navigation">
@@ -38,6 +39,18 @@
         <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref("triage")">
             <span class="nav-icon">🛡️</span>
             <span>Untrusted Intake</span>
+        </NavLink>
+
+        @{
+            var memoryUpdateCount = ActiveMemoryUpdateCount;
+        }
+        <NavLink class="forge-nav-link" href="@WorkspaceState.GetNavHref(MemoryUiConstants.WorkspaceMemoryUrlSuffix)" id="nav-memory-link">
+            <span class="nav-icon">🧠</span>
+            <span>Agent Memory</span>
+            @if (memoryUpdateCount > 0)
+            {
+                <span class="nav-badge" data-testid="nav-memory-badge">@memoryUpdateCount</span>
+            }
         </NavLink>
 
         <div class="nav-section-label">Execution</div>
@@ -112,14 +125,37 @@
     [Parameter]
     public EventCallback OnNavigate { get; set; }
 
+    private bool _disposed;
+
+    private int ActiveMemoryUpdateCount =>
+        WorkspaceState.ActiveWorkspaceId.HasValue
+            ? MemoryTracker.GetCount(WorkspaceState.ActiveWorkspaceId.Value)
+            : 0;
+
     protected override void OnInitialized()
     {
         WorkerState.OnWorkerStateChanged += HandleStateChanged;
         WorkspaceState.OnWorkspaceChanged += HandleStateChanged;
+        MemoryTracker.OnCountChanged += HandleMemoryCountChanged;
     }
 
     private void HandleStateChanged()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleMemoryCountChanged(int workspaceId)
+    {
+        if (_disposed || WorkspaceState.ActiveWorkspaceId != workspaceId)
+        {
+            return;
+        }
+
         _ = InvokeAsync(StateHasChanged);
     }
 
@@ -141,7 +177,9 @@
 
     public void Dispose()
     {
+        _disposed = true;
         WorkerState.OnWorkerStateChanged -= HandleStateChanged;
         WorkspaceState.OnWorkspaceChanged -= HandleStateChanged;
+        MemoryTracker.OnCountChanged -= HandleMemoryCountChanged;
     }
 }

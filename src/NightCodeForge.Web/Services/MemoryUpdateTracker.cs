@@ -13,8 +13,8 @@ public sealed record MemoryUpdateNotice(
     string Summary);
 
 /// <summary>
-/// Scoped tracker of live memory updates: counts updates per workspace (for the Ideation header indicator)
-/// and republishes them to the Workspace Memory drawer so that it can refresh its list.
+/// Scoped tracker of live memory updates: counts updates per workspace (for the navigation and Ideation indicators)
+/// and republishes them to the Agent Memory page so that it can refresh its list.
 /// </summary>
 public class MemoryUpdateTracker : IDisposable
 {
@@ -30,6 +30,7 @@ public class MemoryUpdateTracker : IDisposable
     }
 
     public event Action<MemoryUpdateNotice>? OnMemoryUpdated;
+    public event Action<int>? OnCountChanged;
 
     public int GetCount(int workspaceId)
     {
@@ -41,9 +42,15 @@ public class MemoryUpdateTracker : IDisposable
 
     public void Reset(int workspaceId)
     {
+        bool removed;
         lock (_lock)
         {
-            _counts.Remove(workspaceId);
+            removed = _counts.Remove(workspaceId);
+        }
+
+        if (removed)
+        {
+            OnCountChanged?.Invoke(workspaceId);
         }
     }
 
@@ -59,13 +66,15 @@ public class MemoryUpdateTracker : IDisposable
             _counts[workspaceId] = _counts.GetValueOrDefault(workspaceId) + 1;
         }
 
+        OnCountChanged?.Invoke(workspaceId);
+
         var scope = MemoryPresentationHelper.ParseScope(memoryScope);
         var notice = new MemoryUpdateNotice(
             workspaceId,
             taskId,
             stageId,
             scope,
-            scope == AgentMemoryScope.None ? relativePath : MemoryPresentationHelper.ToDrawerRelativePath(scope, relativePath),
+            scope == AgentMemoryScope.None ? relativePath : MemoryPresentationHelper.ToMemoryRelativePath(scope, relativePath),
             MemoryPresentationHelper.ParseChangeKind(changeKind),
             summary);
         OnMemoryUpdated?.Invoke(notice);

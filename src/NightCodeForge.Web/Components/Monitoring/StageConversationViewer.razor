@@ -1,7 +1,6 @@
 @namespace NightCodeForge.Web.Components.Monitoring
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Memory
-@using NightCodeForge.Web.Components.Memory
 @using NightCodeForge.Core.Repositories
 @using NightCodeForge.Core.Workflow
 @using NightCodeForge.Web.Components.Transcripts
@@ -11,6 +10,7 @@
 @inject IJSRuntime JSRuntime
 @inject ITaskRepository TaskRepository
 @inject ITaskOrchestrator TaskOrchestrator
+@inject NavigationManager Navigation
 @implements IAsyncDisposable
 
 <div id="@ChatPresentationHelper.StageConversationContainerId" class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; min-width: 0; position: relative;">
@@ -290,7 +290,7 @@
                                                       BadgeTooltip="@primingTooltip"
                                                       MemoryBadgeText="@memoryTarget?.BadgeText"
                                                       MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
-                                                      OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
+                                                      OnMemoryBadgeClick="@(() => OpenMemoryPageForTarget(memoryTarget))" />
                                     </div>
                                 </div>
                             }
@@ -412,32 +412,19 @@
     </button>
 </div>
 
-@if (_memoryDrawerOpen && Task != null)
-{
-    <WorkspaceMemoryDrawer WorkspaceId="@Task.WorkspaceId"
-                           InitialScope="@_memoryScope"
-                           InitialRelativePath="@_memoryPath"
-                           OnClosed="CloseMemoryDrawer" />
-}
-
 @code {
-    private bool _memoryDrawerOpen;
-    private AgentMemoryScope _memoryScope = AgentMemoryScope.LocalWorkspace;
-    private string? _memoryPath;
-
-    private void OpenMemoryDrawerForTarget(MemoryToolTarget? target)
+    private void OpenMemoryPageForTarget(MemoryToolTarget? target)
     {
-        if (target == null)
+        if (target == null || Task == null)
         {
             return;
         }
 
-        _memoryScope = target.Scope;
-        _memoryPath = target.RelativePath;
-        _memoryDrawerOpen = true;
+        Navigation.NavigateTo(MemoryPresentationHelper.BuildMemoryPageUrl(
+            Task.WorkspaceId,
+            target.Scope,
+            target.RelativePath));
     }
-
-    private void CloseMemoryDrawer() => _memoryDrawerOpen = false;
 
     [Parameter] public Conversation? Conversation { get; set; }
     [Parameter] public ForgeTask? Task { get; set; }

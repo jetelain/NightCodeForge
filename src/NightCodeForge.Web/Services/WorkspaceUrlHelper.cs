@@ -178,6 +178,17 @@ public static class WorkspaceUrlHelper
             return BuildPath(newWorkspaceId, "transcripts");
         }
 
+        if (string.Equals(remainingPath, MemoryUiConstants.WorkspaceMemoryUrlSuffix, StringComparison.OrdinalIgnoreCase) ||
+            remainingPath.StartsWith(MemoryUiConstants.WorkspaceMemoryUrlSuffix + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPath(newWorkspaceId, MemoryUiConstants.WorkspaceMemoryUrlSuffix);
+        }
+
+        if (string.Equals(remainingPath, "ideation", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPath(newWorkspaceId, "ideation");
+        }
+
         if (IsNonWorkspaceRoute(remainingPath))
         {
             return BuildPath(newWorkspaceId, string.Empty);
@@ -198,6 +209,7 @@ public static class WorkspaceUrlHelper
         {
             "" => "Overview",
             "ideation" => "Ideation Chat",
+            MemoryUiConstants.WorkspaceMemoryUrlSuffix => "Agent Memory",
             "backlog" => "Backlog & DAG",
             "monitoring" => "Live Telemetry",
             "inspector" => "Task Inspector",

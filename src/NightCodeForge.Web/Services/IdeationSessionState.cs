@@ -365,6 +365,7 @@ public class IdeationSessionState : IDisposable
     private long _subscriptionGeneration;
     private Func<Func<Task>, Task>? _uiDispatcher;
     private string? _lastAppliedDraftId;
+    private string? _lastAppliedMemoryActionKey;
     private ChatMessage? _inFlightOptimisticUserMessage;
     private List<ConversationAttachmentChipViewModel>? _inFlightOptimisticChips;
     private bool _costAlreadyIncludesInFlightTurn;
@@ -616,10 +617,16 @@ public class IdeationSessionState : IDisposable
         _lastAppliedDraftId = null;
     }
 
+    public void ClearMemoryActionDeduplication()
+    {
+        _lastAppliedMemoryActionKey = null;
+    }
+
     public async Task<IdeationContextLoadResult> ReloadWorkspaceContextAsync(
         Workspace? activeWorkspace,
         int? taskId,
         string? draftId,
+        IdeationMemoryActionRequest? memoryAction = null,
         CancellationToken cancellationToken = default)
     {
         if (activeWorkspace == null)
@@ -640,6 +647,18 @@ public class IdeationSessionState : IDisposable
             if (BoundWorkspaceId.HasValue && BoundWorkspaceId.Value != activeWorkspace.Id)
             {
                 PendingComposerChips.Clear();
+                await ReleaseBoundSessionOnWorkspaceSwitchAsync(BoundWorkspaceId, ActiveConversationId, cancellationToken);
+                BoundWorkspaceId = null;
+                ActiveConversationId = null;
+                IsGenerating = false;
+            }
+            else if (BoundWorkspaceId == activeWorkspace.Id &&
+                     ActiveConversationId.HasValue &&
+                     IsGenerating &&
+                     _streamSubscription == null &&
+                     !_coordinator.IsConversationGenerating(ActiveConversationId.Value))
+            {
+                IsGenerating = false;
             }
 
             WorkspaceTasks = await _proposalService.GetWorkspaceTasksAsync(activeWorkspace.Id, cancellationToken) ?? Array.Empty<ForgeTask>();
@@ -667,6 +686,21 @@ public class IdeationSessionState : IDisposable
                 }
             }
 
+            if (!string.IsNullOrWhiteSpace(memoryAction?.Action))
+            {
+                var memoryResult = await TryInitializeMemoryActionAsync(
+                    activeWorkspace.Id,
+                    memoryAction.Action,
+                    memoryAction.Scope,
+                    memoryAction.Path,
+                    cancellationToken);
+                if (memoryResult.Handled)
+                {
+                    NotifyStateChanged();
+                    return new IdeationContextLoadResult(memoryResult.SeedPrompt, handledTaskId);
+                }
+            }
+
             if (BoundWorkspaceId != activeWorkspace.Id)
             {
                 await ReleaseBoundSessionOnWorkspaceSwitchAsync(BoundWorkspaceId, ActiveConversationId, cancellationToken);
@@ -676,9 +710,12 @@ public class IdeationSessionState : IDisposable
             }
             else if (!ActiveConversationId.HasValue)
             {
-                var handle = await _coordinator.GetOrCreateActiveConversationAsync(activeWorkspace.Id, NonDefaultOptionsOrNull, cancellationToken);
-                WorkspaceSessions = await _coordinator.GetWorkspaceConversationsAsync(activeWorkspace.Id, cancellationToken);
-                await AttachAndHydrateConversationAsync(activeWorkspace.Id, handle.Conversation.Id, cancellationToken);
+                if (!IsGenerating)
+                {
+                    var handle = await _coordinator.GetOrCreateActiveConversationAsync(activeWorkspace.Id, NonDefaultOptionsOrNull, cancellationToken);
+                    WorkspaceSessions = await _coordinator.GetWorkspaceConversationsAsync(activeWorkspace.Id, cancellationToken);
+                    await AttachAndHydrateConversationAsync(activeWorkspace.Id, handle.Conversation.Id, cancellationToken);
+                }
             }
             else
             {
@@ -765,6 +802,74 @@ public class IdeationSessionState : IDisposable
         await AttachAndHydrateConversationAsync(workspaceId, handle.Conversation.Id, cancellationToken);
 
         var seed = IdeationRefinementHelper.BuildCompanionSeedPrompt(draft);
+        NotifyStateChanged();
+        return (true, seed);
+    }
+
+    public async Task<(bool Handled, string? SeedPrompt)> TryInitializeMemoryActionAsync(
+        int workspaceId,
+        string? actionParam,
+        string? scopeParam,
+        string? pathParam,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IdeationMemoryPromptHelper.TryParseActionQueryValue(actionParam, out var action))
+        {
+            return (false, null);
+        }
+
+        if (action == MemoryIdeationAction.DiscussSelectedFile && string.IsNullOrWhiteSpace(pathParam))
+        {
+            return (false, null);
+        }
+
+        var key = IdeationMemoryPromptHelper.BuildDeduplicationKey(workspaceId, actionParam, scopeParam, pathParam);
+        if (string.Equals(_lastAppliedMemoryActionKey, key, StringComparison.Ordinal))
+        {
+            return (false, null);
+        }
+
+        if (IsGenerating)
+        {
+            _lastAppliedMemoryActionKey = key;
+            OnNotification?.Invoke(
+                "Ideation Busy",
+                "Wait for the current Ideation turn to finish before starting a memory prompt.",
+                ToastLevel.Warning);
+            return (false, null);
+        }
+
+        var previousKey = _lastAppliedMemoryActionKey;
+        _lastAppliedMemoryActionKey = key;
+
+        NightCodeForge.Core.Memory.AgentMemoryScope? parsedScope =
+            MemoryPresentationHelper.TryParseScopeQueryValue(scopeParam, out var scope)
+                ? scope
+                : null;
+
+        var oldConvId = ActiveConversationId;
+        var oldWsId = BoundWorkspaceId ?? workspaceId;
+
+        try
+        {
+            var title = IdeationMemoryPromptHelper.BuildConversationTitle(action, pathParam);
+            var handle = await _coordinator.StartConversationAsync(
+                workspaceId,
+                title: title,
+                options: CurrentOptions,
+                cancellationToken: cancellationToken);
+
+            await ReleaseConversationAffinityIfChangedAsync(oldWsId, oldConvId, handle.Conversation.Id, cancellationToken);
+            WorkspaceSessions = await _coordinator.GetWorkspaceConversationsAsync(workspaceId, cancellationToken);
+            await AttachAndHydrateConversationAsync(workspaceId, handle.Conversation.Id, cancellationToken);
+        }
+        catch
+        {
+            _lastAppliedMemoryActionKey = previousKey;
+            throw;
+        }
+
+        var seed = IdeationMemoryPromptHelper.BuildPrompt(action, parsedScope, pathParam);
         NotifyStateChanged();
         return (true, seed);
     }

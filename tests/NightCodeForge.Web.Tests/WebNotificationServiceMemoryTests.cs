@@ -67,6 +67,18 @@ public class WebNotificationServiceMemoryTests
     [Fact]
     public async Task ReceiveMemoryUpdated_PushEnabledAndTabHidden_DispatchesTasklessNotification()
     {
+        string? clickUrl = null;
+        _jsMock.Setup(j => j.InvokeAsync<bool>(ShowNotificationJs, It.IsAny<object[]>()))
+            .Callback<string, object?[]?>((_, args) =>
+            {
+                if (args is { Length: >= 2 } && args[1] != null)
+                {
+                    var data = args[1]!.GetType().GetProperty("data")?.GetValue(args[1]);
+                    clickUrl = data?.GetType().GetProperty("url")?.GetValue(data)?.ToString();
+                }
+            })
+            .ReturnsAsync(true);
+
         await _service.SavePreferencesAsync(new NotificationPreferences { NotifyOnAgentMemory = true });
 
         _hub.TriggerMemoryUpdated(5, null, "", AgentMemoryConstants.ScopeLocalMetadataValue, "/workspace/memory/a.md", "Updated", "s");
@@ -83,6 +95,8 @@ public class WebNotificationServiceMemoryTests
                 return false;
             }
         });
+
+        Assert.Equal("/w/5/memory?scope=local&path=a.md", clickUrl);
     }
 
     [Fact]
@@ -123,6 +137,30 @@ public class WebNotificationServiceMemoryTests
         Assert.Equal(2, tags.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains(tags, t => t.Contains("a.md", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(tags, t => t.Contains("b.md", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ReceiveMemoryUpdated_DeletedFile_PushNotificationLinksToMemoryRootWithoutFileParams()
+    {
+        string? clickUrl = null;
+        _jsMock.Setup(j => j.InvokeAsync<bool>(ShowNotificationJs, It.IsAny<object[]>()))
+            .Callback<string, object?[]?>((_, args) =>
+            {
+                if (args is { Length: >= 2 } && args[1] != null)
+                {
+                    var data = args[1]!.GetType().GetProperty("data")?.GetValue(args[1]);
+                    clickUrl = data?.GetType().GetProperty("url")?.GetValue(data)?.ToString();
+                }
+            })
+            .ReturnsAsync(true);
+
+        await _service.SavePreferencesAsync(new NotificationPreferences { NotifyOnAgentMemory = true });
+
+        _hub.TriggerMemoryUpdated(5, null, "", AgentMemoryConstants.ScopeLocalMetadataValue, "/workspace/memory/a.md", "Deleted", "s");
+
+        await WaitUntilAsync(() => clickUrl != null);
+
+        Assert.Equal("/w/5/memory", clickUrl);
     }
 
     [Fact]
