@@ -14,7 +14,7 @@ namespace NightCodeForge.Core.Workflow.Stages;
 public partial class DeterministicBuildStage : IWorkflowStage
 {
     public const string DefaultStageId = StageImplementationTypes.DeterministicBuild;
-    public const string DefaultBuildCommand = "dotnet build";
+    public const string DefaultBuildCommand = DeterministicStageConstants.DefaultBuildCommand;
     public const string DefaultDisplayName = "Deterministic Build & Compilation Gate";
     public const string FallbackLoopBackStageId = StandardStageIds.Implementation;
 

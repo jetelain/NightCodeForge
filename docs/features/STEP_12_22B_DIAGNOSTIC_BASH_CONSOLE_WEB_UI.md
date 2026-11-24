@@ -5,7 +5,7 @@
 > *Prerequisite Step:* [Step 12.22A: Container Diagnostic Shell Service & `SIGINT` Recovery](STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)  
 > *Related Steps:* [Step 11.18: Live Operations Telemetry](../archive/phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_OLLAMAROUTER.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -53,9 +53,9 @@ In accordance with [AGENTS.md](../../AGENTS.md), `EnvironmentDiagnosticShell.raz
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Create `src/NightCodeForge.Web/Components/Pages/EnvironmentDiagnosticShell.razor` (`@page "/diagnostics/shell"` and `@page "/w/{WorkspaceId:int}/diagnostics/shell"`) and add `🐚 Container Shell` (`WorkspaceState.GetNavHref("diagnostics/shell")`) to `NavMenu.razor`.
-- [ ] Extract diagnostic presets, command history management, and inspection/doctor view formatting into a dedicated helper/service in `src/NightCodeForge.Web/Services/` per [AGENTS.md](../../AGENTS.md).
-- [ ] Implement target scope selector (Workspace Canonical, Task Worktree, and System Nightwatch), Environment & Mounts Inspector card, 1-click preset buttons, and Environment Doctor report view.
-- [ ] Implement interactive bash console with live output streaming via `IOperationsTelemetryService` shell events (filtered to the active diagnostic console execution), command history, exit code badges, and **⏹ Stop / SIGINT** cancellation.
-- [ ] Add bUnit component tests in `NightCodeForge.Web.Tests` (and unit tests for the extracted helper/service) verifying workspace-scoped routing, `SystemNightwatch` scope selection, preset execution, inspection rendering, doctor results display, live streaming output filtering, command execution, and cancellation UI states.
+- [x] Create `src/NightCodeForge.Web/Components/Pages/EnvironmentDiagnosticShell.razor` (`@page "/diagnostics/shell"` and `@page "/w/{WorkspaceId:int}/diagnostics/shell"`) and add `🐚 Container Shell` (`WorkspaceState.GetNavHref("diagnostics/shell")`) to `NavMenu.razor`.
+- [x] Extract diagnostic presets, command history management, and inspection/doctor view formatting into a dedicated helper/service in `src/NightCodeForge.Web/Services/` per [AGENTS.md](../../AGENTS.md).
+- [x] Implement target scope selector (Workspace Canonical, Task Worktree, and System Nightwatch), Environment & Mounts Inspector card, 1-click preset buttons, and Environment Doctor report view.
+- [x] Implement interactive bash console with live output streaming via `IOperationsTelemetryService` shell events (filtered to the active diagnostic console execution), command history, exit code badges, and **⏹ Stop / SIGINT** cancellation.
+- [x] Add bUnit component tests in `NightCodeForge.Web.Tests` (and unit tests for the extracted helper/service) verifying workspace-scoped routing, `SystemNightwatch` scope selection, preset execution, inspection rendering, doctor results display, live streaming output filtering, command execution, and cancellation UI states.
 

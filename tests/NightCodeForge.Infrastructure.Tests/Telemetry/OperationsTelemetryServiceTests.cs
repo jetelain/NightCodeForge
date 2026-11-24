@@ -590,4 +590,47 @@ public class OperationsTelemetryServiceTests
         var fullTelemetry = fullProvider.GetRequiredService<IOperationsTelemetryService>();
         Assert.Equal(typeof(OperationsTelemetryService), fullTelemetry.GetType());
     }
+
+    [Fact]
+    public void ShellTelemetryEvents_RaiseOnShellCommandChanged_AndOnShellCommandOutput()
+    {
+        var changedRecords = new List<ShellCommandRecord>();
+        var outputChunks = new List<(string CommandId, string Chunk, bool IsError)>();
+
+        _service.OnShellCommandChanged += record => changedRecords.Add(record);
+        _service.OnShellCommandOutput += (id, chunk, isErr) => outputChunks.Add((id, chunk, isErr));
+
+        var started = new ShellCommandRecord(
+            CommandId: "cmd-events-1",
+            CommandLine: "dotnet --info",
+            WorkingDirectory: "/workspace",
+            StartTime: DateTime.UtcNow,
+            DurationMs: 0,
+            ExitCode: null,
+            Status: ShellCommandStatus.Running,
+            OutputPreview: null,
+            ErrorPreview: null);
+
+        _service.RecordShellCommandStarted(started);
+        _service.UpdateShellCommandOutput("cmd-events-1", "line 1\n", isError: false);
+        _service.UpdateShellCommandOutput("cmd-events-1", "warn 1\n", isError: true);
+        _service.UpdateShellCommandOutput(string.Empty, "ignored", isError: false);
+        _service.UpdateShellCommandOutput("cmd-events-1", string.Empty, isError: false);
+
+        var completed = started with
+        {
+            DurationMs = 150,
+            ExitCode = 0,
+            Status = ShellCommandStatus.Completed
+        };
+        _service.RecordShellCommandCompleted(completed);
+
+        Assert.Equal(2, changedRecords.Count);
+        Assert.Equal(ShellCommandStatus.Running, changedRecords[0].Status);
+        Assert.Equal(ShellCommandStatus.Completed, changedRecords[1].Status);
+
+        Assert.Equal(2, outputChunks.Count);
+        Assert.Equal(("cmd-events-1", "line 1\n", false), outputChunks[0]);
+        Assert.Equal(("cmd-events-1", "warn 1\n", true), outputChunks[1]);
+    }
 }

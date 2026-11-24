@@ -12,6 +12,17 @@ using NightCodeForge.Infrastructure.Execution;
 namespace NightCodeForge.Agents.Tools;
 
 /// <summary>
+/// Structured outcome of executing a command through <see cref="SandboxBashToolModule"/>.
+/// </summary>
+public sealed record BashToolExecutionResult(
+    string FormattedOutput,
+    string EffectiveWorkingDirectory,
+    int ExitCode,
+    string Error,
+    TimeSpan Duration,
+    bool IsTruncated);
+
+/// <summary>
 /// Composable tool module encapsulating sandbox command execution (<c>bash</c>),
 /// virtual path translation via <see cref="ISandboxPathResolver"/>, <see cref="ReadOnlyCommandValidator"/>,
 /// dynamic build/test timeout escalation, /tmp raw output offloading, and semantic CLI output filtering.
@@ -132,11 +143,25 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         int? timeout,
         string? workingDirectory,
         bool? disableFilter,
+        CancellationToken cancellationToken = default) =>
+        (await ExecuteStructuredAsync(command, timeout, workingDirectory, disableFilter, cancellationToken)).FormattedOutput;
+
+    /// <summary>
+    /// Executes a command through the full <c>bash</c> tool pipeline (path resolution, read-only validation,
+    /// dynamic timeout escalation, /tmp offloading, and CLI output filtering) and returns structured metadata alongside the rendered output.
+    /// </summary>
+    public async Task<BashToolExecutionResult> ExecuteStructuredAsync(
+        string command,
+        int? timeout = null,
+        string? workingDirectory = null,
+        bool? disableFilter = null,
         CancellationToken cancellationToken = default)
     {
+        var fallbackWorkDir = SandboxPathResolver?.Scope?.DefaultWorkingDirectory ?? string.Empty;
+
         if (string.IsNullOrWhiteSpace(command))
         {
-            return "[Empty bash command]";
+            return new BashToolExecutionResult("[Empty bash command]", fallbackWorkDir, 0, string.Empty, TimeSpan.Zero, false);
         }
 
         var originalCommand = command;
@@ -157,7 +182,7 @@ public sealed class SandboxBashToolModule : IAgentToolModule
                 SandboxPathResolver?.Scope?.DefaultWorkingDirectory) &&
             !Core.Interfaces.SandboxPathResolver.ContainsAttachmentsReference(command, SandboxPathResolver?.MountTable))
         {
-            return $"Error: {ex.Message}";
+            return new BashToolExecutionResult($"Error: {ex.Message}", workingDirectory ?? fallbackWorkDir, 1, ex.Message, TimeSpan.Zero, false);
         }
 
         if (IsEffectiveReadOnly)
@@ -166,7 +191,7 @@ public sealed class SandboxBashToolModule : IAgentToolModule
             if (!isAllowed)
             {
                 _logger.LogWarning("CanonicalTools.bash: Read-only command violation: '{Command}'. Reason: {Error}", command, errorMsg);
-                return $"[READ-ONLY VIOLATION]: {errorMsg}";
+                return new BashToolExecutionResult($"[READ-ONLY VIOLATION]: {errorMsg}", workingDirectory ?? fallbackWorkDir, 1, errorMsg ?? string.Empty, TimeSpan.Zero, false);
             }
         }
 
@@ -184,8 +209,10 @@ public sealed class SandboxBashToolModule : IAgentToolModule
                 SandboxPathResolver?.Scope?.DefaultWorkingDirectory) &&
             !Core.Interfaces.SandboxPathResolver.ContainsAttachmentsReference(command, SandboxPathResolver?.MountTable))
         {
-            return $"Error: {ex.Message}";
+            return new BashToolExecutionResult($"Error: {ex.Message}", workingDirectory ?? fallbackWorkDir, 1, ex.Message, TimeSpan.Zero, false);
         }
+
+        var effectiveWorkDir = workDir ?? fallbackWorkDir;
 
         int configuredBuildTimeout = _buildTimeoutSeconds ?? WorkflowDefaults.DefaultBuildTimeoutSeconds;
         int configuredTestTimeout = _testTimeoutSeconds ?? WorkflowDefaults.DefaultTestTimeoutSeconds;
@@ -203,7 +230,8 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         catch (TimeoutException)
         {
             _logger.LogWarning("CanonicalTools.bash: Command timed out after {Timeout}s: '{Command}' in '{WorkDir}'", effectiveTimeout, command, workDir);
-            return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            var timeoutOutput = $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            return new BashToolExecutionResult(timeoutOutput, effectiveWorkDir, WorkflowDefaults.ProcessTimeoutExitCode, $"Command execution timed out after {effectiveTimeout}s.", TimeSpan.FromSeconds(effectiveTimeout), false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -212,7 +240,7 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         catch (Exception ex)
         {
             _logger.LogError(ex, "CanonicalTools.bash: Execution failed for '{Command}' in '{WorkDir}'", command, workDir);
-            return $"Error: Command execution failed: {ex.Message}";
+            return new BashToolExecutionResult($"Error: Command execution failed: {ex.Message}", effectiveWorkDir, -1, ex.Message, TimeSpan.Zero, false);
         }
 
         var rawOutput = string.IsNullOrWhiteSpace(res.StandardOutput) ? res.StandardError : res.StandardOutput;
@@ -228,7 +256,8 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         if (isTimeout)
         {
             _logger.LogWarning("CanonicalTools.bash: Command timed out (detected exit code {ExitCode} or buffer): '{Command}'", WorkflowDefaults.ProcessTimeoutExitCode, command);
-            return $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            var timeoutOutput = $"Exit Code: {WorkflowDefaults.ProcessTimeoutExitCode}\n[TIMEOUT]: Command execution timed out after {effectiveTimeout}s. Execution was aborted to prevent resource lockup. Check for hanging tests, infinite loops, or deadlocks.";
+            return new BashToolExecutionResult(timeoutOutput, effectiveWorkDir, WorkflowDefaults.ProcessTimeoutExitCode, res.StandardError, res.Duration, res.Truncated);
         }
 
         if (res.ExitCode != 0)
@@ -253,7 +282,13 @@ public sealed class SandboxBashToolModule : IAgentToolModule
         _auditEntries.Enqueue((audit, formatted.FinalOutput));
         _onBashExecutionAudited?.Invoke(audit);
 
-        return formatted.FinalOutput;
+        return new BashToolExecutionResult(
+            formatted.FinalOutput,
+            effectiveWorkDir,
+            res.ExitCode,
+            res.StandardError,
+            res.Duration,
+            res.Truncated || formatted.WasTruncated);
     }
 
     private (string FinalOutput, bool WasSmartFiltered, bool WasTruncated) FormatBashOutput(

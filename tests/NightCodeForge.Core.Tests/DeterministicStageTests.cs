@@ -99,8 +99,8 @@ public class DeterministicStageTests
         Assert.True(result.IsSuccess);
         Assert.Equal(2, context.DataBag.Get<int>(PipelineDataBagKeys.WarningsCurrentTotal));
         Assert.Equal(2, context.DataBag.Get<int>(PipelineDataBagKeys.WarningsBaselineTotal));
-        Assert.Equal("dotnet build", fakeEnv.LastCommand);
-        Assert.Equal("dotnet build", context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)));
+        Assert.Equal("dotnet build --no-incremental", fakeEnv.LastCommand);
+        Assert.Equal("dotnet build --no-incremental", context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId)));
         Assert.Contains("warning CS0168", context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId)));
         var newWarnings = context.DataBag.Get<List<string>>(PipelineDataBagKeys.WarningsNew);
         Assert.NotNull(newWarnings);

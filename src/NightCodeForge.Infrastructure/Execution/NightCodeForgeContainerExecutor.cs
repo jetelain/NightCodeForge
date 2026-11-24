@@ -721,6 +721,26 @@ public class NightCodeForgeContainerExecutor : IExecutionEnvironment, IAsyncDisp
     public Task<string?> DetectContainerDriftAsync(CancellationToken cancellationToken = default) =>
         ContainerMountAndDriftBuilder.DetectContainerDriftAsync(_processRunner, _options, cancellationToken);
 
+    /// <summary>
+    /// Probes whether the container is currently running, returning <see langword="false"/> if stopped or absent and <see langword="null"/> on inspect failure.
+    /// </summary>
+    public async Task<bool?> IsContainerRunningAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await ContainerMountAndDriftBuilder.IsContainerRunningAsync(_processRunner, _options, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Container running inspection failed for {Container}", _options.ContainerNameOrId);
+            return null;
+        }
+    }
+
     public void EnsureImageReady() =>
         ContainerMountAndDriftBuilder.EnsureImageReady(_processRunner, _options, _logger);
 

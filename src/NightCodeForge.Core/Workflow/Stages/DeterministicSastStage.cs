@@ -81,7 +81,7 @@ public class DeterministicSastStage : IWorkflowStage
         {
             var infoMsg = "Deterministic SAST gate skipped: no SAST analyzer command configured (extension point for SonarQube, Semgrep, Trivy, etc.).";
             _logger.LogInformation("{Message}", infoMsg);
-            bag.Set(PipelineDataBagKeys.StageCommand(StageId), "sast (skipped)");
+            bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{DeterministicStageConstants.SastSubStage}{DeterministicStageConstants.SkippedCommandSuffix}");
             bag.Set(PipelineDataBagKeys.StageOutput(StageId), infoMsg);
             return StageExecutionResult.Success();
         }

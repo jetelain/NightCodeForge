@@ -50,12 +50,12 @@ public partial class DeterministicTestStage : IWorkflowStage
     public DeterministicTestStage(
         IExecutionEnvironmentProvider envProvider,
         ILogger<DeterministicTestStage> logger)
-        : this(envProvider, logger, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
+        : this(envProvider, logger, DeterministicStageConstants.DefaultTestCommand, DefaultStageId, "Deterministic Unit Test Gate")
     {
     }
 
     public DeterministicTestStage(IExecutionEnvironmentProvider envProvider)
-        : this(envProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicTestStage>.Instance, "dotnet test --no-build", DefaultStageId, "Deterministic Unit Test Gate")
+        : this(envProvider, Microsoft.Extensions.Logging.Abstractions.NullLogger<DeterministicTestStage>.Instance, DeterministicStageConstants.DefaultTestCommand, DefaultStageId, "Deterministic Unit Test Gate")
     {
     }
 
@@ -77,7 +77,7 @@ public partial class DeterministicTestStage : IWorkflowStage
     {
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _testCommand = !string.IsNullOrWhiteSpace(testCommand) ? testCommand : "dotnet test --no-build";
+        _testCommand = !string.IsNullOrWhiteSpace(testCommand) ? testCommand : DeterministicStageConstants.DefaultTestCommand;
         StageId = !string.IsNullOrWhiteSpace(stageId) ? stageId : DefaultStageId;
         DisplayName = !string.IsNullOrWhiteSpace(displayName) ? displayName : "Deterministic Unit Test Gate";
     }

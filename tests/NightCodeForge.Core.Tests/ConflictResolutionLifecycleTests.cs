@@ -766,7 +766,7 @@ Some resolved documentation.
         Assert.Contains("- Services/Foo.cs", prompt);
         Assert.Contains("- Services/Bar.cs", prompt);
         Assert.Contains("target branch 'main'", prompt);
-        Assert.Contains("You MUST execute 'dotnet build' and 'dotnet test --no-build' via 'bash'", prompt);
+        Assert.Contains("You MUST execute 'dotnet build --no-incremental' and 'dotnet test --no-build' via 'bash'", prompt);
     }
 
     [Fact]

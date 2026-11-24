@@ -33,6 +33,8 @@ public class InMemoryOperationsTelemetryService : IOperationsTelemetryService
     private ModelPreloadTelemetryRecord? _latestModelPreload;
 
     public event Action<LlmCallRecord>? OnLlmCallChanged;
+    public event Action<ShellCommandRecord>? OnShellCommandChanged;
+    public event Action<string, string, bool>? OnShellCommandOutput;
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
     public event Action<IReadOnlyList<ActiveTaskSummary>>? OnActiveTasksChanged;
     public event Action<int, int>? OnPendingCountsChanged;
@@ -236,6 +238,7 @@ public class InMemoryOperationsTelemetryService : IOperationsTelemetryService
             }
         }
 
+        OnShellCommandChanged?.Invoke(record);
         NotifyShellCommandStarted(record);
     }
 
@@ -262,6 +265,7 @@ public class InMemoryOperationsTelemetryService : IOperationsTelemetryService
             }
         }
 
+        OnShellCommandOutput?.Invoke(commandId, outputChunk, isError);
         NotifyShellCommandOutput(commandId, outputChunk, isError);
     }
 
@@ -311,6 +315,7 @@ public class InMemoryOperationsTelemetryService : IOperationsTelemetryService
             }
         }
 
+        OnShellCommandChanged?.Invoke(record);
         NotifyShellCommandCompleted(record);
     }
 

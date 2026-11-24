@@ -1566,7 +1566,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
 
         Assert.True(capturedConfigs.TryGetValue(wksCs, out var csCfg) && csCfg != null);
         Assert.Equal(CodeStack.DotNet, csCfg.CodeStack);
-        Assert.Equal("dotnet build", csCfg.BuildCommand);
+        Assert.Equal(CodeStackPresets.DotNet.BuildCommand, csCfg.BuildCommand);
         Assert.Equal("dotnet test --no-build", csCfg.TestCommand);
         Assert.DoesNotContain("--logger trx", csCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(".ncf-bench-results", csCfg.TestCommand, StringComparison.OrdinalIgnoreCase);

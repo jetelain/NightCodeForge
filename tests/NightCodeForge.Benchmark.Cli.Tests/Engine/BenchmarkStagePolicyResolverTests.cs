@@ -249,7 +249,7 @@ public sealed class BenchmarkStagePolicyResolverTests
                 csRootDir,
                 ExecutionMode.ContainerSandbox);
             Assert.Equal(CodeStack.DotNet, csRootConfig.CodeStack);
-            Assert.Equal("dotnet build", csRootConfig.BuildCommand);
+            Assert.Equal(CodeStackPresets.DotNet.BuildCommand, csRootConfig.BuildCommand);
             Assert.Equal("dotnet test --no-build", csRootConfig.TestCommand);
             Assert.DoesNotContain("--logger trx", csRootConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(".ncf-bench-results", csRootConfig.TestCommand, StringComparison.OrdinalIgnoreCase);

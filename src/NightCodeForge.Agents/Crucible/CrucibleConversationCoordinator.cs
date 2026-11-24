@@ -579,16 +579,20 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
         LocalOptimizationFlags? optimizationFlags,
         string? workspaceRoot)
     {
+        var output = priming.Output ?? string.Empty;
+        bool skipSmartFilter = priming.IsPreFiltered ||
+            output.Contains(DeterministicStageConstants.PrimingSectionHeaderPrefix, StringComparison.Ordinal);
+
         var filtered = NightCodeForge.Core.Workflow.Filtering.CliOutputFilterHelpers.FilterPrimingOutput(
             NightCodeForge.Core.Workflow.Filtering.CliOutputFilterRegistry.Default,
             priming.Command,
-            priming.Output,
+            output,
             priming.IsSuccess,
             workspaceRoot ?? string.Empty,
-            smartFilteringEnabled: optimizationFlags?.SmartCliOutputFiltering ?? true,
+            smartFilteringEnabled: !skipSmartFilter && (optimizationFlags?.SmartCliOutputFiltering ?? true),
             WorkflowDefaults.MaxToolInlineChars);
 
-        return string.Equals(filtered, priming.Output, StringComparison.Ordinal)
+        return string.Equals(filtered, output, StringComparison.Ordinal)
             ? priming
             : priming with { Output = filtered };
     }

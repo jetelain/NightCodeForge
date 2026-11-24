@@ -197,7 +197,7 @@ public class CompositeDeterministicStage : IWorkflowStage
             if (!result.IsSuccess && Config.FailOnError)
             {
                 context.DataBag.Set(PipelineDataBagKeys.StageCommands(StageId), commandList);
-                var failCmds = string.Join(" && ", commandList.Select(c => c.Command));
+                var failCmds = string.Join(DeterministicStageConstants.CommandChainSeparator, commandList.Select(c => c.Command));
                 var failOutputs = string.Join("\n---\n", commandList.Select(c => $"[{c.StageName}] {c.Output}"));
                 context.DataBag.Set(PipelineDataBagKeys.StageCommand(StageId), failCmds);
                 context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(failOutputs));
@@ -210,7 +210,7 @@ public class CompositeDeterministicStage : IWorkflowStage
         }
 
         context.DataBag.Set(PipelineDataBagKeys.StageCommands(StageId), commandList);
-        var combinedCmds = string.Join(" && ", commandList.Select(c => c.Command));
+        var combinedCmds = string.Join(DeterministicStageConstants.CommandChainSeparator, commandList.Select(c => c.Command));
         var combinedOutputs = string.Join("\n---\n", commandList.Select(c => $"[{c.StageName}] {c.Output}"));
         context.DataBag.Set(PipelineDataBagKeys.StageCommand(StageId), combinedCmds);
         context.DataBag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(combinedOutputs));
