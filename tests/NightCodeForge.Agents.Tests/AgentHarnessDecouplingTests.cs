@@ -186,4 +186,61 @@ public class AgentHarnessDecouplingTests : IDisposable
         Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
         Assert.Equal("Missing authorization checks.", result.ReviewerFeedback);
     }
+
+    [Fact]
+    public async Task CrucibleAgentHarness_WhenProjectConfigProvided_InjectsProjectConfigIntoExecutionGuidelines()
+    {
+        List<ChatMessage>? receivedMessages = null;
+        async IAsyncEnumerable<ChatResponseUpdate> StreamGen(IEnumerable<ChatMessage> msgs, ChatOptions? opts)
+        {
+            receivedMessages = msgs.ToList();
+            if (!string.IsNullOrEmpty(opts?.Instructions))
+            {
+                receivedMessages.Insert(0, new ChatMessage(ChatRole.System, opts.Instructions));
+            }
+            yield return new ChatResponseUpdate
+            {
+                Contents = [new TextContent("Done.")]
+            };
+            await Task.CompletedTask;
+        }
+
+        var mockClient = new MockChatClient(StreamGen);
+        var harness = new TestCrucibleHarnessBuilder
+        {
+            BaseChatClient = mockClient,
+            PathResolver = TestPathResolver.Create(),
+            ActivityStreamer = new InMemoryAgentActivityStreamer(),
+            TaskRepository = new InMemoryTaskRepository()
+        }.Build();
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 7, Title = "Python Task", Description = "Fix bug" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = _tempDir },
+            Profile = new AgentProfile { Id = "impl", Mode = AgentMode.Full },
+            StageId = StandardStageIds.Implementation,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = _tempDir,
+            ProjectConfig = new WorkspaceProjectConfig
+            {
+                CodeStack = CodeStack.Python,
+                BuildCommand = CodeStackPresets.Python.BuildCommand,
+                TestCommand = CodeStackPresets.Python.TestCommand,
+                BuildTimeoutSeconds = 120,
+                TestTimeoutSeconds = 120
+            },
+            PipelineContext = null
+        };
+
+        await harness.RunStageAsync(context);
+
+        Assert.NotNull(receivedMessages);
+        var systemMsg = receivedMessages.FirstOrDefault(m => m.Role == ChatRole.System)?.Text;
+        Assert.NotNull(systemMsg);
+        Assert.Contains($"Build Command: `{CodeStackPresets.Python.BuildCommand}`", systemMsg);
+        Assert.Contains($"Test Command: `{CodeStackPresets.Python.TestCommand}`", systemMsg);
+        Assert.DoesNotContain("dotnet build", systemMsg, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--no-build", systemMsg, StringComparison.OrdinalIgnoreCase);
+    }
 }

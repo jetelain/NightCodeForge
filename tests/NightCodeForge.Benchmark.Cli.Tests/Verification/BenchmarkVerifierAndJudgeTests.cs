@@ -25,6 +25,15 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
     {
         if (Directory.Exists(_tempDir))
         {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(_tempDir, "*", SearchOption.AllDirectories))
+            {
+                var attrs = File.GetAttributes(entry);
+                if ((attrs & FileAttributes.ReadOnly) != 0)
+                {
+                    File.SetAttributes(entry, attrs & ~FileAttributes.ReadOnly);
+                }
+            }
+
             Directory.Delete(_tempDir, recursive: true);
         }
     }
@@ -1570,5 +1579,335 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         int fallbackIdx = wrappedPy.IndexOf("if [ ! -x /tmp/ncf-bench-venv/bin/pytest ]; then /tmp/ncf-bench-venv/bin/pip install -q pytest; fi", StringComparison.Ordinal);
         Assert.True(reqIdx > 0 && editableIdx > reqIdx && fallbackIdx > editableIdx,
             $"Expected requirements -> editable -> conditional pytest fallback ordering in: {wrappedPy}");
+    }
+
+    [Fact]
+    public void DotNetGlobalJsonResilienceScope_HidesModifiedTrackedFileFromGitStatusAndDiffAndRestoresCleanIndex()
+    {
+        var repoDir = Path.Combine(_tempDir, "wks-git-global-json");
+        Directory.CreateDirectory(repoDir);
+
+        const string originalGlobalJson = "{\n  \"sdk\": {\n    \"version\": \"7.0.102\",\n    \"rollForward\": \"latestFeature\"\n  }\n}\n";
+        var globalJsonPath = Path.Combine(repoDir, "global.json");
+        File.WriteAllText(globalJsonPath, originalGlobalJson);
+
+        RunGit(repoDir, "init");
+        RunGit(repoDir, "config", "user.email", "test@example.com");
+        RunGit(repoDir, "config", "user.name", "Test User");
+        RunGit(repoDir, "add", "global.json");
+        RunGit(repoDir, "commit", "-m", "Initial commit");
+
+        using (var scope = DotNetGlobalJsonResilienceScope.Apply(repoDir, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(1, scope.ModifiedFileCount);
+            Assert.Contains("\"latestMajor\"", File.ReadAllText(globalJsonPath));
+            Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "status", "--porcelain")));
+            Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "diff")));
+        }
+
+        Assert.Equal(originalGlobalJson, File.ReadAllText(globalJsonPath));
+        Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "status", "--porcelain")));
+        Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "diff")));
+        var lsFiles = RunGit(repoDir, "ls-files", "-v", "global.json").Trim();
+        Assert.StartsWith("H ", lsFiles, StringComparison.Ordinal);
+
+        // If the agent edits global.json during the scope, disposal must clear assume-unchanged so the edit is visible
+        const string agentEdit = "{\n  \"sdk\": {\n    \"version\": \"9.0.100\",\n    \"rollForward\": \"minor\"\n  }\n}\n";
+        using (var editScope = DotNetGlobalJsonResilienceScope.Apply(repoDir, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(1, editScope.ModifiedFileCount);
+            File.WriteAllText(globalJsonPath, agentEdit);
+        }
+
+        Assert.Equal(agentEdit, File.ReadAllText(globalJsonPath));
+        Assert.Contains("global.json", RunGit(repoDir, "status", "--porcelain"));
+        Assert.Contains("9.0.100", RunGit(repoDir, "diff"));
+        var lsFilesAfterEdit = RunGit(repoDir, "ls-files", "-v", "global.json").Trim();
+        Assert.StartsWith("H ", lsFilesAfterEdit, StringComparison.Ordinal);
+
+        // Nested tracked global.json should also be hidden during scope and restored cleanly
+        var nestedDir = Path.Combine(repoDir, "src");
+        Directory.CreateDirectory(nestedDir);
+        var nestedGlobalJsonPath = Path.Combine(nestedDir, "global.json");
+        File.WriteAllText(nestedGlobalJsonPath, originalGlobalJson);
+        File.WriteAllText(globalJsonPath, originalGlobalJson);
+        RunGit(repoDir, "add", "global.json", "src/global.json");
+        RunGit(repoDir, "commit", "-m", "Add nested global.json");
+
+        using (var nestedScope = DotNetGlobalJsonResilienceScope.Apply(repoDir, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(2, nestedScope.ModifiedFileCount);
+            Assert.Contains("\"latestMajor\"", File.ReadAllText(nestedGlobalJsonPath));
+            Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "status", "--porcelain")));
+            Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "diff")));
+        }
+
+        Assert.Equal(originalGlobalJson, File.ReadAllText(nestedGlobalJsonPath));
+        Assert.True(string.IsNullOrWhiteSpace(RunGit(repoDir, "status", "--porcelain")));
+        Assert.StartsWith("H ", RunGit(repoDir, "ls-files", "-v", "src/global.json").Trim(), StringComparison.Ordinal);
+
+        // Untracked global.json in a git repo relaxes and restores cleanly without throwing
+        var untrackedDir = Path.Combine(repoDir, "untracked");
+        Directory.CreateDirectory(untrackedDir);
+        var untrackedGlobalJsonPath = Path.Combine(untrackedDir, "global.json");
+        File.WriteAllText(untrackedGlobalJsonPath, originalGlobalJson);
+
+        using (var untrackedScope = DotNetGlobalJsonResilienceScope.Apply(repoDir, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(3, untrackedScope.ModifiedFileCount);
+            Assert.Contains("\"latestMajor\"", File.ReadAllText(untrackedGlobalJsonPath));
+        }
+
+        Assert.Equal(originalGlobalJson, File.ReadAllText(untrackedGlobalJsonPath));
+        File.Delete(untrackedGlobalJsonPath);
+
+        // Deleted tracked global.json during scope stays deleted on dispose and clears assume-unchanged
+        using (var deleteScope = DotNetGlobalJsonResilienceScope.Apply(repoDir, BenchmarkLanguages.CSharp, NullLogger.Instance))
+        {
+            Assert.Equal(2, deleteScope.ModifiedFileCount);
+            File.Delete(globalJsonPath);
+        }
+
+        Assert.False(File.Exists(globalJsonPath));
+        Assert.Contains(" D global.json", RunGit(repoDir, "status", "--porcelain"));
+        Assert.StartsWith("H ", RunGit(repoDir, "ls-files", "-v", "global.json").Trim(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClassifyCodeReviewVerdict_TreatsWhitespaceOnlyPatchesAsApprove_AndSubstantiveOrRejectionAppropriately()
+    {
+        const string lineWrapPatch = """
+            diff --git a/test/Serilog.Tests/Capturing/PropertyValueConverterTests.cs b/test/Serilog.Tests/Capturing/PropertyValueConverterTests.cs
+            index b863df7a9..123456789 100644
+            --- a/test/Serilog.Tests/Capturing/PropertyValueConverterTests.cs
+            +++ b/test/Serilog.Tests/Capturing/PropertyValueConverterTests.cs
+            @@ -492,4 +492,6 @@ public class PropertyValueConverterTests
+                 [Fact]
+                 public void PrivateGettersAreIgnoredWhenCapturing()
+                 {
+            -        var structure = _converter.CreateStructureValue(new HasPropertyWithPrivateGetter(), typeof(HasPropertyWithPrivateGetter), false);
+            +        var structure = _converter.CreateStructureValue(
+            +            new HasPropertyWithPrivateGetter(),
+            +            typeof(HasPropertyWithPrivateGetter),
+            +            false);
+                     Assert.Contains(structure.Properties, p => p.Name == "A");
+                 }
+            """;
+
+        const string trailingNewlineOnlyPatch = """
+            diff --git a/src/Foo.cs b/src/Foo.cs
+            index 1111111..2222222 100644
+            --- a/src/Foo.cs
+            +++ b/src/Foo.cs
+            @@ -1,2 +1,3 @@
+             class Foo
+            -}
+            \ No newline at end of file
+            +}
+            +
+            """;
+
+        const string substantivePatch = """
+            diff --git a/src/Foo.cs b/src/Foo.cs
+            index 1111111..3333333 100644
+            --- a/src/Foo.cs
+            +++ b/src/Foo.cs
+            @@ -1,2 +1,2 @@
+             class Foo
+            -{ return 1; }
+            +{ return 2; }
+            """;
+
+        const string newFileOnlyPatch = """
+            diff --git a/src/Empty.cs b/src/Empty.cs
+            new file mode 100644
+            index 0000000..e69de29
+            --- /dev/null
+            +++ b/src/Empty.cs
+            """;
+
+        const string reorderedAcrossContextPatch = """
+            diff --git a/src/Foo.cs b/src/Foo.cs
+            index 1111111..2222222 100644
+            --- a/src/Foo.cs
+            +++ b/src/Foo.cs
+            @@ -1,5 +1,5 @@
+            -StepOne();
+             Middle();
+            +StepOne();
+            """;
+
+        const string tripleDashAndPlusInsideHunkPatch = """
+            diff --git a/README.md b/README.md
+            index 1111111..2222222 100644
+            --- a/README.md
+            +++ b/README.md
+            @@ -1,3 +1,3 @@
+             Title
+            --- old horizontal rule
+            +++ new heading
+            """;
+
+        const string copyFilePatch = """
+            diff --git a/src/A.cs b/src/B.cs
+            similarity index 100%
+            copy from src/A.cs
+            copy to src/B.cs
+            """;
+
+        const string stringLiteralWhitespacePatch = """
+            diff --git a/src/Strings.cs b/src/Strings.cs
+            index 1111111..2222222 100644
+            --- a/src/Strings.cs
+            +++ b/src/Strings.cs
+            @@ -1,3 +1,3 @@
+            -var a = "hello world";
+            -var b = 'a b';
+            +var a = "helloworld";
+            +var b = 'a  b';
+            """;
+
+        const string identifierMergePatch = """
+            diff --git a/src/Tokens.cs b/src/Tokens.cs
+            index 1111111..2222222 100644
+            --- a/src/Tokens.cs
+            +++ b/src/Tokens.cs
+            @@ -1,2 +1,2 @@
+            -return x;
+            +returnx;
+            """;
+
+        const string rustLifetimeWrapPatch = """
+            diff --git a/src/lib.rs b/src/lib.rs
+            index 1111111..2222222 100644
+            --- a/src/lib.rs
+            +++ b/src/lib.rs
+            @@ -1,2 +1,4 @@
+            -fn foo<'a>(x: &'a str) -> &'a str { x }
+            +fn foo<'a>(
+            +    x: &'a str
+            +) -> &'a str { x }
+            """;
+
+        const string rustCharLiteralChangePatch = """
+            diff --git a/src/lib.rs b/src/lib.rs
+            index 1111111..2222222 100644
+            --- a/src/lib.rs
+            +++ b/src/lib.rs
+            @@ -1,2 +1,2 @@
+            -let sep = ' ';
+            +let sep = '\t';
+            """;
+
+        const string pythonIndentChangePatch = """
+            diff --git a/src/app.py b/src/app.py
+            index 1111111..2222222 100644
+            --- a/src/app.py
+            +++ b/src/app.py
+            @@ -1,3 +1,3 @@
+             if cond:
+            -    return x
+            +return x
+            """;
+
+        const string pythonWhitespaceOnlyPatch = """
+            diff --git a/src/app.py b/src/app.py
+            index 1111111..2222222 100644
+            --- a/src/app.py
+            +++ b/src/app.py
+            @@ -1,3 +1,4 @@
+             if cond:
+            -    x=1   
+            +    x = 1
+            +
+            """;
+
+        Assert.True(BenchmarkVerifier.IsWhitespaceOnlyPatch(lineWrapPatch));
+        Assert.Equal(CodeReviewVerdict.Approve, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = lineWrapPatch
+        }));
+
+        Assert.True(BenchmarkVerifier.IsWhitespaceOnlyPatch(trailingNewlineOnlyPatch));
+        Assert.Equal(CodeReviewVerdict.Approve, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = trailingNewlineOnlyPatch
+        }));
+
+        Assert.True(BenchmarkVerifier.IsWhitespaceOnlyPatch(rustLifetimeWrapPatch));
+        Assert.Equal(CodeReviewVerdict.Approve, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = rustLifetimeWrapPatch
+        }));
+
+        Assert.True(BenchmarkVerifier.IsWhitespaceOnlyPatch(pythonWhitespaceOnlyPatch));
+        Assert.Equal(CodeReviewVerdict.Approve, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = pythonWhitespaceOnlyPatch
+        }));
+
+        foreach (var substantive in new[]
+        {
+            substantivePatch,
+            newFileOnlyPatch,
+            reorderedAcrossContextPatch,
+            tripleDashAndPlusInsideHunkPatch,
+            copyFilePatch,
+            stringLiteralWhitespacePatch,
+            identifierMergePatch,
+            rustCharLiteralChangePatch,
+            pythonIndentChangePatch
+        })
+        {
+            Assert.False(BenchmarkVerifier.IsWhitespaceOnlyPatch(substantive));
+            Assert.Equal(CodeReviewVerdict.MinorFix, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+            {
+                RunStatus = AgentRunStatus.Completed,
+                ModelPatch = substantive
+            }));
+        }
+
+        Assert.Equal(CodeReviewVerdict.RequestChanges, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = lineWrapPatch,
+            ReviewerFeedback = "Missing regression tests."
+        }));
+
+        Assert.Equal(CodeReviewVerdict.RequestChanges, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = lineWrapPatch,
+            TargetRouting = StandardStageIds.Implementation
+        }));
+    }
+
+    private static string RunGit(string workingDir, params string[] args)
+    {
+        using var process = new System.Diagnostics.Process();
+        process.StartInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDir,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (var arg in args)
+        {
+            process.StartInfo.ArgumentList.Add(arg);
+        }
+
+        Assert.True(process.Start());
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(10_000), $"git {string.Join(' ', args)} timed out.");
+        Assert.True(process.ExitCode == 0, $"git {string.Join(' ', args)} failed ({process.ExitCode}): {stderr}");
+        return stdout;
     }
 }

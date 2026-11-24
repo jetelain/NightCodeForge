@@ -657,13 +657,432 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             return CodeReviewVerdict.RequestChanges;
         }
 
-        if (!string.IsNullOrWhiteSpace(outcome.ModelPatch))
+        if (!string.IsNullOrWhiteSpace(outcome.ModelPatch) &&
+            !IsWhitespaceOnlyPatch(outcome.ModelPatch))
         {
             return CodeReviewVerdict.MinorFix;
         }
 
         return CodeReviewVerdict.Approve;
     }
+
+    private static readonly HashSet<string> IndentationSensitiveExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".py",
+        ".pyi",
+        ".yaml",
+        ".yml",
+        ".coffee",
+        ".haml",
+        ".pug",
+        ".sass"
+    };
+
+    private sealed class NormalizedCodeAccumulator
+    {
+        public StringBuilder Buffer { get; } = new();
+        public bool PendingSpace { get; set; }
+        public char LastChar { get; set; }
+
+        public void AppendCodeChar(char ch)
+        {
+            if (PendingSpace && Buffer.Length > 0 && IsWordChar(LastChar) && IsWordChar(ch))
+            {
+                Buffer.Append(' ');
+            }
+
+            PendingSpace = false;
+            Buffer.Append(ch);
+            LastChar = ch;
+        }
+
+        public void AppendVerbatim(ReadOnlySpan<char> span)
+        {
+            PendingSpace = false;
+            Buffer.Append(span);
+            if (!span.IsEmpty)
+            {
+                LastChar = span[^1];
+            }
+        }
+
+        public void ResetTokenBoundary()
+        {
+            PendingSpace = false;
+            LastChar = '\0';
+        }
+
+        public void Clear()
+        {
+            Buffer.Clear();
+            ResetTokenBoundary();
+        }
+
+        private static bool IsWordChar(char ch) => char.IsLetterOrDigit(ch) || ch == '_';
+    }
+
+    internal static bool IsWhitespaceOnlyPatch(string? patch)
+    {
+        if (string.IsNullOrWhiteSpace(patch))
+        {
+            return true;
+        }
+
+        var normalized = patch.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var removedAcc = new NormalizedCodeAccumulator();
+        var addedAcc = new NormalizedCodeAccumulator();
+        bool sawAnyDiffLine = false;
+        bool inHunk = false;
+        string? currentFilePath = null;
+        bool isIndentationSensitive = false;
+        bool isRustFile = false;
+
+        foreach (var line in normalized.Split('\n'))
+        {
+            if (line.StartsWith("diff --git ", StringComparison.Ordinal))
+            {
+                if (!FlushHunkComparison(removedAcc, addedAcc))
+                {
+                    return false;
+                }
+
+                inHunk = false;
+                currentFilePath = TryExtractDiffGitPath(line);
+                isIndentationSensitive = IsIndentationSensitivePath(currentFilePath);
+                isRustFile = IsRustPath(currentFilePath);
+                continue;
+            }
+
+            if (line.StartsWith("@@ ", StringComparison.Ordinal))
+            {
+                if (!FlushHunkComparison(removedAcc, addedAcc))
+                {
+                    return false;
+                }
+
+                inHunk = true;
+                continue;
+            }
+
+            if (!inHunk)
+            {
+                if (line.StartsWith("new file mode ", StringComparison.Ordinal) ||
+                    line.StartsWith("deleted file mode ", StringComparison.Ordinal) ||
+                    line.StartsWith("old mode ", StringComparison.Ordinal) ||
+                    line.StartsWith("new mode ", StringComparison.Ordinal) ||
+                    line.StartsWith("rename from ", StringComparison.Ordinal) ||
+                    line.StartsWith("rename to ", StringComparison.Ordinal) ||
+                    line.StartsWith("copy from ", StringComparison.Ordinal) ||
+                    line.StartsWith("copy to ", StringComparison.Ordinal) ||
+                    line.StartsWith("Binary files ", StringComparison.Ordinal) ||
+                    line.StartsWith("GIT binary patch", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                if (line.StartsWith("+++ ", StringComparison.Ordinal))
+                {
+                    var extracted = TryExtractDiffHeaderPath(line.AsSpan(4), "b/");
+                    if (!string.IsNullOrEmpty(extracted))
+                    {
+                        currentFilePath = extracted;
+                        isIndentationSensitive = IsIndentationSensitivePath(currentFilePath);
+                        isRustFile = IsRustPath(currentFilePath);
+                    }
+                    continue;
+                }
+
+                if (line.StartsWith("--- ", StringComparison.Ordinal))
+                {
+                    if (string.IsNullOrEmpty(currentFilePath))
+                    {
+                        var extracted = TryExtractDiffHeaderPath(line.AsSpan(4), "a/");
+                        if (!string.IsNullOrEmpty(extracted))
+                        {
+                            currentFilePath = extracted;
+                            isIndentationSensitive = IsIndentationSensitivePath(currentFilePath);
+                            isRustFile = IsRustPath(currentFilePath);
+                        }
+                    }
+                    continue;
+                }
+
+                if (line.StartsWith("index ", StringComparison.Ordinal) ||
+                    line.StartsWith("\\ No newline at end of file", StringComparison.Ordinal) ||
+                    line.StartsWith("similarity index ", StringComparison.Ordinal) ||
+                    line.StartsWith("dissimilarity index ", StringComparison.Ordinal) ||
+                    string.IsNullOrEmpty(line))
+                {
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (line.StartsWith('\\'))
+            {
+                continue;
+            }
+
+            if (line.Length == 0 || line[0] == ' ')
+            {
+                if (!FlushHunkComparison(removedAcc, addedAcc))
+                {
+                    return false;
+                }
+                continue;
+            }
+
+            if (line[0] == '-')
+            {
+                AppendNormalizedLine(line.AsSpan(1), removedAcc, isIndentationSensitive, isRustFile);
+                sawAnyDiffLine = true;
+            }
+            else if (line[0] == '+')
+            {
+                AppendNormalizedLine(line.AsSpan(1), addedAcc, isIndentationSensitive, isRustFile);
+                sawAnyDiffLine = true;
+            }
+            else
+            {
+                if (!FlushHunkComparison(removedAcc, addedAcc))
+                {
+                    return false;
+                }
+                return false;
+            }
+        }
+
+        if (!FlushHunkComparison(removedAcc, addedAcc))
+        {
+            return false;
+        }
+
+        return sawAnyDiffLine;
+    }
+
+    private static bool FlushHunkComparison(NormalizedCodeAccumulator removedAcc, NormalizedCodeAccumulator addedAcc)
+    {
+        if (removedAcc.Buffer.Length != addedAcc.Buffer.Length ||
+            !string.Equals(removedAcc.Buffer.ToString(), addedAcc.Buffer.ToString(), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        removedAcc.Clear();
+        addedAcc.Clear();
+        return true;
+    }
+
+    private static void AppendNormalizedLine(
+        ReadOnlySpan<char> line,
+        NormalizedCodeAccumulator target,
+        bool isIndentationSensitive,
+        bool isRustFile)
+    {
+        if (isIndentationSensitive)
+        {
+            var trimmedEnd = line.TrimEnd();
+            if (trimmedEnd.IsEmpty)
+            {
+                return;
+            }
+
+            int indentLen = 0;
+            while (indentLen < trimmedEnd.Length && char.IsWhiteSpace(trimmedEnd[indentLen]))
+            {
+                indentLen++;
+            }
+
+            target.ResetTokenBoundary();
+            target.Buffer.Append(trimmedEnd[..indentLen]);
+            AppendNormalizedContent(trimmedEnd[indentLen..], target, isRustFile);
+            target.Buffer.Append('\n');
+            target.ResetTokenBoundary();
+            return;
+        }
+
+        AppendNormalizedContent(line, target, isRustFile);
+        target.PendingSpace = true;
+    }
+
+    private static void AppendNormalizedContent(ReadOnlySpan<char> chars, NormalizedCodeAccumulator target, bool isRustFile)
+    {
+        for (int i = 0; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            if (ch == '"')
+            {
+                if (TryFindClosingDelimiter(chars, i + 1, '"', out int closeIdx))
+                {
+                    target.AppendVerbatim(chars.Slice(i, closeIdx - i + 1));
+                    i = closeIdx;
+                }
+                else
+                {
+                    target.AppendVerbatim(chars[i..]);
+                    break;
+                }
+                continue;
+            }
+
+            if (ch == '`')
+            {
+                if (TryFindClosingDelimiter(chars, i + 1, '`', out int closeIdx))
+                {
+                    target.AppendVerbatim(chars.Slice(i, closeIdx - i + 1));
+                    i = closeIdx;
+                    continue;
+                }
+
+                target.AppendCodeChar(ch);
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                bool matchedQuote = isRustFile
+                    ? TryFindRustCharLiteralEnd(chars, i, out int closeIdx)
+                    : TryFindClosingDelimiter(chars, i + 1, '\'', out closeIdx);
+
+                if (matchedQuote)
+                {
+                    target.AppendVerbatim(chars.Slice(i, closeIdx - i + 1));
+                    i = closeIdx;
+                    continue;
+                }
+
+                target.AppendCodeChar(ch);
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                target.PendingSpace = true;
+                continue;
+            }
+
+            target.AppendCodeChar(ch);
+        }
+    }
+
+    private static bool TryFindRustCharLiteralEnd(ReadOnlySpan<char> chars, int quoteIndex, out int closingIndex)
+    {
+        if (quoteIndex + 2 < chars.Length &&
+            chars[quoteIndex + 1] != '\\' &&
+            chars[quoteIndex + 1] != '\'' &&
+            chars[quoteIndex + 2] == '\'')
+        {
+            closingIndex = quoteIndex + 2;
+            return true;
+        }
+
+        if (quoteIndex + 1 < chars.Length && chars[quoteIndex + 1] == '\\' &&
+            TryFindClosingDelimiter(chars, quoteIndex + 1, '\'', out closingIndex))
+        {
+            var inner = chars.Slice(quoteIndex + 2, closingIndex - quoteIndex - 2);
+            if (!inner.IsEmpty && !inner.ToString().Any(char.IsWhiteSpace))
+            {
+                return true;
+            }
+        }
+
+        closingIndex = -1;
+        return false;
+    }
+
+    private static bool TryFindClosingDelimiter(ReadOnlySpan<char> chars, int startIndex, char delimiter, out int closingIndex)
+    {
+        bool escaped = false;
+        for (int i = startIndex; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (ch == delimiter)
+            {
+                closingIndex = i;
+                return true;
+            }
+        }
+
+        closingIndex = -1;
+        return false;
+    }
+
+    private static string? TryExtractDiffHeaderPath(ReadOnlySpan<char> raw, string stripPrefix)
+    {
+        var tabIdx = raw.IndexOf('\t');
+        if (tabIdx >= 0)
+        {
+            raw = raw[..tabIdx];
+        }
+
+        var path = raw.Trim().ToString();
+        if (path.Length >= 2 && path[0] == '"' && path[^1] == '"')
+        {
+            path = path[1..^1];
+        }
+
+        if (string.Equals(path, "/dev/null", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (path.StartsWith(stripPrefix, StringComparison.Ordinal))
+        {
+            path = path[stripPrefix.Length..];
+        }
+
+        return path;
+    }
+
+    private static string? TryExtractDiffGitPath(string line)
+    {
+        const string prefix = "diff --git ";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var bIdx = line.LastIndexOf(" b/", StringComparison.Ordinal);
+        if (bIdx >= 0)
+        {
+            var path = line[(bIdx + 3)..].Trim();
+            if (path.EndsWith('"') && path.StartsWith('"') && path.Length >= 2)
+            {
+                path = path[1..^1];
+            }
+            return path;
+        }
+
+        return null;
+    }
+
+    private static bool IsIndentationSensitivePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var ext = Path.GetExtension(path);
+        return !string.IsNullOrEmpty(ext) && IndentationSensitiveExtensions.Contains(ext);
+    }
+
+    private static bool IsRustPath(string? path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        string.Equals(Path.GetExtension(path), ".rs", StringComparison.OrdinalIgnoreCase);
 
     internal static (double Score, IReadOnlyList<string> MissingDescriptions) EvaluateExpectedFindings(
         IReadOnlyList<BenchmarkExpectedFinding> findings,

@@ -81,7 +81,7 @@ public static class CodeStack
         if (string.IsNullOrWhiteSpace(stack)) return Universal;
         return stack.Trim().ToLowerInvariant() switch
         {
-            "dotnet" or "csharp" or "cs" or "fsharp" or "fs" or ".net" => DotNet,
+            "dotnet" or "csharp" or "c#" or "cs" or "fsharp" or "fs" or ".net" => DotNet,
             "node" or "npm" or "typescript" or "javascript" or "ts" or "js" => Node,
             "python" or "py" => Python,
             "rust" or "cargo" or "rs" => Rust,

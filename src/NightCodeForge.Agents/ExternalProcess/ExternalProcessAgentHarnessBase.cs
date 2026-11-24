@@ -473,7 +473,7 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
     /// </summary>
     protected async Task<string> BuildEnrichedPromptAsync(AgentSessionContext context, string localWorkspaceRoot, CancellationToken cancellationToken)
     {
-        var projectConfig = CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
+        var projectConfig = context.ProjectConfig ?? CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
         var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
 
         var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)

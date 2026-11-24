@@ -27,6 +27,7 @@ public class AgentSessionContext
     public IReadOnlyList<string>? DiscoveredSymbols { get; init; }
 
     // --- Promoted Typed Properties ---
+    public WorkspaceProjectConfig? ProjectConfig { get; init; }
     public string? TaskMarkdownPath { get; init; }
     public string? ReviewDiffStat { get; init; }
     public string? ApprovedPlan { get; init; }

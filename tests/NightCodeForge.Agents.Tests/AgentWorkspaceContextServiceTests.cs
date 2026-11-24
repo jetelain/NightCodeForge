@@ -112,8 +112,8 @@ public class AgentWorkspaceContextServiceTests : IDisposable
             .ReturnsAsync(new[] { new SkillDescriptor("alpha", "Alpha skill", _tempDir, Path.Combine(_tempDir, "SKILL.md")) });
         skills.Setup(s => s.GetSkillsCatalogPromptAsync(It.IsAny<CancellationToken>())).ReturnsAsync("<skills>alpha</skills>");
 
-        var without = await service.BuildPromptContextAsync(workspace, _tempDir, new[] { CanonicalToolNames.Read }, skills.Object, CancellationToken.None);
-        var with = await service.BuildPromptContextAsync(workspace, _tempDir, new[] { CanonicalToolNames.LoadSkill }, skills.Object, CancellationToken.None);
+        var without = await service.BuildPromptContextAsync(workspace, _tempDir, new[] { CanonicalToolNames.Read }, skills.Object, projectConfigOverride: null, CancellationToken.None);
+        var with = await service.BuildPromptContextAsync(workspace, _tempDir, new[] { CanonicalToolNames.LoadSkill }, skills.Object, projectConfigOverride: null, CancellationToken.None);
 
         Assert.Equal(string.Empty, without.SkillsCatalog);
         Assert.Empty(without.ActiveSkills);
@@ -244,5 +244,34 @@ src/Heavy.cs(5,1): error CS0246: Missing type
         Assert.Contains("<workspace_friction_hotspots", digest);
         Assert.Contains("src/Heavy.cs", digest);
         Assert.Contains("CS0246", digest);
+    }
+
+    [Fact]
+    public async Task BuildPromptContextAsync_UsesProjectConfigOverrideInExecutionGuidelines()
+    {
+        var service = CreateContextService();
+        var workspace = new Workspace { Id = 1, RepositoryPath = _tempDir };
+        var skills = new Mock<IWorkspaceSkillsService>();
+        var overrideConfig = new WorkspaceProjectConfig
+        {
+            CodeStack = CodeStack.Python,
+            BuildCommand = CodeStackPresets.Python.BuildCommand,
+            TestCommand = CodeStackPresets.Python.TestCommand,
+            BuildTimeoutSeconds = 90,
+            TestTimeoutSeconds = 150
+        };
+
+        var promptContext = await service.BuildPromptContextAsync(
+            workspace,
+            _tempDir,
+            new[] { CanonicalToolNames.Read },
+            skills.Object,
+            overrideConfig,
+            CancellationToken.None);
+
+        Assert.Contains($"Build Command: `{CodeStackPresets.Python.BuildCommand}` (Timeout: 90s)", promptContext.ProjectContext);
+        Assert.Contains($"Test Command: `{CodeStackPresets.Python.TestCommand}` (Timeout: 150s)", promptContext.ProjectContext);
+        Assert.DoesNotContain("dotnet build", promptContext.ProjectContext, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--no-build", promptContext.ProjectContext, StringComparison.OrdinalIgnoreCase);
     }
 }

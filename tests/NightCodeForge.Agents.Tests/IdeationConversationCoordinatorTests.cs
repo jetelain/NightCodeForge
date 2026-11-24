@@ -964,7 +964,7 @@ public class IdeationConversationCoordinatorTests
         var workspaceContextMock = new Mock<IAgentWorkspaceContextService>();
         workspaceContextMock.Setup(c => c.ResolveLocations(It.IsAny<Workspace>(), null, null))
             .Returns((Workspace ws, int? _, string? __) => new AgentWorkspaceLocations(ws.RepositoryPath, ws.RepositoryPath, ws.RepositoryPath));
-        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
+        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentPromptContext(string.Empty, string.Empty, Array.Empty<string>()));
         workspaceContextMock.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), null, It.IsAny<CancellationToken>())).ReturnsAsync(string.Empty);
         workspaceContextMock.Setup(c => c.BuildWorkspaceAttachmentsDigestAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(string.Empty);
@@ -1728,7 +1728,7 @@ public class IdeationConversationCoordinatorTests
         var workspaceContextMock = new Mock<IAgentWorkspaceContextService>();
         workspaceContextMock.Setup(c => c.ResolveLocations(It.IsAny<Workspace>(), null, null))
             .Returns((Workspace ws, int? _, string? __) => new AgentWorkspaceLocations(ws.RepositoryPath, ws.RepositoryPath, ws.RepositoryPath));
-        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
+        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentPromptContext(string.Empty, string.Empty, Array.Empty<string>()));
         workspaceContextMock.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => Interlocked.Increment(ref backlogCall) == 1 ? "- Task #1" : "- Task #1\n- Task #2");
@@ -1785,7 +1785,7 @@ public class IdeationConversationCoordinatorTests
                 syncStarted.TrySetResult(true);
                 await releaseSync.Task.WaitAsync(ct);
             });
-        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
+        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentPromptContext(string.Empty, string.Empty, Array.Empty<string>()));
         workspaceContextMock.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), null, It.IsAny<CancellationToken>())).ReturnsAsync(string.Empty);
         workspaceContextMock.Setup(c => c.BuildWorkspaceAttachmentsDigestAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync(string.Empty);
@@ -2196,7 +2196,7 @@ public class IdeationConversationCoordinatorTests
         var workspaceContextMock = new Mock<IAgentWorkspaceContextService>();
         workspaceContextMock.Setup(c => c.ResolveLocations(It.IsAny<Workspace>(), null, null))
             .Returns((Workspace ws, int? _, string? __) => new AgentWorkspaceLocations(ws.RepositoryPath, ws.RepositoryPath, ws.RepositoryPath));
-        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
+        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentPromptContext(string.Empty, string.Empty, Array.Empty<string>()));
         workspaceContextMock.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => Interlocked.Increment(ref backlogCall) == 1 ? "- Task #1" : "- Task #1\n- Task #2");
@@ -2296,7 +2296,7 @@ public class IdeationConversationCoordinatorTests
         var workspaceContextMock = new Mock<IAgentWorkspaceContextService>();
         workspaceContextMock.Setup(c => c.ResolveLocations(It.IsAny<Workspace>(), null, null))
             .Returns((Workspace w, int? _, string? __) => new AgentWorkspaceLocations(w.RepositoryPath, w.RepositoryPath, w.RepositoryPath));
-        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
+        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentPromptContext(string.Empty, string.Empty, Array.Empty<string>()));
         workspaceContextMock.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => Interlocked.Increment(ref backlogCall) == 1 ? "- Task #1" : $"- Task #{task.Id} Edited Externally");
@@ -2704,7 +2704,7 @@ public class IdeationConversationCoordinatorTests
         var workspaceContextMock = new Mock<IAgentWorkspaceContextService>();
         workspaceContextMock.Setup(c => c.ResolveLocations(It.IsAny<Workspace>(), null, null))
             .Returns((Workspace w, int? _, string? __) => new AgentWorkspaceLocations(w.RepositoryPath, w.RepositoryPath, w.RepositoryPath));
-        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
+        workspaceContextMock.Setup(c => c.BuildPromptContextAsync(It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new AgentPromptContext(string.Empty, string.Empty, Array.Empty<string>()));
         workspaceContextMock.Setup(c => c.BuildBacklogDigestAsync(It.IsAny<int>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => { Interlocked.Increment(ref backlogCalls); return "- Task #1"; });
@@ -3042,8 +3042,8 @@ public class IdeationConversationCoordinatorTests
         workspaceContextMock.Setup(c => c.BuildFrictionHotspotsDigestAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(string.Empty);
         workspaceContextMock.Setup(c => c.BuildPromptContextAsync(
-                It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<CancellationToken>()))
-            .Returns<Workspace, string, IReadOnlyList<string>, IWorkspaceSkillsService, CancellationToken>(async (_, _, _, _, ct) =>
+                It.IsAny<Workspace>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<IWorkspaceSkillsService>(), It.IsAny<WorkspaceProjectConfig?>(), It.IsAny<CancellationToken>()))
+            .Returns<Workspace, string, IReadOnlyList<string>, IWorkspaceSkillsService, WorkspaceProjectConfig?, CancellationToken>(async (_, _, _, _, _, ct) =>
             {
                 int call = Interlocked.Increment(ref promptCtxCalls);
                 if (call == 1)

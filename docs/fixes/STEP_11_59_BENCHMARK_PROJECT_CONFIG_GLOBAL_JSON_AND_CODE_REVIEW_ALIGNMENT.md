@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `NightCodeForge.Agents`, `benchmarks/datasets`  
 > **Dependencies:** `CrucibleBenchmarkRunner`, `DotNetGlobalJsonResilienceScope`, `BenchmarkVerifier`, `v1-code-review.jsonl`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
@@ -45,7 +45,7 @@ Inspection of the `v1-smoke-Flint-latest-20261124-123321` benchmark run (`18 / 2
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Supply a language-accurate `WorkspaceProjectConfig` (build/test commands per stack) to benchmark sessions so non-C# `<execution_guidelines>` never fall back to `dotnet build` / `dotnet test --no-build`, and avoid misleading non-TaskReview runs toward missing `docs/tasks/` paths, with unit tests.
-- [ ] Update `DotNetGlobalJsonResilienceScope` so relaxed `global.json` files do not show up as dirty in `git status` / `git diff` during agent execution while restoring exact original bytes and git index state on disposal, with unit tests.
-- [ ] Align `v1-code-review.jsonl` `RequestChanges` / `Approve` expectations and `CodeReviewAndFix` verdict/whitespace handling so valid reviews are not penalized by contradictory Tier 1/Tier 2 rules or trivial whitespace edits, with unit tests.
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Supply a language-accurate `WorkspaceProjectConfig` (build/test commands per stack) to benchmark sessions so non-C# `<execution_guidelines>` never fall back to `dotnet build` / `dotnet test --no-build`, and avoid misleading non-TaskReview runs toward missing `docs/tasks/` paths, with unit tests.
+- [x] Update `DotNetGlobalJsonResilienceScope` so relaxed `global.json` files do not show up as dirty in `git status` / `git diff` during agent execution while restoring exact original bytes and git index state on disposal, with unit tests.
+- [x] Align `v1-code-review.jsonl` `RequestChanges` / `Approve` expectations and `CodeReviewAndFix` verdict/whitespace handling so valid reviews are not penalized by contradictory Tier 1/Tier 2 rules or trivial whitespace edits, with unit tests.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

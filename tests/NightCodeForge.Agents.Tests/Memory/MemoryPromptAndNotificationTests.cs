@@ -119,9 +119,9 @@ public sealed class MemoryPromptAndNotificationTests : IDisposable
         var workspace = new Workspace { Id = WorkspaceId, RepositoryPath = _repoDir };
 
         var withWrite = await CreateContext().BuildPromptContextAsync(
-            workspace, _repoDir, new[] { CanonicalToolNames.Read, CanonicalToolNames.Write }, new Mock<IWorkspaceSkillsService>().Object, CancellationToken.None);
+            workspace, _repoDir, new[] { CanonicalToolNames.Read, CanonicalToolNames.Write }, new Mock<IWorkspaceSkillsService>().Object, projectConfigOverride: null, CancellationToken.None);
         var readOnly = await CreateContext().BuildPromptContextAsync(
-            workspace, _repoDir, new[] { CanonicalToolNames.Read }, new Mock<IWorkspaceSkillsService>().Object, CancellationToken.None);
+            workspace, _repoDir, new[] { CanonicalToolNames.Read }, new Mock<IWorkspaceSkillsService>().Object, projectConfigOverride: null, CancellationToken.None);
 
         Assert.Contains("- decision A", withWrite.WorkspaceMemory);
         Assert.Contains("/workspace/memory/topic.md", withWrite.MemoryCatalog);

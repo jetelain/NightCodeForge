@@ -1503,4 +1503,80 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         var resultsJson = await File.ReadAllTextAsync(Path.Combine(outDir, BenchmarkPaths.ResultsFileName));
         Assert.Contains("\"verification_log_path\":", resultsJson);
     }
+
+    [Fact]
+    public async Task RunAsync_PopulatesLanguageAccurateProjectConfigOnAgentSessionContext()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-project-config.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"inst-cs-cfg","language":"csharp","repo":"owner/cs","base_commit":"c1","problem_statement":"Fix C#"}""",
+            """{"instance_id":"inst-py-cfg","language":"python","repo":"pallets/flask","base_commit":"c2","problem_statement":"Fix Python"}"""
+        ]));
+
+        var wksCs = Path.Combine(_tempDir, "wks-cs-cfg");
+        var wksPy = Path.Combine(_tempDir, "wks-py-cfg");
+        Directory.CreateDirectory(wksCs);
+        Directory.CreateDirectory(wksPy);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-cs-cfg"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-cs-cfg", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wksCs, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-py-cfg"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-py-cfg", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wksPy, BaseCommit = "c2" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync("diff --git a/x b/x\n+1");
+
+        var capturedConfigs = new System.Collections.Concurrent.ConcurrentDictionary<string, WorkspaceProjectConfig?>(StringComparer.Ordinal);
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>((ctx, _) =>
+            {
+                capturedConfigs[ctx.WorkspacePath] = ctx.ProjectConfig;
+                return Task.FromResult(AgentRunResult.Completed(new AgentRunMetrics(10, 1, 1, 2), summary: "Ok"));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.ContainerSandbox, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "cfg",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-cfg"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand-1", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.ContainerSandbox
+        });
+
+        Assert.True(capturedConfigs.TryGetValue(wksCs, out var csCfg) && csCfg != null);
+        Assert.Equal(CodeStack.DotNet, csCfg.CodeStack);
+        Assert.Equal("dotnet build", csCfg.BuildCommand);
+        Assert.Equal("dotnet test --no-build", csCfg.TestCommand);
+        Assert.DoesNotContain("--logger trx", csCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".ncf-bench-results", csCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(capturedConfigs.TryGetValue(wksPy, out var pyCfg) && pyCfg != null);
+        Assert.Equal(CodeStack.Python, pyCfg.CodeStack);
+        Assert.Equal(CodeStackPresets.Python.BuildCommand, pyCfg.BuildCommand);
+        Assert.Equal(CodeStackPresets.Python.TestCommand, pyCfg.TestCommand);
+        Assert.DoesNotContain("--junitxml", pyCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(".ncf-bench-results", pyCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("dotnet", pyCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
+    }
 }

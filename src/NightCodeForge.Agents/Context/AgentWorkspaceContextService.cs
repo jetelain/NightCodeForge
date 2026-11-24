@@ -45,12 +45,13 @@ public interface IAgentWorkspaceContextService
     /// <summary>Pre-syncs the backlog task markdown files to disk so the agent can inspect existing tasks.</summary>
     Task SyncBacklogToDiskAsync(Workspace workspace, AgentWorkspaceLocations locations, CancellationToken cancellationToken);
 
-    /// <summary>Builds the project context section and (only when <c>load_skill</c> is permitted) the skills catalog.</summary>
+    /// <summary>Builds the project context section using an optional pre-resolved <see cref="WorkspaceProjectConfig"/> and (only when <c>load_skill</c> is permitted) the skills catalog.</summary>
     Task<AgentPromptContext> BuildPromptContextAsync(
         Workspace workspace,
         string repoPath,
         IReadOnlyList<string> permittedTools,
         IWorkspaceSkillsService skillsService,
+        WorkspaceProjectConfig? projectConfigOverride,
         CancellationToken cancellationToken);
 
     /// <summary>Deterministic symbol map prompt matching the given task text.</summary>
@@ -235,10 +236,11 @@ public sealed class AgentWorkspaceContextService : IAgentWorkspaceContextService
         string repoPath,
         IReadOnlyList<string> permittedTools,
         IWorkspaceSkillsService skillsService,
+        WorkspaceProjectConfig? projectConfigOverride,
         CancellationToken cancellationToken)
     {
         var agentsRules = await _agentsMdService.IngestRulesAsync(repoPath, cancellationToken);
-        var projectConfig = CodeStackPresets.ResolveConfig(repoPath, null);
+        var projectConfig = projectConfigOverride ?? CodeStackPresets.ResolveConfig(repoPath, null);
         var projectContext = _agentsMdService.FormatProjectContextSection(agentsRules, projectConfig, workspace);
 
         // The skills catalog (lean ~25 tokens/skill) is only useful when the agent can call load_skill;

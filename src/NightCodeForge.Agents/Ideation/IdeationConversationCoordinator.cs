@@ -1070,6 +1070,7 @@ public sealed class IdeationConversationCoordinator : IIdeationConversationCoord
                 locations.RepoPath,
                 permittedTools,
                 toolsetSession!.SkillsService,
+                projectConfigOverride: null,
                 cancellationToken).ConfigureAwait(false);
 
             toolsetSession.Tools.FileModule.MemoryWriteObserver = (write, ct) =>

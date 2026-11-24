@@ -178,7 +178,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var multimodalQueue = supportsVision ? new MultimodalAttachmentQueue() : null;
         var effectiveProfileModel = !string.IsNullOrWhiteSpace(context.Profile.ModelName) ? context.Profile.ModelName : null;
 
-        var projectConfig = CodeStackPresets.ResolveConfig(workspacePath, null);
+        var projectConfig = context.ProjectConfig ?? CodeStackPresets.ResolveConfig(workspacePath, null);
         var buildTimeout = workspace.BuildTimeoutSeconds ?? projectConfig.BuildTimeoutSeconds;
         var testTimeout = workspace.TestTimeoutSeconds ?? projectConfig.TestTimeoutSeconds;
 
@@ -263,7 +263,13 @@ public partial class CrucibleAgentHarness : IAgentHarness
         }
 
         // 3. Discover context: AGENTS.md, Skills (Microsoft Agent Framework), Symbols
-        var promptContext = await _workspaceContext.BuildPromptContextAsync(workspace, workspacePath, permittedTools, toolset.SkillsService, cancellationToken);
+        var promptContext = await _workspaceContext.BuildPromptContextAsync(
+            workspace,
+            workspacePath,
+            permittedTools,
+            toolset.SkillsService,
+            context.ProjectConfig,
+            cancellationToken);
 
         string discoveredSymbols = string.Empty;
         if (context.OptimizationFlags.DeterministicSymbolMap)

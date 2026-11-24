@@ -125,6 +125,41 @@ internal static partial class BenchmarkTestCommandResolver
         };
     }
 
+    internal static string ResolveAgentTestCommand(
+        BenchmarkInstance instance,
+        string workspacePath,
+        ExecutionMode executionMode = ExecutionMode.ContainerSandbox)
+    {
+        var normalizedLanguage = BenchmarkLanguages.Normalize(instance.Language);
+
+        if (!string.IsNullOrWhiteSpace(instance.CustomTestCommand))
+        {
+            var custom = instance.CustomTestCommand.Trim();
+            if (string.Equals(normalizedLanguage, BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase))
+            {
+                return ApplyDiscoveredDotNetTargetsToCustomCommand(custom, workspacePath, executionMode);
+            }
+
+            if (normalizedLanguage is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript)
+            {
+                return ApplyVitestConfigToCustomCommand(custom, workspacePath);
+            }
+
+            return custom;
+        }
+
+        return normalizedLanguage switch
+        {
+            BenchmarkLanguages.CSharp => ResolveAgentCSharpTestCommand(workspacePath),
+            BenchmarkLanguages.Python => CodeStackPresets.Python.TestCommand,
+            BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript => ResolveAgentNodeTestCommand(workspacePath),
+            BenchmarkLanguages.Rust => "cargo test --no-fail-fast",
+            _ => throw new BenchmarkVerificationException(
+                $"No default test command configured for language '{instance.Language}'. Provide custom_test_command.",
+                instance.InstanceId)
+        };
+    }
+
     internal static string WrapWithContainerDependencySetup(
         string testCommand,
         string language,
@@ -285,6 +320,45 @@ internal static partial class BenchmarkTestCommandResolver
         return "( ncf_rc=0; " +
                string.Join("; ", commands.Select(cmd => $"{{ {cmd}; }} || ncf_rc=$?")) +
                "; exit $ncf_rc )";
+    }
+
+    private static string ResolveAgentCSharpTestCommand(string workspacePath)
+    {
+        var targets = DiscoverDotNetTargets(workspacePath);
+        if (targets.Count == 0)
+        {
+            return CodeStackPresets.DotNet.TestCommand;
+        }
+
+        return string.Join(" && ", targets.Select(target => $"dotnet test {QuotePathArgument(target)} --no-build"));
+    }
+
+    private static string ResolveAgentNodeTestCommand(string workspacePath)
+    {
+        var pkgJsonPath = Path.Combine(workspacePath, "package.json");
+        if (File.Exists(pkgJsonPath))
+        {
+            var content = File.ReadAllText(pkgJsonPath);
+            if (content.Contains("vitest", StringComparison.OrdinalIgnoreCase))
+            {
+                var unitConfig = ResolveVitestUnitConfig(workspacePath);
+                return unitConfig != null ? $"npx vitest run -c {unitConfig}" : "npx vitest run";
+            }
+
+            if (content.Contains("jest", StringComparison.OrdinalIgnoreCase))
+            {
+                return "npx jest --ci";
+            }
+
+            if (content.Contains("mocha", StringComparison.OrdinalIgnoreCase))
+            {
+                return content.Contains("\"test:mocha\"", StringComparison.OrdinalIgnoreCase)
+                    ? "npm run test:mocha"
+                    : "npx mocha";
+            }
+        }
+
+        return CodeStackPresets.Node.TestCommand;
     }
 
     private static string ResolveNodeTestCommand(string workspacePath, string resultsDir)

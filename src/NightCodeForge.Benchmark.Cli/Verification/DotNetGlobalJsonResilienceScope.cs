@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -8,12 +10,20 @@ namespace NightCodeForge.Benchmark.Cli.Verification;
 
 /// <summary>
 /// Temporarily relaxes .NET <c>global.json</c> SDK <c>rollForward</c> policies to <c>latestMajor</c>
-/// during benchmark agent execution and test verification, then restores the exact original file bytes
-/// before patch extraction or subsequent git operations.
+/// during benchmark agent execution and test verification while keeping tracked files hidden from
+/// <c>git status</c> / <c>git diff</c>, then restores exact original bytes and git index state on disposal.
 /// </summary>
 public sealed class DotNetGlobalJsonResilienceScope : IDisposable
 {
     private const string GlobalJsonFileName = "global.json";
+    private const string GitDirectoryName = ".git";
+    private const string GitExecutable = "git";
+    private const string GitUpdateIndexCommand = "update-index";
+    private const string GitAssumeUnchangedFlag = "--assume-unchanged";
+    private const string GitNoAssumeUnchangedFlag = "--no-assume-unchanged";
+    private const string GitPathspecSeparator = "--";
+    private const int GitUpdateIndexTimeoutMs = 10_000;
+    private const int GitKillWaitTimeoutMs = 1_000;
     private const string SdkPropertyName = "sdk";
     private const string VersionPropertyName = "version";
     private const string RollForwardPropertyName = "rollForward";
@@ -37,14 +47,24 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
         BenchmarkPaths.BenchmarkResultDirRelative
     };
 
-    private sealed record ModifiedGlobalJsonBackup(string FilePath, byte[] OriginalBytes, byte[] MitigatedBytes);
+    private sealed record ModifiedGlobalJsonBackup(
+        string FilePath,
+        string RelativePosixPath,
+        byte[] OriginalBytes,
+        byte[] MitigatedBytes,
+        bool MarkedAssumeUnchanged);
 
+    private readonly string _workspacePath;
     private readonly IReadOnlyList<ModifiedGlobalJsonBackup> _backups;
     private readonly ILogger _logger;
     private bool _disposed;
 
-    private DotNetGlobalJsonResilienceScope(IReadOnlyList<ModifiedGlobalJsonBackup> backups, ILogger logger)
+    private DotNetGlobalJsonResilienceScope(
+        string workspacePath,
+        IReadOnlyList<ModifiedGlobalJsonBackup> backups,
+        ILogger logger)
     {
+        _workspacePath = workspacePath;
         _backups = backups;
         _logger = logger;
     }
@@ -59,20 +79,21 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
             string.IsNullOrWhiteSpace(workspacePath) ||
             !Directory.Exists(workspacePath))
         {
-            return new DotNetGlobalJsonResilienceScope(Array.Empty<ModifiedGlobalJsonBackup>(), logger);
+            return new DotNetGlobalJsonResilienceScope(workspacePath ?? string.Empty, Array.Empty<ModifiedGlobalJsonBackup>(), logger);
         }
 
+        var isGitRepo = IsGitRepository(workspacePath);
         var backups = new List<ModifiedGlobalJsonBackup>();
         foreach (var filePath in EnumerateGlobalJsonFiles(workspacePath, logger))
         {
-            var backup = TryRelaxGlobalJsonFile(filePath, logger);
+            var backup = TryRelaxGlobalJsonFile(workspacePath, filePath, isGitRepo, logger);
             if (backup != null)
             {
                 backups.Add(backup);
             }
         }
 
-        return new DotNetGlobalJsonResilienceScope(backups, logger);
+        return new DotNetGlobalJsonResilienceScope(workspacePath, backups, logger);
     }
 
     public void Dispose()
@@ -87,25 +108,35 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
         {
             try
             {
-                if (!File.Exists(backup.FilePath))
+                if (File.Exists(backup.FilePath))
                 {
-                    continue;
-                }
-
-                var currentBytes = File.ReadAllBytes(backup.FilePath);
-                if (currentBytes.AsSpan().SequenceEqual(backup.MitigatedBytes))
-                {
-                    File.WriteAllBytes(backup.FilePath, backup.OriginalBytes);
+                    var currentBytes = File.ReadAllBytes(backup.FilePath);
+                    if (currentBytes.AsSpan().SequenceEqual(backup.MitigatedBytes))
+                    {
+                        File.WriteAllBytes(backup.FilePath, backup.OriginalBytes);
+                    }
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 _logger.LogWarning(ex, "Failed to restore original global.json at '{FilePath}'.", backup.FilePath);
             }
+
+            if (backup.MarkedAssumeUnchanged &&
+                !TryRunGitUpdateIndex(_workspacePath, GitNoAssumeUnchangedFlag, backup.RelativePosixPath, _logger))
+            {
+                _logger.LogWarning(
+                    "Failed to clear git assume-unchanged flag on global.json at '{RelativePath}'.",
+                    backup.RelativePosixPath);
+            }
         }
     }
 
-    private static ModifiedGlobalJsonBackup? TryRelaxGlobalJsonFile(string filePath, ILogger logger)
+    private static ModifiedGlobalJsonBackup? TryRelaxGlobalJsonFile(
+        string workspacePath,
+        string filePath,
+        bool isGitRepo,
+        ILogger logger)
     {
         byte[] originalBytes;
         try
@@ -167,14 +198,108 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
         try
         {
             File.WriteAllBytes(filePath, mitigatedBytes);
+            var relativePosixPath = Path.GetRelativePath(workspacePath, filePath).Replace('\\', '/');
+            var markedAssumeUnchanged = isGitRepo &&
+                TryRunGitUpdateIndex(workspacePath, GitAssumeUnchangedFlag, relativePosixPath, logger);
+
             logger.LogDebug("Relaxed global.json SDK rollForward to '{RollForward}' at '{FilePath}'.",
                 BenchmarkDefaults.DotNetSdkRollForwardLatestMajor, filePath);
-            return new ModifiedGlobalJsonBackup(filePath, originalBytes, mitigatedBytes);
+            return new ModifiedGlobalJsonBackup(
+                filePath,
+                relativePosixPath,
+                originalBytes,
+                mitigatedBytes,
+                markedAssumeUnchanged);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             logger.LogWarning(ex, "Failed to update global.json at '{FilePath}'.", filePath);
             return null;
+        }
+    }
+
+    private static bool IsGitRepository(string workspacePath)
+    {
+        var dotGitPath = Path.Combine(workspacePath, GitDirectoryName);
+        return Directory.Exists(dotGitPath) || File.Exists(dotGitPath);
+    }
+
+    private static bool TryRunGitUpdateIndex(
+        string workspacePath,
+        string flag,
+        string relativePosixPath,
+        ILogger logger)
+    {
+        try
+        {
+            using var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = GitExecutable,
+                WorkingDirectory = workspacePath,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            process.StartInfo.ArgumentList.Add(GitUpdateIndexCommand);
+            process.StartInfo.ArgumentList.Add(flag);
+            process.StartInfo.ArgumentList.Add(GitPathspecSeparator);
+            process.StartInfo.ArgumentList.Add(relativePosixPath);
+
+            if (!process.Start())
+            {
+                logger.LogDebug("Failed to start git process for '{Flag}' on '{Path}'.", flag, relativePosixPath);
+                return false;
+            }
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
+
+            if (!process.WaitForExit(GitUpdateIndexTimeoutMs))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(GitKillWaitTimeoutMs);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+                {
+                    logger.LogDebug(ex, "Failed to kill timed-out git update-index process for '{Path}'.", relativePosixPath);
+                }
+
+                try
+                {
+                    Task.WaitAll([stdoutTask, stderrTask], GitKillWaitTimeoutMs);
+                }
+                catch (AggregateException ex)
+                {
+                    logger.LogDebug(ex, "Stream draining failed after killing timed-out git update-index for '{Path}'.", relativePosixPath);
+                }
+
+                logger.LogWarning("git update-index {Flag} timed out for '{Path}'.", flag, relativePosixPath);
+                return false;
+            }
+
+            Task.WaitAll([stdoutTask, stderrTask], GitUpdateIndexTimeoutMs);
+            if (process.ExitCode != 0)
+            {
+                var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result.Trim() : string.Empty;
+                logger.LogDebug(
+                    "git update-index {Flag} exited with {ExitCode} for '{Path}': {Stderr}",
+                    flag,
+                    process.ExitCode,
+                    relativePosixPath,
+                    stderr);
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or InvalidOperationException or AggregateException)
+        {
+            logger.LogDebug(ex, "Unable to run git update-index {Flag} for '{Path}'.", flag, relativePosixPath);
+            return false;
         }
     }
 

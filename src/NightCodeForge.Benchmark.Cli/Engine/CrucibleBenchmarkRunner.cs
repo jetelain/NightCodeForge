@@ -381,6 +381,8 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
             scope = BuildExecutionScope(workspace.WorkspacePath, instance.CustomContainerImage, request.ExecutionMode, containerName, candidate.EnableStackSkills, instance.Language, category);
 
+            var projectConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(instance, workspace.WorkspacePath, request.ExecutionMode);
+
             var sessionContext = new AgentSessionContext
             {
                 ForgeTask = ephemeralTask,
@@ -393,6 +395,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 RequiredMode = policy.RequiredMode,
                 BootstrapPrompt = BuildBootstrapPrompt(category, workspace),
                 WorkspacePath = workspace.WorkspacePath,
+                ProjectConfig = projectConfig,
                 TaskMarkdownPath = workspace.TaskMarkdownPath,
                 ReviewDiffStat = workspace.ReviewDiffStat
             };

@@ -42,6 +42,32 @@ public class AgentsMdServiceTests
         Assert.Contains("Test Command: `npm test` (Timeout: 180s)", guidelines);
     }
 
+    [Theory]
+    [InlineData("pytest", false)]
+    [InlineData("dotnet test", false)]
+    [InlineData("dotnet test --no-build", true)]
+    [InlineData("dotnet test --NO-BUILD", true)]
+    public void FormatExecutionGuidelines_ConditionallyIncludesNoBuildWarning(string testCommand, bool expectNoBuildWarning)
+    {
+        var service = new AgentsMdService();
+        var projectConfig = new WorkspaceProjectConfig
+        {
+            BuildCommand = "custom build",
+            TestCommand = testCommand
+        };
+
+        var guidelines = service.FormatExecutionGuidelines(projectConfig, new Workspace());
+
+        if (expectNoBuildWarning)
+        {
+            Assert.Contains("Never run test commands with `--no-build`", guidelines, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("--no-build", guidelines, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     [Fact]
     public void FormatProjectContextSection_CombinesAgentsMdRulesAndExecutionGuidelines()
     {

@@ -35,6 +35,7 @@ public class CodeStackTests
     [InlineData("dotnet", CodeStack.DotNet)]
     [InlineData("DOTNET", CodeStack.DotNet)]
     [InlineData("csharp", CodeStack.DotNet)]
+    [InlineData("c#", CodeStack.DotNet)]
     [InlineData("cs", CodeStack.DotNet)]
     [InlineData("fsharp", CodeStack.DotNet)]
     [InlineData("fs", CodeStack.DotNet)]
