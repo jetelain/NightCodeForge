@@ -709,5 +709,110 @@ public class GitHubClientServiceTests
         Assert.Single(issues);
         Assert.DoesNotContain(requestedUrls, u => u.Contains("evil.example.com", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task ListAccessibleRepositoriesAsync_ParsesExtendedCloneAndMetadataFields()
+    {
+        var updatedAt = new DateTimeOffset(2026, 11, 21, 14, 15, 0, TimeSpan.Zero);
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = req =>
+            {
+                Assert.Equal(HttpMethod.Get, req.Method);
+                Assert.Contains("/user/repos", req.RequestUri?.ToString());
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new[]
+                    {
+                        new
+                        {
+                            id = 9001L,
+                            name = "my-api",
+                            full_name = "octocat/my-api",
+                            owner = new { login = "octocat" },
+                            description = "Backend API",
+                            @private = true,
+                            html_url = "https://github.com/octocat/my-api",
+                            clone_url = "https://github.com/octocat/my-api.git",
+                            ssh_url = "git@github.com:octocat/my-api.git",
+                            default_branch = "develop",
+                            updated_at = updatedAt
+                        }
+                    }))
+                };
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("ghu_test");
+
+        var client = new GitHubClientService(new HttpClient(handler), authMock.Object, NullLogger<GitHubClientService>.Instance);
+        var repos = await client.ListAccessibleRepositoriesAsync();
+
+        var repo = Assert.Single(repos);
+        Assert.Equal("Backend API", repo.Description);
+        Assert.Equal("https://github.com/octocat/my-api.git", repo.CloneUrl);
+        Assert.Equal("git@github.com:octocat/my-api.git", repo.SshUrl);
+        Assert.Equal("develop", repo.DefaultBranch);
+        Assert.Equal(updatedAt, repo.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task CreateRepositoryAsync_SendsPostAndRetriesOn401()
+    {
+        var callCount = 0;
+        var handler = new MockHttpMessageHandler
+        {
+            Handler = req =>
+            {
+                callCount++;
+                Assert.Equal(HttpMethod.Post, req.Method);
+                Assert.Equal("https://api.github.com/user/repos", req.RequestUri?.ToString());
+
+                if (callCount == 1)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+                }
+
+                Assert.Equal("ghu_refreshed", req.Headers.Authorization?.Parameter);
+                var body = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                Assert.Contains("\"name\":\"new-forge-app\"", body);
+                Assert.Contains("\"private\":true", body);
+                Assert.Contains("\"description\":\"Created via NCF\"", body);
+
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(new
+                    {
+                        id = 12345L,
+                        name = "new-forge-app",
+                        full_name = "octocat/new-forge-app",
+                        owner = new { login = "octocat" },
+                        description = "Created via NCF",
+                        @private = true,
+                        html_url = "https://github.com/octocat/new-forge-app",
+                        clone_url = "https://github.com/octocat/new-forge-app.git",
+                        ssh_url = "git@github.com:octocat/new-forge-app.git",
+                        default_branch = "main",
+                        updated_at = DateTimeOffset.UtcNow
+                    }))
+                };
+            }
+        };
+
+        var authMock = new Mock<IGitHubDeviceAuthService>();
+        authMock.Setup(a => a.GetValidAccessTokenAsync(It.IsAny<CancellationToken>())).ReturnsAsync("ghu_stale");
+        authMock.Setup(a => a.RefreshAccessTokenAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitHubOAuthTokenPayload { AccessToken = "ghu_refreshed" });
+
+        var client = new GitHubClientService(new HttpClient(handler), authMock.Object, NullLogger<GitHubClientService>.Instance);
+        var created = await client.CreateRepositoryAsync("new-forge-app", "Created via NCF", isPrivate: true);
+
+        Assert.Equal(2, callCount);
+        Assert.Equal("octocat/new-forge-app", created.FullName);
+        Assert.Equal("https://github.com/octocat/new-forge-app.git", created.CloneUrl);
+        Assert.True(created.Private);
+    }
 }
 

@@ -57,7 +57,8 @@
                                               ProbeResult="@_probeResult" 
                                               IsProbing="@_isProbing"
                                               OnProbeRequested="HandleProbeAsync" 
-                                              OnInitGitRequested="HandleInitGitAsync" />
+                                              OnInitGitRequested="HandleInitGitAsync"
+                                              OnRemoteRepositoryOnboarded="HandleRemoteRepositoryOnboardedAsync" />
                         break;
                     case 2:
                         <WizardStep2StackBranch Model="@_model" 
@@ -266,6 +267,16 @@
         finally
         {
             _isProbing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleRemoteRepositoryOnboardedAsync()
+    {
+        await HandleProbeAsync();
+        if (_currentStep == 1 && CanProceedFromStep(1))
+        {
+            _currentStep = 2;
             StateHasChanged();
         }
     }

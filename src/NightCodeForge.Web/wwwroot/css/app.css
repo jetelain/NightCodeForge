@@ -7580,3 +7580,192 @@ html, body, .forge-layout, .forge-main-content {
     font-size: 0.88rem;
     line-height: 1.55;
 }
+
+/* Step 12.32A: Wizard Local Discovery & Remote Forge Picker */
+.intake-channel-tabs {
+    display: flex;
+    gap: 0.5rem;
+    background: var(--bg-surface);
+    padding: 0.35rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.intake-tab-btn {
+    flex: 1;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 0.55rem 0.85rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.86rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.intake-tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.intake-tab-btn.active {
+    background: rgba(99, 102, 241, 0.16);
+    border-color: rgba(99, 102, 241, 0.45);
+    color: var(--text-primary);
+}
+
+.local-discovery-panel,
+.remote-forge-panel {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+}
+
+.discovery-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.discovery-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.forge-btn-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.8rem;
+}
+
+.remote-provider-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.remote-repo-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    max-height: 320px;
+    overflow-y: auto;
+}
+
+.remote-repo-card {
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    transition: border-color var(--transition-fast);
+}
+
+.remote-repo-card.selected {
+    border-color: var(--accent-indigo);
+}
+
+.remote-repo-card-main {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.remote-repo-info {
+    flex: 1;
+    min-width: 240px;
+}
+
+.remote-repo-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.remote-repo-name {
+    color: var(--text-primary);
+    font-size: 0.92rem;
+}
+
+.remote-repo-updated {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.remote-repo-desc {
+    margin: 0.35rem 0 0 0;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.remote-local-status-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.remote-local-path {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.remote-repo-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.badge-private {
+    background: rgba(245, 158, 11, 0.16);
+    color: #fbbf24;
+}
+
+.badge-public {
+    background: rgba(16, 185, 129, 0.16);
+    color: #34d399;
+}
+
+.badge-branch {
+    background: rgba(99, 102, 241, 0.16);
+    color: #a5b4fc;
+}
+
+.badge-local-match {
+    background: rgba(16, 185, 129, 0.18);
+    color: #34d399;
+}
+
+.remote-empty-state {
+    padding: 1rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.clone-drawer {
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 0.85rem;
+}
+
+.clone-drawer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.clone-validation-error {
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    color: #fca5a5;
+    font-size: 0.8rem;
+}

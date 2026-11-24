@@ -266,6 +266,7 @@ public class WorkspaceProvisioningService : IWorkspaceProvisioningService
             UseWslForContainers = isWindows,
             BuildTimeoutSeconds = model.BuildTimeoutSeconds,
             TestTimeoutSeconds = model.TestTimeoutSeconds,
+            GitHubSettings = model.GitHubSettings?.Clone() ?? new GitHubIntegrationSettings(),
             CreatedAt = DateTime.UtcNow
         };
 

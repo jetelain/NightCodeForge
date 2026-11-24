@@ -327,6 +327,7 @@ public class IdeationCoordinatorWebIntegrationTests
             services.AddScoped<IdeationSessionState>();
             services.AddScoped<IdeationRefinementService>();
             services.AddScoped<IWorkspaceProvisioningService, WorkspaceProvisioningService>();
+            services.AddScoped<IWorkspaceIntakeUiService, WorkspaceIntakeUiService>();
             services.AddScoped<ReviewCommentStateService>();
             services.AddScoped<ITaskReviewService, TaskReviewService>();
             services.AddSingleton<ITranscriptAnalysisService, TranscriptAnalysisService>();

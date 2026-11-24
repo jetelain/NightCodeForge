@@ -51,9 +51,13 @@ public class GitHubRepository
     public string Name { get; set; } = string.Empty;
     public string FullName { get; set; } = string.Empty;
     public string Owner { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
     public bool Private { get; set; }
     public string HtmlUrl { get; set; } = string.Empty;
+    public string CloneUrl { get; set; } = string.Empty;
+    public string SshUrl { get; set; } = string.Empty;
     public string DefaultBranch { get; set; } = "main";
+    public DateTimeOffset? UpdatedAt { get; set; }
     public GitHubRepositoryPermissions? Permissions { get; set; }
 }
 

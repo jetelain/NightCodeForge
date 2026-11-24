@@ -99,6 +99,7 @@ try
     builder.Services.AddScoped<IdeationSessionState>();
     builder.Services.AddScoped<IdeationRefinementService>();
     builder.Services.AddScoped<IWorkspaceProvisioningService, WorkspaceProvisioningService>();
+    builder.Services.AddScoped<IWorkspaceIntakeUiService, WorkspaceIntakeUiService>();
     builder.Services.AddScoped<ReviewCommentStateService>();
     builder.Services.AddScoped<ITaskReviewService, TaskReviewService>();
     builder.Services.AddSingleton<ITranscriptAnalysisService, TranscriptAnalysisService>();

@@ -67,6 +67,9 @@ public static class ServiceCollectionExtensions
 
         // 4. Git Infrastructure
         services.AddGitInfrastructure();
+        services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Domain.LocalDiscoveryOptions>(
+            NightCodeForge.Core.Domain.LocalDiscoveryOptions.SectionName);
+        services.TryAddSingleton<ILocalRepositoryDiscoveryService, Git.LocalRepositoryDiscoveryService>();
 
         // 5. Workflow Pipeline & Orchestration
         services.TryAddSingleton(TimeProvider.System);
@@ -127,7 +130,7 @@ public static class ServiceCollectionExtensions
         // 10. Streaming & Activity Streamer
         services.TryAddSingleton<NightCodeForge.Core.Streaming.IAgentActivityStreamer, NightCodeForge.Core.Streaming.InMemoryAgentActivityStreamer>();
 
-        // 11. GitHub Integration Services
+        // 11. GitHub Integration Services & VCS Hosting Registry
         services.TryAddSingleton<IGitHubTokenStore, GitHub.GitHubTokenStore>();
         services.TryAddSingleton<IApiKeySecretStore, Security.KeySharpApiKeySecretStore>();
         services.AddHttpClient<IGitHubDeviceAuthService, GitHub.GitHubDeviceAuthService>();
@@ -135,6 +138,8 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IGitHubPullRequestDeliveryService, GitHub.GitHubPullRequestDeliveryService>();
         services.TryAddScoped<IGitHubIssueSyncService, GitHub.GitHubIssueSyncService>();
         services.TryAddScoped<IGitHubTaskMirrorService, GitHub.GitHubTaskMirrorService>();
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IVcsHostingProvider, GitHub.GitHubVcsHostingProvider>());
+        services.TryAddScoped<IVcsHostingProviderRegistry, Git.VcsHostingProviderRegistry>();
 
         // 12. Companion API Key Store & Triage Handoff
         services.TryAddSingleton<IKeyProtector>(_ => KeyProtectorFactory.CreatePlatformDefault());

@@ -24,5 +24,6 @@ public interface IGitHubClientService
     // Repository Probe / Connection Test & Discovery
     Task<GitHubRepository> GetRepositoryAsync(string owner, string repo, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<GitHubRepository>> ListAccessibleRepositoriesAsync(CancellationToken cancellationToken = default);
+    Task<GitHubRepository> CreateRepositoryAsync(string name, string? description, bool isPrivate, CancellationToken cancellationToken = default);
 }
 

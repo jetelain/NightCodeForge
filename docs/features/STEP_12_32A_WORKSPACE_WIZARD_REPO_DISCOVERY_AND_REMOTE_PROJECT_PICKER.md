@@ -6,7 +6,7 @@
 > *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](../archive/phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -234,24 +234,24 @@ public interface IVcsHostingProviderRegistry
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Core Interfaces & Models (`NightCodeForge.Core`):**
-  - [ ] Add `DiscoveredRepository` record and `ILocalRepositoryDiscoveryService` in `NightCodeForge.Core.Interfaces`.
-  - [ ] Add `VcsHostingProviderType`, `VcsRepositorySummary`, `IVcsHostingProvider` (including `GetGitHttpAuthHeaderAsync`), and `IVcsHostingProviderRegistry` in `NightCodeForge.Core.Interfaces`.
-  - [ ] Extend `GitHubRepository` (`GitHubModels.cs`) with `Description`, `CloneUrl`, `SshUrl`, and `UpdatedAt`, and add `CreateRepositoryAsync` to `IGitHubClientService`.
-  - [ ] Add domain exceptions: `LocalRepositoryDiscoveryException`, `VcsHostingProviderException`.
-- [ ] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
-  - [ ] Implement `LocalRepositoryDiscoveryService` scanning Windows, Linux, and WSL standard locations with depth-2 limits, cache TTL, and error isolation.
-  - [ ] Extend `GitHubClientService` (`ParseRepository` fields and `CreateRepositoryAsync`) and implement `GitHubVcsHostingProvider` bridging `IGitHubClientService` / `IGitHubDeviceAuthService`.
-  - [ ] Implement `VcsHostingProviderRegistry` supporting dynamic discovery and primary provider resolution.
-  - [ ] Bind `LocalDiscoveryOptions` in DI configuration.
-- [ ] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
-  - [ ] Enhance `WizardStep1PathProbe.razor` with local repository autocomplete / dropdown selector.
-  - [ ] Add remote forge project browser tab with search filter and canonical URL-normalized local clone status badges.
-  - [ ] Add 1-click ephemeral-auth clone workflow (`CloneRemoteRepositoryAsync`) with editable target path and non-empty directory collision validation, respecting the 10-constructor-parameter limit on `WorkspaceProvisioningService`.
-  - [ ] Extend `WorkspaceCreationModel` with optional `GitHubSettings` (`GitHubIntegrationSettings`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to persist `Workspace.GitHubSettings`.
-  - [ ] Extract presentation, URL normalization, and list mapping from `.razor` components into dedicated helper services per [AGENTS.md](../../AGENTS.md).
-- [ ] **Automated Testing:**
-  - [ ] Unit tests for `LocalRepositoryDiscoveryService` testing Windows and Linux standard paths, `.git` folder/worktree file detection, `.git/HEAD` + `.git/config` parsing, depth-2 limits, and caching in `NightCodeForge.Infrastructure.Tests`.
-  - [ ] Unit tests for canonical Git URL normalization, `VcsHostingProviderRegistry`, and `GitHubVcsHostingProvider` / `GitHubClientService` mock responses.
-  - [ ] bUnit component tests in `NightCodeForge.Web.Tests` asserting dropdown rendering, path auto-fill, target collision validation, and remote repository selection.
+- [x] **Core Interfaces & Models (`NightCodeForge.Core`):**
+  - [x] Add `DiscoveredRepository` record and `ILocalRepositoryDiscoveryService` in `NightCodeForge.Core.Interfaces`.
+  - [x] Add `VcsHostingProviderType`, `VcsRepositorySummary`, `IVcsHostingProvider` (including `GetGitHttpAuthHeaderAsync`), and `IVcsHostingProviderRegistry` in `NightCodeForge.Core.Interfaces`.
+  - [x] Extend `GitHubRepository` (`GitHubModels.cs`) with `Description`, `CloneUrl`, `SshUrl`, and `UpdatedAt`, and add `CreateRepositoryAsync` to `IGitHubClientService`.
+  - [x] Add domain exceptions: `LocalRepositoryDiscoveryException`, `VcsHostingProviderException`.
+- [x] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
+  - [x] Implement `LocalRepositoryDiscoveryService` scanning Windows, Linux, and WSL standard locations with depth-2 limits, cache TTL, and error isolation.
+  - [x] Extend `GitHubClientService` (`ParseRepository` fields and `CreateRepositoryAsync`) and implement `GitHubVcsHostingProvider` bridging `IGitHubClientService` / `IGitHubDeviceAuthService`.
+  - [x] Implement `VcsHostingProviderRegistry` supporting dynamic discovery and primary provider resolution.
+  - [x] Bind `LocalDiscoveryOptions` in DI configuration.
+- [x] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
+  - [x] Enhance `WizardStep1PathProbe.razor` with local repository autocomplete / dropdown selector.
+  - [x] Add remote forge project browser tab with search filter and canonical URL-normalized local clone status badges.
+  - [x] Add 1-click ephemeral-auth clone workflow (`CloneRemoteRepositoryAsync`) with editable target path and non-empty directory collision validation, respecting the 10-constructor-parameter limit on `WorkspaceProvisioningService`.
+  - [x] Extend `WorkspaceCreationModel` with optional `GitHubSettings` (`GitHubIntegrationSettings`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to persist `Workspace.GitHubSettings`.
+  - [x] Extract presentation, URL normalization, and list mapping from `.razor` components into dedicated helper services per [AGENTS.md](../../AGENTS.md).
+- [x] **Automated Testing:**
+  - [x] Unit tests for `LocalRepositoryDiscoveryService` testing Windows and Linux standard paths, `.git` folder/worktree file detection, `.git/HEAD` + `.git/config` parsing, depth-2 limits, and caching in `NightCodeForge.Infrastructure.Tests`.
+  - [x] Unit tests for canonical Git URL normalization, `VcsHostingProviderRegistry`, and `GitHubVcsHostingProvider` / `GitHubClientService` mock responses.
+  - [x] bUnit component tests in `NightCodeForge.Web.Tests` asserting dropdown rendering, path auto-fill, target collision validation, and remote repository selection.
 

@@ -378,6 +378,34 @@ public class WorkspaceProvisioningServiceTests : IDisposable
 
     #region Test Fakes
 
+    [Fact]
+    public async Task ProvisionWorkspaceAsync_WithGitHubSettings_PersistsGitHubSettingsOnWorkspace()
+    {
+        var repoDir = Path.Combine(_tempDir, "remote-onboarded-app");
+        Directory.CreateDirectory(repoDir);
+
+        var model = new WorkspaceCreationModel
+        {
+            Name = "RemoteOnboardedApp",
+            RepositoryPath = repoDir,
+            DefaultBaseBranch = "main",
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            GitHubSettings = new GitHubIntegrationSettings
+            {
+                Enabled = true,
+                RepositoryOwner = "octocat",
+                RepositoryName = "remote-onboarded-app"
+            }
+        };
+
+        var workspace = await _service.ProvisionWorkspaceAsync(model);
+
+        Assert.True(workspace.GitHubSettings.Enabled);
+        Assert.Equal("octocat", workspace.GitHubSettings.RepositoryOwner);
+        Assert.Equal("remote-onboarded-app", workspace.GitHubSettings.RepositoryName);
+        Assert.NotSame(model.GitHubSettings, workspace.GitHubSettings);
+    }
+
     private class TestGitCliRunner : IGitCliRunner
     {
         public Func<string, IReadOnlyList<string>, GitCommandResult>? ExecuteHandler { get; set; }
