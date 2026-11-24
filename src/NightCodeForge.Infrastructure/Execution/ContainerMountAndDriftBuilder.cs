@@ -17,6 +17,10 @@ public class ContainerMountAndDriftBuilder
     private const string MountInspectFormat = "{{range .Mounts}}{{.Destination}}={{.Source}}={{.RW}};{{end}}";
     private const string ImageInspectFormat = "{{.Config.Image}}";
     private const string UserInspectFormat = "{{.Config.User}}";
+    private const string RunningInspectFormat = "{{.State.Running}}";
+    private const int InspectTimeoutSeconds = 5;
+    private const string NoSuchContainerMessage = "No such container";
+    private const string NoSuchObjectMessage = "No such object";
 
     /// <summary>
     /// Appends the '-ro' suffix to a container name when the security tier is <see cref="SandboxSecurityTier.RestrictedReadOnly"/>.
@@ -386,6 +390,54 @@ public class ContainerMountAndDriftBuilder
 
         return null;
     }
+
+    /// <summary>
+    /// Probes whether the configured container is currently running via <c>docker inspect -f {{.State.Running}}</c>.
+    /// Returns <see langword="true"/> if running, <see langword="false"/> if stopped or absent, or <see langword="null"/> when status cannot be determined.
+    /// </summary>
+    public static async Task<bool?> IsContainerRunningAsync(
+        IProcessRunner processRunner,
+        ContainerExecutorOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(processRunner);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.CustomProcessFactory != null)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(options.ContainerNameOrId))
+        {
+            return false;
+        }
+
+        var result = await processRunner.RunAsync(BuildDockerProcessSpec(
+            options,
+            ["inspect", "-f", RunningInspectFormat, options.ContainerNameOrId],
+            timeoutSeconds: InspectTimeoutSeconds), cancellationToken);
+
+        if (result.ExitCode == 0)
+        {
+            return result.StandardOutput.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (IsMissingContainerInspectMessage(result.StandardError))
+        {
+            return false;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when a Docker inspect diagnostic message indicates that the container does not exist yet.
+    /// </summary>
+    public static bool IsMissingContainerInspectMessage(string? message) =>
+        !string.IsNullOrWhiteSpace(message) &&
+        (message.Contains(NoSuchContainerMessage, StringComparison.OrdinalIgnoreCase) ||
+         message.Contains(NoSuchObjectMessage, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Compares the existing container's mounts, image, and user with the expected configuration synchronously.

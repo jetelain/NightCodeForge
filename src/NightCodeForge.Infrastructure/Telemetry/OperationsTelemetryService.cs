@@ -269,6 +269,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
             }
         }
 
+        OnShellCommandChanged?.Invoke(record);
+
         _ = Task.Run(async () =>
         {
             try
@@ -304,6 +306,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
                 }
             }
         }
+
+        OnShellCommandOutput?.Invoke(commandId, outputChunk, isError);
 
         _ = Task.Run(async () =>
         {
@@ -363,6 +367,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
                 }
             }
         }
+
+        OnShellCommandChanged?.Invoke(record);
 
         _ = Task.Run(async () =>
         {
@@ -429,6 +435,8 @@ public class OperationsTelemetryService : IOperationsTelemetryService
     private readonly Dictionary<int, ActiveTaskSummary> _activeTasks = new();
 
     public event Action<LlmCallRecord>? OnLlmCallChanged;
+    public event Action<ShellCommandRecord>? OnShellCommandChanged;
+    public event Action<string, string, bool>? OnShellCommandOutput;
     public event Action<ActiveTaskSummary?>? OnActiveTaskChanged;
     public event Action<IReadOnlyList<ActiveTaskSummary>>? OnActiveTasksChanged;
     public event Action<int, int>? OnPendingCountsChanged;

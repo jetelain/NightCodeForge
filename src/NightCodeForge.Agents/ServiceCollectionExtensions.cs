@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using NightCodeForge.Agents.Acp;
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Agents.Crucible;
+using NightCodeForge.Agents.Diagnostics;
 using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Mcp;
@@ -71,6 +72,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<SessionTranscriptService>();
         services.TryAddSingleton<ISessionTranscriptService>(sp => sp.GetRequiredService<SessionTranscriptService>());
         services.TryAddScoped<TranscriptDiagnosticService>();
+        services.TryAddScoped<IEnvironmentDiagnosticShellService, EnvironmentDiagnosticShellService>();
 
         // 4. Ideation & Triage Services
         services.TryAddSingleton<IIdeationConversationCoordinator, IdeationConversationCoordinator>();

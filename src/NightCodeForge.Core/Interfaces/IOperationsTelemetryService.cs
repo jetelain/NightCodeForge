@@ -50,6 +50,16 @@ public interface IOperationsTelemetryService
     void RecordShellCommandCompleted(ShellCommandRecord record);
 
     /// <summary>
+    /// Event fired whenever a shell command starts or completes.
+    /// </summary>
+    event Action<ShellCommandRecord>? OnShellCommandChanged;
+
+    /// <summary>
+    /// Event fired whenever a shell command emits a stdout or stderr output chunk (<c>commandId</c>, <c>outputChunk</c>, <c>isError</c>).
+    /// </summary>
+    event Action<string, string, bool>? OnShellCommandOutput;
+
+    /// <summary>
     /// Retrieves a chronological snapshot of the most recent LLM inference calls (newest first).
     /// </summary>
     IReadOnlyList<LlmCallRecord> GetRecentLlmCalls(int count = 25);
