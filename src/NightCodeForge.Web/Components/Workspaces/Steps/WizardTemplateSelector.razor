@@ -1,0 +1,336 @@
+@namespace NightCodeForge.Web.Components.Workspaces.Steps
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Services
+@using NightCodeForge.Web.Models
+@using NightCodeForge.Web.Services
+@inject IWorkspaceTemplateUiService TemplateUiService
+
+<div class="wizard-step-container">
+    <div class="step-intro">
+        <h4 class="step-title">⚡ Create Workspace from Template</h4>
+        <p class="step-subtitle">Choose a Clean Architecture recipe powered by native .NET 10 CLI commands, automated hygiene, and optional remote forge publishing.</p>
+    </div>
+
+    <!-- Template Gallery -->
+    <div class="form-group mb-4">
+        <label class="form-label">Select Architecture Template</label>
+        <div class="template-gallery-grid" role="radiogroup" aria-label="Workspace templates">
+            @foreach (var template in _templates)
+            {
+                var isSelected = string.Equals(TemplateModel.SelectedTemplateId, template.Id, StringComparison.OrdinalIgnoreCase);
+                var previewProjects = TemplateUiService.ResolvePreviewProjects(template, TemplateModel.ProjectName);
+                <button type="button"
+                        role="radio"
+                        aria-checked="@isSelected"
+                        data-template-id="@template.Id"
+                        class="template-card @(isSelected ? "selected" : "")"
+                        @onclick="() => SelectTemplateAsync(template.Id)">
+                    <div class="template-card-header">
+                        <span class="template-card-icon">@template.IconEmoji</span>
+                        <div class="template-card-title-wrap">
+                            <strong class="template-card-title">@template.Name</strong>
+                            <div class="template-card-badges">
+                                <span class="forge-badge badge-branch">@TemplateUiService.GetStackBadgeLabel(template.StackCategory)</span>
+                                <span class="forge-badge badge-public">@TemplateUiService.GetArchetypeLabel(template.Archetype)</span>
+                                <span class="forge-badge badge-teal">docs / src / tests</span>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="template-card-desc">@template.Description</p>
+                    <div class="template-card-projects font-mono">
+                        @string.Join(" · ", previewProjects)
+                    </div>
+                </button>
+            }
+        </div>
+    </div>
+
+    <!-- Project Name -->
+    <div class="form-group mb-4">
+        <label class="form-label" for="template-project-name-input">
+            Project Name <span class="text-danger">*</span>
+        </label>
+        <input id="template-project-name-input"
+               type="text"
+               class="form-control-dark font-mono"
+               placeholder="e.g. Acme.Billing or my-service"
+               value="@TemplateModel.ProjectName"
+               @oninput="HandleProjectNameInputAsync" />
+        <span class="form-hint">PascalCase, dotted identifier (<code>Acme.Billing</code>), or kebab-case. Used for the solution, projects, and initial folder name.</span>
+        @if (_hasEditedProjectName && _projectNameValidation is { IsValid: false })
+        {
+            <div id="template-project-name-error" class="clone-validation-error mt-2">
+                ⚠️ @_projectNameValidation.ErrorMessage
+            </div>
+        }
+    </div>
+
+    <!-- Destination Directory -->
+    <div class="form-group mb-4">
+        <label class="form-label" for="template-target-path-input">
+            Destination Directory <span class="text-danger">*</span>
+        </label>
+        <input id="template-target-path-input"
+               type="text"
+               class="form-control-dark font-mono"
+               placeholder="e.g. C:\Users\Dev\source\repos\MyProject"
+               value="@TemplateModel.TargetDirectoryPath"
+               @oninput="HandleTargetPathInputAsync" />
+        <span class="form-hint">Absolute directory path where the new solution, <code>docs/</code>, <code>src/</code>, and <code>tests/</code> folders will be created.</span>
+        @if (!string.IsNullOrWhiteSpace(TemplateModel.TargetDirectoryPath) && _targetPathValidation is { IsValid: false })
+        {
+            <div id="template-target-path-error" class="clone-validation-error mt-2">
+                ⚠️ @_targetPathValidation.ErrorMessage
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(ScaffoldedTargetDirectoryPath) &&
+                 _targetPathValidation is { IsValid: true, DirectoryExists: true, IsNonEmpty: true })
+        {
+            <div id="template-already-scaffolded-hint" class="form-hint mt-2">
+                ✓ Local template is already scaffolded in this directory; continuing will reuse it without re-running CLI commands.
+            </div>
+        }
+    </div>
+
+    <!-- Remote Forge Publishing Card (shown when a VCS provider is connected) -->
+    @if (_remoteAvailability is { IsAvailable: true })
+    {
+        <div id="template-remote-publish-card" class="remote-publish-card mb-4">
+            <label class="remote-publish-toggle-row" for="template-publish-toggle">
+                <input id="template-publish-toggle"
+                       type="checkbox"
+                       checked="@TemplateModel.PublishToRemoteForge"
+                       @onchange="HandlePublishToggleChangedAsync" />
+                <div>
+                    <strong class="feedback-title">
+                        🚀 Publish to @_remoteAvailability.ProviderDisplayName repository
+                        @if (!string.IsNullOrWhiteSpace(_remoteAvailability.AuthenticatedUsername))
+                        {
+                            <span class="forge-badge badge-teal ml-2">@@@_remoteAvailability.AuthenticatedUsername</span>
+                        }
+                    </strong>
+                    <span class="form-hint">Automatically creates the remote repository, registers <code>origin</code>, and pushes <code>main</code> with ephemeral credentials.</span>
+                </div>
+            </label>
+
+            @if (TemplateModel.PublishToRemoteForge)
+            {
+                <div class="remote-publish-fields mt-3">
+                    <div class="form-group">
+                        <label class="form-label" for="template-remote-repo-name-input">
+                            Repository Name <span class="text-danger">*</span>
+                        </label>
+                        <input id="template-remote-repo-name-input"
+                               type="text"
+                               class="form-control-dark font-mono"
+                               placeholder="Repository name on @_remoteAvailability.ProviderDisplayName"
+                               value="@TemplateModel.RemoteRepositoryName"
+                               @oninput="HandleRemoteRepoNameInputAsync" />
+                        @if (_remoteRepoNameValidation is { IsValid: false })
+                        {
+                            <div id="template-remote-repo-name-error" class="clone-validation-error mt-2">
+                                ⚠️ @_remoteRepoNameValidation.ErrorMessage
+                            </div>
+                        }
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Visibility</label>
+                        <div class="visibility-toggle-group" role="group" aria-label="Repository visibility">
+                            <button id="template-visibility-private"
+                                    type="button"
+                                    class="visibility-toggle-btn @(TemplateModel.RemoteIsPrivate ? "active" : "")"
+                                    @onclick="() => SetVisibilityAsync(true)">
+                                🔒 Private
+                            </button>
+                            <button id="template-visibility-public"
+                                    type="button"
+                                    class="visibility-toggle-btn @(!TemplateModel.RemoteIsPrivate ? "active" : "")"
+                                    @onclick="() => SetVisibilityAsync(false)">
+                                🌐 Public
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" for="template-remote-description-input">
+                            Description (Optional)
+                        </label>
+                        <input id="template-remote-description-input"
+                               type="text"
+                               class="form-control-dark"
+                               placeholder="Short summary for the remote repository"
+                               value="@TemplateModel.RemoteDescription"
+                               @oninput="HandleRemoteDescriptionInputAsync" />
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public WorkspaceCreationModel Model { get; set; } = default!;
+
+    [Parameter]
+    public WorkspaceTemplateSelectionModel TemplateModel { get; set; } = default!;
+
+    [Parameter]
+    public string? ScaffoldedTargetDirectoryPath { get; set; }
+
+    [Parameter]
+    public EventCallback OnSelectionChanged { get; set; }
+
+    private IReadOnlyList<WorkspaceTemplateDefinition> _templates = Array.Empty<WorkspaceTemplateDefinition>();
+    private RemotePublishAvailability? _remoteAvailability;
+    private ProjectNameValidationResult? _projectNameValidation;
+    private ProjectNameValidationResult? _remoteRepoNameValidation;
+    private TargetPathValidationResult? _targetPathValidation;
+    private bool _hasEditedProjectName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _templates = TemplateUiService.GetTemplates();
+        if (string.IsNullOrWhiteSpace(TemplateModel.SelectedTemplateId) && _templates.Count > 0)
+        {
+            TemplateModel.SelectedTemplateId = _templates[0].Id;
+            if (string.IsNullOrWhiteSpace(Model.Emoji) ||
+                string.Equals(Model.Emoji, WorkspacePresentationHelper.DefaultEmoji, StringComparison.Ordinal))
+            {
+                Model.Emoji = _templates[0].IconEmoji;
+            }
+        }
+
+        SyncValidationState();
+
+        _remoteAvailability = await TemplateUiService.GetRemotePublishAvailabilityAsync();
+        if (_remoteAvailability.IsAvailable && !TemplateModel.RemoteProviderType.HasValue)
+        {
+            TemplateModel.RemoteProviderType = _remoteAvailability.ProviderType;
+        }
+
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        SyncValidationState();
+    }
+
+    private async Task SelectTemplateAsync(string templateId)
+    {
+        TemplateModel.SelectedTemplateId = templateId;
+        var selected = TemplateUiService.GetTemplate(templateId);
+        if (selected is not null)
+        {
+            Model.Emoji = selected.IconEmoji;
+        }
+
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private async Task HandleProjectNameInputAsync(ChangeEventArgs e)
+    {
+        _hasEditedProjectName = true;
+        var value = e.Value?.ToString() ?? string.Empty;
+        TemplateModel.ProjectName = value;
+        Model.Name = value.Trim();
+
+        if (!TemplateModel.IsTargetDirectoryManuallyEdited)
+        {
+            var resolvedPath = TemplateUiService.ResolveDefaultTargetDirectoryPath(value);
+            if (!string.IsNullOrWhiteSpace(resolvedPath))
+            {
+                TemplateModel.TargetDirectoryPath = resolvedPath;
+            }
+            else if (string.IsNullOrWhiteSpace(value))
+            {
+                TemplateModel.TargetDirectoryPath = string.Empty;
+            }
+        }
+
+        if (!TemplateModel.IsRemoteRepositoryNameManuallyEdited)
+        {
+            TemplateModel.RemoteRepositoryName = value.Trim();
+        }
+
+        Model.RepositoryPath = TemplateModel.TargetDirectoryPath;
+        SyncValidationState();
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private async Task HandleTargetPathInputAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? string.Empty;
+        TemplateModel.TargetDirectoryPath = value;
+        TemplateModel.IsTargetDirectoryManuallyEdited = !string.IsNullOrWhiteSpace(value);
+        Model.RepositoryPath = value;
+        SyncValidationState();
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private async Task HandlePublishToggleChangedAsync(ChangeEventArgs e)
+    {
+        var enabled = e.Value is bool b ? b : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+        TemplateModel.PublishToRemoteForge = enabled;
+        if (enabled)
+        {
+            if (_remoteAvailability is { IsAvailable: true })
+            {
+                TemplateModel.RemoteProviderType ??= _remoteAvailability.ProviderType;
+            }
+
+            if (string.IsNullOrWhiteSpace(TemplateModel.RemoteRepositoryName) && !string.IsNullOrWhiteSpace(TemplateModel.ProjectName))
+            {
+                TemplateModel.RemoteRepositoryName = TemplateModel.ProjectName.Trim();
+            }
+        }
+
+        SyncValidationState();
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private async Task HandleRemoteRepoNameInputAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString() ?? string.Empty;
+        TemplateModel.RemoteRepositoryName = value;
+        TemplateModel.IsRemoteRepositoryNameManuallyEdited = !string.IsNullOrWhiteSpace(value);
+        SyncValidationState();
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private async Task SetVisibilityAsync(bool isPrivate)
+    {
+        TemplateModel.RemoteIsPrivate = isPrivate;
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private async Task HandleRemoteDescriptionInputAsync(ChangeEventArgs e)
+    {
+        TemplateModel.RemoteDescription = e.Value?.ToString() ?? string.Empty;
+        await OnSelectionChanged.InvokeAsync();
+    }
+
+    private void SyncValidationState()
+    {
+        _projectNameValidation = TemplateUiService.ValidateProjectName(TemplateModel.ProjectName);
+        _targetPathValidation = string.IsNullOrWhiteSpace(TemplateModel.TargetDirectoryPath)
+            ? null
+            : TemplateUiService.ValidateTargetDirectoryPath(TemplateModel.TargetDirectoryPath, ScaffoldedTargetDirectoryPath);
+
+        if (TemplateModel.PublishToRemoteForge)
+        {
+            var effectiveRepoName = string.IsNullOrWhiteSpace(TemplateModel.RemoteRepositoryName)
+                ? TemplateModel.ProjectName
+                : TemplateModel.RemoteRepositoryName;
+            _remoteRepoNameValidation = string.IsNullOrWhiteSpace(effectiveRepoName)
+                ? null
+                : TemplateUiService.ValidateRemoteRepositoryName(effectiveRepoName);
+        }
+        else
+        {
+            _remoteRepoNameValidation = null;
+        }
+    }
+}

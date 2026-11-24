@@ -502,7 +502,7 @@ public class IdeationAndAcpMultimodalTests : IDisposable
         }))
         {
             var textOptions = new IdeationSessionOptions(ModelOverride: "qwen2.5-coder:32b");
-            Assert.True(await coordinator.StartTurnAsync(new IdeationSendRequest(ws.Id, handle.Conversation.Id, "Summarize findings", textOptions)));
+            Assert.True(await StartTurnWhenIdleAsync(coordinator, new IdeationSendRequest(ws.Id, handle.Conversation.Id, "Summarize findings", textOptions)));
             Assert.Equal(IdeationStreamUpdateKind.Completed, (await tcs2.Task.WaitAsync(TimeSpan.FromSeconds(10))).Kind);
         }
 
@@ -511,11 +511,26 @@ public class IdeationAndAcpMultimodalTests : IDisposable
 
         // Turn 3: sending a new image on text-only ModelOverride must fail fast with ModelVisionNotSupportedException
         await Assert.ThrowsAsync<ModelVisionNotSupportedException>(() =>
-            coordinator.StartTurnAsync(new IdeationSendRequest(
+            StartTurnWhenIdleAsync(coordinator, new IdeationSendRequest(
                 ws.Id,
                 handle.Conversation.Id,
                 "Check @attachment:81",
                 new IdeationSessionOptions(ModelOverride: "qwen2.5-coder:32b"))));
+
+        static async Task<bool> StartTurnWhenIdleAsync(IIdeationConversationCoordinator coord, IdeationSendRequest req)
+        {
+            for (int attempt = 0; attempt < 250; attempt++)
+            {
+                if (await coord.StartTurnAsync(req))
+                {
+                    return true;
+                }
+
+                await Task.Delay(20);
+            }
+
+            return false;
+        }
     }
 
     [Fact]

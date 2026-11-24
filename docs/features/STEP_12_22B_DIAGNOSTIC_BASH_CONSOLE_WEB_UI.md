@@ -3,7 +3,7 @@
 > **Feature Implementation Step (Part 2 of 2 — `/diagnostics/shell` Blazor Page, Presets & Live Streaming Terminal)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Step:* [Step 12.22A: Container Diagnostic Shell Service & `SIGINT` Recovery](STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)  
-> *Related Steps:* [Step 11.18: Live Operations Telemetry](../archive/phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_AND_ROUTER.md)  
+> *Related Steps:* [Step 11.18: Live Operations Telemetry](../archive/phase-11/STEP_11_18_LIVE_OPERATIONS_TELEMETRY_LLM_SHELL_OLLAMAROUTER.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
@@ -14,10 +14,10 @@
 ## 1. Executive Objective
 
 Building on `IEnvironmentDiagnosticShellService` ([Step 12.22A](STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)), this step (Part 2 of Step 12.22) delivers the interactive `/diagnostics/shell` Blazor page (`EnvironmentDiagnosticShell.razor`):
-1. **Target Context Selector:** Switch between Workspace Canonical scope (`TaskId = null`) and Task Worktree scope (`TaskId = N`), `Standard` vs. `RestrictedReadOnly` security tier, and `Agent 'bash' Tool` vs. `Raw IExecutionEnvironment` pipeline.
+1. **Target Context Selector:** Switch between Workspace Canonical scope (`TaskId = null`), Task Worktree scope (`TaskId = N`), and `System Nightwatch` (`ncf-nightwatch-ro`, `ScopeKindOverride = SandboxScopeKind.SystemNightwatch`, `WorkspaceId = null`), plus `Standard` vs. `RestrictedReadOnly` security tier and `Agent 'bash' Tool` vs. `Raw IExecutionEnvironment` pipeline.
 2. **Environment & Volume Mounts Inspector Card:** Display live badges (`ExecutionTier`, `ContainerName`, `ContainerImage`, `Running/Stopped`, `UID:GID`, `WSL2 Distro`), container drift warnings, expandable `ConfiguredMounts` table (`HostPath -> ContainerPath`, `RO`/`RW`), synthesized `PATH`, and **🔄 Refresh Inspection**, **🩺 Run Environment Doctor**, and **♻️ Recreate Container** actions.
 3. **One-Click Diagnostic Presets & Doctor Report Card:** Provide 1-click preset buttons (`Identity & Directories`, `Environment & PATH`, `SDKs & Companion Tools`, `Mount & Write Probe`, `Git & Worktree Status`, `.NET & ICU Probe`) and render `EnvironmentDoctorCheckItem` cards.
-4. **Interactive Terminal & Live Streaming Output:** Monospace command input with command history (`Up`/`Down`), **▶ Execute** and **⏹ Stop / SIGINT** buttons, real-time line-by-line output streaming via `IOperationsTelemetryService`, and chronological session transcript log with exit code and duration badges.
+4. **Interactive Terminal & Live Streaming Output:** Monospace command input with command history (`Up`/`Down`), **▶ Execute** and **⏹ Stop / SIGINT** buttons, real-time line-by-line output streaming via `IOperationsTelemetryService` (filtered to the active diagnostic console execution to avoid cross-talk from background agent commands), and chronological session transcript log with exit code and duration badges.
 
 ---
 
@@ -27,7 +27,7 @@ Routes:
 - `@page "/diagnostics/shell"`
 - `@page "/w/{WorkspaceId:int}/diagnostics/shell"`
 
-Linked in [`NavMenu.razor`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor) under `System` as **🐚 Container Shell** via `href="@WorkspaceState.GetNavHref("diagnostics/shell")"`. When navigated via `/w/{WorkspaceId:int}/diagnostics/shell`, the page activates the route's `WorkspaceId` in `WorkspaceStateService` and syncs the Target Context Selector accordingly.
+Linked in [`NavMenu.razor`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor) under `System` as **🐚 Container Shell** via `href="@WorkspaceState.GetNavHref("diagnostics/shell")"`. When navigated via `/w/{WorkspaceId:int}/diagnostics/shell`, the page activates the route's `WorkspaceId` in `WorkspaceStateService` and syncs the Target Context Selector accordingly (while still allowing switching to `System Nightwatch` with `WorkspaceId = null`).
 
 ### 2.1 One-Click Preset Commands
 
@@ -40,15 +40,22 @@ Linked in [`NavMenu.razor`](../../src/NightCodeForge.Web/Components/Layout/NavMe
 | **Git & Worktree Status** | `git status && git rev-parse --git-dir --git-common-dir && git branch -a && git worktree list` | Diagnoses Git repository validity, relative worktree pointers, and `safe.directory`. |
 | **.NET & ICU Probe** | `dotnet --info` | Verifies mounted host `.NET` SDKs, runtime packs, and `libicu` globalization readiness. |
 
+> [!NOTE]
+> Compound shell presets (such as `for`, `df`, `env`, and `2>/dev/null` redirections) are designed for `RawExecutionEnvironment` or `Standard` tier diagnostics; executing them under `AgentBashTool` + `RestrictedReadOnly` is expected to trigger `ReadOnlyCommandValidator` guardrails (useful for verifying read-only policy enforcement).
+
 ### 2.2 Presentation Separation & Live Streaming Guarantee
-In accordance with [AGENTS.md](../../AGENTS.md), `EnvironmentDiagnosticShell.razor` remains focused on layout and user interaction, delegating environment inspection, command execution, doctor checks, and container recreation to `IEnvironmentDiagnosticShellService` and subscribing to `IOperationsTelemetryService` (`OnShellCommandChanged` / `OnShellCommandOutput`) for real-time line-by-line output streaming.
+In accordance with [AGENTS.md](../../AGENTS.md), `EnvironmentDiagnosticShell.razor` remains focused on layout and user interaction:
+- Extract preset definitions, command history navigation (`Up`/`Down`), and inspection/doctor formatting into a dedicated helper/service class in `src/NightCodeForge.Web/Services/` so they are unit-testable without Blazor rendering context.
+- Delegate environment inspection, command execution, doctor checks, and container recreation to `IEnvironmentDiagnosticShellService`.
+- Subscribe to `IOperationsTelemetryService` (`OnShellCommandChanged` / `OnShellCommandOutput`) for real-time line-by-line output streaming, correlating and filtering telemetry events to the active diagnostic console execution so concurrent background agent shell commands do not cross-talk into the console transcript.
 
 ---
 
 ## 3. Definition of Done (DoD) Checklist
 
 - [ ] Create `src/NightCodeForge.Web/Components/Pages/EnvironmentDiagnosticShell.razor` (`@page "/diagnostics/shell"` and `@page "/w/{WorkspaceId:int}/diagnostics/shell"`) and add `🐚 Container Shell` (`WorkspaceState.GetNavHref("diagnostics/shell")`) to `NavMenu.razor`.
-- [ ] Implement target scope selector, Environment & Mounts Inspector card, 1-click preset buttons, and Environment Doctor report view.
-- [ ] Implement interactive bash console with live output streaming via `IOperationsTelemetryService` shell events, command history, exit code badges, and **⏹ Stop / SIGINT** cancellation.
-- [ ] Add bUnit component tests in `NightCodeForge.Web.Tests` verifying workspace-scoped routing, preset execution, inspection rendering, doctor results display, live streaming output, command execution, and cancellation UI states.
+- [ ] Extract diagnostic presets, command history management, and inspection/doctor view formatting into a dedicated helper/service in `src/NightCodeForge.Web/Services/` per [AGENTS.md](../../AGENTS.md).
+- [ ] Implement target scope selector (Workspace Canonical, Task Worktree, and System Nightwatch), Environment & Mounts Inspector card, 1-click preset buttons, and Environment Doctor report view.
+- [ ] Implement interactive bash console with live output streaming via `IOperationsTelemetryService` shell events (filtered to the active diagnostic console execution), command history, exit code badges, and **⏹ Stop / SIGINT** cancellation.
+- [ ] Add bUnit component tests in `NightCodeForge.Web.Tests` (and unit tests for the extracted helper/service) verifying workspace-scoped routing, `SystemNightwatch` scope selection, preset execution, inspection rendering, doctor results display, live streaming output filtering, command execution, and cancellation UI states.
 

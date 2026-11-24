@@ -380,6 +380,38 @@ public partial class GitHubClientService : IGitHubClientService
             cancellationToken);
     }
 
+    public async Task<GitHubRepository> CreateRepositoryAsync(
+        string name,
+        string? description,
+        bool isPrivate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var url = $"{GitHubApiBaseUrl}/user/repos";
+        var payload = new Dictionary<string, object?>
+        {
+            ["name"] = name.Trim(),
+            ["private"] = isPrivate
+        };
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            payload["description"] = description.Trim();
+        }
+
+        var jsonBody = JsonSerializer.Serialize(payload);
+        using var response = await SendWithAuthAsync(
+            () => new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(jsonBody, Encoding.UTF8, "application/json")
+            },
+            cancellationToken);
+
+        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(content);
+        return ParseRepository(doc.RootElement);
+    }
+
     private async Task<IReadOnlyList<T>> GetPaginatedListAsync<T>(
         string initialUrl,
         Func<JsonElement, T?> mapItem,
@@ -544,9 +576,13 @@ public partial class GitHubClientService : IGitHubClientService
                     ownerEl.TryGetProperty("login", out var ownerLoginEl)
                 ? ownerLoginEl.GetString() ?? string.Empty
                 : string.Empty,
+            Description = GetOptionalString(root, "description") ?? string.Empty,
             Private = root.TryGetProperty("private", out var privEl) && privEl.ValueKind == JsonValueKind.True,
-            HtmlUrl = root.TryGetProperty("html_url", out var htmlEl) ? htmlEl.GetString() ?? string.Empty : string.Empty,
-            DefaultBranch = root.TryGetProperty("default_branch", out var branchEl) ? branchEl.GetString() ?? "main" : "main"
+            HtmlUrl = GetOptionalString(root, "html_url") ?? string.Empty,
+            CloneUrl = GetOptionalString(root, "clone_url") ?? string.Empty,
+            SshUrl = GetOptionalString(root, "ssh_url") ?? string.Empty,
+            DefaultBranch = GetOptionalString(root, "default_branch") ?? "main",
+            UpdatedAt = GetOptionalDateTimeOffset(root, "updated_at")
         };
 
         if (root.TryGetProperty("permissions", out var permEl) && permEl.ValueKind == JsonValueKind.Object)

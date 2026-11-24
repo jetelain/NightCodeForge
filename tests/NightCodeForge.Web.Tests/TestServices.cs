@@ -137,6 +137,15 @@ public static class TestServices
             return memoryService.Object;
         });
         services.TryAddSingleton(_ => WorkerStateTestHelper.Create(new Mock<IOperationsTelemetryService>().Object));
+        services.TryAddSingleton<IWorkspaceTemplateService>(new Mock<IWorkspaceTemplateService>().Object);
+        services.TryAddSingleton<IWorkspaceTemplateUiService>(_ =>
+        {
+            var mock = new Mock<IWorkspaceTemplateUiService>();
+            mock.Setup(s => s.GetTemplates()).Returns(Array.Empty<WorkspaceTemplateDefinition>());
+            mock.Setup(s => s.GetRemotePublishAvailabilityAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RemotePublishAvailability(false, null, null, null));
+            return mock.Object;
+        });
         services.TryAddSingleton<ITaskReviewService>(sp => new TaskReviewService(
             sp.GetRequiredService<ITaskRepository>(),
             sp.GetRequiredService<IWorkspaceRepository>(),

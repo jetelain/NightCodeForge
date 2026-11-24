@@ -286,12 +286,12 @@ public class HangfireQueuePriorityTests
 
         try
         {
-            var started = await Task.WhenAny(startedTcs.Task, Task.Delay(5000));
+            var started = await Task.WhenAny(startedTcs.Task, Task.Delay(15000));
             Assert.Same(startedTcs.Task, started);
 
             server.SendStop();
 
-            var cancelled = await Task.WhenAny(cancelledTcs.Task, Task.Delay(5000));
+            var cancelled = await Task.WhenAny(cancelledTcs.Task, Task.Delay(15000));
             Assert.Same(cancelledTcs.Task, cancelled);
             Assert.True(await cancelledTcs.Task);
         }

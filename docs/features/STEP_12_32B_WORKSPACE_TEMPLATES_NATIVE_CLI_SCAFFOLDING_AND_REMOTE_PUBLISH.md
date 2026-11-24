@@ -6,7 +6,7 @@
 > *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -104,12 +104,12 @@ public record WorkspaceTemplateDefinition(
 
 ### 2.2 Built-in Clean Architecture Templates (.NET 10)
 
-All built-in .NET templates assume standard .NET 10 SDK presence on the host / WSL environment. To ensure deterministic solution file extension across .NET 10 SDK versions (which may default to `.slnx`), `dotnet new sln` explicitly passes `--format sln`, and individual project creation steps pass `--no-restore` followed by a single restore/build pass:
+All built-in .NET templates assume standard .NET 10 SDK presence on the host / WSL environment. To ensure deterministic solution file extension across .NET 10 SDK versions (which may default to `.slnx`), `dotnet new sln` explicitly passes `--format sln`. Individual project creation steps pass `--no-restore` so interactive UI scaffolding completes quickly and offline without blocking on NuGet restore; automated integration tests run `dotnet build` afterward to verify the generated solution restores and compiles cleanly:
 
 #### 1. Web Application (`dotnet-clean-webapp`)
 - **Commands:**
   1. `dotnet new sln -n {ProjectName} --format sln`
-  2. `dotnet new blazor -n {ProjectName}.Web -o src/{ProjectName}.Web --interactivity Server --empty false --no-restore`
+  2. `dotnet new blazor -n {ProjectName}.Web -o src/{ProjectName}.Web --interactivity Server --no-restore`
   3. `dotnet new classlib -n {ProjectName}.Core -o src/{ProjectName}.Core --no-restore`
   4. `dotnet new classlib -n {ProjectName}.Infrastructure -o src/{ProjectName}.Infrastructure --no-restore`
   5. `dotnet add src/{ProjectName}.Web/{ProjectName}.Web.csproj reference src/{ProjectName}.Core/{ProjectName}.Core.csproj src/{ProjectName}.Infrastructure/{ProjectName}.Infrastructure.csproj`
@@ -123,7 +123,7 @@ All built-in .NET templates assume standard .NET 10 SDK presence on the host / W
 #### 2. Web API (`dotnet-clean-webapi`)
 - **Commands:**
   1. `dotnet new sln -n {ProjectName} --format sln`
-  2. `dotnet new webapi -n {ProjectName}.Api -o src/{ProjectName}.Api --controllers false --no-restore`
+  2. `dotnet new webapi -n {ProjectName}.Api -o src/{ProjectName}.Api --no-restore`
   3. `dotnet new classlib -n {ProjectName}.Core -o src/{ProjectName}.Core --no-restore`
   4. `dotnet new classlib -n {ProjectName}.Infrastructure -o src/{ProjectName}.Infrastructure --no-restore`
   5. `dotnet add src/{ProjectName}.Api/{ProjectName}.Api.csproj reference src/{ProjectName}.Core/{ProjectName}.Core.csproj src/{ProjectName}.Infrastructure/{ProjectName}.Infrastructure.csproj`
@@ -209,10 +209,10 @@ When `PublishToRemoteForge == true`:
 1. Resolves `IVcsHostingProvider` from `IVcsHostingProviderRegistry` for the selected `RemoteProviderType` (e.g. GitHub).
 2. Verifies authentication; if unauthenticated, fails fast with `VcsHostingProviderException`.
 3. Calls `IVcsHostingProvider.CreateRepositoryAsync(request.ProjectName, request.RemoteDescription, request.RemoteIsPrivate)`.
-4. Executes native Git remote linkage via `IGitCliRunner` / `CliWrap`:
+4. Obtains the ephemeral HTTP auth header via `IVcsHostingProvider.GetGitHttpAuthHeaderAsync` ([Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md), keeping publishing provider-agnostic without coupling directly to `IGitHubDeviceAuthService`) and executes native Git remote linkage via `IGitCliRunner` / `CliWrap`:
    - `git remote add origin <HttpsCloneUrl>`
-   - `git -c http.extraHeader="Authorization: Basic <base64(x-access-token:token)>" push -u origin main` (using the ephemeral HTTP header authentication pattern from [Step 12.11B](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) with `GIT_TERMINAL_PROMPT=0` so short-lived `ghu_...` tokens are **never** written into `.git/config`).
-5. Populates `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`) to be persisted on the newly provisioned [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite.
+   - `git -c http.extraHeader="<authHeader>" push -u origin main` (with `GIT_TERMINAL_PROMPT=0` per [Step 12.11B](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) so short-lived `ghu_...` tokens are **never** written into `.git/config`).
+5. Populates `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`) onto [`WorkspaceCreationModel`](../../src/NightCodeForge.Web/Models/WorkspaceCreationModel.cs) (introduced in [Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md)) so Phase B persists it on the newly provisioned [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite.
 
 ---
 
@@ -230,7 +230,7 @@ At the entry of the wizard, developers see an intuitive intake selector:
    - Grid displaying the 4 Clean Architecture templates with emoji icons (`🌐 Web App`, `🔌 Web API`, `💻 CLI Tool`, `📦 Class Library`).
    - Cards display stack badges (`.NET 10`), architecture tags (`Clean Architecture`, `docs / src / tests`), and expected generated projects.
 2. **Project Parameters:**
-   - **Project Name (`PascalCase` or `kebab-case`):** Validated in real-time (C# identifier / solution name safety, filesystem safety).
+   - **Project Name (`PascalCase`, dotted identifier like `Acme.Billing`, or `kebab-case`):** Real-time validation enforces filesystem- and solution-safe names matching `^[A-Za-z][A-Za-z0-9._-]*$` (rejecting path separators, spaces, reserved OS names, and leading digits/punctuation; `dotnet new` handles C# root namespace sanitization when hyphens are used).
    - **Destination Folder:** Defaults to `{DefaultReposRoot}\{ProjectName}` (e.g. `C:\Users\Julien\source\repos\my-new-app`), editable with probe warning if the folder already exists and is non-empty.
 3. **Remote Forge Publishing Card:**
    - Appears if a VCS provider (e.g. GitHub) is connected.
@@ -242,7 +242,7 @@ At the entry of the wizard, developers see an intuitive intake selector:
 - Stepper dynamically skips Step 2 (Stack & Branch) since stack is predetermined by the template and base branch is initialized as `main`.
 - Transitions directly to Step 3 (Execution Environment: WSL2 / Container / BareHost) and Step 4 (Provisioning), showing live progress in two coordinated phases:
   1. **Phase A — Template Scaffolding & Remote Publish (`IWorkspaceTemplateService.ScaffoldWorkspaceAsync`):** Creates the target directory, runs native `dotnet new` / `dotnet sln` commands, writes hygiene files (`.gitignore`, `.editorconfig`, `.gitattributes`, `docs/`), initializes Git (`git init -b main` + baseline commit), and (if enabled) creates the remote forge repository and pushes `main`.
-  2. **Phase B — Workspace Onboarding (`IWorkspaceProvisioningService.ProvisionWorkspaceAsync`):** Persists the [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite (including `GitHubIntegrationSettings` when published), clones the isolated Ext4 mirror from the newly committed `main` branch, starts the `docs/tasks/` markdown sync watcher, and configures agent profiles.
+  2. **Phase B — Workspace Onboarding (`IWorkspaceProvisioningService.ProvisionWorkspaceAsync`):** Persists the [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite (mapping `WorkspaceCreationModel.GitHubSettings` from Step 12.32A when published), clones the isolated Ext4 mirror from the newly committed `main` branch, starts the `docs/tasks/` markdown sync watcher, and configures agent profiles.
 - **Partial Failure & Retry Recovery:** If Phase A succeeds locally (`dotnet new` + `git commit`) but remote publishing fails (e.g., a GitHub repository with the same name already exists or network drops), the UI surfaces the specific `VcsHostingProviderException` message and allows retrying remote publish/provisioning or proceeding with local-only onboarding without re-running `dotnet new` over a non-empty directory.
 - **Constructor Limit Compliance ([AGENTS.md](../../AGENTS.md)):** Keep `IWorkspaceTemplateService` as a separate service orchestrated by the wizard (or a dedicated coordinator) rather than adding more dependencies to [`WorkspaceProvisioningService`](../../src/NightCodeForge.Web/Services/WorkspaceProvisioningService.cs) (which already has 9 constructor parameters).
 
@@ -250,22 +250,22 @@ At the entry of the wizard, developers see an intuitive intake selector:
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Core Models & Interfaces (`NightCodeForge.Core`):**
-  - [ ] Add `TemplateStackCategory`, `TemplateArchitectureArchetype`, `WorkspaceTemplateCommand`, `WorkspaceTemplateDefinition` in `NightCodeForge.Core.Domain`.
-  - [ ] Add `TemplateScaffoldingRequest`, `TemplateScaffoldingProgress`, and `IWorkspaceTemplateService` in `NightCodeForge.Core.Interfaces`.
-  - [ ] Add domain exceptions: `WorkspaceTemplateExecutionException`.
-- [ ] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
-  - [ ] Implement `WorkspaceTemplateService` registering the 4 built-in Clean Architecture templates.
-  - [ ] Implement CLI command execution pipeline via `CliWrap` with stdout/stderr logging and progress reporting.
-  - [ ] Implement `WorkspaceHygieneWriter` generating canonical `docs/`, `src/`, `tests/`, `.gitignore`, `.editorconfig`, and `README.md`.
-  - [ ] Implement automated `git init -b main` and initial commit execution.
-  - [ ] Integrate remote forge creation and `git push -u origin main` via `IVcsHostingProvider`.
-- [ ] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
-  - [ ] Add mode switcher in `WorkspaceCreationWizardModal.razor` ("Onboard Existing" vs "Create New from Template").
-  - [ ] Build `WizardTemplateSelector.razor` gallery with template cards, project name validation, and remote publish options.
-  - [ ] Connect template progress streaming to `WizardStep4Provisioning.razor`.
-- [ ] **Automated Testing:**
-  - [ ] Unit tests for `WorkspaceTemplateService` verifying template definitions and command parameter substitution in `NightCodeForge.Infrastructure.Tests`.
-  - [ ] Integration test executing CLI scaffolding in an isolated temp folder, asserting `docs/`, `src/`, `tests/`, `.git`, and solution build.
-  - [ ] bUnit tests for `WizardTemplateSelector.razor` verifying template selection, project name validation, and publish toggle.
+- [x] **Core Models & Interfaces (`NightCodeForge.Core`):**
+  - [x] Add `TemplateStackCategory`, `TemplateArchitectureArchetype`, `WorkspaceTemplateCommand`, `WorkspaceTemplateDefinition` in `NightCodeForge.Core.Domain`.
+  - [x] Add `TemplateScaffoldingRequest`, `TemplateScaffoldingProgress`, and `IWorkspaceTemplateService` in `NightCodeForge.Core.Interfaces`.
+  - [x] Add domain exceptions: `WorkspaceTemplateExecutionException`.
+- [x] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
+  - [x] Implement `WorkspaceTemplateService` registering the 4 built-in Clean Architecture templates.
+  - [x] Implement CLI command execution pipeline (`IProcessRunner`) with stdout/stderr logging and progress reporting.
+  - [x] Implement `WorkspaceHygieneWriter` generating canonical `docs/`, `src/`, `tests/`, `.gitignore`, `.editorconfig`, `.gitattributes`, and `README.md`.
+  - [x] Implement automated `git init -b main` and initial commit execution.
+  - [x] Integrate remote forge creation and `git push -u origin main` via `IVcsHostingProvider`.
+- [x] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
+  - [x] Add mode switcher in `WorkspaceCreationWizardModal.razor` ("Onboard Existing" vs "Create New from Template").
+  - [x] Build `WizardTemplateSelector.razor` gallery with template cards, project name validation, and remote publish options.
+  - [x] Connect template progress streaming to `WizardStep4Provisioning.razor`.
+- [x] **Automated Testing:**
+  - [x] Unit tests for `WorkspaceTemplateService` verifying template definitions and command parameter substitution in `NightCodeForge.Infrastructure.Tests`.
+  - [x] Integration test executing CLI scaffolding in an isolated temp folder, asserting `docs/`, `src/`, `tests/`, `.git`, and solution build.
+  - [x] bUnit tests for `WizardTemplateSelector.razor` verifying template selection, project name validation, and publish toggle.
 

@@ -56,4 +56,9 @@ public class WorkspaceCreationModel
     /// Defaults to true on Windows.
     /// </summary>
     public bool ConfigureCrossPlatformHygiene { get; set; } = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+
+    /// <summary>
+    /// Optional GitHub integration metadata populated when onboarding from a remote forge repository.
+    /// </summary>
+    public GitHubIntegrationSettings? GitHubSettings { get; set; }
 }

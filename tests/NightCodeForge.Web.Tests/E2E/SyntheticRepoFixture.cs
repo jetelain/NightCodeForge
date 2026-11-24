@@ -114,7 +114,7 @@ public class CalculatorTests
         // Create solution file so dotnet build & dotnet test work cleanly in root directory
         await RunCliAsync("dotnet", "new sln");
         await RunCliAsync("dotnet", "sln add src/SyntheticLib/SyntheticLib.csproj");
-        await RunCliAsync("dotnet", "sln add tests/SyntheticLib.Tests/SyntheticLib.Tests.csproj");
+        await RunCliAsync("dotnet", "sln add tests/SyntheticLib.Tests/SyntheticLib.Tests.csproj --include-references false");
 
         // Initialize Git repo & initial baseline commit
         await RunGitAsync("init -b main");
