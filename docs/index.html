@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NightCodeForge — Let your GPU code for you overnight</title>
-  <meta name="description" content="NightCodeForge is an asynchronous developer queue and multi-agent orchestrator for local LLMs with non-blocking Git context switching." />
-  <meta name="keywords" content="local LLM, AI coding agent, Ollama, vLLM, GPU scheduling, developer queue, C#, .NET 10, multi-agent" />
+  <title>NightCodeForge — Your Autonomous, Sandboxed AI Engineering Team</title>
+  <meta name="description" content="NightCodeForge is a local-first, cloud-able multi-agent orchestrator and asynchronous developer queue with containerized sandboxes and non-blocking Git context switching." />
+  <meta name="keywords" content="local LLM, Ollama, OllamaRouter, OpenRouter, Antigravity, AI coding agent, ContainerSandbox, developer queue, C#, .NET 10, multi-agent" />
   <meta name="author" content="Julien & NightCodeForge Contributors" />
 
   <!-- Open Graph / Social Media -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="NightCodeForge — Let your GPU code for you overnight" />
-  <meta property="og:description" content="Asynchronous developer queue and multi-agent orchestrator tailored for local LLMs. Eliminates GPU idle blocks with non-blocking Git context switching." />
+  <meta property="og:title" content="NightCodeForge — Your Autonomous, Sandboxed AI Engineering Team" />
+  <meta property="og:description" content="Local-first, cloud-able multi-agent orchestrator. Stop babysitting agents—run workflow-guided, containerized AI developers in isolated Git worktrees." />
   <meta property="og:url" content="https://github.com/jetelain/NightCodeForge" />
 
   <!-- Favicon -->
@@ -1155,12 +1155,11 @@
       </div>
 
       <h1 class="hero-title">
-        Let your GPU code for you <span class="gradient-text">overnight</span>.
+        Stop babysitting agents. Ship with an <span class="gradient-text">autonomous AI team</span>.
       </h1>
 
       <p class="hero-subtitle">
-        An asynchronous developer queue and multi-agent orchestrator built specifically for local LLMs.
-        Eliminates GPU idle stalls by automatically checkpointing Git state and context-switching tasks when human input is requested.
+        Local-first and cloud-able. Run workflow-guided, containerized agents in isolated Git worktrees—fully air-gapped or integrated with GitHub—while you keep working undisturbed on your repo.
       </p>
 
       <div class="hero-cta">
@@ -1176,7 +1175,7 @@
 
       <div class="pre-release-notice">
         <span>📦</span>
-        <span>Public downloads and NuGet binaries are currently in preparation. You can build from source today.</span>
+        <span>v0.1.0 in active preparation — Installer &amp; NuGet packages coming soon. Build from source today.</span>
       </div>
 
       <!-- Live Mockup / Visual Terminal Component -->
@@ -1188,10 +1187,10 @@
             <span class="dot dot-green"></span>
           </div>
           <div class="terminal-title">
-            <span>nightcodeforge-worker: hangfire-inference-1</span>
+            <span>nightcodeforge-orchestrator: container-sandbox</span>
           </div>
           <div class="terminal-status-pill">
-            <span>WorkerCount = 1 • VRAM Safe</span>
+            <span>Sandboxed • VRAM-Safe Default</span>
           </div>
         </div>
 
@@ -1199,7 +1198,7 @@
           <!-- Active Task Column -->
           <div class="showcase-col">
             <div class="col-header">
-              <span class="col-title">🗂️ Task Backlog &amp; Status</span>
+              <span class="col-title">🗂️ Agile Team &amp; Backlog</span>
               <span style="font-size:0.75rem; color:var(--text-muted); font-family:var(--font-mono);">DAG Active</span>
             </div>
 
@@ -1207,13 +1206,13 @@
             <div class="queue-card active">
               <div class="queue-card-header">
                 <span class="task-id">#TASK-104</span>
-                <span class="stage-badge badge-code">Stage 2: Implementation</span>
+                <span class="stage-badge badge-code">Implementation • ContainerSandbox</span>
               </div>
-              <div class="task-name">Add Container ICU dynamic timeouts</div>
+              <div class="task-name">Add OAuth token refresh retry policy</div>
               <div class="task-meta">
-                <span>Branch: feature/task-104</span>
+                <span>Worktree: task-104</span>
                 <span>•</span>
-                <span>Crucible Agent</span>
+                <span>Crucible (OllamaRouter)</span>
               </div>
             </div>
 
@@ -1221,23 +1220,23 @@
             <div class="queue-card">
               <div class="queue-card-header">
                 <span class="task-id">#TASK-103</span>
-                <span class="stage-badge badge-waiting">Awaiting Human Input</span>
+                <span class="stage-badge badge-waiting">Awaiting PM Input (Inbox)</span>
               </div>
-              <div class="task-name">Refactor Auth token storage schema</div>
+              <div class="task-name">Refactor billing webhook signature check</div>
               <div class="task-meta">
-                <span>Context Checkpointed (WIP commit saved)</span>
+                <span>WIP Checkpointed • Worker Freed</span>
               </div>
             </div>
 
-            <!-- Task 3 (Queued) -->
+            <!-- Task 3 (Ready / PR) -->
             <div class="queue-card">
               <div class="queue-card-header">
-                <span class="task-id">#TASK-105</span>
-                <span class="stage-badge badge-review">Queued (Priority: Standard)</span>
+                <span class="task-id">#TASK-102</span>
+                <span class="stage-badge badge-review">Ready • Review Room / PR #42</span>
               </div>
-              <div class="task-name">Live Operations Telemetry Refinement</div>
+              <div class="task-name">Assay report: Fix mobile drawer scroll</div>
               <div class="task-meta">
-                <span>Depends on: #TASK-104</span>
+                <span>Antigravity (agy acp) • Tests Green</span>
               </div>
             </div>
           </div>
@@ -1245,40 +1244,40 @@
           <!-- Console Output Column -->
           <div class="showcase-col">
             <div class="col-header">
-              <span class="col-title">⚡ Real-time Context Switch Stream</span>
+              <span class="col-title">⚡ Live Operations Stream</span>
               <span style="font-size:0.75rem; color:var(--accent-teal); font-family:var(--font-mono);">SignalR Stream</span>
             </div>
 
             <div class="console-body">
               <div class="log-line">
                 <span class="log-time">02:14:10</span>
-                <span class="log-tag-agent">[Agent]</span>
-                <span>Prompting developer: "Should refresh tokens be single-use?"</span>
+                <span class="log-tag-agent">[Crucible]</span>
+                <span>Asked PM: "Keep legacy webhook header fallback?"</span>
               </div>
               <div class="log-line">
                 <span class="log-time">02:14:11</span>
                 <span class="log-tag-git">[Git]</span>
-                <span>Checkpoint: git commit -m "WIP: Task 103" --no-verify</span>
+                <span>WIP checkpoint saved in isolated worktree task-103</span>
               </div>
               <div class="log-line">
                 <span class="log-time">02:14:11</span>
-                <span class="log-tag-free">[Worker]</span>
-                <span>Saved agent state to DB. Freeing GPU worker immediately.</span>
+                <span class="log-tag-free">[Sandbox]</span>
+                <span>Container torn down. Worker freed immediately.</span>
               </div>
               <div class="log-line">
                 <span class="log-time">02:14:12</span>
                 <span class="log-tag-gpu">[Queue]</span>
-                <span>Dequeued Task 104 &rarr; Checked out feature/task-104</span>
+                <span>Dequeued Task 104 &rarr; Mounted worktree (:rw)</span>
               </div>
               <div class="log-line">
                 <span class="log-time">02:14:13</span>
-                <span class="log-tag-gpu">[OllamaRouter]</span>
-                <span>Target: Dedicated LAN GPU &bull; Model: qwen2.5-coder:32b</span>
+                <span class="log-tag-gpu">[Provider]</span>
+                <span>OllamaRouter: LAN GPU &bull; OpenRouter overflow ready</span>
               </div>
               <div class="log-line">
                 <span class="log-time">02:14:18</span>
-                <span class="log-tag-agent">[Crucible]</span>
-                <span>Executing: dotnet test --filter "Category!=Acceptance"</span>
+                <span class="log-tag-agent">[Gates]</span>
+                <span>Deterministic build &amp; test gate passed inside sandbox</span>
               </div>
             </div>
           </div>
@@ -1291,10 +1290,10 @@
   <section class="section" id="how-it-works">
     <div class="container">
       <div class="section-header">
-        <span class="section-eyebrow">The Core Problem &amp; Breakthrough</span>
-        <h2 class="section-title">Zero Idle GPU Time. Continuous Engineering.</h2>
+        <span class="section-eyebrow">No More Micro-Management</span>
+        <h2 class="section-title">From Babysitting Prompts to Autonomous Delivery.</h2>
         <p class="section-desc">
-          When running local models, hardware is strictly bounded by VRAM. Conventional coding agents freeze when asking questions, wasting hours of compute.
+          Interactive coding agents hijack your terminal, share your working tree, and stall whenever they need input. NightCodeForge turns AI coding into an asynchronous, sandboxed engineering workflow.
         </p>
       </div>
 
@@ -1302,22 +1301,22 @@
         <!-- The Problem -->
         <div class="comparison-card problem">
           <div class="card-badge badge-problem">Conventional Agent Tools</div>
-          <h3>GPU Contention &amp; Idle Blocks</h3>
+          <h3>Babysitting, Collisions &amp; Idle Stalls</h3>
           <p>
-            Local LLM inference requires dedicated VRAM. Running multiple agents concurrently causes VRAM thrashing and Out-Of-Memory (OOM) crashes.
+            Running agents directly in your IDE or terminal forces you to watch every step, blocks your working directory, and wastes GPU time when questions arise.
           </p>
           <div class="flow-steps">
             <div class="flow-step">
               <span class="step-icon neg">&times;</span>
-              <span>Agent encounters an ambiguity and waits for a developer response.</span>
+              <span>Agent edits your live working tree, preventing you from coding in parallel.</span>
             </div>
             <div class="flow-step">
               <span class="step-icon neg">&times;</span>
-              <span>The background process blocks and retains GPU allocation all night.</span>
+              <span>No strict container boundary—one bad command can touch your host filesystem.</span>
             </div>
             <div class="flow-step">
               <span class="step-icon neg">&times;</span>
-              <span>Remaining backlog tasks are completely stalled, wasting valuable compute.</span>
+              <span>Agent stalls waiting for an answer, blocking the queue and wasting compute.</span>
             </div>
           </div>
         </div>
@@ -1325,22 +1324,22 @@
         <!-- The Solution -->
         <div class="comparison-card solution">
           <div class="card-badge badge-solution">The NightCodeForge Approach</div>
-          <h3>Non-Blocking Git Checkpointing</h3>
+          <h3>Sandboxed, Workflow-Guided Autonomy</h3>
           <p>
-            NightCodeForge decouples tasks from the GPU worker through native Git branching, instant WIP state commits, and priority rescheduling.
+            Each task runs inside an ephemeral container and isolated Git worktree, guided by deterministic build/test gates and non-blocking context switching.
           </p>
           <div class="flow-steps">
             <div class="flow-step">
               <span class="step-icon pos">&check;</span>
-              <span>On question trigger, agent memory is serialized and uncommitted files saved via Git WIP.</span>
+              <span>Work on your repo undisturbed while agents execute in isolated worktrees &amp; sandboxes.</span>
             </div>
             <div class="flow-step">
               <span class="step-icon pos">&check;</span>
-              <span>Worker terminates immediately, freeing the GPU for the next backlog task.</span>
+              <span>When an agent asks a question, state &amp; WIP commits are saved and the worker moves on.</span>
             </div>
             <div class="flow-step">
               <span class="step-icon pos">&check;</span>
-              <span>When the developer replies, the task returns with <code>llm-urgent</code> priority.</span>
+              <span>Review diffs in the Review Room, open a GitHub PR, or let passing tasks auto-merge.</span>
             </div>
           </div>
         </div>
@@ -1352,72 +1351,72 @@
   <section class="section" id="features">
     <div class="container">
       <div class="section-header">
-        <span class="section-eyebrow">Engineered For Quality</span>
-        <h2 class="section-title">Architectural Highlights</h2>
+        <span class="section-eyebrow">Built For Real Engineering</span>
+        <h2 class="section-title">Key Capabilities &amp; Security</h2>
         <p class="section-desc">
-          Designed from the ground up as a production-grade developer platform combining determinism with local LLM capabilities.
+          Local-first sovereignty when you want privacy, cloud flexibility when you want speed—all wrapped in deterministic quality gates.
         </p>
       </div>
 
       <div class="features-grid">
         <!-- Feature 1 -->
         <div class="feature-card">
-          <div class="feature-icon-wrapper">🛡️</div>
-          <h3>Strict VRAM Protection</h3>
+          <div class="feature-icon-wrapper">⚡</div>
+          <h3>Local-First, Cloud-Able &amp; Easy Setup</h3>
           <p>
-            A dedicated Hangfire inference queue enforces <code>WorkerCount = 1</code> across tasks, guaranteeing zero VRAM thrashing or OOM crashes on consumer and workstation GPUs.
+            <strong>Local AI made easy:</strong> the setup wizard inspects your hardware and helps pick the best models for your GPU. Run locally with <strong>Ollama</strong> &amp; <strong>OllamaRouter</strong> (+ Cloud Overflow), <strong>OpenRouter</strong>, or your Google AI subscription via <strong>Antigravity CLI</strong>.
           </p>
-          <span class="feature-tag">Sequential Hardware Bounds</span>
+          <span class="feature-tag">Hardware-Aware Wizard • OllamaRouter • OpenRouter • Antigravity</span>
         </div>
 
         <!-- Feature 2 -->
         <div class="feature-card">
-          <div class="feature-icon-wrapper">🔀</div>
-          <h3>Native Git CLI Isolation</h3>
+          <div class="feature-icon-wrapper">🔌</div>
+          <h3>Air-Gapped or GitHub-Integrated</h3>
           <p>
-            Direct execution via <code>CliWrap</code> on isolated <code>feature/task-{id}</code> branches. Zero reliance on brittle wrappers, with deterministic branch resets and squash merges.
+            Work 100% offline on your machine—workflows, backlog, Review Room, and Git CLI worktrees run locally. Or connect <strong>GitHub</strong> to triage issues and deliver changes via Pull Requests.
           </p>
-          <span class="feature-tag">Pure Git Subsystem</span>
+          <span class="feature-tag">Offline Sovereign • Optional GitHub PRs</span>
         </div>
 
         <!-- Feature 3 -->
         <div class="feature-card">
-          <div class="feature-icon-wrapper">🧩</div>
-          <h3>3-Agent Workflow Pipeline</h3>
+          <div class="feature-icon-wrapper">👥</div>
+          <h3>Your Agile AI Team</h3>
           <p>
-            Stage 1 reviews and prompts humans proactively before coding begins; Stage 2 handles implementation, test execution and repair; Stage 3 inspects live git diffs and fixes regressions.
+            You act as <strong>Product Manager</strong>; <strong>Ideation</strong> is your PM/Architect; <strong>NightCode Assay</strong> is your Test Scribe; <strong>Crucible &amp; Antigravity</strong> are your Devs; and <strong>NightWatch</strong> <em>(v0.2)</em> is your Retrospective engineer.
           </p>
-          <span class="feature-tag">Review &rarr; Code &rarr; Audit</span>
+          <span class="feature-tag">PM • Architect • Assay • Devs • NightWatch</span>
         </div>
 
         <!-- Feature 4 -->
         <div class="feature-card">
-          <div class="feature-icon-wrapper">🔌</div>
-          <h3>Universal Agent Harnesses</h3>
+          <div class="feature-icon-wrapper">📦</div>
+          <h3>No More Babysitting</h3>
           <p>
-            Run in-process native C# agents via <strong>Crucible</strong>, run external agents via <strong>Pi JSON-RPC</strong>, or connect open coding agents via the <strong>Agent Client Protocol (ACP)</strong>.
+            Workflow-guided stages combine LLM reasoning with deterministic build/test gates inside <code>ContainerSandbox</code>. Keep coding on your branch, then review diffs or let agents auto-merge.
           </p>
-          <span class="feature-tag">Crucible • Pi • ACP</span>
+          <span class="feature-tag">Worktrees • Review Room • Auto-Merge</span>
         </div>
 
         <!-- Feature 5 -->
         <div class="feature-card">
-          <div class="feature-icon-wrapper">🌐</div>
-          <h3>Dual-Compute with OllamaRouter</h3>
+          <div class="feature-icon-wrapper">🛡️</div>
+          <h3>Containerized Security &amp; v0.2 Guardrails</h3>
           <p>
-            Route 95% of heavy backlog jobs to a dedicated high-VRAM LAN server while keeping your workstation GPU 100% responsive for real-time interactive ideation chat.
+            Agents run in containers with declarative mounts and zero host FS access (plus <code>RestrictedReadOnly</code> for untrusted triage). <strong>v0.2 adds:</strong> Envoy network filtering, DevSkim &amp; DiffGuard rogue-agent detection, and Secure Web UI auth.
           </p>
-          <span class="feature-tag">Local Host + LAN Server</span>
+          <span class="feature-tag">Sandbox Now • Envoy / DiffGuard / Auth v0.2</span>
         </div>
 
         <!-- Feature 6 -->
         <div class="feature-card">
           <div class="feature-icon-wrapper">🚀</div>
-          <h3>Deterministic CLI Onboarding</h3>
+          <h3>VRAM-Safe Scaling &amp; <code>ncf</code> CLI</h3>
           <p>
-            The <code>ncf</code> CLI tool prepares repositories in seconds: merges gitignore, applies editorconfig, installs agent skills, and runs a 5-pillar project readiness audit.
+            Defaults to <code>WorkerCount = 1</code> to protect single-GPU VRAM and scales to <code>N</code> concurrent workers for cloud/multi-GPU setups. Onboard any repo in seconds with <code>ncf init</code> &amp; <code>ncf audit</code>.
           </p>
-          <span class="feature-tag"><code>ncf init</code> &amp; <code>ncf audit</code></span>
+          <span class="feature-tag">1-to-N Workers • <code>ncf</code> CLI</span>
         </div>
       </div>
     </div>
@@ -1437,13 +1436,13 @@
       <div class="interactive-box">
         <div class="tabs-header" role="tablist">
           <button class="tab-btn active" id="tab-btn-pipeline" role="tab" aria-selected="true" aria-controls="panel-pipeline" onclick="switchTab('pipeline')">
-            <span>🧩 3-Stage Pipeline</span>
+            <span>👥 Agile Team &amp; Pipeline</span>
           </button>
           <button class="tab-btn" id="tab-btn-topology" role="tab" aria-selected="false" aria-controls="panel-topology" onclick="switchTab('topology')">
-            <span>🌐 Dual-Compute Topology</span>
+            <span>🌐 Local-First &amp; Cloud Providers</span>
           </button>
           <button class="tab-btn" id="tab-btn-stack" role="tab" aria-selected="false" aria-controls="panel-stack" onclick="switchTab('stack')">
-            <span>🛠️ Technology Stack</span>
+            <span>🛡️ Security &amp; Tech Stack</span>
           </button>
         </div>
 
@@ -1451,30 +1450,30 @@
         <div class="tab-panel active" id="panel-pipeline" role="tabpanel">
           <div class="pipeline-diagram">
             <div class="stage-card">
-              <span class="stage-number">Stage 1</span>
-              <h3 class="stage-title">ForgeTask Review Agent</h3>
+              <span class="stage-number">PM, Architect &amp; Test Scribe</span>
+              <h3 class="stage-title">Plan, Ideate &amp; Test</h3>
               <p class="stage-desc">
-                Pre-inspects the codebase, clarifies ambiguities, and asks the human developer clarifying questions upfront before touching any code.
+                You set goals as <strong>Product Manager</strong>. Explore architecture and create DAG tasks in <strong>Ideation Chat</strong>, or hand off exploratory bug reports from <strong>NightCode Assay</strong>.
               </p>
-              <div class="stage-pill">System Prompt: Clarity &amp; Alignment</div>
+              <div class="stage-pill">Ideation • Assay • Task Review</div>
             </div>
 
             <div class="stage-card">
-              <span class="stage-number">Stage 2</span>
-              <h3 class="stage-title">Implementation Agent</h3>
+              <span class="stage-number">Sandboxed Developers</span>
+              <h3 class="stage-title">Crucible &amp; Antigravity</h3>
               <p class="stage-desc">
-                Receives the approved technical specification and developer answers, modifies code, runs compiler/build loops, executes tests, and iterates to green.
+                Agents implement features inside ephemeral <code>ContainerSandbox</code> worktrees, backed by deterministic baseline, build, and test gates—never blocking your local repo.
               </p>
-              <div class="stage-pill">System Prompt: TDD &amp; Coding</div>
+              <div class="stage-pill">Crucible • Antigravity (agy acp)</div>
             </div>
 
             <div class="stage-card">
-              <span class="stage-number">Stage 3</span>
-              <h3 class="stage-title">Code Review &amp; Fixes</h3>
+              <span class="stage-number">Delivery &amp; v0.2 Retrospective</span>
+              <h3 class="stage-title">Review, Deliver &amp; Improve</h3>
               <p class="stage-desc">
-                Generates a live <code>git diff</code> against the base branch, evaluates against rigorous quality checklists, and applies corrective patches.
+                Inspect diffs in the <strong>Review Room</strong>, deliver via <strong>GitHub PR</strong>, or auto-merge passing tasks. In <strong>v0.2</strong>, <strong>NightWatch</strong> monitors health and proposes improvements.
               </p>
-              <div class="stage-pill">System Prompt: Security &amp; Diff Audit</div>
+              <div class="stage-pill">Review Room • PR • NightWatch (v0.2)</div>
             </div>
           </div>
         </div>
@@ -1482,49 +1481,49 @@
         <!-- Tab 2: Topology -->
         <div class="tab-panel" id="panel-topology" role="tabpanel">
           <div style="background:var(--bg-card); border: 1px solid var(--border-subtle); border-radius:var(--radius-md); padding:2rem; line-height:1.7;">
-            <h3 style="font-size:1.2rem; margin-bottom:0.75rem;">100% Private, On-Premise Dual-Compute Architecture</h3>
+            <h3 style="font-size:1.2rem; margin-bottom:0.75rem;">Local-First Sovereignty, Cloud Flexibility</h3>
             <p style="color:var(--text-secondary); margin-bottom:1.5rem; font-size:0.95rem;">
-              Running local models doesn't mean your workstation has to grind to a halt. NightCodeForge integrates first-class with <a href="https://github.com/jetelain/OllamaRouter" target="_blank" rel="noopener noreferrer" style="color:var(--accent-indigo-light); text-decoration:underline;">OllamaRouter</a> to dynamically partition workloads:
+              Mix local hardware and cloud providers per stage without lock-in, and run either 100% air-gapped or connected to GitHub:
             </p>
             <ul style="list-style:none; display:flex; flex-direction:column; gap:1rem; color:var(--text-secondary); font-size:0.92rem;">
               <li style="display:flex; align-items:flex-start; gap:0.75rem;">
                 <span style="color:var(--accent-teal); font-weight:700;">&bull;</span>
-                <div><strong style="color:var(--text-primary);">Host GPU (Workstation):</strong> Powers real-time Ideation Chat and developer codebase exploration concurrently without waiting for the background queue.</div>
+                <div><strong style="color:var(--text-primary);">Ollama &amp; OllamaRouter:</strong> Run local models on your workstation GPU and dedicated LAN GPU server, with optional Cloud Overflow when you need extra capacity.</div>
               </li>
               <li style="display:flex; align-items:flex-start; gap:0.75rem;">
                 <span style="color:var(--accent-indigo-light); font-weight:700;">&bull;</span>
-                <div><strong style="color:var(--text-primary);">Dedicated LAN GPU Server:</strong> Runs heavy, multi-turn coding and test-execution tasks with high-context models (e.g. Qwen 2.5 Coder 32B or DeepSeek R1).</div>
+                <div><strong style="color:var(--text-primary);">OpenAI-Compatible &amp; Google AI:</strong> Plug in OpenRouter, vLLM, LM Studio, or OpenAI endpoints, or use your Google AI subscription via Antigravity CLI (<code>agy acp</code>).</div>
               </li>
               <li style="display:flex; align-items:flex-start; gap:0.75rem;">
                 <span style="color:var(--accent-amber); font-weight:700;">&bull;</span>
-                <div><strong style="color:var(--text-primary);">Optional Cloud Overflow:</strong> Allows zero-VRAM offline AI diagnostics and quick transcript audits when local compute is busy.</div>
+                <div><strong style="color:var(--text-primary);">Air-Gapped or GitHub:</strong> Keep everything local (tasks, diffs, Git branches, offline-hardened Web UI) or connect GitHub App Device Flow for issue triage and PR delivery.</div>
               </li>
             </ul>
           </div>
         </div>
 
-        <!-- Tab 3: Tech Stack -->
+        <!-- Tab 3: Tech Stack & Security -->
         <div class="tab-panel" id="panel-stack" role="tabpanel">
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:1.25rem;">
             <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
-              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-indigo-light); margin-bottom:0.25rem;">BACKEND &amp; ENGINE</div>
-              <div style="font-weight:700; font-size:1.05rem;">.NET 10 / C#</div>
-              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">High performance, strict typing, cross-platform.</div>
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-teal); margin-bottom:0.25rem;">SANDBOX &amp; SECRETS (NOW)</div>
+              <div style="font-weight:700; font-size:1.05rem;">ContainerSandbox &amp; KeySharp</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Declarative container mounts (no host FS access), <code>RestrictedReadOnly</code> triage, OS keyring secrets.</div>
             </div>
             <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
-              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-teal); margin-bottom:0.25rem;">UI &amp; TELEMETRY</div>
-              <div style="font-weight:700; font-size:1.05rem;">Blazor &amp; SignalR</div>
-              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Low-latency live streaming &amp; interactive dashboard.</div>
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-amber); margin-bottom:0.25rem;">SECURITY GUARDRAILS (v0.2)</div>
+              <div style="font-weight:700; font-size:1.05rem;">Envoy, DevSkim &amp; DiffGuard</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Strict egress allowlisting, SAST &amp; AI diff scanning for rogue behavior, plus Secure Web UI auth.</div>
             </div>
             <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
-              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-amber); margin-bottom:0.25rem;">QUEUE SYSTEM</div>
-              <div style="font-weight:700; font-size:1.05rem;">Hangfire + SQLite</div>
-              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Single-worker priority queues (urgent vs standard).</div>
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-indigo-light); margin-bottom:0.25rem;">CORE &amp; UI</div>
+              <div style="font-weight:700; font-size:1.05rem;">.NET 10, Blazor &amp; SignalR</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Air-gapped hardened Server UI, live streaming, Hangfire + SQLite WAL, CliWrap Git engine.</div>
             </div>
             <div style="background:var(--bg-card); padding:1.25rem; border-radius:var(--radius-md); border:1px solid var(--border-subtle);">
-              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-purple); margin-bottom:0.25rem;">AI INTEGRATION</div>
-              <div style="font-weight:700; font-size:1.05rem;">Microsoft.Extensions.AI</div>
-              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;">Ollama, OpenAI-compatible, &amp; OllamaRouter.</div>
+              <div style="font-size:0.8rem; font-weight:700; color:var(--accent-purple); margin-bottom:0.25rem;">AGENT HARNESSES</div>
+              <div style="font-weight:700; font-size:1.05rem;">Crucible &amp; ACP</div>
+              <div style="color:var(--text-secondary); font-size:0.85rem; margin-top:0.4rem;"><code>Microsoft.Extensions.AI</code> native C# harness + Antigravity CLI via Agent Client Protocol.</div>
             </div>
           </div>
         </div>
@@ -1537,9 +1536,9 @@
     <div class="container">
       <div class="section-header">
         <span class="section-eyebrow">Project Status</span>
-        <h2 class="section-title">Current State &amp; Availability</h2>
+        <h2 class="section-title">Current State &amp; Roadmap</h2>
         <p class="section-desc">
-          NightCodeForge is currently in active pre-release development. Here is exactly where the project stands today.
+          Core orchestration, sandboxing, and multi-provider support are implemented. Here is what ships in <code>v0.1.0</code> and what follows in <code>v0.2</code>.
         </p>
       </div>
 
@@ -1547,9 +1546,9 @@
       <div class="status-highlight-box" id="availability-notice">
         <div class="status-highlight-icon">🚧</div>
         <div class="status-highlight-content">
-          <h3>Pre-Release Phase — Not Yet Available for Public Download</h3>
+          <h3>v0.1.0 Release Preparation — Build from Source Today</h3>
           <p>
-            NightCodeForge is advancing rapidly through core architectural phases. Pre-compiled binaries, packaged desktop installers, and public NuGet packages are currently in development and will be released once initial integration phases conclude. In the meantime, full source code is public and can be tested from GitHub.
+            NightCodeForge is finalizing its <code>v0.1.0</code> release stream (Avalonia OOBE installer, standalone benchmark CLI, and onboarding polish). Pre-compiled binaries and NuGet packages are coming soon; in the meantime, full source code is available on GitHub.
           </p>
         </div>
       </div>
@@ -1559,48 +1558,48 @@
         <div class="roadmap-item completed">
           <span class="roadmap-icon">✅</span>
           <div class="roadmap-text">
-            <h4>Core Orchestrator &amp; Engine</h4>
-            <p>Single-worker Hangfire queue, task DAG dependencies, and EF Core persistence.</p>
+            <h4>Local-First &amp; Cloud Providers</h4>
+            <p>Ollama, OllamaRouter (+ Cloud overflow), OpenAI-compatible (OpenRouter), and Antigravity CLI (<code>agy acp</code>).</p>
           </div>
         </div>
 
         <div class="roadmap-item completed">
           <span class="roadmap-icon">✅</span>
           <div class="roadmap-text">
-            <h4>Native Git Context Switching</h4>
-            <p>CliWrap branch sandboxing, automatic WIP checkpointing, and safe diff handling.</p>
+            <h4>ContainerSandbox &amp; Git Worktrees</h4>
+            <p>Isolated worktrees, declarative container mounts, WIP checkpointing, and air-gapped Web UI.</p>
           </div>
         </div>
 
         <div class="roadmap-item completed">
           <span class="roadmap-icon">✅</span>
           <div class="roadmap-text">
-            <h4>Interactive Web UI &amp; SignalR</h4>
-            <p>Blazor Server dashboard, live terminal stream, question inbox, and review room.</p>
-          </div>
-        </div>
-
-        <div class="roadmap-item completed">
-          <span class="roadmap-icon">✅</span>
-          <div class="roadmap-text">
-            <h4>Universal Harnesses &amp; CLI Tool</h4>
-            <p>Crucible C# harness, ACP protocol support, and the <code>ncf</code> preparation tool.</p>
+            <h4>GitHub, Assay &amp; Mobile PWA</h4>
+            <p>Optional GitHub issue triage &amp; PR delivery, NightCode Assay handoff, Tailscale Serve, and 1-to-N workers.</p>
           </div>
         </div>
 
         <div class="roadmap-item in-progress">
           <span class="roadmap-icon">🔄</span>
           <div class="roadmap-text">
-            <h4>Phase 11: Container &amp; Hardening (Current)</h4>
-            <p>Dynamic tool timeouts, containerized ICU support, command transparency, and test expansion.</p>
+            <h4>v0.1.0 Setup Wizard &amp; Benchmark CLI (Current)</h4>
+            <p>Native AOT OOBE wizard with hardware-aware model recommendations, NuGet provisioning, and Crucible benchmark CLI.</p>
           </div>
         </div>
 
         <div class="roadmap-item upcoming">
           <span class="roadmap-icon">⏳</span>
           <div class="roadmap-text">
-            <h4>Public Distribution &amp; Installers (Next)</h4>
-            <p>Packaged standalone server binaries, NuGet global tools, and official download bundles.</p>
+            <h4>v0.2: NightWatch Retrospective Agent</h4>
+            <p>Autonomous environment recovery and idle-GPU deep transcript analysis to propose backlog improvements.</p>
+          </div>
+        </div>
+
+        <div class="roadmap-item upcoming">
+          <span class="roadmap-icon">⏳</span>
+          <div class="roadmap-text">
+            <h4>v0.2: Security Hardening Suite</h4>
+            <p>Envoy strict network egress filtering, DevSkim &amp; DiffGuard rogue-agent detection, and Secure Web UI access.</p>
           </div>
         </div>
       </div>
