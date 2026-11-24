@@ -95,7 +95,7 @@ public class DeterministicFormatStage : IWorkflowStage
         {
             var skipMsg = "Deterministic code formatting step skipped: no format command configured for workspace stack.";
             _logger.LogInformation("{Message}", skipMsg);
-            bag.Set(PipelineDataBagKeys.StageCommand(StageId), "format (skipped)");
+            bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{DeterministicStageConstants.FormatSubStage}{DeterministicStageConstants.SkippedCommandSuffix}");
             bag.Set(PipelineDataBagKeys.StageOutput(StageId), skipMsg);
             return StageExecutionResult.Success();
         }
@@ -123,7 +123,7 @@ public class DeterministicFormatStage : IWorkflowStage
             {
                 var skipMsg = $"Deterministic code formatting command '{command}' is not available in workspace environment; skipped: {errorDetail}".Trim();
                 _logger.LogWarning("{Message}", skipMsg);
-                bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{command} (unavailable)");
+                bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{command}{DeterministicStageConstants.UnavailableCommandSuffix}");
                 bag.Set(PipelineDataBagKeys.StageOutput(StageId), skipMsg);
                 return StageExecutionResult.Success();
             }
@@ -132,7 +132,7 @@ public class DeterministicFormatStage : IWorkflowStage
             {
                 var warnMsg = $"Deterministic code formatting command '{command}' failed with exit code {res.ExitCode} (ignored): {errorDetail}".Trim();
                 _logger.LogWarning("{Message}", warnMsg);
-                bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{command} (failed, ignored)");
+                bag.Set(PipelineDataBagKeys.StageCommand(StageId), $"{command}{DeterministicStageConstants.FailedIgnoredCommandSuffix}");
                 bag.Set(PipelineDataBagKeys.StageOutput(StageId), WorkflowDefaults.TruncateStageOutput(warnMsg));
                 bag.Remove(PipelineDataBagKeys.FormatFailureReason);
                 return StageExecutionResult.Success();

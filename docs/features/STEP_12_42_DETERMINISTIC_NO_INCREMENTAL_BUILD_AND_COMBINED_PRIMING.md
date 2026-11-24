@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step (Accurate Warning Counting in Deterministic Gates & Combined `build && test` Synthetic Priming)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Cli.Tests`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)  
+> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Cli.Tests`, `tests/NightCodeForge.Agents.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
 > *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
 >
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
@@ -65,8 +65,8 @@ flowchart LR
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] `DeterministicStageConstants.DefaultBuildCommand`, `DeterministicBuildStage.DefaultBuildCommand`, and `CodeStackPresets.DotNet.BuildCommand` default to `"dotnet build --no-incremental"`, while preserving explicit custom `BuildCommand` overrides.
-- [ ] `TaskOrchestrator.SetSyntheticPrimingFromDeterministicStage` emits a single `SyntheticPrimingExecution` with chained `&&` commands (excluding skipped/non-shell sub-stages such as `sast (skipped)` and `ratchet`) and concatenated (per-command filtered) outputs covering both build and test sub-stages on both success and failure.
-- [ ] `CrucibleConversationCoordinator.FilterSyntheticPriming` preserves all sub-stage sections of combined priming output without double-filtering/stripping while enforcing `WorkflowDefaults.MaxToolInlineChars`.
-- [ ] Unit tests in `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Cli.Tests`, and `tests/NightCodeForge.Agents.Tests` verify the `--no-incremental` default build command, updated preset assertions, combined `build && test` priming (including skipped/non-shell sub-stage exclusion), and non-stripped coordinator priming output.
-- [ ] All unit and integration tests pass (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`).
+- [x] `DeterministicStageConstants.DefaultBuildCommand`, `DeterministicBuildStage.DefaultBuildCommand`, and `CodeStackPresets.DotNet.BuildCommand` default to `"dotnet build --no-incremental"`, while preserving explicit custom `BuildCommand` overrides.
+- [x] `TaskOrchestrator.SetSyntheticPrimingFromDeterministicStage` emits a single `SyntheticPrimingExecution` with chained `&&` commands (excluding skipped/non-shell sub-stages such as `sast (skipped)` and `ratchet`) and concatenated (per-command filtered) outputs covering both build and test sub-stages on both success and failure.
+- [x] `CrucibleConversationCoordinator.FilterSyntheticPriming` preserves all sub-stage sections of combined priming output without double-filtering/stripping while enforcing `WorkflowDefaults.MaxToolInlineChars`.
+- [x] Unit tests in `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Cli.Tests`, and `tests/NightCodeForge.Agents.Tests` verify the `--no-incremental` default build command, updated preset assertions, combined `build && test` priming (including skipped/non-shell sub-stage exclusion), and non-stripped coordinator priming output.
+- [x] All unit and integration tests pass (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`).

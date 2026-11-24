@@ -27,6 +27,8 @@ public class DifferentialGateTests
         Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
         Assert.Contains("Coverage regression detected", result.ErrorMessage);
         Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.CoverageFailureReason));
+        Assert.Equal(DeterministicStageConstants.CoverageEvaluationCommand, context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(gate.StageId)));
+        Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(gate.StageId)));
     }
 
     [Fact]
@@ -49,6 +51,26 @@ public class DifferentialGateTests
         Assert.Contains("Anti-cheating violation", result.ErrorMessage);
         Assert.Equal(StandardStageIds.Implementation, result.TargetRoutingStageId);
         Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.CoverageFailureReason));
+        Assert.Equal(DeterministicStageConstants.CoverageEvaluationCommand, context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(gate.StageId)));
+        Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(gate.StageId)));
+    }
+
+    [Fact]
+    public async Task CoverageGate_Fails_WhenBaselineExistsAndCurrentCoverageMissing_RecordsEvaluationCommand()
+    {
+        var gate = new DeterministicTestWithCoverageGate(new Moq.Mock<IExecutionEnvironmentProvider>().Object) { EvaluateOnly = true };
+        var task = new ForgeTask { Id = 1, WorkspaceId = 1, CurrentStageId = "coverage-gate" };
+        var workspace = new Workspace { Id = 1, Name = "WS" };
+        var context = new PipelineContext(task, workspace);
+
+        context.DataBag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, 0.85);
+
+        var result = await gate.ExecuteAsync(context);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("Coverage gate failure", result.ErrorMessage);
+        Assert.Equal(DeterministicStageConstants.CoverageEvaluationCommand, context.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(gate.StageId)));
+        Assert.Equal(result.ErrorMessage, context.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(gate.StageId)));
     }
 
     [Fact]

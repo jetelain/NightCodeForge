@@ -16,7 +16,7 @@ public class CodeStackDetectionTests
             var detected = CodeStackPresets.Detect(tempDir);
             Assert.NotNull(detected);
             Assert.Equal("dotnet", detected.Name);
-            Assert.Equal("dotnet build", detected.BuildCommand);
+            Assert.Equal("dotnet build --no-incremental", detected.BuildCommand);
         }
         finally
         {

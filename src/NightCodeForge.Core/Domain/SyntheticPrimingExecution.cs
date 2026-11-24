@@ -10,4 +10,5 @@ public sealed record SyntheticPrimingExecution(
     string Command = "",
     string Output = "",
     bool IsSuccess = true,
-    long? DurationMs = null);
+    long? DurationMs = null,
+    bool IsPreFiltered = false);

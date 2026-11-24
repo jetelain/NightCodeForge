@@ -1824,7 +1824,15 @@ public class TaskOrchestrator : ITaskOrchestrator
                 {
                     if (stage.Kind == WorkflowStageKind.Deterministic)
                     {
-                        SetSyntheticPrimingFromDeterministicStage(stage, pipelineContext, result, durationMs);
+                        await SetSyntheticPrimingFromDeterministicStageAsync(
+                            workspace,
+                            task,
+                            stage,
+                            pipelineContext,
+                            result,
+                            durationMs,
+                            explicitTargetStageId: null,
+                            cancellationToken);
                     }
 
                     // Case B: Stage Completed
@@ -2814,7 +2822,15 @@ public class TaskOrchestrator : ITaskOrchestrator
         PopulateDiagnosticsIntoDataBag(pipelineContext, currentStage, retries, result);
         if (currentStage.Kind == WorkflowStageKind.Deterministic)
         {
-            SetSyntheticPrimingFromDeterministicStage(currentStage, pipelineContext, result, durationMs);
+            await SetSyntheticPrimingFromDeterministicStageAsync(
+                workspace,
+                task,
+                currentStage,
+                pipelineContext,
+                result,
+                durationMs,
+                explicitTargetStageId: targetStage.StageId,
+                cancellationToken);
         }
 
         if (!string.Equals(targetStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) &&
@@ -2862,7 +2878,15 @@ public class TaskOrchestrator : ITaskOrchestrator
         PopulateDiagnosticsIntoDataBag(pipelineContext, currentStage, retries, result);
         if (currentStage.Kind == WorkflowStageKind.Deterministic)
         {
-            SetSyntheticPrimingFromDeterministicStage(currentStage, pipelineContext, result, durationMs);
+            await SetSyntheticPrimingFromDeterministicStageAsync(
+                workspace,
+                task,
+                currentStage,
+                pipelineContext,
+                result,
+                durationMs,
+                explicitTargetStageId: targetStage.StageId,
+                cancellationToken);
         }
 
         if (!string.Equals(targetStage.StageId, StandardStageIds.CodeReviewAndFix, StringComparison.OrdinalIgnoreCase) &&
@@ -3158,156 +3182,445 @@ public class TaskOrchestrator : ITaskOrchestrator
         return StageExecutionResult.Failure(runResult.Error ?? "Stage failed.", record: record);
     }
 
-    private static void SetSyntheticPrimingFromDeterministicStage(
+    private static bool IsExecutedShellSubStage(StageCommandExecution exec) =>
+        IsSingleExecutedShellCommand(exec.Command, exec.StageName);
+
+    private static bool IsExecutedShellCommand(string? command, string? stageName)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return false;
+        }
+
+        if (command.Contains(DeterministicStageConstants.CommandChainSeparator, StringComparison.Ordinal))
+        {
+            return command
+                .Split(DeterministicStageConstants.CommandChainSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Any(part => IsSingleExecutedShellCommand(part, stageName));
+        }
+
+        return IsSingleExecutedShellCommand(command, stageName);
+    }
+
+    private static bool IsSingleExecutedShellCommand(string? command, string? stageName)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return false;
+        }
+
+        if (string.Equals(stageName, DeterministicStageConstants.RatchetSubStage, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(stageName, StageImplementationTypes.DeterministicRatchet, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var trimmedCmd = command.Trim();
+        if (trimmedCmd.EndsWith(DeterministicStageConstants.SkippedCommandSuffix, StringComparison.OrdinalIgnoreCase) ||
+            trimmedCmd.EndsWith(DeterministicStageConstants.UnavailableCommandSuffix, StringComparison.OrdinalIgnoreCase) ||
+            trimmedCmd.EndsWith(DeterministicStageConstants.FailedIgnoredCommandSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.Equals(trimmedCmd, DeterministicStageConstants.CoverageEvaluationCommand, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmedCmd, Stages.DeterministicWarningRatchetStage.DefaultDisplayName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private async Task SetSyntheticPrimingFromDeterministicStageAsync(
+        Workspace workspace,
+        ForgeTask task,
         IWorkflowStage stage,
         PipelineContext pipelineContext,
         StageExecutionResult result,
-        int stageDurationMs)
+        int stageDurationMs,
+        string? explicitTargetStageId,
+        CancellationToken cancellationToken)
     {
-        var commandExecutions = pipelineContext.DataBag.Get<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands(stage.StageId));
-        if (result.IsSuccess)
+        var commandExecutions = pipelineContext.DataBag.Get<List<StageCommandExecution>>(PipelineDataBagKeys.StageCommands(stage.StageId))
+            ?? new List<StageCommandExecution>();
+
+        var shellExecutions = commandExecutions.Where(IsExecutedShellSubStage).ToList();
+        var outputExecutions = commandExecutions.Where(c => IsExecutedShellSubStage(c) || !c.IsSuccess).ToList();
+
+        bool isPureEvaluationStage = stage is Stages.DeterministicWarningRatchetStage
+            or Stages.DeterministicTestWithCoverageGate { EvaluateOnly: true };
+        var stageCmd = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId));
+        bool hasNonShellStageCommand = isPureEvaluationStage
+            || (!string.IsNullOrWhiteSpace(stageCmd) && !IsExecutedShellCommand(stageCmd, stage.StageId));
+
+        if (result.IsSuccess &&
+            ((commandExecutions.Count > 0 && outputExecutions.Count == 0) ||
+             (commandExecutions.Count == 0 && hasNonShellStageCommand)))
         {
-            StageCommandExecution? selected = null;
-            if (commandExecutions is { Count: > 0 })
+            pipelineContext.DataBag.Remove(PipelineDataBagKeys.PendingSyntheticPriming);
+            return;
+        }
+
+        bool hasExecutedShellCommand = shellExecutions.Count > 0
+            || (commandExecutions.Count == 0 && !hasNonShellStageCommand);
+
+        var command = shellExecutions.Count > 0
+            ? string.Join(DeterministicStageConstants.CommandChainSeparator, shellExecutions.Select(c => c.Command.Trim()))
+            : (hasExecutedShellCommand && !string.IsNullOrWhiteSpace(stageCmd)
+                ? stageCmd.Trim()
+                : pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TestCommand)
+                    ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand)
+                    ?? CodeStackPresets.ResolveConfig(workspace.RepositoryPath, pipelineContext.DataBag).TestCommand
+                    ?? DeterministicStageConstants.DefaultTestCommand);
+
+        string targetAgentStageId;
+        if (!string.IsNullOrWhiteSpace(explicitTargetStageId))
+        {
+            targetAgentStageId = explicitTargetStageId;
+        }
+        else if (result.IsSuccess && pipelineContext.Pipeline != null)
+        {
+            var next = !string.IsNullOrWhiteSpace(result.TargetRoutingStageId)
+                ? pipelineContext.Pipeline.GetStage(result.TargetRoutingStageId)
+                : pipelineContext.Pipeline.GetNextStage(stage.StageId);
+            while (next != null && next.Kind != WorkflowStageKind.Agentic)
             {
-                selected = commandExecutions.FirstOrDefault(c =>
-                    string.Equals(c.StageName, DeterministicStageConstants.TestWithCoverageSubStage, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(c.StageName, DeterministicStageConstants.TestSubStage, StringComparison.OrdinalIgnoreCase))
-                    ?? commandExecutions.Last();
+                next = pipelineContext.Pipeline.GetNextStage(next.StageId);
             }
-
-            var command = selected?.Command
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId))
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TestCommand)
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand)
-                ?? DeterministicStageConstants.DefaultTestCommand;
-
-            var rawOutput = selected?.Output
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
-                ?? "Verification completed successfully with exit code 0.";
-
-            var targetAgentStageId = StandardStageIds.Implementation;
-            rawOutput = ApplySmartCliFilterForPriming(pipelineContext, targetAgentStageId, command, rawOutput, isSuccess: true);
-
-            var formattedOutput = rawOutput.StartsWith("Exit Code:", StringComparison.OrdinalIgnoreCase)
-                ? rawOutput
-                : $"Exit Code: 0\n{rawOutput}".TrimEnd();
-
-            formattedOutput = WorkflowDefaults.TruncateStageOutput(formattedOutput);
-
-            var duration = selected?.DurationMs > 0 ? selected.DurationMs : (stageDurationMs > 0 ? stageDurationMs : (long?)null);
-
-            pipelineContext.DataBag.Set(PipelineDataBagKeys.PendingSyntheticPriming, new SyntheticPrimingExecution(
-                SourceStageId: stage.StageId,
-                ToolName: CanonicalToolNames.Bash,
-                Command: command,
-                Output: formattedOutput,
-                IsSuccess: true,
-                DurationMs: duration));
+            targetAgentStageId = next?.StageId ?? StandardStageIds.Implementation;
         }
         else
         {
-            StageCommandExecution? failed = null;
-            if (commandExecutions is { Count: > 0 })
+            targetAgentStageId = !string.IsNullOrWhiteSpace(result.TargetRoutingStageId)
+                ? result.TargetRoutingStageId
+                : (!string.IsNullOrWhiteSpace(stage.LoopBackStageId) ? stage.LoopBackStageId : StandardStageIds.Implementation);
+        }
+
+        var savedInterruptedProfileId = task.InterruptedAgentProfileId;
+        AgentProfile? targetProfile;
+        try
+        {
+            targetProfile = await _workspacePreparer.ResolveAgentProfileAsync(workspace, task, targetAgentStageId, cancellationToken);
+        }
+        finally
+        {
+            task.InterruptedAgentProfileId = savedInterruptedProfileId;
+        }
+        targetProfile ??= workspace.AgentProfiles?.FirstOrDefault(p => p.MatchesStage(targetAgentStageId, workspace.Id));
+
+        var optFlags = pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags)
+            ?? targetProfile?.OptimizationFlags
+            ?? pipelineContext.CurrentProfile?.OptimizationFlags;
+        bool smartFilteringEnabled = optFlags?.SmartCliOutputFiltering ?? true;
+
+        var workspaceRoot = pipelineContext.WorkingDirectory
+            ?? workspace.Ext4MirrorPath
+            ?? workspace.RepositoryPath
+            ?? string.Empty;
+
+        string rawOutput;
+        bool isPreFiltered;
+        List<(string Header, string Body)>? sectionParts = null;
+
+        if (outputExecutions.Count == 1)
+        {
+            var single = outputExecutions[0];
+            bool isSingleShell = IsExecutedShellSubStage(single);
+            rawOutput = isSingleShell
+                ? ApplySmartCliFilterForPriming(single.Command, single.Output, single.IsSuccess, smartFilteringEnabled, workspaceRoot)
+                : single.Output;
+            isPreFiltered = !isSingleShell || smartFilteringEnabled;
+        }
+        else if (outputExecutions.Count > 1)
+        {
+            sectionParts = new List<(string Header, string Body)>(outputExecutions.Count);
+            foreach (var exec in outputExecutions)
             {
-                failed = commandExecutions.LastOrDefault(c => !c.IsSuccess) ?? commandExecutions.Last();
+                var isShell = IsExecutedShellSubStage(exec);
+                var subOut = isShell
+                    ? ApplySmartCliFilterForPriming(exec.Command, exec.Output, exec.IsSuccess, smartFilteringEnabled, workspaceRoot)
+                    : exec.Output;
+
+                var header = isShell
+                    ? $"{DeterministicStageConstants.PrimingSectionHeaderPrefix}{exec.StageName}] {exec.Command.Trim()}{DeterministicStageConstants.PrimingSectionHeaderSuffix}"
+                    : $"{DeterministicStageConstants.PrimingSectionHeaderPrefix}{exec.StageName}]{DeterministicStageConstants.PrimingSectionHeaderSuffix}";
+                var trimmedSubOut = string.IsNullOrWhiteSpace(subOut) ? string.Empty : subOut.TrimEnd();
+                sectionParts.Add((header, trimmedSubOut));
             }
 
-            var command = failed?.Command
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageCommand(stage.StageId))
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.TestCommand)
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.BuildCommand)
-                ?? DeterministicStageConstants.DefaultTestCommand;
+            rawOutput = string.Join("\n\n", sectionParts.Select(s => string.IsNullOrEmpty(s.Body) ? s.Header : $"{s.Header}\n{s.Body}"));
+            isPreFiltered = true;
+        }
+        else
+        {
+            var stageOutput = pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId));
+            var fallbackOutput = stageOutput
+                ?? (result.IsSuccess
+                    ? "Verification completed successfully with exit code 0."
+                    : result.ErrorMessage ?? "Deterministic step failed.");
 
-            var rawOutput = failed?.Output
-                ?? pipelineContext.DataBag.Get<string>(PipelineDataBagKeys.StageOutput(stage.StageId))
-                ?? result.ErrorMessage
-                ?? "Deterministic step failed.";
+            rawOutput = stageOutput != null && hasExecutedShellCommand
+                ? ApplySmartCliFilterForPriming(command, fallbackOutput, result.IsSuccess, smartFilteringEnabled, workspaceRoot)
+                : fallbackOutput;
+            isPreFiltered = !hasExecutedShellCommand || (stageOutput != null && smartFilteringEnabled);
+        }
 
-            var targetAgentStageId = !string.IsNullOrWhiteSpace(stage.LoopBackStageId)
-                ? stage.LoopBackStageId
-                : StandardStageIds.Implementation;
-            rawOutput = ApplySmartCliFilterForPriming(pipelineContext, targetAgentStageId, command, rawOutput, isSuccess: false);
+        var (exitCodePrefix, bodyWithoutPrefix) = ExtractAndNormalizeExitPrefix(
+            rawOutput,
+            result.IsSuccess,
+            allowExistingPrefix: sectionParts == null);
 
-            if (!string.IsNullOrWhiteSpace(result.ErrorMessage) && !rawOutput.Contains(result.ErrorMessage, StringComparison.OrdinalIgnoreCase))
+        int maxBodyBudget = Math.Max(0, WorkflowDefaults.MaxStageOutputChars - exitCodePrefix.Length);
+        string fittedBody = sectionParts != null
+            ? FitSectionsToBudget(sectionParts, maxBodyBudget)
+            : FitSingleBodyToBudget(bodyWithoutPrefix, maxBodyBudget);
+
+        if (!result.IsSuccess)
+        {
+            var diagSuffix = BuildFailureDiagnosticsSuffix(fittedBody, pipelineContext, result);
+            if (!string.IsNullOrEmpty(diagSuffix))
             {
-                rawOutput = $"{rawOutput.TrimEnd()}\n\n[Quality Gate Failure Reason]:\n{result.ErrorMessage}";
-            }
-
-            var compilerErrors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
-            var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
-
-            var diagSb = new StringBuilder();
-            if (compilerErrors is { Count: > 0 } && !rawOutput.Contains("[Compiler Diagnostics]", StringComparison.OrdinalIgnoreCase))
-            {
-                var actualCompilerErrors = compilerErrors
-                    .Where(err => !err.Contains(TestFailureMarker, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (actualCompilerErrors.Count > 0)
+                if (exitCodePrefix.Length + fittedBody.Length + diagSuffix.Length > WorkflowDefaults.MaxStageOutputChars)
                 {
-                    diagSb.AppendLine().AppendLine("[Compiler Diagnostics]:");
-                    foreach (var err in actualCompilerErrors)
+                    int reducedBodyBudget = Math.Max(0, WorkflowDefaults.MaxStageOutputChars - exitCodePrefix.Length - diagSuffix.Length);
+                    fittedBody = sectionParts != null
+                        ? FitSectionsToBudget(sectionParts, reducedBodyBudget)
+                        : FitSingleBodyToBudget(bodyWithoutPrefix, reducedBodyBudget);
+                    diagSuffix = BuildFailureDiagnosticsSuffix(fittedBody, pipelineContext, result);
+                    int remainingForDiag = Math.Max(0, WorkflowDefaults.MaxStageOutputChars - exitCodePrefix.Length - fittedBody.Length);
+                    if (diagSuffix.Length > remainingForDiag)
                     {
-                        diagSb.AppendLine(err);
+                        diagSuffix = Filtering.CliOutputFilterHelpers.TruncateWithHeadAndFooter(string.Empty, diagSuffix, string.Empty, remainingForDiag);
                     }
                 }
+
+                fittedBody = string.IsNullOrEmpty(fittedBody)
+                    ? diagSuffix.TrimStart('\r', '\n')
+                    : $"{fittedBody.TrimEnd()}{diagSuffix}";
             }
-            if (failedTests is { Count: > 0 } && !rawOutput.Contains("[Failed Tests]", StringComparison.OrdinalIgnoreCase))
+        }
+
+        var formattedOutput = $"{exitCodePrefix}{fittedBody}".TrimEnd();
+        if (formattedOutput.Length > WorkflowDefaults.MaxStageOutputChars)
+        {
+            formattedOutput = Filtering.CliOutputFilterHelpers.TruncateWithHeadAndFooter(
+                exitCodePrefix,
+                fittedBody,
+                string.Empty,
+                WorkflowDefaults.MaxStageOutputChars);
+        }
+
+        var summedDuration = outputExecutions.Where(c => c.DurationMs > 0).Sum(c => c.DurationMs);
+        long? duration = summedDuration > 0 ? summedDuration : (stageDurationMs > 0 ? stageDurationMs : null);
+
+        pipelineContext.DataBag.Set(PipelineDataBagKeys.PendingSyntheticPriming, new SyntheticPrimingExecution(
+            SourceStageId: stage.StageId,
+            ToolName: CanonicalToolNames.Bash,
+            Command: command,
+            Output: formattedOutput,
+            IsSuccess: result.IsSuccess,
+            DurationMs: duration,
+            IsPreFiltered: isPreFiltered));
+    }
+
+    private static (string ExitCodePrefix, string BodyWithoutPrefix) ExtractAndNormalizeExitPrefix(
+        string rawBody,
+        bool isSuccess,
+        bool allowExistingPrefix)
+    {
+        var defaultPrefix = isSuccess ? "Exit Code: 0\n" : "Exit Code: 1\n";
+        if (!allowExistingPrefix || string.IsNullOrEmpty(rawBody) || !rawBody.StartsWith("Exit Code:", StringComparison.OrdinalIgnoreCase))
+        {
+            return (defaultPrefix, rawBody ?? string.Empty);
+        }
+
+        int newlineIdx = rawBody.IndexOf('\n');
+        string firstLine = newlineIdx >= 0 ? rawBody[..newlineIdx] : rawBody;
+        string remainder = newlineIdx >= 0 ? rawBody[(newlineIdx + 1)..] : string.Empty;
+
+        var codePart = firstLine["Exit Code:".Length..].Trim();
+        bool isZeroCode = int.TryParse(
+            codePart,
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out int parsedCode) && parsedCode == 0;
+
+        string normalizedPrefix = isZeroCode == isSuccess
+            ? $"{firstLine.TrimEnd('\r')}\n"
+            : defaultPrefix;
+
+        return (normalizedPrefix, remainder);
+    }
+
+    private static string FitSingleBodyToBudget(string body, int maxChars)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(body) ? string.Empty : body.TrimEnd();
+        if (trimmed.Length <= maxChars)
+        {
+            return trimmed;
+        }
+
+        return Filtering.CliOutputFilterHelpers.TruncateWithHeadAndFooter(string.Empty, trimmed, string.Empty, maxChars);
+    }
+
+    private static string FitSectionsToBudget(IReadOnlyList<(string Header, string Body)> sections, int maxChars)
+    {
+        if (sections.Count == 0 || maxChars <= 0)
+        {
+            return string.Empty;
+        }
+
+        const string SectionSeparator = "\n\n";
+        int separatorCost = (sections.Count - 1) * SectionSeparator.Length;
+        int sectionBudget = Math.Max(0, maxChars - separatorCost);
+
+        var fullSections = new string[sections.Count];
+        long totalLength = 0;
+        for (int i = 0; i < sections.Count; i++)
+        {
+            fullSections[i] = string.IsNullOrEmpty(sections[i].Body)
+                ? sections[i].Header
+                : $"{sections[i].Header}\n{sections[i].Body}";
+            totalLength += fullSections[i].Length;
+        }
+
+        if (totalLength <= sectionBudget)
+        {
+            return string.Join(SectionSeparator, fullSections);
+        }
+
+        var locked = new bool[sections.Count];
+        var allocated = new int[sections.Count];
+        int remainingBudget = sectionBudget;
+        int remainingCount = sections.Count;
+
+        while (remainingCount > 0)
+        {
+            int fairShare = remainingBudget / remainingCount;
+            bool lockedAny = false;
+            for (int i = 0; i < sections.Count; i++)
             {
-                diagSb.AppendLine().AppendLine("[Failed Tests]:");
-                foreach (var ft in failedTests)
+                if (!locked[i] && fullSections[i].Length <= fairShare)
                 {
-                    diagSb.AppendLine(ft);
+                    locked[i] = true;
+                    allocated[i] = fullSections[i].Length;
+                    remainingBudget -= allocated[i];
+                    remainingCount--;
+                    lockedAny = true;
                 }
             }
 
-            if (diagSb.Length > 0)
+            if (!lockedAny)
             {
-                rawOutput = $"{rawOutput.TrimEnd()}\n{diagSb.ToString().TrimEnd()}";
+                int baseAllocation = remainingBudget / remainingCount;
+                int extra = remainingBudget % remainingCount;
+                for (int i = 0; i < sections.Count; i++)
+                {
+                    if (!locked[i])
+                    {
+                        allocated[i] = baseAllocation + (extra > 0 ? 1 : 0);
+                        if (extra > 0) extra--;
+                    }
+                }
+                break;
             }
-
-            var formattedOutput = rawOutput.StartsWith("Exit Code:", StringComparison.OrdinalIgnoreCase)
-                ? rawOutput
-                : $"Exit Code: 1\n{rawOutput}".TrimEnd();
-
-            formattedOutput = WorkflowDefaults.TruncateStageOutput(formattedOutput);
-
-            var duration = failed?.DurationMs > 0 ? failed.DurationMs : (stageDurationMs > 0 ? stageDurationMs : (long?)null);
-
-            pipelineContext.DataBag.Set(PipelineDataBagKeys.PendingSyntheticPriming, new SyntheticPrimingExecution(
-                SourceStageId: stage.StageId,
-                ToolName: CanonicalToolNames.Bash,
-                Command: command,
-                Output: formattedOutput,
-                IsSuccess: false,
-                DurationMs: duration));
         }
+
+        var resultSections = new string[sections.Count];
+        for (int i = 0; i < sections.Count; i++)
+        {
+            if (locked[i])
+            {
+                resultSections[i] = fullSections[i];
+            }
+            else
+            {
+                int target = allocated[i];
+                var (header, body) = sections[i];
+                if (string.IsNullOrEmpty(body) || target <= header.Length + 1)
+                {
+                    resultSections[i] = header.Length <= target ? header : header[..target];
+                }
+                else
+                {
+                    resultSections[i] = Filtering.CliOutputFilterHelpers.TruncateWithHeadAndFooter(
+                        $"{header}\n",
+                        body,
+                        string.Empty,
+                        target);
+                }
+            }
+        }
+
+        var joined = string.Join(SectionSeparator, resultSections);
+        return joined.Length <= maxChars
+            ? joined
+            : Filtering.CliOutputFilterHelpers.TruncateWithHeadAndFooter(string.Empty, joined, string.Empty, maxChars);
+    }
+
+    private static string BuildFailureDiagnosticsSuffix(
+        string bodySoFar,
+        PipelineContext pipelineContext,
+        StageExecutionResult result)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage) &&
+            !bodySoFar.Contains(result.ErrorMessage, StringComparison.OrdinalIgnoreCase))
+        {
+            sb.Append("\n\n[Quality Gate Failure Reason]:\n").Append(result.ErrorMessage.Trim());
+        }
+
+        var compilerErrors = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.CompilerErrors);
+        if (compilerErrors is { Count: > 0 } &&
+            !bodySoFar.Contains("[Compiler Diagnostics]", StringComparison.OrdinalIgnoreCase))
+        {
+            var actualCompilerErrors = compilerErrors
+                .Where(err => !err.Contains(TestFailureMarker, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (actualCompilerErrors.Count > 0)
+            {
+                sb.Append("\n\n[Compiler Diagnostics]:");
+                foreach (var err in actualCompilerErrors)
+                {
+                    sb.Append('\n').Append(err);
+                }
+            }
+        }
+
+        var failedTests = pipelineContext.DataBag.Get<List<string>>(PipelineDataBagKeys.FailedTests);
+        if (failedTests is { Count: > 0 } &&
+            !bodySoFar.Contains("[Failed Tests]", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.Append("\n\n[Failed Tests]:");
+            foreach (var ft in failedTests)
+            {
+                sb.Append('\n').Append(ft);
+            }
+        }
+
+        var suffix = sb.ToString();
+        int maxDiagChars = WorkflowDefaults.MaxStageOutputChars / 3;
+        if (suffix.Length > maxDiagChars)
+        {
+            suffix = Filtering.CliOutputFilterHelpers.TruncateWithHeadAndFooter(string.Empty, suffix, string.Empty, maxDiagChars);
+        }
+
+        return suffix;
     }
 
     private static string ApplySmartCliFilterForPriming(
-        PipelineContext pipelineContext,
-        string targetAgentStageId,
         string command,
         string rawOutput,
-        bool isSuccess)
+        bool isSuccess,
+        bool smartFilteringEnabled,
+        string workspaceRoot)
     {
         if (string.IsNullOrWhiteSpace(rawOutput) || string.IsNullOrWhiteSpace(command))
         {
             return rawOutput;
         }
-
-        var targetProfile = pipelineContext.Workspace?.AgentProfiles?
-            .FirstOrDefault(p => p.MatchesStage(targetAgentStageId, pipelineContext.Workspace.Id));
-
-        var optFlags = pipelineContext.CurrentProfile?.OptimizationFlags
-            ?? targetProfile?.OptimizationFlags
-            ?? pipelineContext.DataBag.Get<LocalOptimizationFlags>(PipelineDataBagKeys.OptimizationFlags);
-
-        var workspaceRoot = pipelineContext.WorkingDirectory
-            ?? pipelineContext.Workspace?.Ext4MirrorPath
-            ?? pipelineContext.Workspace?.RepositoryPath
-            ?? string.Empty;
 
         return Filtering.CliOutputFilterHelpers.FilterPrimingOutput(
             Filtering.CliOutputFilterRegistry.Default,
@@ -3315,7 +3628,7 @@ public class TaskOrchestrator : ITaskOrchestrator
             rawOutput,
             isSuccess,
             workspaceRoot,
-            smartFilteringEnabled: optFlags?.SmartCliOutputFiltering ?? true);
+            smartFilteringEnabled: smartFilteringEnabled);
     }
 
     private Task<IReadOnlyList<int>> ResolveExistingWorkspaceAttachmentIdsAsync(

@@ -19,9 +19,17 @@ public static class DeterministicStageConstants
     public const string SastSubStage = "sast";
     public const string RatchetSubStage = "ratchet";
 
-    public const string DefaultBuildCommand = "dotnet build";
+    public const string DefaultBuildCommand = "dotnet build --no-incremental";
     public const string DefaultFormatCommand = "dotnet format --verify-no-changes";
     public const string DefaultTestCommand = "dotnet test --no-build";
     public const string DefaultCoverageCommand = "dotnet test --collect:\"XPlat Code Coverage\"";
     public const string DefaultSastCommand = "devskim analyze --source .";
+
+    public const string CommandChainSeparator = " && ";
+    public const string PrimingSectionHeaderPrefix = "=== [";
+    public const string PrimingSectionHeaderSuffix = " ===";
+    public const string SkippedCommandSuffix = " (skipped)";
+    public const string UnavailableCommandSuffix = " (unavailable)";
+    public const string FailedIgnoredCommandSuffix = " (failed, ignored)";
+    public const string CoverageEvaluationCommand = "coverage evaluation";
 }

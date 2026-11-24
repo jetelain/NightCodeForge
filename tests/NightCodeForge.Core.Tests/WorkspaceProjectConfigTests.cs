@@ -10,7 +10,7 @@ public class WorkspaceProjectConfigTests
     {
         var config = CodeStackPresets.ResolveConfig(null);
 
-        Assert.Equal("dotnet build", config.BuildCommand);
+        Assert.Equal("dotnet build --no-incremental", config.BuildCommand);
         Assert.Equal("dotnet test --no-build", config.TestCommand);
         Assert.Equal(120, config.BuildTimeoutSeconds);
         Assert.Equal(120, config.TestTimeoutSeconds);

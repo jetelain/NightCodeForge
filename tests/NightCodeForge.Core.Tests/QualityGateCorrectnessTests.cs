@@ -559,7 +559,7 @@ Passed! - Failed: 0, Passed: 10, Total: 10";
         Assert.Equal("format", list[0].StageName);
         Assert.Equal("dotnet format", list[0].Command);
         Assert.Equal("build", list[1].StageName);
-        Assert.Equal("dotnet build", list[1].Command);
+        Assert.Equal("dotnet build --no-incremental", list[1].Command);
         Assert.Equal("test-with-coverage", list[2].StageName);
         Assert.Contains("dotnet test", list[2].Command);
         Assert.Equal("sast", list[3].StageName);

@@ -13,7 +13,7 @@ public class ConfigBootstrapperTests
         var json = ConfigBootstrapper.GenerateConfigJson(preset, "main");
 
         Assert.Contains("\"codeStack\": \"dotnet\"", json);
-        Assert.Contains("\"buildCommand\": \"dotnet build\"", json);
+        Assert.Contains("\"buildCommand\": \"dotnet build --no-incremental\"", json);
         Assert.Contains("\"testCommand\": \"dotnet test --no-build\"", json);
         Assert.Contains("\"formatCommand\": \"dotnet format\"", json);
         Assert.Contains("\"ignoreFormatFailures\": true", json);

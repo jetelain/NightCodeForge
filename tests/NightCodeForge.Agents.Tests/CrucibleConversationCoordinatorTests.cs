@@ -8,6 +8,7 @@ using NightCodeForge.Agents.Transcripts;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -368,5 +369,121 @@ public class CrucibleConversationCoordinatorTests : IDisposable
         Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, null!, gateway, logger));
         Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, transcripts, null!, logger));
         Assert.Throws<ArgumentNullException>(() => new CrucibleConversationCoordinator(repo, transcripts, gateway, null!));
+    }
+
+    [Fact]
+    public async Task Coordinator_Begin_CombinedPreFilteredPrimingPreservesAllSectionsWithoutDoubleFiltering()
+    {
+        var repository = new InMemoryTaskRepository();
+        var coordinator = CreateCoordinator(repository);
+        var combinedOutput = string.Join("\n",
+            "Exit Code: 0",
+            "=== [build] dotnet build --no-incremental ===",
+            "Build succeeded.",
+            "    0 Warning(s)",
+            "",
+            "=== [test] dotnet test --no-build ===",
+            "Passed!  - Failed:     0, Passed:    12, Skipped:     0, Total:    12");
+
+        var priming = new SyntheticPrimingExecution(
+            SourceStageId: StandardStageIds.PreImplementationBaseline,
+            ToolName: CanonicalToolNames.Bash,
+            Command: "dotnet build --no-incremental && dotnet test --no-build",
+            Output: combinedOutput,
+            IsSuccess: true,
+            DurationMs: 500,
+            IsPreFiltered: true);
+
+        var context = StageContext(38, priming: priming);
+        var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+
+        var primedResult = state.ChatHistory
+            .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+            .Single().Result?.ToString();
+        var primedCall = state.ChatHistory
+            .SelectMany(m => m.Contents.OfType<FunctionCallContent>())
+            .Single();
+
+        Assert.Equal("dotnet build --no-incremental && dotnet test --no-build", primedCall.Arguments?["command"]?.ToString());
+        Assert.Equal(combinedOutput, primedResult);
+        Assert.Contains("=== [build] dotnet build --no-incremental ===", primedResult);
+        Assert.Contains("=== [test] dotnet test --no-build ===", primedResult);
+        Assert.Contains("Build succeeded.", primedResult);
+        Assert.Contains("Passed!  - Failed:     0", primedResult);
+    }
+
+    [Fact]
+    public async Task Coordinator_Begin_CombinedPreFilteredPrimingStillEnforcesMaxToolInlineCharsCap()
+    {
+        var repository = new InMemoryTaskRepository();
+        var coordinator = CreateCoordinator(repository);
+        var oversizedBody = new string('x', WorkflowDefaults.MaxToolInlineChars + 2000);
+        var combinedOutput = $"Exit Code: 0\n=== [build] dotnet build --no-incremental ===\nBuild succeeded.\n\n=== [test] dotnet test --no-build ===\n{oversizedBody}";
+
+        var priming = new SyntheticPrimingExecution(
+            SourceStageId: StandardStageIds.PreImplementationBaseline,
+            ToolName: CanonicalToolNames.Bash,
+            Command: "dotnet build --no-incremental && dotnet test --no-build",
+            Output: combinedOutput,
+            IsSuccess: true,
+            DurationMs: 500,
+            IsPreFiltered: true);
+
+        var context = StageContext(39, priming: priming);
+        var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+
+        var primedResult = state.ChatHistory
+            .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+            .Single().Result?.ToString();
+
+        Assert.NotNull(primedResult);
+        Assert.True(primedResult.Length <= WorkflowDefaults.MaxToolInlineChars);
+        Assert.Contains("=== [build] dotnet build --no-incremental ===", primedResult);
+        Assert.Contains("... additional ", primedResult);
+    }
+
+    [Fact]
+    public async Task Coordinator_Begin_CombinedPrimingWithLegacyFalseIsPreFiltered_StillSkipsSmartFilterViaSectionHeaderAndHandlesEmptyOutput()
+    {
+        var repository = new InMemoryTaskRepository();
+        var coordinator = CreateCoordinator(repository);
+        var combinedOutput = string.Join("\n",
+            "Exit Code: 0",
+            "=== [build] dotnet build --no-incremental ===",
+            "Build succeeded.",
+            "",
+            "=== [test] dotnet test --no-build ===",
+            "Passed Suite.Test_1 [2 ms]",
+            "Passed!  - Failed:     0, Passed:     1, Skipped:     0, Total:     1");
+
+        var priming = new SyntheticPrimingExecution(
+            SourceStageId: StandardStageIds.PreImplementationBaseline,
+            ToolName: CanonicalToolNames.Bash,
+            Command: "dotnet build --no-incremental && dotnet test --no-build",
+            Output: combinedOutput,
+            IsSuccess: true,
+            DurationMs: 250,
+            IsPreFiltered: false);
+
+        var state = await coordinator.BeginAsync(StageContext(40, priming: priming), StandardHarnessIds.Crucible, CancellationToken.None);
+        var primedResult = state.ChatHistory
+            .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+            .Single().Result?.ToString();
+
+        Assert.Equal(combinedOutput, primedResult);
+        Assert.Contains("=== [build] dotnet build --no-incremental ===", primedResult);
+        Assert.Contains("=== [test] dotnet test --no-build ===", primedResult);
+        Assert.DoesNotContain("[This is a simplified output]", primedResult);
+
+        var nullOutputPriming = new SyntheticPrimingExecution(
+            SourceStageId: StandardStageIds.PreImplementationBaseline,
+            ToolName: CanonicalToolNames.Bash,
+            Command: "dotnet build --no-incremental",
+            Output: null!,
+            IsSuccess: true,
+            IsPreFiltered: false);
+
+        var nullState = await coordinator.BeginAsync(StageContext(41, priming: nullOutputPriming), StandardHarnessIds.Crucible, CancellationToken.None);
+        Assert.Contains(nullState.ChatHistory, m => m.Contents.OfType<FunctionResultContent>().Any());
     }
 }

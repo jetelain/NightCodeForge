@@ -96,8 +96,8 @@ public static class CodeStackPresets
 {
     public static readonly CodeStackPreset DotNet = new(
         Name: CodeStack.DotNet,
-        BuildCommand: "dotnet build",
-        TestCommand: "dotnet test --no-build",
+        BuildCommand: DeterministicStageConstants.DefaultBuildCommand,
+        TestCommand: DeterministicStageConstants.DefaultTestCommand,
         FormatCommand: "dotnet format",
         SastCommand: null,
         CoverageCommand: WorkflowDefaults.DefaultCoverageTestCommand,

@@ -112,6 +112,7 @@ public class DeterministicTestWithCoverageGate : IWorkflowStage
             {
                 var error = $"Anti-cheating violation: total test count decreased from {baselineTests} to {currentTests}. Tests must not be deleted or disabled.";
                 bag.Set(PipelineDataBagKeys.CoverageFailureReason, error);
+                RecordEvaluationStageMetadataIfMissing(bag, StageId, error);
                 return StageExecutionResult.Failure(error, targetStage);
             }
         }
@@ -127,18 +128,14 @@ public class DeterministicTestWithCoverageGate : IWorkflowStage
                 var error = $"Coverage gate failure: baseline coverage was established at {baselineLineRate:P2}, but current code coverage could not be extracted from test runner output or coverage reports. Ensure coverage collection remains enabled.";
                 bag.Set(PipelineDataBagKeys.CoverageFailureReason, error);
                 _logger?.LogError("{Error}", error);
+                RecordEvaluationStageMetadataIfMissing(bag, StageId, error);
                 return StageExecutionResult.Failure(error, targetStage);
             }
 
             var warning = "Code coverage metric could not be extracted from test runner output or coverage reports. Ensure tests execute with coverage collection enabled (e.g. --collect:\"XPlat Code Coverage\"). Coverage check skipped as a warning.";
             bag.Set(PipelineDataBagKeys.CoverageFailureReason, warning);
             _logger?.LogWarning("{Warning}", warning);
-
-            if (!bag.TryGet<string>(PipelineDataBagKeys.StageCommand(StageId), out _))
-            {
-                bag.Set(PipelineDataBagKeys.StageCommand(StageId), "coverage evaluation");
-                bag.Set(PipelineDataBagKeys.StageOutput(StageId), warning);
-            }
+            RecordEvaluationStageMetadataIfMissing(bag, StageId, warning);
 
             return StageExecutionResult.Success();
         }
@@ -152,6 +149,7 @@ public class DeterministicTestWithCoverageGate : IWorkflowStage
                 bag.Set(PipelineDataBagKeys.CoverageDelta, delta);
                 var error = $"Coverage regression detected: line coverage decreased from {baselineLineRate:P2} to {currentLineRate:P2} (Delta: {delta:P2}). Quality gate requires Delta >= 0.0%.";
                 bag.Set(PipelineDataBagKeys.CoverageFailureReason, error);
+                RecordEvaluationStageMetadataIfMissing(bag, StageId, error);
                 return StageExecutionResult.Failure(error, targetStage);
             }
 
@@ -163,14 +161,19 @@ public class DeterministicTestWithCoverageGate : IWorkflowStage
             bag.Set(PipelineDataBagKeys.CoverageBaselineLineRate, currentLineRate);
         }
 
-        if (!bag.TryGet<string>(PipelineDataBagKeys.StageCommand(StageId), out _))
-        {
-            bag.Set(PipelineDataBagKeys.StageCommand(StageId), "coverage evaluation");
-            var summary = $"Code coverage verified: {currentLineRate:P2} line coverage." +
-                (bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out var b) ? $" (Baseline: {b:P2})" : "");
-            bag.Set(PipelineDataBagKeys.StageOutput(StageId), summary);
-        }
+        var summary = $"Code coverage verified: {currentLineRate:P2} line coverage." +
+            (bag.TryGet<double>(PipelineDataBagKeys.CoverageBaselineLineRate, out var b) ? $" (Baseline: {b:P2})" : "");
+        RecordEvaluationStageMetadataIfMissing(bag, StageId, summary);
 
         return StageExecutionResult.Success();
+    }
+
+    private static void RecordEvaluationStageMetadataIfMissing(PipelineDataBag bag, string stageId, string output)
+    {
+        if (!bag.TryGet<string>(PipelineDataBagKeys.StageCommand(stageId), out _))
+        {
+            bag.Set(PipelineDataBagKeys.StageCommand(stageId), DeterministicStageConstants.CoverageEvaluationCommand);
+            bag.Set(PipelineDataBagKeys.StageOutput(stageId), output);
+        }
     }
 }
