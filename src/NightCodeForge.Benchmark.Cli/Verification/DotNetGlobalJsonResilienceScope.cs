@@ -55,7 +55,7 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
     {
         ArgumentNullException.ThrowIfNull(logger);
 
-        if (!string.Equals(BenchmarkLanguages.Normalize(language), BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase) ||
+        if (!BenchmarkLanguages.IsCSharp(language) ||
             string.IsNullOrWhiteSpace(workspacePath) ||
             !Directory.Exists(workspacePath))
         {

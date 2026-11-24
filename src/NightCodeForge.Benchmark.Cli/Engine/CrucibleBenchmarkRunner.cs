@@ -329,6 +329,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         AgentRunResult? runResult = null;
         string? modelPatch = null;
         var stopwatch = Stopwatch.StartNew();
+        var agentStopwatch = new Stopwatch();
 
         try
         {
@@ -345,7 +346,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 ContainerImage = instance.CustomContainerImage,
                 ContainerName = containerName
             };
-            BenchmarkStagePolicyResolver.ConfigureWorkspaceSkills(ephemeralWorkspace, candidate.EnableStackSkills);
+            BenchmarkStagePolicyResolver.ConfigureWorkspaceSkills(ephemeralWorkspace, candidate.EnableStackSkills, instance.Language);
 
             var ephemeralTask = new ForgeTask
             {
@@ -378,7 +379,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 RoutingTarget = candidate.RoutingTarget
             };
 
-            scope = BuildExecutionScope(workspace.WorkspacePath, instance.CustomContainerImage, request.ExecutionMode, containerName, candidate.EnableStackSkills, category);
+            scope = BuildExecutionScope(workspace.WorkspacePath, instance.CustomContainerImage, request.ExecutionMode, containerName, candidate.EnableStackSkills, instance.Language, category);
 
             var sessionContext = new AgentSessionContext
             {
@@ -401,7 +402,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, candidate.InstanceTimeoutSeconds)));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-            var agentStopwatch = Stopwatch.StartNew();
+            agentStopwatch.Start();
             try
             {
                 using var _ = CrucibleDispatchTelemetryScope.Begin(dispatchTelemetry);
@@ -414,7 +415,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 timedOut = true;
                 runResult = AgentRunResult.Cancelled(
                     $"Benchmark instance timed out after {candidate.InstanceTimeoutSeconds}s.",
-                    new AgentRunMetrics(DurationMs: agentStopwatch.ElapsedMilliseconds));
+                    new AgentRunMetrics());
             }
             finally
             {
@@ -443,6 +444,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                         category,
                         BenchmarkInstanceOutcome.Error,
                         stopwatch.ElapsedMilliseconds,
+                        agentStopwatch.ElapsedMilliseconds,
                         capture,
                         runResult,
                         abnormalBreakdown,
@@ -462,6 +464,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                     category,
                     BenchmarkInstanceOutcome.Timeout,
                     stopwatch.ElapsedMilliseconds,
+                    agentStopwatch.ElapsedMilliseconds,
                     capture,
                     runResult,
                     timeoutBreakdown,
@@ -480,6 +483,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                     category,
                     BenchmarkInstanceOutcome.Error,
                     stopwatch.ElapsedMilliseconds,
+                    agentStopwatch.ElapsedMilliseconds,
                     capture,
                     runResult,
                     failedBreakdown,
@@ -554,14 +558,11 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
             stopwatch.Stop();
 
-            long promptTokens = runResult.Metrics.PromptTokens;
-            long completionTokens = runResult.Metrics.CompletionTokens;
-            long totalTokens = runResult.Metrics.TotalTokens > 0 ? runResult.Metrics.TotalTokens : (promptTokens + completionTokens);
             long durationMs = Math.Max(1, stopwatch.ElapsedMilliseconds);
-            long agentDurationMs = runResult.Metrics.DurationMs > 0
-                ? runResult.Metrics.DurationMs
-                : Math.Max(1, agentStopwatch.ElapsedMilliseconds);
-            double tokensPerSecond = completionTokens > 0 ? completionTokens / (agentDurationMs / 1000.0) : 0.0;
+            var (promptTokens, completionTokens, totalTokens, tokensPerSecond) = ResolveEffectiveMetrics(
+                runResult.Metrics,
+                capture.CapturedMetrics,
+                agentStopwatch.ElapsedMilliseconds);
 
             var telemetry = BuildTelemetryBreakdown(capture.TurnSink.Turns, dispatchTelemetry.CreateSnapshot());
             var finalOutcome = verification.Passed ? BenchmarkInstanceOutcome.Passed : BenchmarkInstanceOutcome.Failed;
@@ -609,6 +610,11 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             _logger.LogWarning(ex, "Benchmark evaluation failed with unhandled exception for candidate '{CandidateId}' on instance '{InstanceId}'.",
                 candidate.CandidateId, instance.InstanceId);
 
+            if (capture.ConversationState != null)
+            {
+                await capture.ConversationState.DrainAsync().ConfigureAwait(false);
+            }
+
             var telemetry = BuildTelemetryBreakdown(capture.TurnSink.Turns, dispatchTelemetry.CreateSnapshot());
             var metrics = runResult?.Metrics ?? new AgentRunMetrics();
             var errorResult = BuildAbnormalResult(
@@ -617,6 +623,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 category,
                 BenchmarkInstanceOutcome.Error,
                 stopwatch.ElapsedMilliseconds,
+                agentStopwatch.ElapsedMilliseconds,
                 capture,
                 metrics,
                 telemetry,
@@ -725,6 +732,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         ExecutionMode executionMode,
         string containerName,
         bool enableStackSkills,
+        string? language,
         BenchmarkProblemCategory category = BenchmarkProblemCategory.Implementation)
     {
         var mountTable = SandboxMountTable.ForWorkspace(
@@ -748,7 +756,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             scopeCacheKey: $"bench-run:{containerName}",
             hostWorkspacePath: workspacePath,
             canonicalClonePath: null,
-            mountHostDotnetTools: enableStackSkills,
+            mountHostDotnetTools: enableStackSkills && BenchmarkLanguages.IsCSharp(language),
             protectCloneWorkingTree: false,
             disableNetwork: disableNetwork,
             blockedHosts: disableNetwork ? Array.Empty<string>() : BenchmarkDefaults.BlockedAntiCheatHosts,
@@ -864,6 +872,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         BenchmarkProblemCategory category,
         BenchmarkInstanceOutcome outcome,
         long durationMs,
+        long fallbackAgentDurationMs,
         InMemoryConversationCapture capture,
         AgentRunResult runResult,
         ToolCallTelemetryBreakdown telemetry,
@@ -874,11 +883,55 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             category,
             outcome,
             durationMs,
+            fallbackAgentDurationMs,
             capture,
             runResult.Metrics,
             telemetry,
             errorMessage,
             modelPatch: null);
+
+    internal static (long PromptTokens, long CompletionTokens, long TotalTokens, double TokensPerSecond) ResolveEffectiveMetrics(
+        AgentRunMetrics? primaryMetrics,
+        AgentRunMetrics? capturedMetrics,
+        long fallbackAgentDurationMs)
+    {
+        static bool HasTokens(AgentRunMetrics? m) =>
+            m is { PromptTokens: > 0 } or { CompletionTokens: > 0 } or { TotalTokens: > 0 };
+
+        long promptTokens;
+        long completionTokens;
+        long totalTokens;
+        long agentDurationMs;
+
+        if (HasTokens(primaryMetrics))
+        {
+            promptTokens = primaryMetrics!.PromptTokens;
+            completionTokens = primaryMetrics.CompletionTokens;
+            totalTokens = primaryMetrics.TotalTokens > 0 ? primaryMetrics.TotalTokens : (promptTokens + completionTokens);
+            agentDurationMs = primaryMetrics.DurationMs > 0
+                ? primaryMetrics.DurationMs
+                : (capturedMetrics is { DurationMs: > 0 } ? capturedMetrics.DurationMs : Math.Max(1, fallbackAgentDurationMs));
+        }
+        else if (HasTokens(capturedMetrics))
+        {
+            promptTokens = capturedMetrics!.PromptTokens;
+            completionTokens = capturedMetrics.CompletionTokens;
+            totalTokens = capturedMetrics.TotalTokens > 0 ? capturedMetrics.TotalTokens : (promptTokens + completionTokens);
+            agentDurationMs = capturedMetrics.DurationMs > 0
+                ? capturedMetrics.DurationMs
+                : (primaryMetrics is { DurationMs: > 0 } ? primaryMetrics.DurationMs : Math.Max(1, fallbackAgentDurationMs));
+        }
+        else
+        {
+            promptTokens = 0;
+            completionTokens = 0;
+            totalTokens = 0;
+            agentDurationMs = Math.Max(1, fallbackAgentDurationMs);
+        }
+
+        double tokensPerSecond = completionTokens > 0 ? completionTokens / (agentDurationMs / 1000.0) : 0.0;
+        return (promptTokens, completionTokens, totalTokens, tokensPerSecond);
+    }
 
     private static BenchmarkInstanceResult BuildAbnormalResult(
         BenchmarkInstance instance,
@@ -886,15 +939,17 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         BenchmarkProblemCategory category,
         BenchmarkInstanceOutcome outcome,
         long durationMs,
+        long fallbackAgentDurationMs,
         InMemoryConversationCapture capture,
         AgentRunMetrics metrics,
         ToolCallTelemetryBreakdown telemetry,
         string errorMessage,
         string? modelPatch)
     {
-        long totalTokens = metrics.TotalTokens > 0
-            ? metrics.TotalTokens
-            : (metrics.PromptTokens + metrics.CompletionTokens);
+        var (promptTokens, completionTokens, totalTokens, tokensPerSecond) = ResolveEffectiveMetrics(
+            metrics,
+            capture.CapturedMetrics,
+            fallbackAgentDurationMs);
 
         return new BenchmarkInstanceResult
         {
@@ -906,9 +961,10 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             Outcome = outcome,
             DurationMs = Math.Max(1, durationMs),
             Turns = ResolveTurnCount(capture),
-            PromptTokens = metrics.PromptTokens,
-            CompletionTokens = metrics.CompletionTokens,
+            PromptTokens = promptTokens,
+            CompletionTokens = completionTokens,
             TotalTokens = totalTokens,
+            TokensPerSecond = tokensPerSecond,
             ModelPatch = modelPatch,
             TranscriptPath = capture.SavedTranscriptPath,
             Telemetry = telemetry,
@@ -1042,6 +1098,14 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             }
         }
 
+        int accountedRepairs = dispatchSnapshot.ToolAliasesResolved
+            + dispatchSnapshot.ParameterAliasesResolved
+            + dispatchSnapshot.NamespacesStripped
+            + dispatchSnapshot.CasingNormalized
+            + dispatchSnapshot.EnumValuesSnapped
+            + dispatchSnapshot.StringifiedJsonRepaired;
+        int otherDispatcherRepairs = Math.Max(0, dispatchSnapshot.TotalHits - accountedRepairs);
+
         return new ToolCallTelemetryBreakdown
         {
             TotalToolCalls = totalToolCalls,
@@ -1056,7 +1120,11 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             DispatcherRepairs = dispatchSnapshot.TotalHits,
             ToolAliasesResolved = dispatchSnapshot.ToolAliasesResolved,
             ParameterAliasesResolved = dispatchSnapshot.ParameterAliasesResolved,
+            NamespacesStripped = dispatchSnapshot.NamespacesStripped,
+            CasingNormalized = dispatchSnapshot.CasingNormalized,
+            EnumValuesSnapped = dispatchSnapshot.EnumValuesSnapped,
             StringifiedJsonRepaired = dispatchSnapshot.StringifiedJsonRepaired,
+            OtherDispatcherRepairs = otherDispatcherRepairs,
             CsNavBashCalls = csNavBashCalls,
             CodeCondenserBashCalls = codeCondenserBashCalls
         };

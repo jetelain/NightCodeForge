@@ -40,6 +40,9 @@ public static class BenchmarkLanguages
         };
     }
 
+    public static bool IsCSharp(string? language) =>
+        string.Equals(Normalize(language), CSharp, StringComparison.OrdinalIgnoreCase);
+
     public static TestResultFormat GetDefaultTestResultFormat(string? language) => Normalize(language) switch
     {
         CSharp => TestResultFormat.Trx,

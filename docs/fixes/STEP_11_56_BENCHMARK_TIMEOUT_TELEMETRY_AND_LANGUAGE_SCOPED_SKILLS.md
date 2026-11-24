@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Implemented  
 > **Target Projects:** `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `NightCodeForge.Agents`  
 > **Dependencies:** `CrucibleBenchmarkRunner`, `BenchmarkSummaryAggregator`, `BenchmarkStagePolicyResolver`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
@@ -44,8 +44,8 @@ In the `v1-smoke-Flint-latest-20261123-214242` benchmark run, four telemetry and
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Propagate real accumulated `PromptTokens`, `CompletionTokens`, `TotalTokens`, and `TokensPerSecond` on benchmark timeout / abnormal termination into `BenchmarkInstanceResult`, with unit tests.
-- [ ] Update `BenchmarkSummaryAggregator` so unstarted / zero-token error runs do not depress `AverageTokensPerSecond`, with unit tests covering mixed passed/timeout/error result sets.
-- [ ] Scope C# stack skills (`csharp-nav`, `codecondenser`) to C# workspaces/instances in benchmark policy/skill resolution, with unit tests verifying exclusion on Python/JS/TS/Rust runs.
-- [ ] Reconcile `DispatcherRepairs` (`TotalHits`) with explicit breakdown counters in `LenientDispatchTelemetry` / `ToolCallTelemetryBreakdown`, with unit tests verifying exact counter reconciliation.
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Propagate real accumulated `PromptTokens`, `CompletionTokens`, `TotalTokens`, and `TokensPerSecond` on benchmark timeout / abnormal termination into `BenchmarkInstanceResult`, with unit tests.
+- [x] Update `BenchmarkSummaryAggregator` so unstarted / zero-token error runs do not depress `AverageTokensPerSecond`, with unit tests covering mixed passed/timeout/error result sets.
+- [x] Scope C# stack skills (`csharp-nav`, `codecondenser`) to C# workspaces/instances in benchmark policy/skill resolution, with unit tests verifying exclusion on Python/JS/TS/Rust runs.
+- [x] Reconcile `DispatcherRepairs` (`TotalHits`) with explicit breakdown counters in `LenientDispatchTelemetry` / `ToolCallTelemetryBreakdown`, with unit tests verifying exact counter reconciliation.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

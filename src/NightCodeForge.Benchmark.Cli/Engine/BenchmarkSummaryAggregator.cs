@@ -108,6 +108,14 @@ public static class BenchmarkSummaryAggregator
             })
             .ToList();
 
+        var tokenCounts = results
+            .Select(ResolveEffectiveTokens)
+            .Where(t => t > 0)
+            .ToList();
+        var throughputResults = results
+            .Where(r => double.IsFinite(r.TokensPerSecond) && r.TokensPerSecond > 0)
+            .ToList();
+
         return new BenchmarkCandidateSummary
         {
             CandidateId = candidate.CandidateId,
@@ -124,8 +132,8 @@ public static class BenchmarkSummaryAggregator
             AverageJudgeScore = avgJudge,
             AverageDurationMs = results.Average(r => r.DurationMs),
             AverageTurns = results.Average(r => r.Turns),
-            AverageTokens = results.Average(r => r.TotalTokens),
-            AverageTokensPerSecond = results.Average(r => r.TokensPerSecond),
+            AverageTokens = tokenCounts.Count > 0 ? tokenCounts.Average() : 0.0,
+            AverageTokensPerSecond = throughputResults.Count > 0 ? throughputResults.Average(r => r.TokensPerSecond) : 0.0,
             EditFailureRate = editFailureRate,
             TotalCsNavBashCalls = results.Sum(r => r.Telemetry.CsNavBashCalls),
             TotalCodeCondenserBashCalls = results.Sum(r => r.Telemetry.CodeCondenserBashCalls),
@@ -133,4 +141,7 @@ public static class BenchmarkSummaryAggregator
             ByLanguage = byLanguage
         };
     }
+
+    private static long ResolveEffectiveTokens(BenchmarkInstanceResult result) =>
+        result.TotalTokens > 0 ? result.TotalTokens : (result.PromptTokens + result.CompletionTokens);
 }

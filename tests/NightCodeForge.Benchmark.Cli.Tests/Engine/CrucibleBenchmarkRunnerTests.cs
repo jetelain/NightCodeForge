@@ -801,6 +801,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             ExecutionMode.ContainerSandbox,
             "ncf-bench-tr",
             enableStackSkills: true,
+            language: BenchmarkLanguages.CSharp,
             category: BenchmarkProblemCategory.TaskReview);
         Assert.True(trScope.DisableNetwork);
         Assert.Empty(trScope.BlockedHosts);
@@ -950,5 +951,466 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.Equal(originalGlobalJson, await File.ReadAllTextAsync(globalJsonPath));
         Assert.Equal(1, result.Turns);
         Assert.Equal(1, result.Telemetry.ReadCalls);
+    }
+
+    [Fact]
+    public async Task RunAsync_TimeoutAfterTranscriptSave_PreservesCapturedTokensAndTokensPerSecond()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-timeout-tokens.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cs-to-tokens","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Timeout with tokens"}""");
+
+        var wks = Path.Combine(_tempDir, "wks-to-tokens");
+        Directory.CreateDirectory(wks);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-to-tokens", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks, BaseCommit = "c1" });
+
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            new SessionTranscriptService(_tempDir),
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                var state = await coordinator.BeginAsync(ctx, StandardHarnessIds.Crucible, ct);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    await coordinator.SaveTranscriptAsync(
+                        state,
+                        new CrucibleTranscriptRequest(
+                            ctx,
+                            wks,
+                            state.ChatHistory,
+                            ElapsedMs: 2_000,
+                            PromptTokens: 4_000,
+                            CompletionTokens: 600,
+                            Status: AgentRunStatus.Cancelled,
+                            Summary: "Stage cancelled",
+                            TracingClient: null,
+                            HarnessOptions: null,
+                            ActiveSkills: null),
+                        CancellationToken.None);
+                    throw;
+                }
+
+                return AgentRunResult.Completed(new AgentRunMetrics(), summary: "unreachable");
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "to-tokens",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-to-tokens"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1", InstanceTimeoutSeconds = 1 }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Timeout, result.Outcome);
+        Assert.Equal(4_000, result.PromptTokens);
+        Assert.Equal(600, result.CompletionTokens);
+        Assert.Equal(4_600, result.TotalTokens);
+        Assert.Equal(300.0, result.TokensPerSecond, 1);
+    }
+
+    [Fact]
+    public void BuildTelemetryBreakdown_ReconcilesAllDispatcherRepairCategoriesWithTotalHits()
+    {
+        var telemetry = new LenientDispatchTelemetry();
+        telemetry.Record(LenientDispatchEventType.ToolAliasResolved, "run_command", CanonicalToolNames.Bash);
+        telemetry.Record(LenientDispatchEventType.ParameterAliasResolved, "file_path", "path");
+        telemetry.Record(LenientDispatchEventType.NamespaceStripped, "tools.read", CanonicalToolNames.Read);
+        telemetry.Record(LenientDispatchEventType.CasingNormalized, "READ", CanonicalToolNames.Read);
+        telemetry.Record(LenientDispatchEventType.EnumValueSnapped, "FULL", "full");
+        telemetry.Record(LenientDispatchEventType.StringifiedJsonRepaired, CanonicalToolNames.Edit, "edits");
+        // EnumValueUnmatched is not counted in LenientDispatchTelemetrySnapshot.TotalHits
+        telemetry.Record(LenientDispatchEventType.EnumValueUnmatched, "invalid", "invalid");
+
+        var snapshot = telemetry.CreateSnapshot();
+        var breakdown = CrucibleBenchmarkRunner.BuildTelemetryBreakdown(Array.Empty<ConversationTurn>(), snapshot);
+
+        Assert.Equal(6, breakdown.DispatcherRepairs);
+        Assert.Equal(1, breakdown.ToolAliasesResolved);
+        Assert.Equal(1, breakdown.ParameterAliasesResolved);
+        Assert.Equal(1, breakdown.NamespacesStripped);
+        Assert.Equal(1, breakdown.CasingNormalized);
+        Assert.Equal(1, breakdown.EnumValuesSnapped);
+        Assert.Equal(1, breakdown.StringifiedJsonRepaired);
+        Assert.Equal(0, breakdown.OtherDispatcherRepairs);
+
+        int sumOfCategories = breakdown.ToolAliasesResolved
+            + breakdown.ParameterAliasesResolved
+            + breakdown.NamespacesStripped
+            + breakdown.CasingNormalized
+            + breakdown.EnumValuesSnapped
+            + breakdown.StringifiedJsonRepaired
+            + breakdown.OtherDispatcherRepairs;
+        Assert.Equal(breakdown.DispatcherRepairs, sumOfCategories);
+
+        // Verify fallback attribution when TotalHits exceeds known breakdown categories
+        var uncategorizedSnapshot = new LenientDispatchTelemetrySnapshot(
+            TotalHits: 5,
+            ToolAliasesResolved: 0,
+            ParameterAliasesResolved: 1,
+            NamespacesStripped: 0,
+            CasingNormalized: 0,
+            EnumValuesSnapped: 0,
+            EnumValuesUnmatched: 0,
+            StringifiedJsonRepaired: 0);
+        var fallbackBreakdown = CrucibleBenchmarkRunner.BuildTelemetryBreakdown(Array.Empty<ConversationTurn>(), uncategorizedSnapshot);
+        Assert.Equal(5, fallbackBreakdown.DispatcherRepairs);
+        Assert.Equal(1, fallbackBreakdown.ParameterAliasesResolved);
+        Assert.Equal(4, fallbackBreakdown.OtherDispatcherRepairs);
+    }
+
+    [Fact]
+    public async Task RunAsync_ScopesCSharpSkillsAndDotnetToolsMountToCSharpInstancesOnly()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-lang-skills.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"cs-inst","language":"csharp","repo":"owner/cs","base_commit":"c1","problem_statement":"C# fix"}""",
+            """{"instance_id":"py-inst","language":"python","repo":"owner/py","base_commit":"c2","problem_statement":"Py fix"}""",
+            """{"instance_id":"rs-inst","language":"rust","repo":"owner/rs","base_commit":"c3","problem_statement":"Rust fix"}"""
+        ]));
+
+        var wksCs = Path.Combine(_tempDir, "wks-lang-cs");
+        var wksPy = Path.Combine(_tempDir, "wks-lang-py");
+        var wksRs = Path.Combine(_tempDir, "wks-lang-rs");
+        Directory.CreateDirectory(wksCs);
+        Directory.CreateDirectory(wksPy);
+        Directory.CreateDirectory(wksRs);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "cs-inst"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-inst", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wksCs, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "py-inst"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "py-inst", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wksPy, BaseCommit = "c2" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rs-inst"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "rs-inst", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wksRs, BaseCommit = "c3" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync("diff");
+
+        var capturedByRepo = new Dictionary<string, (string? DisabledSkillsJson, bool MountHostDotnetTools)>(StringComparer.OrdinalIgnoreCase);
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>((ctx, _) =>
+            {
+                capturedByRepo[ctx.Workspace!.Name] = (ctx.Workspace.DisabledGlobalSkillsJson, ctx.SandboxScope?.MountHostDotnetTools ?? false);
+                return Task.FromResult(AgentRunResult.Completed(new AgentRunMetrics(50, 10, 10, 20), summary: "Ok"));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "lang-skills",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-lang-skills"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1", EnableStackSkills = true }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        Assert.True(capturedByRepo["owner/cs"].MountHostDotnetTools);
+        Assert.DoesNotContain(BenchmarkSkillNames.CSharpNav, capturedByRepo["owner/cs"].DisabledSkillsJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(BenchmarkSkillNames.CodeCondenser, capturedByRepo["owner/cs"].DisabledSkillsJson, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var nonCSharpRepo in new[] { "owner/py", "owner/rs" })
+        {
+            Assert.False(capturedByRepo[nonCSharpRepo].MountHostDotnetTools);
+            Assert.Contains(BenchmarkSkillNames.CSharpNav, capturedByRepo[nonCSharpRepo].DisabledSkillsJson, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(BenchmarkSkillNames.CodeCondenser, capturedByRepo[nonCSharpRepo].DisabledSkillsJson, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(BenchmarkSkillNames.MdFetch, capturedByRepo[nonCSharpRepo].DisabledSkillsJson, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void ResolveEffectiveMetrics_UsesCapturedMetricsAtomically_WithoutMixingDurationOrTokenFields()
+    {
+        // Primary has DurationMs > 0 with zero tokens; captured has tokens + its own DurationMs.
+        // TokensPerSecond must use captured.DurationMs (2_000ms -> 600 / 2.0 = 300.0), not primary.DurationMs (10_000ms).
+        var primaryZeroTokens = new AgentRunMetrics(DurationMs: 10_000, PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0);
+        var captured = new AgentRunMetrics(DurationMs: 2_000, PromptTokens: 4_000, CompletionTokens: 600, TotalTokens: 4_600);
+
+        var resolvedFromCaptured = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(primaryZeroTokens, captured, fallbackAgentDurationMs: 5_000);
+        Assert.Equal(4_000, resolvedFromCaptured.PromptTokens);
+        Assert.Equal(600, resolvedFromCaptured.CompletionTokens);
+        Assert.Equal(4_600, resolvedFromCaptured.TotalTokens);
+        Assert.Equal(300.0, resolvedFromCaptured.TokensPerSecond, 2);
+
+        // Primary has PromptTokens > 0 and CompletionTokens == 0; must NOT mix CompletionTokens from captured.
+        var primaryPromptOnly = new AgentRunMetrics(DurationMs: 1_000, PromptTokens: 250, CompletionTokens: 0, TotalTokens: 0);
+        var resolvedFromPrimary = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(primaryPromptOnly, captured, fallbackAgentDurationMs: 5_000);
+        Assert.Equal(250, resolvedFromPrimary.PromptTokens);
+        Assert.Equal(0, resolvedFromPrimary.CompletionTokens);
+        Assert.Equal(250, resolvedFromPrimary.TotalTokens);
+        Assert.Equal(0.0, resolvedFromPrimary.TokensPerSecond, 2);
+    }
+
+    [Fact]
+    public async Task RunAsync_AbnormalFailedResultWithDurationAndZeroTokens_UsesCapturedMetricsDurationForTokensPerSecond()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-failed-tokens.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cs-fail-tokens","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Fail with tokens"}""");
+
+        var wks = Path.Combine(_tempDir, "wks-fail-tokens");
+        Directory.CreateDirectory(wks);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-fail-tokens", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks, BaseCommit = "c1" });
+
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            new SessionTranscriptService(_tempDir),
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                var state = await coordinator.BeginAsync(ctx, StandardHarnessIds.Crucible, ct);
+                await coordinator.SaveTranscriptAsync(
+                    state,
+                    new CrucibleTranscriptRequest(
+                        ctx,
+                        wks,
+                        state.ChatHistory,
+                        ElapsedMs: 2_000,
+                        PromptTokens: 1_200,
+                        CompletionTokens: 600,
+                        Status: AgentRunStatus.Failed,
+                        Summary: "Failed",
+                        TracingClient: null,
+                        HarnessOptions: null,
+                        ActiveSkills: null),
+                    ct);
+
+                return AgentRunResult.Failed("Simulated failure", new AgentRunMetrics(DurationMs: 10_000));
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "fail-tokens",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-fail-tokens"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Error, result.Outcome);
+        Assert.Equal(1_200, result.PromptTokens);
+        Assert.Equal(600, result.CompletionTokens);
+        Assert.Equal(1_800, result.TotalTokens);
+        Assert.Equal(300.0, result.TokensPerSecond, 1);
+    }
+
+    [Fact]
+    public async Task RunAsync_UnhandledHarnessException_DrainsPendingTurnsAndPreservesCapturedMetrics()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-unhandled-ex.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cs-ex-1","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"Unhandled exception"}""");
+
+        var wks = Path.Combine(_tempDir, "wks-ex-1");
+        Directory.CreateDirectory(wks);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-ex-1", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks, BaseCommit = "c1" });
+
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            new SessionTranscriptService(_tempDir),
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                var state = await coordinator.BeginAsync(ctx, StandardHarnessIds.Crucible, ct);
+                var capture = InMemoryCrucibleConversationCoordinator.CurrentCapture!;
+                state.EnqueueWrite(
+                    async () =>
+                    {
+                        await Task.Delay(80);
+                        await capture.TurnSink.AddTurnAsync(
+                            state.Conversation.Id,
+                            StageTurnRole.Tool,
+                            toolName: CanonicalToolNames.Read,
+                            toolArguments: """{"path":"Bug.cs"}""",
+                            cancellationToken: CancellationToken.None);
+                    },
+                    "delayed turn before unhandled throw");
+
+                await coordinator.SaveTranscriptAsync(
+                    state,
+                    new CrucibleTranscriptRequest(
+                        ctx,
+                        wks,
+                        state.ChatHistory,
+                        ElapsedMs: 2_000,
+                        PromptTokens: 1_000,
+                        CompletionTokens: 400,
+                        Status: AgentRunStatus.Failed,
+                        Summary: "Crash",
+                        TracingClient: null,
+                        HarnessOptions: null,
+                        ActiveSkills: null),
+                    ct);
+
+                throw new InvalidOperationException("Simulated unhandled harness crash");
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "unhandled-ex",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-ex"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Error, result.Outcome);
+        Assert.Equal("Simulated unhandled harness crash", result.ErrorMessage);
+        Assert.Equal(1, result.Turns);
+        Assert.Equal(1, result.Telemetry.ReadCalls);
+        Assert.Equal(1_000, result.PromptTokens);
+        Assert.Equal(400, result.CompletionTokens);
+        Assert.Equal(1_400, result.TotalTokens);
+        Assert.Equal(200.0, result.TokensPerSecond, 1);
+    }
+
+    [Theory]
+    [InlineData(true, "csharp", true)]
+    [InlineData(true, "c#", true)]
+    [InlineData(true, "dotnet", true)]
+    [InlineData(true, null, true)]
+    [InlineData(false, "csharp", false)]
+    [InlineData(true, "python", false)]
+    [InlineData(true, "rust", false)]
+    [InlineData(true, "typescript", false)]
+    [InlineData(true, "javascript", false)]
+    [InlineData(true, "go", false)]
+    public void BuildExecutionScope_MountsHostDotnetToolsOnlyWhenSkillsEnabledAndLanguageIsCSharp(
+        bool enableStackSkills,
+        string? language,
+        bool expectedMount)
+    {
+        var scope = CrucibleBenchmarkRunner.BuildExecutionScope(
+            _tempDir,
+            null,
+            ExecutionMode.ContainerSandbox,
+            "ncf-bench-scope",
+            enableStackSkills,
+            language);
+
+        Assert.Equal(expectedMount, scope.MountHostDotnetTools);
+    }
+
+    [Fact]
+    public void ToolCallTelemetryBreakdown_SnakeCaseJsonRoundTrip_PreservesExtendedRepairFields()
+    {
+        var original = new ToolCallTelemetryBreakdown
+        {
+            TotalToolCalls = 4,
+            DispatcherRepairs = 7,
+            ToolAliasesResolved = 1,
+            ParameterAliasesResolved = 1,
+            NamespacesStripped = 1,
+            CasingNormalized = 1,
+            EnumValuesSnapped = 1,
+            StringifiedJsonRepaired = 1,
+            OtherDispatcherRepairs = 1
+        };
+
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true
+        };
+
+        var json = JsonSerializer.Serialize(original, options);
+        var roundTripped = JsonSerializer.Deserialize<ToolCallTelemetryBreakdown>(json, options);
+
+        Assert.NotNull(roundTripped);
+        Assert.Equal(original, roundTripped);
+        Assert.Contains("\"namespaces_stripped\":1", json);
+        Assert.Contains("\"casing_normalized\":1", json);
+        Assert.Contains("\"enum_values_snapped\":1", json);
+        Assert.Contains("\"other_dispatcher_repairs\":1", json);
     }
 }

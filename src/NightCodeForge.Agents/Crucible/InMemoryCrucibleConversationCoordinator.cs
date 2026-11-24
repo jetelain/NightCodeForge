@@ -20,6 +20,7 @@ public sealed class InMemoryConversationCapture
     public InMemoryConversationTurnSink TurnSink { get; internal set; } = new();
     public string? SavedTranscriptPath { get; internal set; }
     public long TotalModelCalls { get; internal set; }
+    public AgentRunMetrics? CapturedMetrics { get; internal set; }
 
     public InMemoryConversationCapture(string? targetTranscriptPath = null)
     {
@@ -119,6 +120,9 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
             capture.Conversation = conversation;
             capture.ConversationState = state;
             capture.TurnSink = sink;
+            capture.SavedTranscriptPath = null;
+            capture.TotalModelCalls = 0;
+            capture.CapturedMetrics = null;
         }
 
         return Task.FromResult(state);
@@ -139,9 +143,19 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
         var harnessOptions = request.HarnessOptions;
         var capture = _activeCapture.Value;
 
-        if (capture != null && tracingClient != null)
+        var metrics = new AgentRunMetrics(
+            DurationMs: request.ElapsedMs,
+            PromptTokens: request.PromptTokens,
+            CompletionTokens: request.CompletionTokens,
+            TotalTokens: request.PromptTokens + request.CompletionTokens);
+
+        if (capture != null)
         {
-            capture.TotalModelCalls = tracingClient.TotalModelCalls;
+            capture.CapturedMetrics = metrics;
+            if (tracingClient != null)
+            {
+                capture.TotalModelCalls = tracingClient.TotalModelCalls;
+            }
         }
 
         var systemPrompt = tracingClient?.LastCapturedSystemPrompt
@@ -169,12 +183,6 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
                 opts.KeepRecentTokens,
                 opts.ResolutionSource ?? "Unknown");
         }
-
-        var metrics = new AgentRunMetrics(
-            DurationMs: request.ElapsedMs,
-            PromptTokens: request.PromptTokens,
-            CompletionTokens: request.CompletionTokens,
-            TotalTokens: request.PromptTokens + request.CompletionTokens);
 
         var meta = new TranscriptMetadata(
             context.ForgeTask.Id,

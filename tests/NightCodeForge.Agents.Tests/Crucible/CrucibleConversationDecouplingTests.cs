@@ -125,6 +125,48 @@ public sealed class CrucibleConversationDecouplingTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(repoDir, "docs", "transcripts")));
         Assert.Equal(2, capture.TurnSink!.Turns.Count);
         Assert.Equal(StageExecutionStatus.Completed, capture.Conversation!.Status);
+        Assert.NotNull(capture.CapturedMetrics);
+        Assert.Equal(1200, capture.CapturedMetrics!.DurationMs);
+        Assert.Equal(100, capture.CapturedMetrics.PromptTokens);
+        Assert.Equal(50, capture.CapturedMetrics.CompletionTokens);
+        Assert.Equal(150, capture.CapturedMetrics.TotalTokens);
+    }
+
+    [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_ReusingCaptureAcrossBeginAsync_ClearsStaleMetricsAndTranscriptPath()
+    {
+        var transcriptService = new SessionTranscriptService(Path.Combine(_tempDir, "default-transcripts"));
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            transcriptService,
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var repoDir = Path.Combine(_tempDir, "repo-reuse");
+        Directory.CreateDirectory(repoDir);
+
+        var targetTranscript = Path.Combine(_tempDir, "bench-out", "transcripts", "cand-1", "reuse.md");
+        var capture = new InMemoryConversationCapture(targetTranscript)
+        {
+            SavedTranscriptPath = "/stale/path.md",
+            TotalModelCalls = 42,
+            CapturedMetrics = new AgentRunMetrics(DurationMs: 999, PromptTokens: 111, CompletionTokens: 222, TotalTokens: 333)
+        };
+
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Reuse task", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench Profile", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "Fix the bug",
+            WorkspacePath = repoDir
+        };
+
+        using var _ = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+        await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+
+        Assert.Null(capture.SavedTranscriptPath);
+        Assert.Equal(0, capture.TotalModelCalls);
+        Assert.Null(capture.CapturedMetrics);
     }
 
     [Fact]

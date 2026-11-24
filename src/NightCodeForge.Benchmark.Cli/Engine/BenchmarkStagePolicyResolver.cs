@@ -53,14 +53,21 @@ public static class BenchmarkStagePolicyResolver
         return new BenchmarkStagePolicy(stageId, AgentMode.Full, permittedTools, directive);
     }
 
-    public static void ConfigureWorkspaceSkills(Workspace workspace, bool enableStackSkills)
+    public static void ConfigureWorkspaceSkills(Workspace workspace, bool enableStackSkills, string? language)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
         if (enableStackSkills)
         {
             workspace.GlobalSkillsInjectionMode = GlobalSkillsInjectionMode.ForceEnabled;
-            workspace.DisabledGlobalSkillsJson = JsonSerializer.Serialize(new[] { BenchmarkSkillNames.MdFetch });
+            var disabledSkills = new List<string> { BenchmarkSkillNames.MdFetch };
+            if (!BenchmarkLanguages.IsCSharp(language))
+            {
+                disabledSkills.Add(BenchmarkSkillNames.CSharpNav);
+                disabledSkills.Add(BenchmarkSkillNames.CodeCondenser);
+            }
+
+            workspace.DisabledGlobalSkillsJson = JsonSerializer.Serialize(disabledSkills);
         }
         else
         {

@@ -148,7 +148,11 @@ public sealed record ToolCallTelemetryBreakdown
     public int DispatcherRepairs { get; init; }
     public int ToolAliasesResolved { get; init; }
     public int ParameterAliasesResolved { get; init; }
+    public int NamespacesStripped { get; init; }
+    public int CasingNormalized { get; init; }
+    public int EnumValuesSnapped { get; init; }
     public int StringifiedJsonRepaired { get; init; }
+    public int OtherDispatcherRepairs { get; init; }
     public int CsNavBashCalls { get; init; }
     public int CodeCondenserBashCalls { get; init; }
 
