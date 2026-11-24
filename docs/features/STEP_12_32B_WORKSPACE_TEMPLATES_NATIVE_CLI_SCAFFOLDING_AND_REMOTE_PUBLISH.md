@@ -6,7 +6,7 @@
 > *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -250,22 +250,22 @@ At the entry of the wizard, developers see an intuitive intake selector:
 
 ## 4. Implementation Checklist & Deliverables
 
-- [ ] **Core Models & Interfaces (`NightCodeForge.Core`):**
-  - [ ] Add `TemplateStackCategory`, `TemplateArchitectureArchetype`, `WorkspaceTemplateCommand`, `WorkspaceTemplateDefinition` in `NightCodeForge.Core.Domain`.
-  - [ ] Add `TemplateScaffoldingRequest`, `TemplateScaffoldingProgress`, and `IWorkspaceTemplateService` in `NightCodeForge.Core.Interfaces`.
-  - [ ] Add domain exceptions: `WorkspaceTemplateExecutionException`.
-- [ ] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
-  - [ ] Implement `WorkspaceTemplateService` registering the 4 built-in Clean Architecture templates.
-  - [ ] Implement CLI command execution pipeline via `CliWrap` with stdout/stderr logging and progress reporting.
-  - [ ] Implement `WorkspaceHygieneWriter` generating canonical `docs/`, `src/`, `tests/`, `.gitignore`, `.editorconfig`, and `README.md`.
-  - [ ] Implement automated `git init -b main` and initial commit execution.
-  - [ ] Integrate remote forge creation and `git push -u origin main` via `IVcsHostingProvider`.
-- [ ] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
-  - [ ] Add mode switcher in `WorkspaceCreationWizardModal.razor` ("Onboard Existing" vs "Create New from Template").
-  - [ ] Build `WizardTemplateSelector.razor` gallery with template cards, project name validation, and remote publish options.
-  - [ ] Connect template progress streaming to `WizardStep4Provisioning.razor`.
-- [ ] **Automated Testing:**
-  - [ ] Unit tests for `WorkspaceTemplateService` verifying template definitions and command parameter substitution in `NightCodeForge.Infrastructure.Tests`.
-  - [ ] Integration test executing CLI scaffolding in an isolated temp folder, asserting `docs/`, `src/`, `tests/`, `.git`, and solution build.
-  - [ ] bUnit tests for `WizardTemplateSelector.razor` verifying template selection, project name validation, and publish toggle.
+- [x] **Core Models & Interfaces (`NightCodeForge.Core`):**
+  - [x] Add `TemplateStackCategory`, `TemplateArchitectureArchetype`, `WorkspaceTemplateCommand`, `WorkspaceTemplateDefinition` in `NightCodeForge.Core.Domain`.
+  - [x] Add `TemplateScaffoldingRequest`, `TemplateScaffoldingProgress`, and `IWorkspaceTemplateService` in `NightCodeForge.Core.Interfaces`.
+  - [x] Add domain exceptions: `WorkspaceTemplateExecutionException`.
+- [x] **Infrastructure Implementation (`NightCodeForge.Infrastructure`):**
+  - [x] Implement `WorkspaceTemplateService` registering the 4 built-in Clean Architecture templates.
+  - [x] Implement CLI command execution pipeline (`IProcessRunner`) with stdout/stderr logging and progress reporting.
+  - [x] Implement `WorkspaceHygieneWriter` generating canonical `docs/`, `src/`, `tests/`, `.gitignore`, `.editorconfig`, `.gitattributes`, and `README.md`.
+  - [x] Implement automated `git init -b main` and initial commit execution.
+  - [x] Integrate remote forge creation and `git push -u origin main` via `IVcsHostingProvider`.
+- [x] **Web Presentation & Wizard UI (`NightCodeForge.Web`):**
+  - [x] Add mode switcher in `WorkspaceCreationWizardModal.razor` ("Onboard Existing" vs "Create New from Template").
+  - [x] Build `WizardTemplateSelector.razor` gallery with template cards, project name validation, and remote publish options.
+  - [x] Connect template progress streaming to `WizardStep4Provisioning.razor`.
+- [x] **Automated Testing:**
+  - [x] Unit tests for `WorkspaceTemplateService` verifying template definitions and command parameter substitution in `NightCodeForge.Infrastructure.Tests`.
+  - [x] Integration test executing CLI scaffolding in an isolated temp folder, asserting `docs/`, `src/`, `tests/`, `.git`, and solution build.
+  - [x] bUnit tests for `WizardTemplateSelector.razor` verifying template selection, project name validation, and publish toggle.
 

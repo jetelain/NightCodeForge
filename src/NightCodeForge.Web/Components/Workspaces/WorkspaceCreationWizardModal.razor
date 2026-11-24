@@ -1,9 +1,14 @@
 @namespace NightCodeForge.Web.Components.Workspaces
+@using System.Security
 @using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Exceptions
+@using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Web.Models
 @using NightCodeForge.Web.Services
 @using NightCodeForge.Web.Components.Workspaces.Steps
 @inject IWorkspaceProvisioningService ProvisioningService
+@inject IWorkspaceTemplateService TemplateService
+@inject IWorkspaceTemplateUiService TemplateUiService
 @inject WorkspaceStateService WorkspaceState
 @inject ToastService ToastService
 @inject NavigationManager Navigation
@@ -19,46 +24,101 @@
                     <span class="wizard-title-icon">🧙</span>
                     <div>
                         <h3 class="wizard-main-title">Workspace Provisioning Wizard</h3>
-                        <p class="wizard-header-desc">Onboard a local Git repository into NightCodeForge.</p>
+                        <p class="wizard-header-desc">
+                            @(_intakeMode == WizardIntakeMode.CreateFromTemplate
+                                ? "Scaffold a Clean Architecture repository from a native template and onboard it into NightCodeForge."
+                                : "Onboard a local Git repository into NightCodeForge.")
+                        </p>
                     </div>
                 </div>
                 <button type="button" class="forge-btn-close" @onclick="Close" title="Close wizard" disabled="@(_isProvisioningInProgress || (_currentStep == 4 && !_isProvisioningComplete && string.IsNullOrEmpty(_provisioningError)))">✕</button>
             </div>
 
             <!-- Stepper Progress Header -->
-            <div class="wizard-stepper">
-                <div class="step-node @(_currentStep >= 1 ? "active" : "") @(_currentStep > 1 ? "completed" : "")">
-                    <span class="step-num">1</span>
-                    <span class="step-label">Repository</span>
+            @if (_intakeMode == WizardIntakeMode.CreateFromTemplate)
+            {
+                <div class="wizard-stepper">
+                    <div class="step-node @(_currentStep >= 1 ? "active" : "") @(_currentStep > 1 ? "completed" : "")">
+                        <span class="step-num">1</span>
+                        <span class="step-label">Template</span>
+                    </div>
+                    <div class="step-connector @(_currentStep > 1 ? "completed" : "")"></div>
+                    <div class="step-node @(_currentStep >= 3 ? "active" : "") @(_currentStep > 3 ? "completed" : "")">
+                        <span class="step-num">2</span>
+                        <span class="step-label">Environment</span>
+                    </div>
+                    <div class="step-connector @(_currentStep > 3 ? "completed" : "")"></div>
+                    <div class="step-node @(_currentStep >= 4 ? "active" : "") @(_isProvisioningComplete ? "completed" : "")">
+                        <span class="step-num">3</span>
+                        <span class="step-label">Provision</span>
+                    </div>
                 </div>
-                <div class="step-connector @(_currentStep > 1 ? "completed" : "")"></div>
-                <div class="step-node @(_currentStep >= 2 ? "active" : "") @(_currentStep > 2 ? "completed" : "")">
-                    <span class="step-num">2</span>
-                    <span class="step-label">Stack &amp; Branch</span>
+            }
+            else
+            {
+                <div class="wizard-stepper">
+                    <div class="step-node @(_currentStep >= 1 ? "active" : "") @(_currentStep > 1 ? "completed" : "")">
+                        <span class="step-num">1</span>
+                        <span class="step-label">Repository</span>
+                    </div>
+                    <div class="step-connector @(_currentStep > 1 ? "completed" : "")"></div>
+                    <div class="step-node @(_currentStep >= 2 ? "active" : "") @(_currentStep > 2 ? "completed" : "")">
+                        <span class="step-num">2</span>
+                        <span class="step-label">Stack &amp; Branch</span>
+                    </div>
+                    <div class="step-connector @(_currentStep > 2 ? "completed" : "")"></div>
+                    <div class="step-node @(_currentStep >= 3 ? "active" : "") @(_currentStep > 3 ? "completed" : "")">
+                        <span class="step-num">3</span>
+                        <span class="step-label">Environment</span>
+                    </div>
+                    <div class="step-connector @(_currentStep > 3 ? "completed" : "")"></div>
+                    <div class="step-node @(_currentStep >= 4 ? "active" : "") @(_isProvisioningComplete ? "completed" : "")">
+                        <span class="step-num">4</span>
+                        <span class="step-label">Provision</span>
+                    </div>
                 </div>
-                <div class="step-connector @(_currentStep > 2 ? "completed" : "")"></div>
-                <div class="step-node @(_currentStep >= 3 ? "active" : "") @(_currentStep > 3 ? "completed" : "")">
-                    <span class="step-num">3</span>
-                    <span class="step-label">Environment</span>
-                </div>
-                <div class="step-connector @(_currentStep > 3 ? "completed" : "")"></div>
-                <div class="step-node @(_currentStep >= 4 ? "active" : "") @(_isProvisioningComplete ? "completed" : "")">
-                    <span class="step-num">4</span>
-                    <span class="step-label">Provision</span>
-                </div>
-            </div>
+            }
 
             <!-- Wizard Step Body -->
             <div class="wizard-body">
                 @switch (_currentStep)
                 {
                     case 1:
-                        <WizardStep1PathProbe Model="@_model" 
-                                              ProbeResult="@_probeResult" 
-                                              IsProbing="@_isProbing"
-                                              OnProbeRequested="HandleProbeAsync" 
-                                              OnInitGitRequested="HandleInitGitAsync"
-                                              OnRemoteRepositoryOnboarded="HandleRemoteRepositoryOnboardedAsync" />
+                        <div class="wizard-mode-switcher mb-4" role="tablist" aria-label="Workspace creation mode">
+                            <button id="wizard-mode-existing"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="@(_intakeMode == WizardIntakeMode.OnboardExisting)"
+                                    class="wizard-mode-btn @(_intakeMode == WizardIntakeMode.OnboardExisting ? "active" : "")"
+                                    @onclick="() => SelectIntakeMode(WizardIntakeMode.OnboardExisting)">
+                                📁 Onboard Existing Repository
+                            </button>
+                            <button id="wizard-mode-template"
+                                    type="button"
+                                    role="tab"
+                                    aria-selected="@(_intakeMode == WizardIntakeMode.CreateFromTemplate)"
+                                    class="wizard-mode-btn @(_intakeMode == WizardIntakeMode.CreateFromTemplate ? "active" : "")"
+                                    @onclick="() => SelectIntakeMode(WizardIntakeMode.CreateFromTemplate)">
+                                ⚡ Create New from Template
+                            </button>
+                        </div>
+
+                        @if (_intakeMode == WizardIntakeMode.CreateFromTemplate)
+                        {
+                            <WizardTemplateSelector Model="@_model"
+                                                    TemplateModel="@_templateModel"
+                                                    ScaffoldedTargetDirectoryPath="@(_templateLocalScaffoldCompleted ? _scaffoldedTargetDirectoryPath : null)"
+                                                    OnSelectionChanged="HandleTemplateSelectionChanged" />
+                        }
+                        else
+                        {
+                            <WizardStep1PathProbe Model="@_model" 
+                                                  ProbeResult="@_probeResult" 
+                                                  IsProbing="@_isProbing"
+                                                  OnProbeRequested="HandleProbeAsync" 
+                                                  OnInitGitRequested="HandleInitGitAsync"
+                                                  OnRemoteRepositoryOnboarded="HandleRemoteRepositoryOnboardedAsync" />
+                        }
                         break;
                     case 2:
                         <WizardStep2StackBranch Model="@_model" 
@@ -69,6 +129,10 @@
                         break;
                     case 4:
                         <WizardStep4Provisioning ProgressMessage="@_provisioningMessage" 
+                                                 ProgressPercentage="@_provisioningPercentage"
+                                                 IsTemplateMode="@(_intakeMode == WizardIntakeMode.CreateFromTemplate)"
+                                                 IsLocalScaffoldCompleted="@_templateLocalScaffoldCompleted"
+                                                 IsRemotePublishFailed="@_templateRemotePublishFailed"
                                                  IsComplete="@_isProvisioningComplete"
                                                  CreatedWorkspace="@_createdWorkspace"
                                                  ErrorMessage="@_provisioningError" />
@@ -118,12 +182,32 @@
                 }
                 else if (_currentStep == 4 && !string.IsNullOrEmpty(_provisioningError))
                 {
-                    <button type="button" 
-                            class="forge-btn forge-btn-primary" 
-                            @onclick="ExecuteProvisioningAsync"
-                            disabled="@_isProvisioningInProgress">
-                        🔄 Retry Provisioning
-                    </button>
+                    @if (_intakeMode == WizardIntakeMode.CreateFromTemplate && _templateRemotePublishFailed && _templateLocalScaffoldCompleted)
+                    {
+                        <button id="continue-local-only-btn"
+                                type="button"
+                                class="forge-btn forge-btn-secondary"
+                                @onclick="ContinueLocalOnlyProvisioningAsync"
+                                disabled="@_isProvisioningInProgress">
+                            📁 Continue Local-Only
+                        </button>
+                        <button id="retry-remote-publish-btn"
+                                type="button"
+                                class="forge-btn forge-btn-primary"
+                                @onclick="RetryRemotePublishAndProvisionAsync"
+                                disabled="@_isProvisioningInProgress">
+                            🔄 Retry Remote Publish
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button" 
+                                class="forge-btn forge-btn-primary" 
+                                @onclick="ExecuteProvisioningAsync"
+                                disabled="@_isProvisioningInProgress">
+                            🔄 Retry Provisioning
+                        </button>
+                    }
                 }
                 else if (_isProvisioningComplete)
                 {
@@ -137,6 +221,12 @@
 }
 
 @code {
+    private enum WizardIntakeMode
+    {
+        OnboardExisting,
+        CreateFromTemplate
+    }
+
     [Parameter]
     public bool IsOpen { get; set; }
 
@@ -147,13 +237,22 @@
     public EventCallback<Workspace> OnWorkspaceCreated { get; set; }
 
     private int _currentStep = 1;
+    private WizardIntakeMode _intakeMode = WizardIntakeMode.OnboardExisting;
     private WorkspaceCreationModel _model = new();
+    private WorkspaceTemplateSelectionModel _templateModel = new();
     private RepositoryProbeResult? _probeResult;
     private bool _isProbing = false;
 
     private string _provisioningMessage = string.Empty;
+    private int? _provisioningPercentage;
     private bool _isProvisioningComplete = false;
     private bool _isProvisioningInProgress = false;
+    private bool _templateLocalScaffoldCompleted = false;
+    private bool _templateRemotePublishFailed = false;
+    private string? _scaffoldedTemplateId;
+    private string? _scaffoldedProjectName;
+    private string? _scaffoldedTargetDirectoryPath;
+    private VcsRepositorySummary? _templatePublishedRepository;
     private Workspace? _createdWorkspace;
     private string? _provisioningError;
 
@@ -185,14 +284,97 @@
     private void ResetWizard()
     {
         _currentStep = 1;
+        _intakeMode = WizardIntakeMode.OnboardExisting;
         _model = new WorkspaceCreationModel();
+        _templateModel = new WorkspaceTemplateSelectionModel();
         _probeResult = null;
         _isProbing = false;
         _provisioningMessage = string.Empty;
+        _provisioningPercentage = null;
         _isProvisioningComplete = false;
         _isProvisioningInProgress = false;
+        _templateLocalScaffoldCompleted = false;
+        _templateRemotePublishFailed = false;
+        _scaffoldedTemplateId = null;
+        _scaffoldedProjectName = null;
+        _scaffoldedTargetDirectoryPath = null;
+        _templatePublishedRepository = null;
         _createdWorkspace = null;
         _provisioningError = null;
+    }
+
+    private void SelectIntakeMode(WizardIntakeMode mode)
+    {
+        if (_intakeMode == mode)
+        {
+            return;
+        }
+
+        _intakeMode = mode;
+        _probeResult = null;
+        _templateLocalScaffoldCompleted = false;
+        _templateRemotePublishFailed = false;
+        _scaffoldedTemplateId = null;
+        _scaffoldedProjectName = null;
+        _scaffoldedTargetDirectoryPath = null;
+        _templatePublishedRepository = null;
+        _provisioningError = null;
+
+        if (mode == WizardIntakeMode.CreateFromTemplate)
+        {
+            _model.DefaultBaseBranch = WorkspaceTemplateConstants.DefaultBranch;
+            _model.GitHubSettings = null;
+            _model.Name = _templateModel.ProjectName.Trim();
+            _model.RepositoryPath = _templateModel.TargetDirectoryPath.Trim();
+        }
+    }
+
+    private void HandleTemplateSelectionChanged()
+    {
+        if (_templateLocalScaffoldCompleted && HasLocalScaffoldIdentityChanged())
+        {
+            _templateLocalScaffoldCompleted = false;
+            _scaffoldedTemplateId = null;
+            _scaffoldedProjectName = null;
+            _scaffoldedTargetDirectoryPath = null;
+            _templatePublishedRepository = null;
+            _model.GitHubSettings = null;
+        }
+
+        _templateRemotePublishFailed = false;
+        _provisioningError = null;
+        StateHasChanged();
+    }
+
+    private bool HasLocalScaffoldIdentityChanged()
+    {
+        if (!string.Equals(_templateModel.SelectedTemplateId?.Trim(), _scaffoldedTemplateId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.Equals(_templateModel.ProjectName.Trim(), _scaffoldedProjectName, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var currentTarget = _templateModel.TargetDirectoryPath.Trim();
+        if (string.IsNullOrWhiteSpace(currentTarget) || string.IsNullOrWhiteSpace(_scaffoldedTargetDirectoryPath))
+        {
+            return !string.Equals(currentTarget, _scaffoldedTargetDirectoryPath, StringComparison.Ordinal);
+        }
+
+        try
+        {
+            var left = Path.GetFullPath(currentTarget).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var right = Path.GetFullPath(_scaffoldedTargetDirectoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return !string.Equals(left, right, comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or SecurityException)
+        {
+            return true;
+        }
     }
 
     private void HandleBackdropClick()
@@ -283,6 +465,10 @@
 
     private bool CanProceedFromStep(int step) => step switch
     {
+        1 when _intakeMode == WizardIntakeMode.CreateFromTemplate =>
+            TemplateUiService.CanProceed(
+                _templateModel,
+                _templateLocalScaffoldCompleted ? _scaffoldedTargetDirectoryPath : null),
         1 => !string.IsNullOrWhiteSpace(_model.Name) &&
              !string.IsNullOrWhiteSpace(_model.RepositoryPath) &&
              (_probeResult?.IsGitRepository == true),
@@ -293,14 +479,39 @@
 
     private void GoNext()
     {
-        if (_currentStep < 3 && CanProceedFromStep(_currentStep))
+        if (_currentStep >= 3 || !CanProceedFromStep(_currentStep))
         {
-            _currentStep++;
+            return;
         }
+
+        if (_intakeMode == WizardIntakeMode.CreateFromTemplate && _currentStep == 1)
+        {
+            _model.DefaultBaseBranch = WorkspaceTemplateConstants.DefaultBranch;
+            _model.RepositoryPath = _templateModel.TargetDirectoryPath.Trim();
+            if (string.IsNullOrWhiteSpace(_model.Name))
+            {
+                _model.Name = _templateModel.ProjectName.Trim();
+            }
+            var selectedTemplate = TemplateUiService.GetTemplate(_templateModel.SelectedTemplateId);
+            if (selectedTemplate is not null && string.Equals(_model.Emoji, WorkspacePresentationHelper.DefaultEmoji, StringComparison.Ordinal))
+            {
+                _model.Emoji = selectedTemplate.IconEmoji;
+            }
+            _currentStep = 3;
+            return;
+        }
+
+        _currentStep++;
     }
 
     private void GoPrevious()
     {
+        if (_intakeMode == WizardIntakeMode.CreateFromTemplate && _currentStep == 3)
+        {
+            _currentStep = 1;
+            return;
+        }
+
         if (_currentStep > 1)
         {
             _currentStep--;
@@ -316,11 +527,32 @@
         _currentStep = 4;
         _isProvisioningComplete = false;
         _provisioningError = null;
+        _templateRemotePublishFailed = false;
         _createdWorkspace = null;
-        _provisioningMessage = "Starting workspace onboarding pipeline...";
+        if (_intakeMode == WizardIntakeMode.CreateFromTemplate)
+        {
+            if (_templateLocalScaffoldCompleted)
+            {
+                var needsRemotePublish = _templateModel.PublishToRemoteForge && _templatePublishedRepository is null;
+                _provisioningPercentage = needsRemotePublish ? 88 : 95;
+                _provisioningMessage = needsRemotePublish
+                    ? "Retrying remote forge publishing..."
+                    : "Starting Phase B: onboarding workspace into NightCodeForge...";
+            }
+            else
+            {
+                _provisioningPercentage = 5;
+                _provisioningMessage = "Starting Phase A: native template scaffolding...";
+            }
+        }
+        else
+        {
+            _provisioningPercentage = null;
+            _provisioningMessage = "Starting workspace onboarding pipeline...";
+        }
         StateHasChanged();
 
-        var progress = new Progress<string>(msg =>
+        var onboardingProgress = new Progress<string>(msg =>
         {
             _provisioningMessage = msg;
             _ = InvokeAsync(StateHasChanged);
@@ -328,7 +560,67 @@
 
         try
         {
-            _createdWorkspace = await ProvisioningService.ProvisionWorkspaceAsync(_model, progress);
+            if (_intakeMode == WizardIntakeMode.CreateFromTemplate)
+            {
+                var request = TemplateUiService.BuildScaffoldingRequest(_templateModel);
+                _model.RepositoryPath = request.TargetDirectoryPath;
+                _model.DefaultBaseBranch = WorkspaceTemplateConstants.DefaultBranch;
+                if (string.IsNullOrWhiteSpace(_model.Name))
+                {
+                    _model.Name = request.ProjectName;
+                }
+
+                if (!_templateLocalScaffoldCompleted)
+                {
+                    var templateProgress = new SynchronousProgress<TemplateScaffoldingProgress>(p =>
+                    {
+                        _provisioningMessage = p.CurrentStep;
+                        _provisioningPercentage = p.Percentage;
+                        if (p.LocalScaffoldCompleted)
+                        {
+                            _templateLocalScaffoldCompleted = true;
+                            RecordLocalScaffoldSnapshot(request);
+                        }
+                        _ = InvokeAsync(StateHasChanged);
+                    });
+
+                    try
+                    {
+                        var result = await TemplateService.ScaffoldWorkspaceAsync(request, templateProgress);
+                        _templateLocalScaffoldCompleted = result.LocalScaffoldCompleted;
+                        if (result.LocalScaffoldCompleted)
+                        {
+                            RecordLocalScaffoldSnapshot(request);
+                        }
+                        _templatePublishedRepository = result.PublishedRepository;
+                        _model.GitHubSettings = TemplateUiService.BuildGitHubSettingsIfApplicable(
+                            request.RemoteProviderType,
+                            result.PublishedRepository);
+                    }
+                    catch (VcsHostingProviderException ex) when (_templateLocalScaffoldCompleted)
+                    {
+                        _templateRemotePublishFailed = true;
+                        _provisioningError = ex.Message;
+                        ToastService.Show("Remote Publish Failed", ex.Message, ToastLevel.Error);
+                        return;
+                    }
+                }
+                else if (request.PublishToRemoteForge && request.RemoteProviderType.HasValue && _templatePublishedRepository is null)
+                {
+                    await PublishOnlyPhaseAsync(request);
+                    if (_templateRemotePublishFailed)
+                    {
+                        return;
+                    }
+                }
+
+                _provisioningPercentage = 95;
+                _provisioningMessage = "Starting Phase B: onboarding workspace into NightCodeForge...";
+                StateHasChanged();
+            }
+
+            _createdWorkspace = await ProvisioningService.ProvisionWorkspaceAsync(_model, onboardingProgress);
+            _provisioningPercentage = _intakeMode == WizardIntakeMode.CreateFromTemplate ? 100 : null;
             _isProvisioningComplete = true;
         }
         catch (Exception ex)
@@ -343,6 +635,77 @@
             StateHasChanged();
         }
 
+        await NotifyWorkspaceCreatedAsync();
+    }
+
+    private async Task RetryRemotePublishAndProvisionAsync()
+    {
+        if (_isProvisioningInProgress || !_templateLocalScaffoldCompleted)
+            return;
+
+        await ExecuteProvisioningAsync();
+    }
+
+    private async Task ContinueLocalOnlyProvisioningAsync()
+    {
+        if (_isProvisioningInProgress || !_templateLocalScaffoldCompleted)
+            return;
+
+        _templateModel.PublishToRemoteForge = false;
+        _templatePublishedRepository = null;
+        _model.GitHubSettings = null;
+        _templateRemotePublishFailed = false;
+        await ExecuteProvisioningAsync();
+    }
+
+    private void RecordLocalScaffoldSnapshot(TemplateScaffoldingRequest request)
+    {
+        _scaffoldedTemplateId = request.TemplateId;
+        _scaffoldedProjectName = request.ProjectName;
+        _scaffoldedTargetDirectoryPath = request.TargetDirectoryPath;
+    }
+
+    private async Task PublishOnlyPhaseAsync(TemplateScaffoldingRequest request)
+    {
+        if (!request.RemoteProviderType.HasValue)
+        {
+            _templateRemotePublishFailed = true;
+            _provisioningError = "Remote VCS hosting provider is not configured.";
+            return;
+        }
+
+        var templateProgress = new SynchronousProgress<TemplateScaffoldingProgress>(p =>
+        {
+            _provisioningMessage = p.CurrentStep;
+            _provisioningPercentage = p.Percentage;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            var effectiveRepoName = string.IsNullOrWhiteSpace(request.RemoteRepositoryName)
+                ? request.ProjectName
+                : request.RemoteRepositoryName;
+            var repo = await TemplateService.PublishToRemoteForgeAsync(
+                request.TargetDirectoryPath,
+                request.RemoteProviderType.Value,
+                effectiveRepoName,
+                request.RemoteDescription,
+                request.RemoteIsPrivate,
+                templateProgress);
+            _templatePublishedRepository = repo;
+            _model.GitHubSettings = TemplateUiService.BuildGitHubSettingsIfApplicable(request.RemoteProviderType, repo);
+        }
+        catch (VcsHostingProviderException ex)
+        {
+            _templateRemotePublishFailed = true;
+            _provisioningError = ex.Message;
+            ToastService.Show("Remote Publish Failed", ex.Message, ToastLevel.Error);
+        }
+    }
+
+    private async Task NotifyWorkspaceCreatedAsync()
+    {
         // Post-provisioning activation and notifications are isolated from provisioning failure handling
         if (_createdWorkspace != null)
         {
@@ -352,9 +715,10 @@
                 ToastService.Show("Workspace Created", $"Workspace '{_createdWorkspace.Name}' is ready.", ToastLevel.Success);
                 await OnWorkspaceCreated.InvokeAsync(_createdWorkspace);
             }
-            catch
+            catch (Exception ex)
             {
                 // Non-critical notification error; workspace is already provisioned
+                System.Diagnostics.Debug.WriteLine($"Post-provisioning notification failed: {ex.Message}");
             }
             finally
             {
@@ -371,6 +735,11 @@
         }
         Close();
         Navigation.NavigateTo(WorkspaceState.GetPath(""));
+    }
+
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
     }
 
     public void Dispose()

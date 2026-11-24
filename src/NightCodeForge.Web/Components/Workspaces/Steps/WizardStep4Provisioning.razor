@@ -62,15 +62,35 @@
             <div class="provision-card-header text-danger">
                 <span class="status-icon">❌</span>
                 <div>
-                    <h4 class="status-title">Provisioning Failed</h4>
-                    <p class="status-subtitle">An error occurred while provisioning the workspace.</p>
+                    <h4 class="status-title">@(IsRemotePublishFailed ? "Remote Publishing Failed" : "Provisioning Failed")</h4>
+                    <p class="status-subtitle">
+                        @if (IsRemotePublishFailed)
+                        {
+                            <span>Your local repository and baseline commit succeeded, but publishing to the remote forge failed. You can retry publishing, edit the remote repository name, or continue with local-only onboarding.</span>
+                        }
+                        else if (IsTemplateMode && IsLocalScaffoldCompleted)
+                        {
+                            <span>Your local repository and baseline commit succeeded, but NightCodeForge workspace onboarding failed. Retrying will resume onboarding without re-scaffolding.</span>
+                        }
+                        else
+                        {
+                            <span>An error occurred while provisioning the workspace.</span>
+                        }
+                    </p>
                 </div>
             </div>
             <div class="error-detail-box font-mono">
                 @ErrorMessage
             </div>
             <p class="error-hint">
-                Please verify directory permissions, ensure Git is available on your PATH, and retry.
+                @if (IsRemotePublishFailed)
+                {
+                    <span>Tip: Verify the remote repository name does not already exist or check your forge authentication in Settings.</span>
+                }
+                else
+                {
+                    <span>Please verify directory permissions, ensure Git is available on your PATH, and retry.</span>
+                }
             </p>
         </div>
     }
@@ -82,9 +102,23 @@
                 <div class="spinner-large"></div>
                 <div>
                     <h4 class="status-title">Provisioning Workspace...</h4>
-                    <p class="status-subtitle">Configuring repository boundaries, Git mirror clone, and agent environment.</p>
+                    <p class="status-subtitle">
+                        @(IsTemplateMode
+                            ? "Executing native CLI scaffolding, hygiene setup, Git baseline commit, and NightCodeForge onboarding."
+                            : "Configuring repository boundaries, Git mirror clone, and agent environment.")
+                    </p>
                 </div>
             </div>
+
+            @if (ProgressPercentage.HasValue)
+            {
+                <div class="template-progress-bar-wrap">
+                    <div class="template-progress-bar-track">
+                        <div class="template-progress-bar-fill" style="width: @(Math.Clamp(ProgressPercentage.Value, 0, 100))%;"></div>
+                    </div>
+                    <span class="template-progress-pct font-mono">@(Math.Clamp(ProgressPercentage.Value, 0, 100))%</span>
+                </div>
+            }
 
             <!-- Current Progress Banner -->
             <div class="current-task-pill font-mono">
@@ -93,28 +127,48 @@
             </div>
 
             <!-- Pipeline Checklist -->
-            <div class="provision-checklist">
-                <div class="checklist-item done">
-                    <span class="check-icon">✓</span>
-                    <span class="check-text">Validate local repository &amp; stack heuristics</span>
+            @if (IsTemplateMode)
+            {
+                <div class="provision-checklist">
+                    <div class="checklist-item @(IsLocalScaffoldCompleted ? "done" : "active")">
+                        <span class="check-icon">@(IsLocalScaffoldCompleted ? "✓" : "⏳")</span>
+                        <span class="check-text">Phase A: Execute native CLI template &amp; write hygiene files</span>
+                    </div>
+                    <div class="checklist-item @(IsLocalScaffoldCompleted ? "done" : "")">
+                        <span class="check-icon">@(IsLocalScaffoldCompleted ? "✓" : "○")</span>
+                        <span class="check-text">Initialize Git on <code>main</code> &amp; create baseline commit</span>
+                    </div>
+                    <div class="checklist-item @(IsLocalScaffoldCompleted ? "active" : "")">
+                        <span class="check-icon">@(IsLocalScaffoldCompleted ? "⏳" : "○")</span>
+                        <span class="check-text">Phase B: Persist workspace, Ext4 mirror &amp; <code>docs/tasks/</code> sync</span>
+                    </div>
                 </div>
-                <div class="checklist-item done">
-                    <span class="check-icon">✓</span>
-                    <span class="check-text">Configure execution boundaries &amp; sandboxing</span>
+            }
+            else
+            {
+                <div class="provision-checklist">
+                    <div class="checklist-item done">
+                        <span class="check-icon">✓</span>
+                        <span class="check-text">Validate local repository &amp; stack heuristics</span>
+                    </div>
+                    <div class="checklist-item done">
+                        <span class="check-icon">✓</span>
+                        <span class="check-text">Configure execution boundaries &amp; sandboxing</span>
+                    </div>
+                    <div class="checklist-item active">
+                        <span class="check-icon">⏳</span>
+                        <span class="check-text">Persist workspace &amp; initialize isolated Ext4 clone mirror</span>
+                    </div>
+                    <div class="checklist-item">
+                        <span class="check-icon">○</span>
+                        <span class="check-text">Scaffold <code>docs/tasks/</code> &amp; register markdown file watcher</span>
+                    </div>
+                    <div class="checklist-item">
+                        <span class="check-icon">○</span>
+                        <span class="check-text">Configure global &amp; dedicated agent profiles</span>
+                    </div>
                 </div>
-                <div class="checklist-item active">
-                    <span class="check-icon">⏳</span>
-                    <span class="check-text">Persist workspace &amp; initialize isolated Ext4 clone mirror</span>
-                </div>
-                <div class="checklist-item">
-                    <span class="check-icon">○</span>
-                    <span class="check-text">Scaffold <code>docs/tasks/</code> &amp; register markdown file watcher</span>
-                </div>
-                <div class="checklist-item">
-                    <span class="check-icon">○</span>
-                    <span class="check-text">Configure global &amp; dedicated agent profiles</span>
-                </div>
-            </div>
+            }
         </div>
     }
 </div>
@@ -131,4 +185,16 @@
 
     [Parameter]
     public string? ErrorMessage { get; set; }
+
+    [Parameter]
+    public int? ProgressPercentage { get; set; }
+
+    [Parameter]
+    public bool IsTemplateMode { get; set; }
+
+    [Parameter]
+    public bool IsLocalScaffoldCompleted { get; set; }
+
+    [Parameter]
+    public bool IsRemotePublishFailed { get; set; }
 }

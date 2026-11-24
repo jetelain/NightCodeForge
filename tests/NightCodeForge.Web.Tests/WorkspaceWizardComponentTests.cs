@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Services;
@@ -20,6 +21,8 @@ public class WorkspaceWizardComponentTests : BunitContext
     private readonly MockModelCatalogService _modelCatalogService;
     private readonly MockWslMetadataService _wslMetadataService;
     private readonly MockWorkspaceIntakeUiService _intakeUiService;
+    private readonly MockWorkspaceTemplateService _templateService;
+    private readonly MockWorkspaceTemplateUiService _templateUiService;
 
     public WorkspaceWizardComponentTests()
     {
@@ -29,6 +32,8 @@ public class WorkspaceWizardComponentTests : BunitContext
         _modelCatalogService = new MockModelCatalogService();
         _wslMetadataService = new MockWslMetadataService();
         _intakeUiService = new MockWorkspaceIntakeUiService();
+        _templateService = new MockWorkspaceTemplateService();
+        _templateUiService = new MockWorkspaceTemplateUiService(_templateService);
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -39,6 +44,8 @@ public class WorkspaceWizardComponentTests : BunitContext
         Services.AddSingleton(_toastService);
         Services.AddSingleton<IWorkspaceProvisioningService>(_provisioningService);
         Services.AddSingleton<IWorkspaceIntakeUiService>(_intakeUiService);
+        Services.AddSingleton<IWorkspaceTemplateService>(_templateService);
+        Services.AddSingleton<IWorkspaceTemplateUiService>(_templateUiService);
         Services.AddSingleton<ILlmModelCatalogService>(_modelCatalogService);
         Services.AddSingleton<IWslMetadataService>(_wslMetadataService);
         Services.AddSingleton<IConfiguration>(config);
@@ -380,10 +387,294 @@ public class WorkspaceWizardComponentTests : BunitContext
         Assert.Equal(2, _intakeUiService.LoadRemoteCallCount);
     }
 
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_TemplateMode_SkipsStep2AndProvisionsWithGitHubSettings()
+    {
+        _templateUiService.RemoteAvailability = new RemotePublishAvailability(
+            true,
+            VcsHostingProviderType.GitHub,
+            "GitHub",
+            "octocat");
+
+        var publishedRepo = new VcsRepositorySummary(
+            "99",
+            "BillingApp",
+            "octocat/BillingApp",
+            "octocat",
+            "Billing API",
+            true,
+            "main",
+            "https://github.com/octocat/BillingApp.git",
+            "git@github.com:octocat/BillingApp.git",
+            DateTimeOffset.UtcNow);
+        _templateService.PublishedRepositoryToReturn = publishedRepo;
+
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        Assert.NotEmpty(cut.FindAll(".template-gallery-grid"));
+
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "BillingApp" });
+        await cut.Find("#template-publish-toggle")
+            .ChangeAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = true });
+
+        // Continue goes directly from Step 1 (Template) to Step 3 (Environment), skipping Step 2
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        Assert.Empty(cut.FindAll("#base-branch-select"));
+        Assert.Contains("Execution Mode &amp; Environment Configuration", cut.Markup);
+
+        // Provision executes Phase A (template scaffold) then Phase B (workspace onboarding)
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.NotNull(_provisioningService.LastProvisionedModel);
+        Assert.Equal("main", _provisioningService.LastProvisionedModel.DefaultBaseBranch);
+        Assert.NotNull(_provisioningService.LastProvisionedModel.GitHubSettings);
+        Assert.True(_provisioningService.LastProvisionedModel.GitHubSettings.Enabled);
+        Assert.Equal("octocat", _provisioningService.LastProvisionedModel.GitHubSettings.RepositoryOwner);
+        Assert.Equal("BillingApp", _provisioningService.LastProvisionedModel.GitHubSettings.RepositoryName);
+        Assert.Contains("Workspace Ready!", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_TemplateMode_RemotePublishFailure_AllowsRetryWithoutReScaffoldingOrLocalOnly()
+    {
+        _templateUiService.RemoteAvailability = new RemotePublishAvailability(
+            true,
+            VcsHostingProviderType.GitHub,
+            "GitHub",
+            "octocat");
+        _templateService.ThrowRemoteFailureAfterLocalScaffold = true;
+
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "RetryApp" });
+        await cut.Find("#template-publish-toggle")
+            .ChangeAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = true });
+
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Null(_provisioningService.LastProvisionedModel);
+        Assert.NotEmpty(cut.FindAll("#retry-remote-publish-btn"));
+        Assert.NotEmpty(cut.FindAll("#continue-local-only-btn"));
+
+        // Retry remote publish succeeds without re-running ScaffoldWorkspaceAsync
+        _templateService.ThrowRemoteFailureAfterLocalScaffold = false;
+        _templateService.PublishedRepositoryToReturn = new VcsRepositorySummary(
+            "100",
+            "RetryApp",
+            "octocat/RetryApp",
+            "octocat",
+            string.Empty,
+            true,
+            "main",
+            "https://github.com/octocat/RetryApp.git",
+            "git@github.com:octocat/RetryApp.git",
+            DateTimeOffset.UtcNow);
+
+        await cut.Find("#retry-remote-publish-btn").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Equal(1, _templateService.PublishOnlyCallCount);
+        Assert.NotNull(_provisioningService.LastProvisionedModel);
+        Assert.Contains("Workspace Ready!", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_TemplateMode_PhaseBFailureAfterLocalScaffold_ShowsProvisioningFailedAndRetriesWithoutReScaffolding()
+    {
+        _provisioningService.ProvisionExceptionToThrow = new InvalidOperationException("Database locked");
+
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "LocalOnlyApp" });
+
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Contains("Provisioning Failed", cut.Markup);
+        Assert.DoesNotContain("Remote Publishing Failed", cut.Markup);
+        Assert.Empty(cut.FindAll("#retry-remote-publish-btn"));
+        Assert.Empty(cut.FindAll("#continue-local-only-btn"));
+
+        // Retry Phase B without re-running local template scaffolding
+        _provisioningService.ProvisionExceptionToThrow = null;
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Equal(0, _templateService.PublishOnlyCallCount);
+        Assert.NotNull(_provisioningService.LastProvisionedModel);
+        Assert.Contains("Workspace Ready!", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_TemplateMode_PhaseBFailureAfterNonGitHubPublish_RetriesWithoutRepublishing()
+    {
+        _templateUiService.RemoteAvailability = new RemotePublishAvailability(
+            true,
+            VcsHostingProviderType.GitLab,
+            "GitLab",
+            "octocat");
+        _templateService.PublishedRepositoryToReturn = new VcsRepositorySummary(
+            "200",
+            "GitLabApp",
+            "octocat/GitLabApp",
+            "octocat",
+            string.Empty,
+            true,
+            "main",
+            "https://gitlab.com/octocat/GitLabApp.git",
+            "git@gitlab.com:octocat/GitLabApp.git",
+            DateTimeOffset.UtcNow);
+        _provisioningService.ProvisionExceptionToThrow = new InvalidOperationException("Ext4 mirror failed");
+
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "GitLabApp" });
+        await cut.Find("#template-publish-toggle")
+            .ChangeAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = true });
+
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Contains("Provisioning Failed", cut.Markup);
+
+        _provisioningService.ProvisionExceptionToThrow = null;
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Equal(0, _templateService.PublishOnlyCallCount);
+        Assert.NotNull(_provisioningService.LastProvisionedModel);
+        Assert.Null(_provisioningService.LastProvisionedModel.GitHubSettings);
+        Assert.Contains("Workspace Ready!", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_TemplateMode_EditRemoteRepoNameAfterPublishFailure_PreservesLocalScaffoldAndRetriesWithNewName()
+    {
+        _templateUiService.RemoteAvailability = new RemotePublishAvailability(
+            true,
+            VcsHostingProviderType.GitHub,
+            "GitHub",
+            "octocat");
+        _templateService.ThrowRemoteFailureAfterLocalScaffold = true;
+
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "RetryApp" });
+        await cut.Find("#template-publish-toggle")
+            .ChangeAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = true });
+
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.NotEmpty(cut.FindAll("#retry-remote-publish-btn"));
+
+        // Navigate back to Step 1 (Template) via Edit Configuration -> Back
+        await cut.Find("button.forge-btn-secondary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-secondary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        // Edit only the remote repository name; local scaffold remains preserved
+        await cut.Find("#template-remote-repo-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "RetryApp-v2" });
+
+        _templateService.ThrowRemoteFailureAfterLocalScaffold = false;
+        _templateService.PublishedRepositoryToReturn = new VcsRepositorySummary(
+            "101",
+            "RetryApp-v2",
+            "octocat/RetryApp-v2",
+            "octocat",
+            string.Empty,
+            true,
+            "main",
+            "https://github.com/octocat/RetryApp-v2.git",
+            "git@github.com:octocat/RetryApp-v2.git",
+            DateTimeOffset.UtcNow);
+
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Equal(1, _templateService.PublishOnlyCallCount);
+        Assert.Equal("RetryApp-v2", _templateService.LastPublishedRepositoryName);
+        Assert.Contains("Workspace Ready!", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_TemplateMode_RemotePublishFailure_ContinueLocalOnlySkipsPublishAndProvisions()
+    {
+        _templateUiService.RemoteAvailability = new RemotePublishAvailability(
+            true,
+            VcsHostingProviderType.GitHub,
+            "GitHub",
+            "octocat");
+        _templateService.ThrowRemoteFailureAfterLocalScaffold = true;
+
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "FallbackLocalApp" });
+        await cut.Find("#template-publish-toggle")
+            .ChangeAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = true });
+
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("button.forge-btn-primary").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.NotEmpty(cut.FindAll("#continue-local-only-btn"));
+
+        await cut.Find("#continue-local-only-btn").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.Equal(1, _templateService.ScaffoldCallCount);
+        Assert.Equal(0, _templateService.PublishOnlyCallCount);
+        Assert.NotNull(_provisioningService.LastProvisionedModel);
+        Assert.Null(_provisioningService.LastProvisionedModel.GitHubSettings);
+        Assert.Contains("Workspace Ready!", cut.Markup);
+    }
+
+    [Fact]
+    public async Task WorkspaceCreationWizardModal_SwitchingFromExistingToTemplateAndBack_ClearsStaleProbeResult()
+    {
+        var cut = Render<WorkspaceCreationWizardModal>(parameters => parameters.Add(p => p.IsOpen, true));
+
+        await cut.Find("#repo-path-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "C:\\repos\\ExistingRepo" });
+        await cut.FindAll("button").First(b => b.TextContent.Contains("Probe"))
+            .ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.False(cut.Find(".wizard-footer button.forge-btn-primary").HasAttribute("disabled"));
+
+        await cut.Find("#wizard-mode-template").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+        await cut.Find("#template-project-name-input")
+            .InputAsync(new Microsoft.AspNetCore.Components.ChangeEventArgs { Value = "NewTemplateApp" });
+
+        await cut.Find("#wizard-mode-existing").ClickAsync(new Microsoft.AspNetCore.Components.Web.MouseEventArgs());
+
+        Assert.True(cut.Find(".wizard-footer button.forge-btn-primary").HasAttribute("disabled"));
+    }
+
     #region Mocks
 
     private class MockWorkspaceProvisioningService : IWorkspaceProvisioningService
     {
+        public WorkspaceCreationModel? LastProvisionedModel { get; private set; }
+        public Exception? ProvisionExceptionToThrow { get; set; }
+
         public Task<RepositoryProbeResult> ProbeRepositoryAsync(string directoryPath, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(new RepositoryProbeResult(
@@ -402,6 +693,12 @@ public class WorkspaceWizardComponentTests : BunitContext
 
         public Task<Workspace> ProvisionWorkspaceAsync(WorkspaceCreationModel model, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
         {
+            if (ProvisionExceptionToThrow is not null)
+            {
+                throw ProvisionExceptionToThrow;
+            }
+
+            LastProvisionedModel = model;
             return Task.FromResult(new Workspace
             {
                 Id = 1,
@@ -496,6 +793,185 @@ public class WorkspaceWizardComponentTests : BunitContext
 
         public string DeriveWorkspaceNameFromPath(string? repositoryPath)
             => string.IsNullOrWhiteSpace(repositoryPath) ? string.Empty : Path.GetFileName(repositoryPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+    }
+
+    private class MockWorkspaceTemplateService : IWorkspaceTemplateService
+    {
+        private readonly IReadOnlyList<WorkspaceTemplateDefinition> _templates =
+        [
+            new WorkspaceTemplateDefinition(
+                WorkspaceTemplateConstants.DotNetCleanWebAppId,
+                "Web Application (Clean Architecture)",
+                "Blazor Server Clean Architecture",
+                "🌐",
+                TemplateStackCategory.DotNet,
+                TemplateArchitectureArchetype.WebApp,
+                Array.Empty<WorkspaceTemplateCommand>(),
+                ["src/{ProjectName}.Web", "src/{ProjectName}.Core"]),
+            new WorkspaceTemplateDefinition(
+                WorkspaceTemplateConstants.DotNetClassLibId,
+                "Class Library",
+                "Modular class library",
+                "📦",
+                TemplateStackCategory.DotNet,
+                TemplateArchitectureArchetype.ClassLibrary,
+                Array.Empty<WorkspaceTemplateCommand>(),
+                ["src/{ProjectName}", "tests/{ProjectName}.Tests"])
+        ];
+
+        public int ScaffoldCallCount { get; private set; }
+        public int PublishOnlyCallCount { get; private set; }
+        public string? LastPublishedRepositoryName { get; private set; }
+        public bool ThrowRemoteFailureAfterLocalScaffold { get; set; }
+        public VcsRepositorySummary? PublishedRepositoryToReturn { get; set; }
+
+        public IReadOnlyList<WorkspaceTemplateDefinition> GetAvailableTemplates() => _templates;
+
+        public WorkspaceTemplateDefinition? GetTemplate(string templateId)
+            => _templates.FirstOrDefault(t => string.Equals(t.Id, templateId, StringComparison.OrdinalIgnoreCase));
+
+        public Task<TemplateScaffoldingResult> ScaffoldWorkspaceAsync(
+            TemplateScaffoldingRequest request,
+            IProgress<TemplateScaffoldingProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            ScaffoldCallCount++;
+            progress?.Report(new TemplateScaffoldingProgress("Local scaffold complete.", 85, false, null, LocalScaffoldCompleted: true));
+
+            if (ThrowRemoteFailureAfterLocalScaffold)
+            {
+                throw new VcsHostingProviderException(VcsHostingProviderType.GitHub, "Repository already exists on GitHub.");
+            }
+
+            progress?.Report(new TemplateScaffoldingProgress("Done.", 100, true, null, LocalScaffoldCompleted: true));
+            return Task.FromResult(new TemplateScaffoldingResult(
+                request.TargetDirectoryPath,
+                request.TemplateId,
+                request.ProjectName,
+                LocalScaffoldCompleted: true,
+                GitInitialized: request.InitializeGit,
+                PublishedRepository: request.PublishToRemoteForge ? PublishedRepositoryToReturn : null));
+        }
+
+        public Task<VcsRepositorySummary> PublishToRemoteForgeAsync(
+            string targetDirectoryPath,
+            VcsHostingProviderType providerType,
+            string repositoryName,
+            string? description,
+            bool isPrivate,
+            IProgress<TemplateScaffoldingProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            PublishOnlyCallCount++;
+            LastPublishedRepositoryName = repositoryName;
+            if (ThrowRemoteFailureAfterLocalScaffold)
+            {
+                throw new VcsHostingProviderException(providerType, "Retry remote publish failed.");
+            }
+
+            return Task.FromResult(PublishedRepositoryToReturn ?? new VcsRepositorySummary(
+                "1",
+                repositoryName,
+                $"octocat/{repositoryName}",
+                "octocat",
+                description ?? string.Empty,
+                isPrivate,
+                "main",
+                $"https://github.com/octocat/{repositoryName}.git",
+                $"git@github.com:octocat/{repositoryName}.git",
+                DateTimeOffset.UtcNow));
+        }
+    }
+
+    private class MockWorkspaceTemplateUiService : IWorkspaceTemplateUiService
+    {
+        private readonly IWorkspaceTemplateService _templateService;
+
+        public MockWorkspaceTemplateUiService(IWorkspaceTemplateService templateService)
+        {
+            _templateService = templateService;
+        }
+
+        public RemotePublishAvailability RemoteAvailability { get; set; } = new(false, null, null, null);
+
+        public IReadOnlyList<WorkspaceTemplateDefinition> GetTemplates() => _templateService.GetAvailableTemplates();
+
+        public WorkspaceTemplateDefinition? GetTemplate(string? templateId)
+            => string.IsNullOrWhiteSpace(templateId) ? null : _templateService.GetTemplate(templateId);
+
+        public ProjectNameValidationResult ValidateProjectName(string? projectName)
+            => WorkspaceTemplateProjectNameValidator.Validate(projectName);
+
+        public ProjectNameValidationResult ValidateRemoteRepositoryName(string? repositoryName)
+            => WorkspaceTemplateProjectNameValidator.ValidateRepositoryName(repositoryName);
+
+        public TargetPathValidationResult ValidateTargetDirectoryPath(string? targetPath, string? alreadyScaffoldedDirectoryPath = null)
+            => new(!string.IsNullOrWhiteSpace(targetPath), string.IsNullOrWhiteSpace(targetPath) ? "Required" : null, false, false);
+
+        public string ResolveDefaultTargetDirectoryPath(string projectName)
+            => string.IsNullOrWhiteSpace(projectName) ? string.Empty : Path.Combine(Path.GetTempPath(), "repos", projectName.Trim());
+
+        public Task<RemotePublishAvailability> GetRemotePublishAvailabilityAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(RemoteAvailability);
+
+        public bool CanProceed(WorkspaceTemplateSelectionModel selection, string? alreadyScaffoldedDirectoryPath = null)
+        {
+            if (GetTemplate(selection.SelectedTemplateId) is null ||
+                !ValidateProjectName(selection.ProjectName).IsValid ||
+                !ValidateTargetDirectoryPath(selection.TargetDirectoryPath, alreadyScaffoldedDirectoryPath).IsValid)
+            {
+                return false;
+            }
+
+            if (selection.PublishToRemoteForge)
+            {
+                if (!selection.InitializeGit || !selection.RemoteProviderType.HasValue)
+                {
+                    return false;
+                }
+
+                var repoName = string.IsNullOrWhiteSpace(selection.RemoteRepositoryName)
+                    ? selection.ProjectName
+                    : selection.RemoteRepositoryName;
+                if (!ValidateRemoteRepositoryName(repoName).IsValid)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public IReadOnlyList<string> ResolvePreviewProjects(WorkspaceTemplateDefinition template, string? projectName)
+        {
+            var name = ValidateProjectName(projectName).IsValid
+                ? projectName!.Trim()
+                : WorkspaceTemplateConstants.ProjectNamePlaceholder;
+            return template.GeneratedProjects
+                .Select(p => p.Replace(WorkspaceTemplateConstants.ProjectNamePlaceholder, name, StringComparison.Ordinal))
+                .ToList();
+        }
+
+        public TemplateScaffoldingRequest BuildScaffoldingRequest(WorkspaceTemplateSelectionModel selection)
+            => new(
+                selection.SelectedTemplateId ?? string.Empty,
+                selection.ProjectName.Trim(),
+                selection.TargetDirectoryPath.Trim(),
+                selection.InitializeGit,
+                selection.PublishToRemoteForge,
+                selection.PublishToRemoteForge ? selection.RemoteProviderType : null,
+                selection.RemoteIsPrivate,
+                selection.RemoteDescription,
+                selection.PublishToRemoteForge ? selection.RemoteRepositoryName : null);
+
+        public GitHubIntegrationSettings? BuildGitHubSettingsIfApplicable(VcsHostingProviderType? providerType, VcsRepositorySummary? repository)
+            => providerType == VcsHostingProviderType.GitHub && repository is not null
+                ? new GitHubIntegrationSettings { Enabled = true, RepositoryOwner = repository.Owner, RepositoryName = repository.Name }
+                : null;
+
+        public string GetStackBadgeLabel(TemplateStackCategory category) => ".NET 10";
+
+        public string GetArchetypeLabel(TemplateArchitectureArchetype archetype) => "Clean Architecture";
     }
 
     #endregion

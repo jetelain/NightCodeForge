@@ -70,6 +70,7 @@ public static class ServiceCollectionExtensions
         services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Domain.LocalDiscoveryOptions>(
             NightCodeForge.Core.Domain.LocalDiscoveryOptions.SectionName);
         services.TryAddSingleton<ILocalRepositoryDiscoveryService, Git.LocalRepositoryDiscoveryService>();
+        services.TryAddScoped<IWorkspaceTemplateService, Templates.WorkspaceTemplateService>();
 
         // 5. Workflow Pipeline & Orchestration
         services.TryAddSingleton(TimeProvider.System);
