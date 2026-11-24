@@ -256,4 +256,79 @@ public sealed class TestResultParsersTests
             outcomes);
         Assert.False(skippedEval.AllPassed);
     }
+
+    [Fact]
+    public void JUnitXmlTestResultParser_AndEvaluator_HandleMochaJUnitWithUnrelatedSocketFailure()
+    {
+        const string mochaJunitXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <testsuites name="Mocha Tests" time="0.250" tests="4" failures="1">
+              <testsuite name="supports http with nodejs" timestamp="2026-11-24T12:00:00" tests="4" failures="1" time="0.250">
+                <testcase name="supports http with nodejs defaults should transform request json" time="0.010" classname="should transform request json" />
+                <testcase name="supports http with nodejs should follow redirects" time="0.015" classname="should follow redirects" />
+                <testcase name="supports http with nodejs should parse custom headers" time="0.012" classname="should parse custom headers" />
+                <testcase name="supports http with nodejs should support sockets" time="0.005" classname="should support sockets">
+                  <failure message="listen ENOTSUP: operation not supported on socket ./test.sock" type="Error">Error: listen ENOTSUP</failure>
+                </testcase>
+              </testsuite>
+            </testsuites>
+            """;
+
+        var outcomes = JUnitXmlTestResultParser.Parse(mochaJunitXml);
+
+        Assert.Equal(4, outcomes.Count);
+        Assert.Equal("supports http with nodejs defaults should transform request json", outcomes[0].Name);
+        Assert.True(outcomes[0].Passed);
+        Assert.False(outcomes[3].Passed);
+
+        // F2P/P2P assertions evaluate accurately despite unrelated ENOTSUP socket failure
+        var eval = TestAssertionEvaluator.Evaluate(
+            ["supports http with nodejs > defaults > should transform request json"],
+            ["supports http with nodejs should follow redirects", "should parse custom headers"],
+            outcomes);
+        Assert.True(eval.AllPassed);
+        Assert.Equal(1, eval.FailToPassPassed);
+        Assert.Equal(2, eval.PassToPassPassed);
+
+        // Failing socket test is still caught when explicitly asserted
+        var socketEval = TestAssertionEvaluator.Evaluate(
+            ["supports http with nodejs > should support sockets"],
+            [],
+            outcomes);
+        Assert.False(socketEval.AllPassed);
+        Assert.Equal(["supports http with nodejs > should support sockets"], socketEval.FailedTests);
+
+        // Repeated whitespace in Mocha identifiers is collapsed during matching
+        var whitespaceOutcomes = new[]
+        {
+            new ParsedTestOutcome("supports http   should transform request json", Passed: true)
+        };
+        var whitespaceEval = TestAssertionEvaluator.Evaluate(
+            ["supports http > should transform request json"],
+            [],
+            whitespaceOutcomes);
+        Assert.True(whitespaceEval.AllPassed);
+    }
+
+    [Fact]
+    public void TestAssertionEvaluator_DoesNotFallThroughFromMatchedFailingTestToMochaSpaceSuffix()
+    {
+        var rawOutcomes = new[]
+        {
+            new ParsedTestOutcome("Bar.foo", Passed: false),
+            new ParsedTestOutcome("Baz foo", Passed: true)
+        };
+        var rawEval = TestAssertionEvaluator.Evaluate(["foo"], [], rawOutcomes);
+        Assert.False(rawEval.AllPassed);
+        Assert.Equal(["foo"], rawEval.FailedTests);
+
+        var normalizedOutcomes = new[]
+        {
+            new ParsedTestOutcome("SuiteA::test_foo", Passed: false),
+            new ParsedTestOutcome("other SuiteA.test_foo", Passed: true)
+        };
+        var normalizedEval = TestAssertionEvaluator.Evaluate(["SuiteA::test_foo"], [], normalizedOutcomes);
+        Assert.False(normalizedEval.AllPassed);
+        Assert.Equal(["SuiteA::test_foo"], normalizedEval.FailedTests);
+    }
 }

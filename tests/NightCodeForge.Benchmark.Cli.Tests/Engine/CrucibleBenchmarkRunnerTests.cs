@@ -1418,4 +1418,89 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.Contains("\"parameter_envelopes_unwrapped\":2", json);
         Assert.Contains("\"other_dispatcher_repairs\":1", json);
     }
+
+    [Fact]
+    public async Task RunAsync_PersistsVerificationLogToDiskAndRecordsVerificationLogPathInResultsJson()
+    {
+        var datasetPath = Path.Combine(_tempDir, "dataset-vlog.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"inst-with-log","language":"csharp","repo":"owner/repo","base_commit":"c1","problem_statement":"One","fail_to_pass":["T1"]}""",
+            """{"instance_id":"inst-no-log","language":"csharp","repo":"owner/repo","base_commit":"c2","problem_statement":"Two","fail_to_pass":["T2"]}"""
+        ]));
+
+        var outDir = Path.Combine(_tempDir, "out-vlog");
+        var wks1 = Path.Combine(_tempDir, "wks-vlog-1");
+        var wks2 = Path.Combine(_tempDir, "wks-vlog-2");
+        Directory.CreateDirectory(wks1);
+        Directory.CreateDirectory(wks2);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-with-log"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-with-log", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks1, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-no-log"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "inst-no-log", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks2, BaseCommit = "c2" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks1, "c1", It.IsAny<CancellationToken>())).ReturnsAsync("diff1");
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks2, "c2", It.IsAny<CancellationToken>())).ReturnsAsync("diff2");
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(50, 10, 10, 20), summary: "Ok"));
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        const string expectedLog = "EXIT_CODE: 1\n\nSTDOUT:\n1 failed\n\nSTDERR:\nError: ENOTSUP\n";
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-with-log"), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                DeterministicScore = 0.0,
+                VerificationLog = expectedLog,
+                ErrorMessage = "Failed"
+            });
+        verifier.Setup(v => v.VerifyAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "inst-no-log"), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = true,
+                DeterministicScore = 1.0,
+                VerificationLog = "   "
+            });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "vlog",
+            DatasetPath = datasetPath,
+            OutputDirectory = outDir,
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand-1", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var withLog = Assert.Single(report.Results, r => r.InstanceId == "inst-with-log");
+        var expectedPath = Path.Combine(outDir, BenchmarkPaths.VerificationLogsSubdir, "cand-1", "inst-with-log.log");
+        Assert.Equal(expectedPath, withLog.VerificationLogPath);
+        Assert.True(File.Exists(expectedPath));
+        Assert.Equal(expectedLog, await File.ReadAllTextAsync(expectedPath));
+
+        var noLog = Assert.Single(report.Results, r => r.InstanceId == "inst-no-log");
+        Assert.Null(noLog.VerificationLogPath);
+        Assert.False(File.Exists(Path.Combine(outDir, BenchmarkPaths.VerificationLogsSubdir, "cand-1", "inst-no-log.log")));
+
+        var resultsJson = await File.ReadAllTextAsync(Path.Combine(outDir, BenchmarkPaths.ResultsFileName));
+        Assert.Contains("\"verification_log_path\":", resultsJson);
+    }
 }

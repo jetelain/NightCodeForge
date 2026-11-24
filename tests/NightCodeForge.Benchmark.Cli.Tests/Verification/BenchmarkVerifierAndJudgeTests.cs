@@ -1384,4 +1384,191 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Equal(agentReplacement, File.ReadAllText(agentEditedPath));
         Assert.False(File.Exists(agentDeletedPath));
     }
+
+    [Fact]
+    public void BenchmarkTestCommandResolver_DeprioritizesDocsScriptsToolsAndPrefersSolutionsWithTests()
+    {
+        var csharpInstance = new BenchmarkInstance
+        {
+            InstanceId = "spectreconsole__spectre-console-1458",
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "spectreconsole/spectre.console",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix"
+        };
+
+        // docs/Docs.sln must lose to src/Spectre.Console.sln even though docs < src alphabetically
+        var docsVsSrcWks = Path.Combine(_tempDir, "wks-docs-vs-src");
+        Directory.CreateDirectory(Path.Combine(docsVsSrcWks, "docs"));
+        Directory.CreateDirectory(Path.Combine(docsVsSrcWks, "src"));
+        File.WriteAllText(Path.Combine(docsVsSrcWks, "docs", "Docs.sln"), "");
+        File.WriteAllText(Path.Combine(docsVsSrcWks, "src", "Spectre.Console.sln"), "");
+
+        var spectreCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, docsVsSrcWks, ExecutionMode.ContainerSandbox);
+        Assert.Contains("src/Spectre.Console.sln", spectreCmd);
+        Assert.DoesNotContain("docs/Docs.sln", spectreCmd);
+
+        // doc/, resources/, scripts/, tools/ are also deprioritized, while MyDocuments/MyDocuments.sln is NOT
+        foreach (var lowDir in new[] { "doc", "resources", "scripts", "tools" })
+        {
+            var wks = Path.Combine(_tempDir, $"wks-low-{lowDir}");
+            Directory.CreateDirectory(Path.Combine(wks, lowDir));
+            Directory.CreateDirectory(Path.Combine(wks, "src", "MyDocuments"));
+            File.WriteAllText(Path.Combine(wks, lowDir, "Aaa.sln"), "");
+            File.WriteAllText(Path.Combine(wks, "src", "MyDocuments", "MyDocuments.sln"), "");
+
+            var cmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, wks, ExecutionMode.ContainerSandbox);
+            Assert.Contains("src/MyDocuments/MyDocuments.sln", cmd);
+            Assert.DoesNotContain($"{lowDir}/Aaa.sln", cmd);
+        }
+
+        // Solution referencing test projects beats an alphabetically earlier solution without tests (.sln)
+        var testAwareSlnWks = Path.Combine(_tempDir, "wks-test-aware-sln");
+        Directory.CreateDirectory(Path.Combine(testAwareSlnWks, "a_build"));
+        Directory.CreateDirectory(Path.Combine(testAwareSlnWks, "z_src"));
+        File.WriteAllText(Path.Combine(testAwareSlnWks, "a_build", "Build.sln"), """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BuildTools", "BuildTools\BuildTools.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            """);
+        File.WriteAllText(Path.Combine(testAwareSlnWks, "z_src", "App.sln"), """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App.Tests", "..\tests\App.Tests\App.Tests.csproj", "{22222222-2222-2222-2222-222222222222}"
+            EndProject
+            """);
+
+        var testAwareSlnCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, testAwareSlnWks, ExecutionMode.ContainerSandbox);
+        Assert.Contains("z_src/App.sln", testAwareSlnCmd);
+        Assert.DoesNotContain("a_build/Build.sln", testAwareSlnCmd);
+
+        // Solution referencing test projects beats an alphabetically earlier solution without tests (.slnx)
+        var testAwareSlnxWks = Path.Combine(_tempDir, "wks-test-aware-slnx");
+        Directory.CreateDirectory(Path.Combine(testAwareSlnxWks, "a_build"));
+        Directory.CreateDirectory(Path.Combine(testAwareSlnxWks, "z_src"));
+        File.WriteAllText(Path.Combine(testAwareSlnxWks, "a_build", "Build.slnx"), """
+            <Solution>
+              <Project Path="BuildTools\BuildTools.csproj" />
+            </Solution>
+            """);
+        File.WriteAllText(Path.Combine(testAwareSlnxWks, "z_src", "App.slnx"), """
+            <Solution>
+              <Project Path="../test/App.Tests/App.Tests.csproj" />
+            </Solution>
+            """);
+
+        var testAwareSlnxCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, testAwareSlnxWks, ExecutionMode.ContainerSandbox);
+        Assert.Contains("z_src/App.slnx", testAwareSlnxCmd);
+        Assert.DoesNotContain("a_build/Build.slnx", testAwareSlnxCmd);
+
+        // Single-quoted Path attributes in .slnx are also recognized for test-project detection
+        var singleQuoteSlnxWks = Path.Combine(_tempDir, "wks-single-quote-slnx");
+        Directory.CreateDirectory(Path.Combine(singleQuoteSlnxWks, "a_build"));
+        Directory.CreateDirectory(Path.Combine(singleQuoteSlnxWks, "z_src"));
+        File.WriteAllText(Path.Combine(singleQuoteSlnxWks, "a_build", "Build.slnx"), """
+            <Solution>
+              <Project Path='BuildTools\BuildTools.csproj' />
+            </Solution>
+            """);
+        File.WriteAllText(Path.Combine(singleQuoteSlnxWks, "z_src", "App.slnx"), """
+            <Solution>
+              <Project Path='../test/App.Tests/App.Tests.csproj' />
+            </Solution>
+            """);
+
+        var singleQuoteSlnxCmd = BenchmarkTestCommandResolver.ResolveTestCommand(csharpInstance, singleQuoteSlnxWks, ExecutionMode.ContainerSandbox);
+        Assert.Contains("z_src/App.slnx", singleQuoteSlnxCmd);
+        Assert.DoesNotContain("a_build/Build.slnx", singleQuoteSlnxCmd);
+    }
+
+    [Fact]
+    public void BenchmarkTestCommandResolver_ResolvesMochaJUnitAndPythonPinnedRequirementsBeforePytestFallback()
+    {
+        // Default Mocha command resolution (test:mocha script vs bare mocha)
+        var mochaScriptWks = Path.Combine(_tempDir, "wks-mocha-script");
+        Directory.CreateDirectory(mochaScriptWks);
+        File.WriteAllText(Path.Combine(mochaScriptWks, "package.json"), """{"scripts":{"test:mocha":"mocha test/unit/**/*.js"},"devDependencies":{"mocha":"^10.0.0"}}""");
+
+        var jsDefaultInstance = new BenchmarkInstance
+        {
+            InstanceId = "axios__axios-5892",
+            Language = BenchmarkLanguages.JavaScript,
+            Repo = "axios/axios",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix"
+        };
+
+        var defaultMochaCmd = BenchmarkTestCommandResolver.ResolveTestCommand(jsDefaultInstance, mochaScriptWks, ExecutionMode.ContainerSandbox);
+        Assert.Equal("MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter", defaultMochaCmd);
+
+        var bareMochaWks = Path.Combine(_tempDir, "wks-mocha-bare");
+        Directory.CreateDirectory(bareMochaWks);
+        File.WriteAllText(Path.Combine(bareMochaWks, "package.json"), """{"devDependencies":{"mocha":"^10.0.0"}}""");
+        Assert.Equal(
+            "MOCHA_FILE=.ncf-bench-results/junit.xml npx mocha --reporter mocha-junit-reporter",
+            BenchmarkTestCommandResolver.ResolveTestCommand(jsDefaultInstance, bareMochaWks, ExecutionMode.BareHost));
+
+        // Custom Mocha command rewritten only when format is JUnitXml; ExitCode preserved
+        var junitCustom = jsDefaultInstance with
+        {
+            TestResultFormat = TestResultFormat.JUnitXml,
+            CustomTestCommand = "npm run test:mocha"
+        };
+        Assert.Equal(
+            "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter",
+            BenchmarkTestCommandResolver.ResolveTestCommand(junitCustom, mochaScriptWks, ExecutionMode.ContainerSandbox));
+
+        var exitCodeCustom = jsDefaultInstance with
+        {
+            TestResultFormat = TestResultFormat.ExitCode,
+            CustomTestCommand = "npm run test:mocha"
+        };
+        Assert.Equal(
+            "npm run test:mocha",
+            BenchmarkTestCommandResolver.ResolveTestCommand(exitCodeCustom, mochaScriptWks, ExecutionMode.ContainerSandbox));
+
+        // Custom Mocha commands with leading env vars preserve existing MOCHA_FILE or prepend default
+        var customMochaFileCmd = jsDefaultInstance with
+        {
+            TestResultFormat = TestResultFormat.JUnitXml,
+            CustomTestCommand = "MOCHA_FILE=/custom/junit.xml npm run test:mocha"
+        };
+        Assert.Equal(
+            "MOCHA_FILE=/custom/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter",
+            BenchmarkTestCommandResolver.ResolveTestCommand(customMochaFileCmd, mochaScriptWks, ExecutionMode.ContainerSandbox));
+
+        var customNodeEnvCmd = jsDefaultInstance with
+        {
+            TestResultFormat = TestResultFormat.JUnitXml,
+            CustomTestCommand = "NODE_ENV=test npm run test:mocha -- --timeout 5000"
+        };
+        Assert.Equal(
+            "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml NODE_ENV=test npm run test:mocha -- --timeout 5000 --reporter mocha-junit-reporter",
+            BenchmarkTestCommandResolver.ResolveTestCommand(customNodeEnvCmd, mochaScriptWks, ExecutionMode.ContainerSandbox));
+
+        var customNpxMochaFileCmd = jsDefaultInstance with
+        {
+            TestResultFormat = TestResultFormat.JUnitXml,
+            CustomTestCommand = "MOCHA_FILE=/custom/junit.xml npx mocha test/unit"
+        };
+        Assert.Equal(
+            "MOCHA_FILE=/custom/junit.xml npx mocha test/unit --reporter mocha-junit-reporter",
+            BenchmarkTestCommandResolver.ResolveTestCommand(customNpxMochaFileCmd, mochaScriptWks, ExecutionMode.ContainerSandbox));
+
+        // Container wrapping for mocha-junit-reporter provisions isolated prefix & NODE_PATH
+        var wrappedMocha = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            defaultMochaCmd,
+            BenchmarkLanguages.JavaScript,
+            ExecutionMode.ContainerSandbox);
+        Assert.Contains("npm install --prefix /tmp/ncf-mocha-junit --no-save mocha-junit-reporter", wrappedMocha);
+        Assert.Contains("NODE_PATH=\"/tmp/ncf-mocha-junit/node_modules", wrappedMocha);
+
+        // Python container wrapping installs pinned requirement files before conditional unpinned pytest fallback
+        var wrappedPy = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml",
+            BenchmarkLanguages.Python,
+            ExecutionMode.ContainerSandbox);
+        int reqIdx = wrappedPy.IndexOf("requirements/tests.txt", StringComparison.Ordinal);
+        int editableIdx = wrappedPy.IndexOf("pip install -q -e .", StringComparison.Ordinal);
+        int fallbackIdx = wrappedPy.IndexOf("if [ ! -x /tmp/ncf-bench-venv/bin/pytest ]; then /tmp/ncf-bench-venv/bin/pip install -q pytest; fi", StringComparison.Ordinal);
+        Assert.True(reqIdx > 0 && editableIdx > reqIdx && fallbackIdx > editableIdx,
+            $"Expected requirements -> editable -> conditional pytest fallback ordering in: {wrappedPy}");
+    }
 }

@@ -556,6 +556,13 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 request.JudgeConfig,
                 cancellationToken).ConfigureAwait(false);
 
+            var verificationLogPath = await PersistVerificationLogAsync(
+                request.OutputDirectory,
+                candidateSlug,
+                instanceSlug,
+                verification.VerificationLog,
+                cancellationToken).ConfigureAwait(false);
+
             stopwatch.Stop();
 
             long durationMs = Math.Max(1, stopwatch.ElapsedMilliseconds);
@@ -583,6 +590,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 TokensPerSecond = tokensPerSecond,
                 ModelPatch = modelPatch,
                 TranscriptPath = capture.SavedTranscriptPath,
+                VerificationLogPath = verificationLogPath,
                 ActualVerdict = verification.ActualVerdict,
                 DeterministicScore = verification.DeterministicScore,
                 JudgeScore = verification.JudgeScore,
@@ -658,6 +666,25 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 }
             }
         }
+    }
+
+    private static async Task<string?> PersistVerificationLogAsync(
+        string outputDirectory,
+        string candidateSlug,
+        string instanceSlug,
+        string? verificationLog,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(verificationLog))
+        {
+            return null;
+        }
+
+        var logDir = Path.Combine(outputDirectory, BenchmarkPaths.VerificationLogsSubdir, candidateSlug);
+        Directory.CreateDirectory(logDir);
+        var logPath = Path.Combine(logDir, $"{instanceSlug}.log");
+        await File.WriteAllTextAsync(logPath, verificationLog, cancellationToken).ConfigureAwait(false);
+        return logPath;
     }
 
     private async Task AppendPredictionAsync(

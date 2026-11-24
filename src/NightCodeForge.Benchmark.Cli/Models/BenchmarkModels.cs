@@ -205,6 +205,7 @@ public sealed record BenchmarkInstanceResult
     public double TokensPerSecond { get; init; }
     public string? ModelPatch { get; init; }
     public string? TranscriptPath { get; init; }
+    public string? VerificationLogPath { get; init; }
     public string? ActualVerdict { get; init; }
     public double DeterministicScore { get; init; }
     public double? JudgeScore { get; init; }

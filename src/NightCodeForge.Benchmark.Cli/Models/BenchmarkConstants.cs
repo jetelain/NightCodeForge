@@ -82,6 +82,7 @@ public static class BenchmarkPaths
     public const string ReposCacheSubdir = "repos";
     public const string WorkspacesSubdir = "workspaces";
     public const string TranscriptsSubdir = "transcripts";
+    public const string VerificationLogsSubdir = "verification-logs";
     public const string PredictionsFileName = "predictions.jsonl";
     public const string ResultsFileName = "results.json";
     public const string SummaryFileName = "summary.md";

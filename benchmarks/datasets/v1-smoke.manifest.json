@@ -99,8 +99,8 @@
       "category": "Implementation",
       "language": "javascript",
       "repo": "axios/axios",
-      "test_result_format": "ExitCode",
-      "custom_test_command": "npm run test:mocha"
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter"
     },
     {
       "instance_id": "psf__requests-1921",
@@ -108,6 +108,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "psf/requests",
+      "custom_container_image": "python:3.9",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -117,6 +118,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pallets/flask",
+      "custom_container_image": "python:3.11",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },

@@ -146,7 +146,14 @@ public static class JUnitXmlTestResultParser
                 continue;
             }
 
-            var fullName = !string.IsNullOrWhiteSpace(className) && !name.StartsWith(className, StringComparison.OrdinalIgnoreCase)
+            bool nameAlreadyContainsClass = !string.IsNullOrWhiteSpace(className) &&
+                (name.StartsWith(className, StringComparison.OrdinalIgnoreCase) ||
+                 name.EndsWith(" " + className, StringComparison.OrdinalIgnoreCase) ||
+                 name.EndsWith("." + className, StringComparison.OrdinalIgnoreCase) ||
+                 name.EndsWith(" > " + className, StringComparison.OrdinalIgnoreCase) ||
+                 name.EndsWith("::" + className, StringComparison.OrdinalIgnoreCase));
+
+            var fullName = !string.IsNullOrWhiteSpace(className) && !nameAlreadyContainsClass
                 ? $"{className}.{name}"
                 : name;
 
@@ -194,8 +201,11 @@ public static partial class CargoTestResultParser
     }
 }
 
-public static class TestAssertionEvaluator
+public static partial class TestAssertionEvaluator
 {
+    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
+    private static partial Regex WhitespaceRunRegex();
+
     public static TestAssertionEvaluation Evaluate(
         IReadOnlyList<string> failToPass,
         IReadOnlyList<string> passToPass,
@@ -243,9 +253,10 @@ public static class TestAssertionEvaluator
         }
 
         var trimmed = expectedName.Trim();
-        if (MatchesExpectedIdentifier(trimmed, outcomes, static o => o.Name))
+        var rawResult = TryEvaluateExpectedIdentifier(trimmed, outcomes, static o => o.Name);
+        if (rawResult.HasValue)
         {
-            return true;
+            return rawResult.Value;
         }
 
         var normalizedExpected = NormalizeTestIdentifier(trimmed);
@@ -255,20 +266,50 @@ public static class TestAssertionEvaluator
                               o.Name.Contains('\\', StringComparison.Ordinal) ||
                               o.Name.Contains(" > ", StringComparison.Ordinal)))
         {
-            return MatchesExpectedIdentifier(normalizedExpected, outcomes, static o => NormalizeTestIdentifier(o.Name));
+            var normalizedResult = TryEvaluateExpectedIdentifier(normalizedExpected, outcomes, static o => NormalizeTestIdentifier(o.Name));
+            if (normalizedResult.HasValue)
+            {
+                return normalizedResult.Value;
+            }
         }
 
-        return false;
+        return MatchesSpaceNormalizedMochaIdentifier(trimmed, outcomes);
     }
 
-    private static bool MatchesExpectedIdentifier(
+    private static bool MatchesSpaceNormalizedMochaIdentifier(string expected, IReadOnlyList<ParsedTestOutcome> outcomes)
+    {
+        var normalizedExpected = NormalizeMochaSpaceIdentifier(expected);
+        if (string.IsNullOrWhiteSpace(normalizedExpected))
+        {
+            return false;
+        }
+
+        var exact = outcomes
+            .Where(o => string.Equals(NormalizeMochaSpaceIdentifier(o.Name), normalizedExpected, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (exact.Count > 0)
+        {
+            return exact.All(o => o.Passed);
+        }
+
+        var spaceSuffix = " " + normalizedExpected;
+        var suffixMatches = outcomes
+            .Where(o => NormalizeMochaSpaceIdentifier(o.Name).EndsWith(spaceSuffix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        return suffixMatches.Count > 0 && suffixMatches.All(o => o.Passed);
+    }
+
+    private static string NormalizeMochaSpaceIdentifier(string name) =>
+        WhitespaceRunRegex().Replace(name.Trim().Replace(" > ", " ", StringComparison.Ordinal), " ");
+
+    private static bool? TryEvaluateExpectedIdentifier(
         string target,
         IReadOnlyList<ParsedTestOutcome> outcomes,
         Func<ParsedTestOutcome, string> nameSelector)
     {
         if (string.IsNullOrWhiteSpace(target))
         {
-            return false;
+            return null;
         }
 
         var exact = outcomes.Where(o => string.Equals(nameSelector(o), target, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -306,7 +347,7 @@ public static class TestAssertionEvaluator
                    candidate.Contains("." + bracketPrefix, StringComparison.OrdinalIgnoreCase);
         }).ToList();
 
-        return paramMatches.Count > 0 && paramMatches.All(o => o.Passed);
+        return paramMatches.Count > 0 ? paramMatches.All(o => o.Passed) : null;
     }
 
     internal static string NormalizeTestIdentifier(string name)

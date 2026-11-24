@@ -23,6 +23,8 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
 | **11.55** | [🛡️ Step 11.55: Benchmark Verification Environment Parity, .NET SDK Resilience & Vitest Matching](STEP_11_55_BENCHMARK_VERIFICATION_ENVIRONMENT_AND_DOTNET_SDK_RESILIENCE.md) | Fix benchmark false negatives by configuring `core.longpaths true` on Windows checkouts, ensuring Python/Node/Rust verification dependency & `PATH` parity, handling `.NET` `global.json` SDK roll-forward without polluting patches, discovering subdirectory `.sln`/test projects, and normalizing Vitest ` > ` identifiers in `TestResultParsers`. | Proposed |
 | **11.56** | [📊 Step 11.56: Benchmark Timeout Telemetry Preservation, Summary Aggregation & Language-Scoped Skills](STEP_11_56_BENCHMARK_TIMEOUT_TELEMETRY_AND_LANGUAGE_SCOPED_SKILLS.md) | Preserve accumulated token metrics on benchmark timeouts, exclude unstarted zero-token error runs from `AverageTokensPerSecond`, scope C#-only stack skills (`csharp-nav`, `codecondenser`) to C# repositories, and reconcile `DispatcherRepairs` telemetry with breakdown sub-counters. | Proposed |
 | **11.57** | [🔧 Step 11.57: Crucible `ask` Tool Lenient Parsing, Error Diagnostics & Transcript Turn Timestamps](STEP_11_57_CRUCIBLE_ASK_TOOL_RESILIENCE_AND_TRANSCRIPT_TIMESTAMPS.md) | Upgrade `Pmad.AI` to `0.0.6` for `parameters`/`arguments` envelope unwrapping in `LenientToolDispatcher`, accept `{label, description}` objects in `QuestionItem.Options`, surface actionable tool binding diagnostics instead of `"Error: Function failed."`, and preserve real per-turn elapsed timestamps in Crucible transcripts. | Proposed |
+| **11.58** | [🛡️ Step 11.58: Benchmark Multi-Stack Verification Parity, Solution Discovery & Verification Log Persistence](STEP_11_58_BENCHMARK_VERIFICATION_PARITY_AND_LOG_PERSISTENCE.md) | Deprioritize `docs` in subdirectory `.sln` discovery and prefer test-bearing solutions, replace `ExitCode`-only Mocha verification with bind-mount-safe structured test reporting, enforce Python runtime/dependency parity for legacy SWE-bench repos, and persist `VerificationLog` diagnostics to disk and `results.json`. | Completed |
+| **11.59** | [🔧 Step 11.59: Benchmark ProjectConfig Propagation, Clean global.json Scoping & Code Review Verdict Alignment](STEP_11_59_BENCHMARK_PROJECT_CONFIG_GLOBAL_JSON_AND_CODE_REVIEW_ALIGNMENT.md) | Propagate language-accurate `WorkspaceProjectConfig` commands into benchmark sessions (avoiding `dotnet` fallbacks and missing `docs/tasks/` guidance), hide `DotNetGlobalJsonResilienceScope` edits from `git status`/`git diff`, and align `CodeReview` Tier 1/Tier 2 verdict and whitespace classification rules. | Proposed |
 
 ---
 
@@ -62,6 +64,19 @@ Once a step is implemented and all unit, integration, and end-to-end tests pass,
   - [ ] Support both `string` and `{label, description}` object entries for `QuestionItem.Options` in `ask` tool binding/parsing.
   - [ ] Surface actionable schema/parameter binding error diagnostics to the model instead of `"Error: Function failed."`.
   - [ ] Preserve and render real per-turn elapsed timestamps in Crucible transcripts (`CrucibleConversationCoordinator`, `InMemoryCrucibleConversationCoordinator`, `SessionTranscriptService`).
+  - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+- [x] **Step 11.58 (Benchmark Multi-Stack Verification Parity, Solution Discovery & Verification Log Persistence):**
+  - [x] Update `.NET` subdirectory solution discovery to deprioritize `docs`/`doc`/`resources`/`scripts`/`tools` and prefer solutions containing test projects.
+  - [x] Replace `ExitCode`-only Mocha verification on `axios__axios-5892` (and equivalent suites) with structured JUnit XML reporting or bind-mount-safe test scoping.
+  - [x] Ensure Python benchmark verification uses compatible runtimes and pinned repository dependencies so legacy SWE-bench repos do not fail collection/import.
+  - [x] Persist verification command stdout/stderr (`VerificationLog`) to disk under the benchmark output directory and reference the log path on `BenchmarkInstanceResult`.
+  - [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+
+- [ ] **Step 11.59 (Benchmark ProjectConfig Propagation, Clean global.json Scoping & Code Review Verdict Alignment):**
+  - [ ] Supply language-accurate `WorkspaceProjectConfig` (build/test commands per stack) to benchmark sessions and avoid misleading non-TaskReview runs toward missing `docs/tasks/` paths.
+  - [ ] Hide `DotNetGlobalJsonResilienceScope` `global.json` relaxations from `git status` / `git diff` during agent execution while restoring exact original bytes and index state on disposal.
+  - [ ] Align `v1-code-review.jsonl` `RequestChanges` / `Approve` expectations and `CodeReviewAndFix` verdict/whitespace handling with Tier 1 vs. Tier 2 policy.
   - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
 
 ---

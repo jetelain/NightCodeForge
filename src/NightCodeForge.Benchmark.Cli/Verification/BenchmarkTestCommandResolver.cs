@@ -13,6 +13,7 @@ internal static partial class BenchmarkTestCommandResolver
     private const string PythonVenvDir = "/tmp/ncf-bench-venv";
     private const string NpmGlobalPrefix = "/tmp/ncf-npm-global";
     private const string JestJUnitPrefix = "/tmp/ncf-jest-junit";
+    private const string MochaJUnitPrefix = "/tmp/ncf-mocha-junit";
 
     private static readonly char[] ShellSpecialChars =
     [
@@ -39,12 +40,21 @@ internal static partial class BenchmarkTestCommandResolver
         BenchmarkPaths.BenchmarkResultDirRelative
     };
 
-    private static readonly string[] LowPriorityDirectoryOrNameTokens =
+    private static readonly string[] LowPrioritySubstringTokens =
     [
         "sample",
         "benchmark",
         "example"
     ];
+
+    private static readonly HashSet<string> LowPriorityExactSegmentNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "docs",
+        "doc",
+        "resources",
+        "scripts",
+        "tools"
+    };
 
     [GeneratedRegex(@"^\s*dotnet\s+test(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex BareDotNetTestRegex();
@@ -52,11 +62,29 @@ internal static partial class BenchmarkTestCommandResolver
     [GeneratedRegex(@"\.(?:sln|slnx|csproj|fsproj|vbproj)(?:\s|$|[""'])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DotNetProjectOrSolutionRefRegex();
 
+    [GeneratedRegex(@"Project\([^)]+\)\s*=\s*""(?<name>[^""]+)""\s*,\s*""(?<path>[^""]+\.(?:csproj|fsproj|vbproj))""", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SlnProjectEntryRegex();
+
+    [GeneratedRegex(@"<Project\b[^>]*\bPath\s*=\s*(?<q>[""'])(?<path>[^""']+\.(?:csproj|fsproj|vbproj))\k<q>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SlnxProjectEntryRegex();
+
     [GeneratedRegex(@"(?<prefix>\bvitest\s+run)(?<rest>.*)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex VitestRunRegex();
 
     [GeneratedRegex(@"(?:^|\s)(?:-c|--config)(?:\s|=|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ExplicitConfigFlagRegex();
+
+    [GeneratedRegex(@"(?:^|\s)(?:-R|--reporter)(?:\s|=|$)", RegexOptions.CultureInvariant)]
+    private static partial Regex ExplicitMochaReporterRegex();
+
+    [GeneratedRegex(@"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:""[^""]*""|'[^']*'|\S+)\s+)*npm\s+run\s+test:mocha(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NpmRunTestMochaRegex();
+
+    [GeneratedRegex(@"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:""[^""]*""|'[^']*'|\S+)\s+)*(?:npx\s+(?:--\s+)?)?mocha(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex MochaRunRegex();
+
+    [GeneratedRegex(@"(?:^|\s)--(?:\s|$)", RegexOptions.CultureInvariant)]
+    private static partial Regex DoubleDashSeparatorRegex();
 
     internal static string ResolveTestCommand(
         BenchmarkInstance instance,
@@ -64,6 +92,9 @@ internal static partial class BenchmarkTestCommandResolver
         ExecutionMode executionMode = ExecutionMode.ContainerSandbox)
     {
         var normalizedLanguage = BenchmarkLanguages.Normalize(instance.Language);
+        var resultsDir = executionMode == ExecutionMode.ContainerSandbox
+            ? BenchmarkPaths.ContainerResultsDir
+            : BenchmarkPaths.BenchmarkResultDirRelative;
 
         if (!string.IsNullOrWhiteSpace(instance.CustomTestCommand))
         {
@@ -75,15 +106,12 @@ internal static partial class BenchmarkTestCommandResolver
 
             if (normalizedLanguage is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript)
             {
-                return ApplyVitestConfigToCustomCommand(custom, workspacePath);
+                var withVitest = ApplyVitestConfigToCustomCommand(custom, workspacePath);
+                return ApplyMochaJUnitReporterToCustomCommand(withVitest, instance, resultsDir);
             }
 
             return custom;
         }
-
-        var resultsDir = executionMode == ExecutionMode.ContainerSandbox
-            ? BenchmarkPaths.ContainerResultsDir
-            : BenchmarkPaths.BenchmarkResultDirRelative;
 
         return normalizedLanguage switch
         {
@@ -157,6 +185,7 @@ internal static partial class BenchmarkTestCommandResolver
         {
             var bestSolution = solutions
                 .OrderBy(IsLowPriorityTarget)
+                .ThenByDescending(p => SolutionReferencesTestProject(workspacePath, p))
                 .ThenBy(CountPathSegments)
                 .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
                 .First();
@@ -275,6 +304,13 @@ internal static partial class BenchmarkTestCommandResolver
             {
                 return $"JEST_JUNIT_OUTPUT_DIR={resultsDir} JEST_JUNIT_OUTPUT_NAME={BenchmarkPaths.JUnitFileName} npx jest --ci --reporters=default --reporters=jest-junit";
             }
+
+            if (content.Contains("mocha", StringComparison.OrdinalIgnoreCase))
+            {
+                return content.Contains("\"test:mocha\"", StringComparison.OrdinalIgnoreCase)
+                    ? $"MOCHA_FILE={resultsDir}/{BenchmarkPaths.JUnitFileName} npm run test:mocha -- --reporter mocha-junit-reporter"
+                    : $"MOCHA_FILE={resultsDir}/{BenchmarkPaths.JUnitFileName} npx mocha --reporter mocha-junit-reporter";
+            }
         }
 
         return "npm test";
@@ -303,16 +339,58 @@ internal static partial class BenchmarkTestCommandResolver
         return $"{customCommand[..prefixIndex]} -c {unitConfig}{customCommand[prefixIndex..]}";
     }
 
+    private static string ApplyMochaJUnitReporterToCustomCommand(
+        string customCommand,
+        BenchmarkInstance instance,
+        string resultsDir)
+    {
+        if (instance.ResolveEffectiveTestResultFormat() != TestResultFormat.JUnitXml ||
+            customCommand.Contains("mocha-junit-reporter", StringComparison.OrdinalIgnoreCase) ||
+            ExplicitMochaReporterRegex().IsMatch(customCommand))
+        {
+            return customCommand;
+        }
+
+        string? rewritten = null;
+        var npmMatch = NpmRunTestMochaRegex().Match(customCommand);
+        if (npmMatch.Success)
+        {
+            var rest = npmMatch.Groups["rest"].Value;
+            if (!ContainsUnquotedShellOperator(rest))
+            {
+                rewritten = DoubleDashSeparatorRegex().IsMatch(rest)
+                    ? $"{customCommand} --reporter mocha-junit-reporter"
+                    : $"{customCommand} -- --reporter mocha-junit-reporter";
+            }
+        }
+        else
+        {
+            var mochaMatch = MochaRunRegex().Match(customCommand);
+            if (mochaMatch.Success && !ContainsUnquotedShellOperator(mochaMatch.Groups["rest"].Value))
+            {
+                rewritten = $"{customCommand} --reporter mocha-junit-reporter";
+            }
+        }
+
+        if (rewritten == null)
+        {
+            return customCommand;
+        }
+
+        return customCommand.Contains("MOCHA_FILE=", StringComparison.Ordinal)
+            ? rewritten
+            : $"MOCHA_FILE={resultsDir}/{BenchmarkPaths.JUnitFileName} {rewritten}";
+    }
+
     private static string WrapPythonContainerCommand(string testCommand) =>
         "if ! command -v pytest >/dev/null 2>&1; then " +
-        $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then " +
-        $"python3 -m venv {PythonVenvDir} && " +
-        $"{PythonVenvDir}/bin/pip install -q pytest && " +
-        "(for req in requirements-dev.txt requirements/dev.txt requirements/tests.txt requirements/test.txt test-requirements.txt requirements.txt; do " +
+        $"if [ ! -d {PythonVenvDir}/bin ]; then python3 -m venv {PythonVenvDir}; fi && " +
+        "(for req in requirements/tests.txt requirements/test.txt requirements-test.txt test-requirements.txt requirements/dev.txt requirements-dev.txt requirements.txt; do " +
         $"[ -f \"$req\" ] && {PythonVenvDir}/bin/pip install -q -r \"$req\" || true; done) && " +
         "(if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ]; then " +
-        $"{PythonVenvDir}/bin/pip install -q -e . || {PythonVenvDir}/bin/pip install -q --no-build-isolation -e . || true; fi); " +
-        $"fi && export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
+        $"{PythonVenvDir}/bin/pip install -q -e . || {PythonVenvDir}/bin/pip install -q --no-build-isolation -e . || true; fi) && " +
+        $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then {PythonVenvDir}/bin/pip install -q pytest; fi && " +
+        $"export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
         $"fi && {WrapPosixCompoundBody(testCommand)}";
 
     private static string WrapNodeContainerCommand(string testCommand)
@@ -332,16 +410,28 @@ internal static partial class BenchmarkTestCommandResolver
             "else npm install; fi; " +
             "fi";
 
-        if (testCommand.Contains("jest-junit", StringComparison.OrdinalIgnoreCase))
-        {
-            installStep +=
-                " && if [ -f package.json ] && [ ! -d node_modules/jest-junit ]; then " +
-                $"if [ ! -d {JestJUnitPrefix}/node_modules/jest-junit ]; then mkdir -p {JestJUnitPrefix} && (npm install --prefix {JestJUnitPrefix} --no-save jest-junit || true); fi; " +
-                $"if [ -d {JestJUnitPrefix}/node_modules/jest-junit ]; then export NODE_PATH=\"{JestJUnitPrefix}/node_modules${{NODE_PATH:+:$NODE_PATH}}\"; fi; " +
-                "fi";
-        }
+        installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "jest-junit", JestJUnitPrefix);
+        installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "mocha-junit-reporter", MochaJUnitPrefix);
 
         return $"{pathGuard} && {installStep} && {WrapPosixCompoundBody(testCommand)}";
+    }
+
+    private static string AppendIsolatedNodeReporterSetup(
+        string installStep,
+        string testCommand,
+        string packageName,
+        string prefix)
+    {
+        if (!testCommand.Contains(packageName, StringComparison.OrdinalIgnoreCase))
+        {
+            return installStep;
+        }
+
+        return installStep +
+               $" && if [ -f package.json ] && [ ! -d node_modules/{packageName} ]; then " +
+               $"if [ ! -d {prefix}/node_modules/{packageName} ]; then mkdir -p {prefix} && (npm install --prefix {prefix} --no-save {packageName} || true); fi; " +
+               $"if [ -d {prefix}/node_modules/{packageName} ]; then export NODE_PATH=\"{prefix}/node_modules${{NODE_PATH:+:$NODE_PATH}}\"; fi; " +
+               "fi";
     }
 
     private static string WrapPosixCompoundBody(string testCommand)
@@ -509,8 +599,55 @@ internal static partial class BenchmarkTestCommandResolver
     private static bool IsLowPriorityTarget(string relativePosixPath)
     {
         var segments = relativePosixPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return segments.Any(seg => LowPriorityDirectoryOrNameTokens.Any(tok =>
-            seg.Contains(tok, StringComparison.OrdinalIgnoreCase)));
+        if (segments.Any(seg =>
+                LowPriorityExactSegmentNames.Contains(seg) ||
+                LowPrioritySubstringTokens.Any(tok => seg.Contains(tok, StringComparison.OrdinalIgnoreCase))))
+        {
+            return true;
+        }
+
+        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(relativePosixPath);
+        return LowPriorityExactSegmentNames.Contains(fileNameWithoutExt);
+    }
+
+    private static bool SolutionReferencesTestProject(string workspacePath, string relativeSolutionPath)
+    {
+        var fullPath = Path.Combine(workspacePath, relativeSolutionPath.Replace('/', Path.DirectorySeparatorChar));
+        string content;
+        try
+        {
+            content = File.ReadAllText(fullPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        if (relativeSolutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (Match match in SlnxProjectEntryRegex().Matches(content))
+            {
+                var projPath = match.Groups["path"].Value.Replace('\\', '/');
+                if (IsTestProjectPath(projPath))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        foreach (Match match in SlnProjectEntryRegex().Matches(content))
+        {
+            var projName = match.Groups["name"].Value;
+            var projPath = match.Groups["path"].Value.Replace('\\', '/');
+            if (IsTestProjectPath(projPath) || projName.Contains("test", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static string QuotePathArgument(string value)

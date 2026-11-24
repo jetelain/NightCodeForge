@@ -57,7 +57,18 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(fullEntry.Repo, smokeEntry.Repo);
             Assert.Equal(fullEntry.TestResultFormat, smokeEntry.TestResultFormat);
             Assert.Equal(fullEntry.CustomTestCommand, smokeEntry.CustomTestCommand);
+            Assert.Equal(fullEntry.CustomContainerImage, smokeEntry.CustomContainerImage);
         }
+
+        var axiosSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "axios__axios-5892");
+        Assert.Equal(TestResultFormat.JUnitXml, axiosSmoke.TestResultFormat);
+        Assert.Contains("mocha-junit-reporter", axiosSmoke.CustomTestCommand);
+
+        var requestsSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "psf__requests-1921");
+        Assert.False(string.IsNullOrWhiteSpace(requestsSmoke.CustomContainerImage));
+
+        var flaskSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pallets__flask-5014");
+        Assert.False(string.IsNullOrWhiteSpace(flaskSmoke.CustomContainerImage));
     }
 
     [Fact]
