@@ -1,0 +1,1299 @@
+@page "/diagnostics/shell"
+@page "/w/{WorkspaceId:int}/diagnostics/shell"
+@namespace NightCodeForge.Web.Components.Pages
+@using System.Diagnostics
+@using Microsoft.Extensions.Logging
+@using NightCodeForge.Core.Domain
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Core.Repositories
+@using NightCodeForge.Core.Workflow
+@using NightCodeForge.Web.Services
+@inject IEnvironmentDiagnosticShellService DiagnosticShellService
+@inject IOperationsTelemetryService TelemetryService
+@inject IWorkspaceRepository WorkspaceRepository
+@inject ITaskRepository TaskRepository
+@inject WorkspaceStateService WorkspaceState
+@inject ToastService ToastService
+@inject ILogger<EnvironmentDiagnosticShell> Logger
+@implements IDisposable
+
+<PageTitle>Container Diagnostic Shell - NightCodeForge</PageTitle>
+
+<div class="diag-shell-page" id="diagnostic-shell-page">
+    <!-- Page Header -->
+    <div class="diag-page-header">
+        <div class="diag-title-group">
+            <span class="diag-title-icon">🐚</span>
+            <div>
+                <h1 class="diag-title">Container Diagnostic Bash Console</h1>
+                <p class="diag-subtitle">
+                    Inspect sandbox mounts, verify SDKs and permissions, run Environment Doctor probes, and stream interactive shell diagnostics with SIGINT recovery.
+                </p>
+            </div>
+        </div>
+        <div class="diag-header-actions">
+            @if (_inspection != null)
+            {
+                var tierBadge = DiagnosticShellUiHelper.FormatExecutionTier(_inspection.ResolvedTier);
+                var statusBadge = DiagnosticShellUiHelper.FormatContainerLiveness(_inspection.IsContainerRunning);
+                <span class="forge-badge @tierBadge.CssClass" id="header-tier-badge">@tierBadge.Label</span>
+                <span class="forge-badge @statusBadge.CssClass" id="header-liveness-badge">@statusBadge.Label</span>
+            }
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_errorBanner))
+    {
+        <div class="diag-error-banner" id="diagnostic-error-banner" role="alert">
+            <span>⚠️ @_errorBanner</span>
+            <button type="button" class="forge-btn forge-btn-ghost diag-btn-compact" @onclick="() => _errorBanner = null">✕</button>
+        </div>
+    }
+
+    <!-- 1. Target Context Selector -->
+    <section class="forge-card diag-section-card" id="diagnostic-target-card">
+        <div class="diag-card-header">
+            <h2 class="diag-card-title">🎯 Target Context &amp; Execution Pipeline</h2>
+            <span class="forge-badge badge-gray" id="target-scope-badge">@DiagnosticShellUiHelper.FormatScopeLabel(_scopeSelection)</span>
+        </div>
+
+        <div class="diag-target-grid">
+            <div class="diag-field">
+                <label class="forge-field-label" for="scope-selector">Target Scope</label>
+                <select id="scope-selector"
+                        class="forge-select"
+                        value="@_scopeSelection"
+                        @onchange="HandleScopeChangedAsync"
+                        disabled="@IsTargetSelectionLocked">
+                    <option value="@DiagnosticScopeSelection.WorkspaceCanonical">Workspace Canonical</option>
+                    <option value="@DiagnosticScopeSelection.TaskWorktree">Task Worktree</option>
+                    <option value="@DiagnosticScopeSelection.SystemNightwatch">System Nightwatch (ncf-nightwatch-ro)</option>
+                </select>
+            </div>
+
+            <div class="diag-field">
+                <label class="forge-field-label" for="workspace-selector">Workspace</label>
+                <select id="workspace-selector"
+                        class="forge-select"
+                        value="@(_selectedWorkspaceId?.ToString() ?? string.Empty)"
+                        @onchange="HandleWorkspaceSelectionChangedAsync"
+                        disabled="@(IsTargetSelectionLocked || _scopeSelection == DiagnosticScopeSelection.SystemNightwatch)">
+                    @if (_scopeSelection == DiagnosticScopeSelection.SystemNightwatch)
+                    {
+                        <option value="">System Nightwatch (Global Read-Only)</option>
+                    }
+                    else if (_workspaces.Count == 0)
+                    {
+                        <option value="">No workspaces configured</option>
+                    }
+                    else
+                    {
+                        @foreach (var ws in _workspaces)
+                        {
+                            <option value="@ws.Id">@ws.Name (#@ws.Id)</option>
+                        }
+                    }
+                </select>
+            </div>
+
+            @if (_scopeSelection == DiagnosticScopeSelection.TaskWorktree)
+            {
+                <div class="diag-field">
+                    <label class="forge-field-label" for="task-selector">Task Worktree</label>
+                    <select id="task-selector"
+                            class="forge-select"
+                            value="@(_selectedTaskId?.ToString() ?? string.Empty)"
+                            @onchange="HandleTaskSelectionChangedAsync"
+                            disabled="@IsTargetSelectionLocked">
+                        @if (_workspaceTasks.Count == 0)
+                        {
+                            <option value="">No tasks available in workspace</option>
+                        }
+                        else
+                        {
+                            @foreach (var t in _workspaceTasks)
+                            {
+                                <option value="@t.Id">#@t.Id — @t.Title</option>
+                            }
+                        }
+                    </select>
+                </div>
+            }
+
+            <div class="diag-field">
+                <label class="forge-field-label" for="security-tier-selector">Security Tier</label>
+                <select id="security-tier-selector"
+                        class="forge-select"
+                        value="@EffectiveSecurityTier"
+                        @onchange="HandleSecurityTierChangedAsync"
+                        disabled="@(IsTargetSelectionLocked || _scopeSelection == DiagnosticScopeSelection.SystemNightwatch)">
+                    <option value="@SandboxSecurityTier.Standard">Standard (RW)</option>
+                    <option value="@SandboxSecurityTier.RestrictedReadOnly">RestrictedReadOnly (RO, No Network)</option>
+                </select>
+            </div>
+
+            <div class="diag-field">
+                <label class="forge-field-label" for="pipeline-selector">Execution Pipeline</label>
+                <select id="pipeline-selector"
+                        class="forge-select"
+                        value="@_pipeline"
+                        @onchange="HandlePipelineChanged"
+                        disabled="@IsTargetSelectionLocked">
+                    <option value="@DiagnosticExecutionPipeline.AgentBashTool">Agent 'bash' Tool</option>
+                    <option value="@DiagnosticExecutionPipeline.RawExecutionEnvironment">Raw IExecutionEnvironment</option>
+                </select>
+            </div>
+
+            <div class="diag-field">
+                <label class="forge-field-label" for="workdir-override-input">Working Directory Override</label>
+                <input id="workdir-override-input"
+                       type="text"
+                       class="forge-input font-mono"
+                       placeholder="@(_inspection?.DefaultWorkingDirectory ?? "/workspace")"
+                       @bind="_workingDirectoryOverride"
+                       disabled="@IsTargetSelectionLocked" />
+            </div>
+
+            <div class="diag-field">
+                <label class="forge-field-label" for="timeout-override-input">Timeout (seconds)</label>
+                <input id="timeout-override-input"
+                       type="number"
+                       min="@DiagnosticShellUiHelper.MinTimeoutSeconds"
+                       max="@DiagnosticShellUiHelper.MaxTimeoutSeconds"
+                       class="forge-input font-mono"
+                       placeholder="Default"
+                       @bind="_timeoutSecondsOverride"
+                       disabled="@IsTargetSelectionLocked" />
+            </div>
+        </div>
+    </section>
+
+    <!-- 2. Environment & Volume Mounts Inspector Card -->
+    <section class="forge-card diag-section-card" id="environment-inspector-card">
+        <div class="diag-card-header">
+            <h2 class="diag-card-title">🔍 Environment &amp; Volume Mounts Inspector</h2>
+            <div class="diag-action-bar">
+                <button type="button"
+                        id="btn-refresh-inspection"
+                        class="forge-btn forge-btn-secondary diag-btn-compact"
+                        @onclick="RefreshInspectionAsync"
+                        disabled="@(!CanInspectOrRun || _isInspecting || _isExecuting || _isRecreating)">
+                    @(_isInspecting ? "⏳ Inspecting..." : "🔄 Refresh Inspection")
+                </button>
+                <button type="button"
+                        id="btn-run-doctor"
+                        class="forge-btn forge-btn-secondary diag-btn-compact"
+                        @onclick="RunEnvironmentDoctorAsync"
+                        disabled="@(!CanInspectOrRun || _isRunningDoctor || _isExecuting || _isRecreating)">
+                    @(_isRunningDoctor ? "⏳ Running Doctor..." : "🩺 Run Environment Doctor")
+                </button>
+                <button type="button"
+                        id="btn-recreate-container"
+                        class="forge-btn forge-btn-outline diag-btn-compact"
+                        @onclick="RecreateContainerAsync"
+                        disabled="@(!CanRecreateContainer || _isRecreating || _isExecuting || _isInspecting || _isRunningDoctor)">
+                    @(_isRecreating ? "⏳ Recreating..." : "♻️ Recreate Container")
+                </button>
+            </div>
+        </div>
+
+        @if (!CanInspectOrRun)
+        {
+            <div class="diag-empty-state" id="inspection-validation-message">
+                @TargetValidationMessage
+            </div>
+        }
+        else if (_isInspecting && _inspection == null)
+        {
+            <div class="diag-empty-state" id="inspection-loading-state">
+                Inspecting target execution environment...
+            </div>
+        }
+        else if (_inspection != null)
+        {
+            var tierBadge = DiagnosticShellUiHelper.FormatExecutionTier(_inspection.ResolvedTier);
+            var livenessBadge = DiagnosticShellUiHelper.FormatContainerLiveness(_inspection.IsContainerRunning);
+            var wslLabel = DiagnosticShellUiHelper.FormatWslBadge(_inspection.UseWsl, _inspection.WslDistribution);
+
+            <div class="diag-badges-row" id="inspection-badges-row">
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">Tier</span>
+                    <span class="forge-badge @tierBadge.CssClass" id="badge-execution-tier">@tierBadge.Label</span>
+                </div>
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">Container</span>
+                    <code class="diag-meta-code" id="badge-container-name">@(_inspection.ContainerName ?? "N/A")</code>
+                </div>
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">Image</span>
+                    <code class="diag-meta-code" id="badge-container-image">@(_inspection.ContainerImage ?? "N/A")</code>
+                </div>
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">Status</span>
+                    <span class="forge-badge @livenessBadge.CssClass" id="badge-container-status">@livenessBadge.Label</span>
+                </div>
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">UID:GID</span>
+                    <code class="diag-meta-code" id="badge-uid-gid">@(_inspection.UserUidGid ?? "N/A")</code>
+                </div>
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">Host Runtime</span>
+                    <span class="forge-badge badge-gray" id="badge-wsl-distro">@wslLabel</span>
+                </div>
+                <div class="diag-meta-pill">
+                    <span class="diag-meta-label">Default WorkDir</span>
+                    <code class="diag-meta-code" id="badge-default-workdir">@_inspection.DefaultWorkingDirectory</code>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_inspection.DriftDescription))
+            {
+                <div class="diag-drift-warning" id="container-drift-warning" role="alert">
+                    <strong>⚠️ Container Drift Detected:</strong> @_inspection.DriftDescription
+                </div>
+            }
+
+            <div class="diag-expandables">
+                <details class="diag-details" id="mounts-details">
+                    <summary class="diag-details-summary">
+                        <span>📁 Configured Volume Mounts (@_inspection.ConfiguredMounts.Count)</span>
+                    </summary>
+                    @if (_inspection.ConfiguredMounts.Count == 0)
+                    {
+                        <div class="diag-empty-state">No bind mounts configured for this execution tier.</div>
+                    }
+                    else
+                    {
+                        <div class="diag-table-wrap">
+                            <table class="diag-mounts-table" id="configured-mounts-table">
+                                <thead>
+                                    <tr>
+                                        <th>Host Path</th>
+                                        <th>Container Path</th>
+                                        <th>Mode</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var mount in _inspection.ConfiguredMounts)
+                                    {
+                                        var modeBadge = DiagnosticShellUiHelper.FormatMountMode(mount.IsReadOnly);
+                                        <tr>
+                                            <td class="font-mono">@mount.HostPath</td>
+                                            <td class="font-mono">@mount.ContainerPath</td>
+                                            <td><span class="forge-badge @modeBadge.CssClass">@modeBadge.Label</span></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </details>
+
+                @if (!string.IsNullOrWhiteSpace(_inspection.SynthesizedPath))
+                {
+                    var pathSegments = DiagnosticShellUiHelper.SplitSynthesizedPath(_inspection.SynthesizedPath);
+                    <details class="diag-details" id="synthesized-path-details">
+                        <summary class="diag-details-summary">
+                            <span>🧭 Synthesized PATH (@pathSegments.Count entries)</span>
+                        </summary>
+                        <div class="diag-path-box font-mono" id="synthesized-path-value">
+                            @foreach (var segment in pathSegments)
+                            {
+                                <span class="diag-path-chip">@segment</span>
+                            }
+                        </div>
+                    </details>
+                }
+            </div>
+        }
+    </section>
+
+    <!-- 3. One-Click Diagnostic Presets -->
+    <section class="forge-card diag-section-card" id="diagnostic-presets-card">
+        <div class="diag-card-header">
+            <h2 class="diag-card-title">⚡ One-Click Diagnostic Presets</h2>
+            <span class="diag-hint-inline">Executes immediately on the selected target &amp; pipeline</span>
+        </div>
+
+        <div class="diag-presets-grid">
+            @foreach (var preset in DiagnosticShellUiHelper.Presets)
+            {
+                <button type="button"
+                        class="diag-preset-btn"
+                        data-preset-id="@preset.Id"
+                        data-preset-name="@preset.Name"
+                        title="@preset.Purpose"
+                        @onclick="() => RunPresetAsync(preset)"
+                        disabled="@(!CanInspectOrRun || IsTargetSelectionLocked)">
+                    <span class="diag-preset-name">@preset.Name</span>
+                    <span class="diag-preset-purpose">@preset.Purpose</span>
+                </button>
+            }
+        </div>
+
+        <p class="diag-preset-note">
+            Compound shell presets (loops, pipes, and redirections) are designed for <strong>Raw IExecutionEnvironment</strong> or <strong>Standard</strong> tier diagnostics; running them under <strong>Agent 'bash' Tool + RestrictedReadOnly</strong> exercises read-only guardrail enforcement.
+        </p>
+    </section>
+
+    <!-- 4. Environment Doctor Report Card -->
+    @if (_isRunningDoctor || _doctorChecks.Count > 0)
+    {
+        var summary = DiagnosticShellUiHelper.SummarizeDoctorChecks(_doctorChecks);
+        <section class="forge-card diag-section-card" id="environment-doctor-card">
+            <div class="diag-card-header">
+                <h2 class="diag-card-title">🩺 Environment Doctor Report</h2>
+                @if (_doctorChecks.Count > 0)
+                {
+                    <div class="diag-doctor-summary" id="doctor-summary-badges">
+                        <span class="forge-badge badge-teal">✅ @summary.Passed Passed</span>
+                        <span class="forge-badge badge-amber">⚠️ @summary.Warnings Warnings</span>
+                        <span class="forge-badge badge-crimson">❌ @summary.Failed Failed</span>
+                    </div>
+                }
+            </div>
+
+            @if (_isRunningDoctor)
+            {
+                <div class="diag-empty-state" id="doctor-loading-state">Running Environment Doctor probes inside target environment...</div>
+            }
+            else
+            {
+                <div class="diag-doctor-grid" id="doctor-checks-grid">
+                    @foreach (var check in _doctorChecks)
+                    {
+                        var display = DiagnosticShellUiHelper.FormatDoctorStatus(check.Status);
+                        <div class="diag-doctor-item @display.CardCssClass" data-doctor-check="@check.Name">
+                            <div class="diag-doctor-item-header">
+                                <div>
+                                    <span class="diag-doctor-category">@check.Category</span>
+                                    <div class="diag-doctor-name">@check.Name</div>
+                                </div>
+                                <span class="forge-badge @display.BadgeCssClass">@display.Icon @display.Label</span>
+                            </div>
+                            <div class="diag-doctor-summary-text">@check.Summary</div>
+                            @if (!string.IsNullOrWhiteSpace(check.DiagnosticOutput))
+                            {
+                                <details class="diag-doctor-output-details">
+                                    <summary>Diagnostic output</summary>
+                                    <pre class="diag-doctor-pre font-mono">@check.DiagnosticOutput</pre>
+                                </details>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </section>
+    }
+
+    <!-- 5. Interactive Terminal & Live Streaming Output -->
+    <section class="forge-card diag-section-card diag-terminal-card" id="diagnostic-terminal-card">
+        <div class="diag-card-header">
+            <div class="diag-terminal-heading">
+                <h2 class="diag-card-title">💻 Interactive Shell &amp; Live Transcript</h2>
+                <span class="forge-badge badge-gray" id="transcript-count-badge">@_transcript.Count commands</span>
+                @if (_commandHistory.Entries.Count > 0)
+                {
+                    <span class="forge-badge badge-indigo" id="history-count-badge">@_commandHistory.Entries.Count in history</span>
+                }
+            </div>
+            <button type="button"
+                    id="btn-clear-transcript"
+                    class="forge-btn forge-btn-outline diag-btn-compact"
+                    @onclick="ClearTranscript"
+                    disabled="@(_transcript.Count == 0)">
+                Clear
+            </button>
+        </div>
+
+        @{
+            var liveSnapshot = _streamCorrelator.GetSnapshot();
+        }
+
+        <div class="diag-transcript-body font-mono" id="diagnostic-transcript-body">
+            @if (_transcript.Count == 0 && !liveSnapshot.IsActive)
+            {
+                <div class="diag-terminal-empty" id="diagnostic-transcript-empty">
+                    Enter a bash command below or click a diagnostic preset above to begin.
+                </div>
+            }
+            else
+            {
+                @foreach (var entry in _transcript)
+                {
+                    var exitBadge = DiagnosticShellUiHelper.FormatExitCodeBadge(entry.Result.ExitCode);
+                    <article class="diag-transcript-entry" data-entry-id="@entry.Id">
+                        <div class="diag-entry-header">
+                            <div class="diag-entry-command">
+                                <span class="diag-prompt-symbol">$</span>
+                                <code>@entry.Result.CommandLine</code>
+                            </div>
+                            <div class="diag-entry-badges">
+                                <span class="forge-badge badge-gray">@DiagnosticShellUiHelper.FormatScopeLabel(entry.Scope)</span>
+                                <span class="forge-badge badge-gray">@DiagnosticShellUiHelper.FormatPipelineLabel(entry.Pipeline)</span>
+                                <span class="forge-badge @exitBadge.CssClass" data-testid="entry-exit-badge">@exitBadge.Label</span>
+                                <span class="forge-badge badge-indigo" data-testid="entry-duration-badge">@DiagnosticShellUiHelper.FormatDuration(entry.Result.Duration)</span>
+                                @if (entry.Result.IsTruncated)
+                                {
+                                    <span class="forge-badge badge-amber">Truncated</span>
+                                }
+                            </div>
+                        </div>
+                        <div class="diag-entry-meta">
+                            <span>cwd: <code>@entry.Result.EffectiveWorkingDirectory</code></span>
+                            <span>@entry.Result.ExecutedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                        </div>
+                        @if (!string.IsNullOrEmpty(entry.Result.Output))
+                        {
+                            <pre class="diag-stream-pre diag-stdout">@entry.Result.Output</pre>
+                        }
+                        @if (!string.IsNullOrEmpty(entry.Result.Error))
+                        {
+                            <pre class="diag-stream-pre diag-stderr">@entry.Result.Error</pre>
+                        }
+                        @if (string.IsNullOrEmpty(entry.Result.Output) && string.IsNullOrEmpty(entry.Result.Error))
+                        {
+                            <div class="diag-no-output">(no output)</div>
+                        }
+                    </article>
+                }
+
+                @if (liveSnapshot.IsActive)
+                {
+                    <article class="diag-transcript-entry diag-live-entry" id="live-streaming-entry">
+                        <div class="diag-entry-header">
+                            <div class="diag-entry-command">
+                                <span class="diag-prompt-symbol">$</span>
+                                <code>@liveSnapshot.Command</code>
+                            </div>
+                            <div class="diag-entry-badges">
+                                <span class="forge-badge badge-indigo">● Streaming</span>
+                                @if (!string.IsNullOrWhiteSpace(liveSnapshot.TrackedCommandId))
+                                {
+                                    <span class="forge-badge badge-gray">@liveSnapshot.TrackedCommandId</span>
+                                }
+                            </div>
+                        </div>
+                        @if (liveSnapshot.Chunks.Count == 0)
+                        {
+                            <div class="diag-no-output">Waiting for process output...</div>
+                        }
+                        else
+                        {
+                            @foreach (var chunk in liveSnapshot.Chunks)
+                            {
+                                <pre class="diag-stream-pre @(chunk.IsError ? "diag-stderr" : "diag-stdout")">@chunk.Text</pre>
+                            }
+                        }
+                    </article>
+                }
+            }
+        </div>
+
+        <div class="diag-command-bar">
+            <span class="diag-prompt-prefix font-mono">$</span>
+            <input id="diagnostic-command-input"
+                   type="text"
+                   class="forge-input font-mono diag-command-input"
+                   placeholder="Enter bash command (Up/Down for history, Enter to execute)..."
+                   value="@_commandInput"
+                   @oninput="HandleCommandInputChanged"
+                   @onkeydown="HandleCommandInputKeyDownAsync"
+                   disabled="@_isExecuting" />
+            <button type="button"
+                    id="btn-execute-command"
+                    class="forge-btn forge-btn-primary"
+                    @onclick="ExecuteInputCommandAsync"
+                    disabled="@(IsTargetSelectionLocked || string.IsNullOrWhiteSpace(_commandInput) || !CanInspectOrRun)">
+                ▶ Execute
+            </button>
+            <button type="button"
+                    id="btn-stop-command"
+                    class="forge-btn forge-btn-danger"
+                    @onclick="StopExecution"
+                    disabled="@(!_isExecuting)">
+                ⏹ Stop / SIGINT
+            </button>
+        </div>
+    </section>
+</div>
+
+@code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    private readonly DiagnosticCommandHistory _commandHistory = new();
+    private readonly DiagnosticLiveStreamCorrelator _streamCorrelator = new();
+    private readonly List<DiagnosticTranscriptEntry> _transcript = new();
+    private readonly List<EnvironmentDoctorCheckItem> _doctorChecks = new();
+
+    private IReadOnlyList<Workspace> _workspaces = Array.Empty<Workspace>();
+    private IReadOnlyList<ForgeTask> _workspaceTasks = Array.Empty<ForgeTask>();
+    private EnvironmentInspectionSnapshot? _inspection;
+
+    private DiagnosticScopeSelection _scopeSelection = DiagnosticScopeSelection.WorkspaceCanonical;
+    private int? _selectedWorkspaceId;
+    private int? _selectedTaskId;
+    private SandboxSecurityTier _securityTier = SandboxSecurityTier.Standard;
+    private DiagnosticExecutionPipeline _pipeline = DiagnosticExecutionPipeline.AgentBashTool;
+    private string _workingDirectoryOverride = string.Empty;
+    private int? _timeoutSecondsOverride;
+    private string _commandInput = string.Empty;
+    private string? _errorBanner;
+
+    private int? _lastRouteWorkspaceId;
+    private int? _lastObservedActiveWorkspaceId;
+    private int? _loadedTasksWorkspaceId;
+    private bool _hasInitializedScope;
+    private string? _lastInspectedTargetKey;
+
+    private long _inspectionSequence;
+    private long _taskLoadSequence;
+    private long _doctorSequence;
+
+    private bool _isInspecting;
+    private bool _isRunningDoctor;
+    private bool _isRecreating;
+    private bool _isExecuting;
+    private bool _disposed;
+
+    private CancellationTokenSource? _executionCts;
+    private CancellationTokenSource? _inspectionCts;
+    private CancellationTokenSource? _doctorCts;
+    private CancellationTokenSource _lifecycleCts = new();
+
+    private bool IsTargetSelectionLocked => _isExecuting || _isRecreating;
+
+    private SandboxSecurityTier EffectiveSecurityTier =>
+        _scopeSelection == DiagnosticScopeSelection.SystemNightwatch
+            ? SandboxSecurityTier.RestrictedReadOnly
+            : _securityTier;
+
+    private (bool IsValid, string? ErrorMessage) TargetValidation =>
+        DiagnosticShellUiHelper.ValidateTarget(_scopeSelection, _selectedWorkspaceId, _selectedTaskId);
+
+    private bool CanInspectOrRun => TargetValidation.IsValid;
+    private string? TargetValidationMessage => TargetValidation.ErrorMessage;
+
+    private bool CanRecreateContainer =>
+        CanInspectOrRun &&
+        _inspection != null &&
+        _inspection.ResolvedTier == ExecutionTier.ContainerSandbox;
+
+    protected override void OnInitialized()
+    {
+        _lastObservedActiveWorkspaceId = WorkspaceState.ActiveWorkspaceId;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceStateChanged;
+        TelemetryService.OnShellCommandChanged += HandleTelemetryShellCommandChanged;
+        TelemetryService.OnShellCommandOutput += HandleTelemetryShellCommandOutput;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await EnsureWorkspacesLoadedAsync();
+
+        var routeChanged = WorkspaceId != _lastRouteWorkspaceId;
+        _lastRouteWorkspaceId = WorkspaceId;
+
+        if (WorkspaceId.HasValue && WorkspaceId.Value > 0)
+        {
+            ActivateRouteWorkspace(WorkspaceId.Value);
+            _lastObservedActiveWorkspaceId = WorkspaceState.ActiveWorkspaceId;
+            if (routeChanged || !_hasInitializedScope)
+            {
+                if (_scopeSelection == DiagnosticScopeSelection.SystemNightwatch)
+                {
+                    _scopeSelection = DiagnosticScopeSelection.WorkspaceCanonical;
+                }
+                if (_selectedWorkspaceId != WorkspaceId.Value)
+                {
+                    _selectedWorkspaceId = WorkspaceId.Value;
+                    _selectedTaskId = null;
+                    _loadedTasksWorkspaceId = null;
+                }
+            }
+        }
+        else if (!_hasInitializedScope)
+        {
+            if (WorkspaceState.ActiveWorkspaceId is > 0)
+            {
+                _selectedWorkspaceId = WorkspaceState.ActiveWorkspaceId;
+            }
+            else if (_workspaces.Count > 0)
+            {
+                _selectedWorkspaceId = _workspaces[0].Id;
+            }
+            else
+            {
+                _scopeSelection = DiagnosticScopeSelection.SystemNightwatch;
+            }
+        }
+
+        _hasInitializedScope = true;
+
+        if (_scopeSelection == DiagnosticScopeSelection.TaskWorktree &&
+            _loadedTasksWorkspaceId != _selectedWorkspaceId)
+        {
+            await LoadTasksForSelectedWorkspaceAsync();
+        }
+
+        await RefreshInspectionIfTargetChangedAsync();
+    }
+
+    private async Task EnsureWorkspacesLoadedAsync()
+    {
+        if (WorkspaceState.KnownWorkspaces.Count > 0)
+        {
+            _workspaces = WorkspaceState.KnownWorkspaces;
+            return;
+        }
+
+        try
+        {
+            var loaded = await WorkspaceRepository.GetAllAsync(_lifecycleCts.Token);
+            _workspaces = loaded ?? Array.Empty<Workspace>();
+            if (_workspaces.Count > 0)
+            {
+                WorkspaceState.SetKnownWorkspaces(_workspaces);
+            }
+        }
+        catch (OperationCanceledException) when (_lifecycleCts.IsCancellationRequested)
+        {
+            // Component disposed while loading workspaces.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load workspaces for Diagnostic Shell.");
+            _errorBanner = $"Failed to load workspaces: {ex.Message}";
+        }
+    }
+
+    private void ActivateRouteWorkspace(int workspaceId)
+    {
+        if (WorkspaceState.TryActivateWorkspaceById(workspaceId))
+        {
+            return;
+        }
+
+        var matched = _workspaces.FirstOrDefault(w => w.Id == workspaceId);
+        if (matched != null)
+        {
+            WorkspaceState.SetActiveWorkspace(matched);
+        }
+    }
+
+    private void HandleWorkspaceStateChanged()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                _workspaces = WorkspaceState.KnownWorkspaces;
+                var currentActiveId = WorkspaceState.ActiveWorkspaceId;
+                var activeWorkspaceChanged = currentActiveId != _lastObservedActiveWorkspaceId;
+                _lastObservedActiveWorkspaceId = currentActiveId;
+
+                if (activeWorkspaceChanged &&
+                    !IsTargetSelectionLocked &&
+                    _scopeSelection != DiagnosticScopeSelection.SystemNightwatch &&
+                    currentActiveId is > 0 &&
+                    currentActiveId != _selectedWorkspaceId)
+                {
+                    CancelDoctorProbe();
+                    _doctorChecks.Clear();
+                    _selectedWorkspaceId = currentActiveId;
+                    _selectedTaskId = null;
+                    _loadedTasksWorkspaceId = null;
+
+                    if (_scopeSelection == DiagnosticScopeSelection.TaskWorktree)
+                    {
+                        await LoadTasksForSelectedWorkspaceAsync();
+                    }
+
+                    await RefreshInspectionIfTargetChangedAsync();
+                }
+
+                if (!_disposed)
+                {
+                    StateHasChanged();
+                }
+            }
+            catch (OperationCanceledException) when (_lifecycleCts.IsCancellationRequested)
+            {
+                // Component disposed during workspace state sync.
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed to synchronize workspace state change in Diagnostic Shell.");
+            }
+        });
+    }
+
+    private async Task HandleScopeChangedAsync(ChangeEventArgs e)
+    {
+        if (IsTargetSelectionLocked || !Enum.TryParse<DiagnosticScopeSelection>(e.Value?.ToString(), out var newScope))
+        {
+            return;
+        }
+
+        CancelDoctorProbe();
+        _scopeSelection = newScope;
+        _doctorChecks.Clear();
+        _errorBanner = null;
+
+        if (_scopeSelection != DiagnosticScopeSelection.SystemNightwatch &&
+            _selectedWorkspaceId is not > 0)
+        {
+            _selectedWorkspaceId = WorkspaceId ?? WorkspaceState.ActiveWorkspaceId ?? _workspaces.FirstOrDefault()?.Id;
+            _loadedTasksWorkspaceId = null;
+        }
+
+        if (_scopeSelection == DiagnosticScopeSelection.TaskWorktree)
+        {
+            await LoadTasksForSelectedWorkspaceAsync();
+        }
+        else
+        {
+            _selectedTaskId = null;
+        }
+
+        await RefreshInspectionAsync();
+    }
+
+    private async Task HandleWorkspaceSelectionChangedAsync(ChangeEventArgs e)
+    {
+        if (IsTargetSelectionLocked)
+        {
+            return;
+        }
+
+        if (int.TryParse(e.Value?.ToString(), out var wsId) && wsId > 0)
+        {
+            CancelDoctorProbe();
+            _selectedWorkspaceId = wsId;
+            _selectedTaskId = null;
+            _loadedTasksWorkspaceId = null;
+            _doctorChecks.Clear();
+            _errorBanner = null;
+
+            if (_scopeSelection == DiagnosticScopeSelection.TaskWorktree)
+            {
+                await LoadTasksForSelectedWorkspaceAsync();
+            }
+
+            await RefreshInspectionAsync();
+        }
+    }
+
+    private async Task HandleTaskSelectionChangedAsync(ChangeEventArgs e)
+    {
+        if (IsTargetSelectionLocked)
+        {
+            return;
+        }
+
+        CancelDoctorProbe();
+        _selectedTaskId = int.TryParse(e.Value?.ToString(), out var taskId) && taskId > 0
+            ? taskId
+            : null;
+        _doctorChecks.Clear();
+        _errorBanner = null;
+
+        await RefreshInspectionAsync();
+    }
+
+    private async Task HandleSecurityTierChangedAsync(ChangeEventArgs e)
+    {
+        if (IsTargetSelectionLocked)
+        {
+            return;
+        }
+
+        if (Enum.TryParse<SandboxSecurityTier>(e.Value?.ToString(), out var tier))
+        {
+            CancelDoctorProbe();
+            _securityTier = tier;
+            _doctorChecks.Clear();
+            _errorBanner = null;
+            await RefreshInspectionAsync();
+        }
+    }
+
+    private void HandlePipelineChanged(ChangeEventArgs e)
+    {
+        if (!IsTargetSelectionLocked && Enum.TryParse<DiagnosticExecutionPipeline>(e.Value?.ToString(), out var pipeline))
+        {
+            _pipeline = pipeline;
+        }
+    }
+
+    private async Task LoadTasksForSelectedWorkspaceAsync()
+    {
+        var sequence = ++_taskLoadSequence;
+        var targetWorkspaceId = _selectedWorkspaceId;
+
+        if (targetWorkspaceId is not > 0)
+        {
+            _workspaceTasks = Array.Empty<ForgeTask>();
+            _selectedTaskId = null;
+            _loadedTasksWorkspaceId = null;
+            return;
+        }
+
+        try
+        {
+            var tasks = await TaskRepository.GetByWorkspaceIdAsync(targetWorkspaceId.Value, _lifecycleCts.Token);
+            if (_disposed || sequence != _taskLoadSequence || _selectedWorkspaceId != targetWorkspaceId)
+            {
+                return;
+            }
+
+            _workspaceTasks = tasks
+                .OrderByDescending(t => t.UpdatedAt)
+                .ThenByDescending(t => t.Id)
+                .ToList();
+            _loadedTasksWorkspaceId = targetWorkspaceId;
+
+            if (_selectedTaskId is not > 0 || _workspaceTasks.All(t => t.Id != _selectedTaskId))
+            {
+                _selectedTaskId = _workspaceTasks.FirstOrDefault()?.Id;
+            }
+        }
+        catch (OperationCanceledException) when (_lifecycleCts.IsCancellationRequested)
+        {
+            // Component disposed while loading tasks.
+        }
+        catch (Exception ex)
+        {
+            if (_disposed || sequence != _taskLoadSequence || _selectedWorkspaceId != targetWorkspaceId)
+            {
+                return;
+            }
+
+            Logger.LogError(ex, "Failed to load tasks for workspace #{WorkspaceId}.", targetWorkspaceId);
+            _errorBanner = $"Failed to load workspace tasks: {ex.Message}";
+            _workspaceTasks = Array.Empty<ForgeTask>();
+            _loadedTasksWorkspaceId = null;
+        }
+    }
+
+    private EnvironmentDiagnosticTarget BuildCurrentTarget() =>
+        DiagnosticShellUiHelper.BuildTarget(
+            _scopeSelection,
+            _selectedWorkspaceId,
+            _selectedTaskId,
+            EffectiveSecurityTier,
+            _pipeline,
+            _workingDirectoryOverride,
+            _timeoutSecondsOverride);
+
+    private string BuildInspectionKey() =>
+        DiagnosticShellUiHelper.BuildInspectionKey(
+            _scopeSelection,
+            _selectedWorkspaceId,
+            _selectedTaskId,
+            EffectiveSecurityTier);
+
+    private async Task RefreshInspectionIfTargetChangedAsync()
+    {
+        var key = BuildInspectionKey();
+        if (string.Equals(key, _lastInspectedTargetKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await RefreshInspectionAsync();
+    }
+
+    private async Task RefreshInspectionAsync()
+    {
+        var targetKey = BuildInspectionKey();
+        var sequence = ++_inspectionSequence;
+        CancelAndDisposeCts(ref _inspectionCts);
+
+        if (!CanInspectOrRun)
+        {
+            _inspection = null;
+            _lastInspectedTargetKey = targetKey;
+            _isInspecting = false;
+            return;
+        }
+
+        if (!string.Equals(targetKey, _lastInspectedTargetKey, StringComparison.Ordinal))
+        {
+            _inspection = null;
+            _lastInspectedTargetKey = null;
+        }
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifecycleCts.Token);
+        _inspectionCts = cts;
+        var token = cts.Token;
+
+        _isInspecting = true;
+        _errorBanner = null;
+        try
+        {
+            var target = BuildCurrentTarget();
+            var snapshot = await DiagnosticShellService.InspectEnvironmentAsync(target, token);
+            if (sequence == _inspectionSequence && !_disposed)
+            {
+                _inspection = snapshot;
+                _lastInspectedTargetKey = targetKey;
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Superseded by a newer target inspection or component disposal.
+        }
+        catch (Exception ex)
+        {
+            if (sequence == _inspectionSequence && !_disposed)
+            {
+                Logger.LogError(ex, "Environment inspection failed.");
+                _errorBanner = $"Inspection failed: {ex.Message}";
+                ToastService.Show("Inspection Failed", ex.Message, ToastLevel.Error);
+            }
+        }
+        finally
+        {
+            if (sequence == _inspectionSequence)
+            {
+                _isInspecting = false;
+                if (ReferenceEquals(_inspectionCts, cts))
+                {
+                    _inspectionCts = null;
+                }
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private async Task RunEnvironmentDoctorAsync()
+    {
+        if (!CanInspectOrRun || _isRunningDoctor || IsTargetSelectionLocked)
+        {
+            return;
+        }
+
+        var sequence = ++_doctorSequence;
+        CancelAndDisposeCts(ref _doctorCts);
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_lifecycleCts.Token);
+        _doctorCts = cts;
+        var token = cts.Token;
+
+        _isRunningDoctor = true;
+        _errorBanner = null;
+        try
+        {
+            var target = BuildCurrentTarget();
+            var checks = await DiagnosticShellService.RunEnvironmentDoctorAsync(target, token);
+            if (sequence == _doctorSequence && !_disposed)
+            {
+                _doctorChecks.Clear();
+                _doctorChecks.AddRange(checks);
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // Superseded by target change or component disposal.
+        }
+        catch (Exception ex)
+        {
+            if (sequence == _doctorSequence && !_disposed)
+            {
+                Logger.LogError(ex, "Environment Doctor failed.");
+                _errorBanner = $"Environment Doctor failed: {ex.Message}";
+                ToastService.Show("Environment Doctor Failed", ex.Message, ToastLevel.Error);
+            }
+        }
+        finally
+        {
+            if (sequence == _doctorSequence)
+            {
+                _isRunningDoctor = false;
+                if (ReferenceEquals(_doctorCts, cts))
+                {
+                    _doctorCts = null;
+                }
+            }
+
+            cts.Dispose();
+        }
+    }
+
+    private void CancelDoctorProbe()
+    {
+        _doctorSequence++;
+        CancelAndDisposeCts(ref _doctorCts);
+        _isRunningDoctor = false;
+    }
+
+    private async Task RecreateContainerAsync()
+    {
+        if (!CanRecreateContainer || _isRecreating || _isExecuting)
+        {
+            return;
+        }
+
+        _isRecreating = true;
+        _errorBanner = null;
+        try
+        {
+            var target = BuildCurrentTarget();
+            await DiagnosticShellService.RecreateEnvironmentContainerAsync(target, _lifecycleCts.Token);
+            ToastService.Show("Container Recreated", "Sandbox container was recreated successfully.", ToastLevel.Success);
+            await RefreshInspectionAsync();
+        }
+        catch (OperationCanceledException) when (_lifecycleCts.IsCancellationRequested)
+        {
+            // Component disposed while recreating container.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Container recreation failed.");
+            _errorBanner = $"Container recreation failed: {ex.Message}";
+            ToastService.Show("Recreate Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _isRecreating = false;
+        }
+    }
+
+    private async Task RunPresetAsync(DiagnosticShellPreset preset)
+    {
+        ArgumentNullException.ThrowIfNull(preset);
+        await ExecuteCommandAsync(preset.Command, clearInput: false);
+    }
+
+    private async Task ExecuteInputCommandAsync()
+    {
+        await ExecuteCommandAsync(_commandInput, clearInput: true);
+    }
+
+    private async Task ExecuteCommandAsync(string? commandText, bool clearInput)
+    {
+        if (IsTargetSelectionLocked || !CanInspectOrRun || string.IsNullOrWhiteSpace(commandText))
+        {
+            return;
+        }
+
+        var trimmedCommand = commandText.Trim();
+        _commandHistory.Record(trimmedCommand);
+        if (clearInput)
+        {
+            _commandInput = string.Empty;
+        }
+        _errorBanner = null;
+
+        var target = BuildCurrentTarget();
+        var expectedWorkDir = DiagnosticShellUiHelper.ResolveExpectedWorkingDirectory(
+            target.WorkingDirectoryOverride,
+            _inspection?.DefaultWorkingDirectory);
+
+        _isExecuting = true;
+        CancelAndDisposeCts(ref _executionCts);
+        var executionCts = CancellationTokenSource.CreateLinkedTokenSource(_lifecycleCts.Token);
+        _executionCts = executionCts;
+        _streamCorrelator.BeginExecution(trimmedCommand, expectedWorkDir);
+
+        await InvokeAsync(StateHasChanged);
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var result = await DiagnosticShellService.ExecuteCommandAsync(
+                target,
+                trimmedCommand,
+                executionCts.Token);
+
+            stopwatch.Stop();
+            AppendTranscriptEntry(new DiagnosticTranscriptEntry(
+                Guid.NewGuid(),
+                _scopeSelection,
+                _pipeline,
+                EffectiveSecurityTier,
+                result));
+        }
+        catch (OperationCanceledException) when (_lifecycleCts.IsCancellationRequested)
+        {
+            Logger.LogDebug("Diagnostic command execution cancelled on component disposal.");
+        }
+        catch (OperationCanceledException) when (executionCts.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+            Logger.LogInformation("Diagnostic command execution cancelled before service returned.");
+            if (!_disposed)
+            {
+                var snapshot = _streamCorrelator.GetSnapshot();
+                var fallbackResult = DiagnosticShellUiHelper.BuildFallbackCancelledResult(
+                    trimmedCommand,
+                    expectedWorkDir,
+                    snapshot,
+                    stopwatch.Elapsed);
+
+                AppendTranscriptEntry(new DiagnosticTranscriptEntry(
+                    Guid.NewGuid(),
+                    _scopeSelection,
+                    _pipeline,
+                    EffectiveSecurityTier,
+                    fallbackResult));
+            }
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            Logger.LogError(ex, "Diagnostic command execution failed for command: {Command}", trimmedCommand);
+            _errorBanner = $"Command failed: {ex.Message}";
+            ToastService.Show("Execution Failed", ex.Message, ToastLevel.Error);
+        }
+        finally
+        {
+            _streamCorrelator.EndExecution();
+            _isExecuting = false;
+            if (ReferenceEquals(_executionCts, executionCts))
+            {
+                _executionCts = null;
+            }
+            executionCts.Dispose();
+        }
+    }
+
+    private void AppendTranscriptEntry(DiagnosticTranscriptEntry entry)
+    {
+        _transcript.Add(entry);
+        if (_transcript.Count > DiagnosticShellUiHelper.MaxTranscriptEntries)
+        {
+            _transcript.RemoveRange(0, _transcript.Count - DiagnosticShellUiHelper.MaxTranscriptEntries);
+        }
+    }
+
+    private void HandleCommandInputChanged(ChangeEventArgs e)
+    {
+        _commandInput = e.Value?.ToString() ?? string.Empty;
+        _commandHistory.ResetNavigation();
+    }
+
+    private void StopExecution()
+    {
+        try
+        {
+            _executionCts?.Cancel();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            Logger.LogDebug(ex, "Execution cancellation token was already disposed.");
+        }
+    }
+
+    private async Task HandleCommandInputKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == DiagnosticShellUiHelper.KeyEnter && !e.ShiftKey)
+        {
+            await ExecuteInputCommandAsync();
+            return;
+        }
+
+        if (e.Key == DiagnosticShellUiHelper.KeyArrowUp)
+        {
+            _commandInput = _commandHistory.NavigateUp(_commandInput);
+            return;
+        }
+
+        if (e.Key == DiagnosticShellUiHelper.KeyArrowDown)
+        {
+            _commandInput = _commandHistory.NavigateDown(_commandInput);
+        }
+    }
+
+    private void ClearTranscript()
+    {
+        _transcript.Clear();
+    }
+
+    private void HandleTelemetryShellCommandChanged(ShellCommandRecord record)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_streamCorrelator.HandleShellCommandChanged(record))
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void HandleTelemetryShellCommandOutput(string commandId, string chunk, bool isError)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        if (_streamCorrelator.HandleShellCommandOutput(commandId, chunk, isError))
+        {
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CancelAndDisposeCts(ref CancellationTokenSource? cts)
+    {
+        var current = cts;
+        cts = null;
+        if (current == null)
+        {
+            return;
+        }
+
+        try
+        {
+            current.Cancel();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            Logger.LogDebug(ex, "Cancellation token source already disposed during cancel.");
+        }
+
+        try
+        {
+            current.Dispose();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            Logger.LogDebug(ex, "Cancellation token source already disposed during dispose.");
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceStateChanged;
+        TelemetryService.OnShellCommandChanged -= HandleTelemetryShellCommandChanged;
+        TelemetryService.OnShellCommandOutput -= HandleTelemetryShellCommandOutput;
+
+        CancelAndDisposeCts(ref _executionCts);
+        CancelAndDisposeCts(ref _inspectionCts);
+        CancelAndDisposeCts(ref _doctorCts);
+
+        try
+        {
+            _lifecycleCts.Cancel();
+            _lifecycleCts.Dispose();
+        }
+        catch (ObjectDisposedException ex)
+        {
+            Logger.LogDebug(ex, "Diagnostic shell lifecycle CTS already disposed.");
+        }
+    }
+}

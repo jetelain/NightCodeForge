@@ -219,6 +219,7 @@ public static class WorkspaceUrlHelper
             "dev-queue" => "Dev-Queue & Locks",
             "settings" => "Settings",
             "transcripts" => "Transcripts & AI",
+            "diagnostics" => "Container Shell",
             "triage" => "Untrusted Intake",
             "tasks" => "Tasks",
             _ => char.ToUpperInvariant(primarySegment[0]) + primarySegment[1..]

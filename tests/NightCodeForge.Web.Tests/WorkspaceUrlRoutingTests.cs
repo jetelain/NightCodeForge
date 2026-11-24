@@ -82,6 +82,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
     [InlineData("http://localhost/w/2/tasks/15", "Tasks")]
     [InlineData("http://localhost/w/2/tasks/create", "Tasks")]
     [InlineData("http://localhost/w/2/review/15", "Review Room")]
+    [InlineData("http://localhost/w/2/diagnostics/shell", "Container Shell")]
     [InlineData("http://localhost/w/2", "Overview")]
     public void GetSectionDisplayName_StripsWorkspacePrefixBeforeResolvingSection(
         string uri, string expectedSection)
@@ -170,6 +171,9 @@ public class WorkspaceUrlRoutingTests : BunitContext
 
         var memoryLink = cut.Find("a[href='w/9/memory']");
         Assert.NotNull(memoryLink);
+
+        var shellLink = cut.Find("a[href='w/9/diagnostics/shell']");
+        Assert.NotNull(shellLink);
 
         var homeLink = cut.Find("a.brand-logo-wrap[href='']");
         Assert.NotNull(homeLink);
