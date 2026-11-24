@@ -180,13 +180,118 @@ public class MemoryPresentationHelperTests
     }
 
     [Fact]
-    public void ToDrawerRelativePath_StripsWksTaskWorktreeAndDotSegments()
+    public void ToMemoryRelativePath_StripsWksTaskWorktreeAndDotSegments()
     {
         Assert.Equal(
             ".agents/memory/arch.md",
-            MemoryPresentationHelper.ToDrawerRelativePath(AgentMemoryScope.SharedRepository, "/home/dev/.nightcodeforge/wks/7/task-42/.agents/memory/arch.md"));
+            MemoryPresentationHelper.ToMemoryRelativePath(AgentMemoryScope.SharedRepository, "/home/dev/.nightcodeforge/wks/7/task-42/.agents/memory/arch.md"));
         Assert.Equal(
             "AGENTS.md",
-            MemoryPresentationHelper.ToDrawerRelativePath(AgentMemoryScope.SharedRepository, "/workspace/task-42/./AGENTS.md"));
+            MemoryPresentationHelper.ToMemoryRelativePath(AgentMemoryScope.SharedRepository, "/workspace/task-42/./AGENTS.md"));
+    }
+
+    [Fact]
+    public void BuildMemoryPageUrl_FormatsWorkspaceScopedAndDeepLinkUrls()
+    {
+        Assert.Equal("/w/5/memory", MemoryPresentationHelper.BuildMemoryPageUrl(5));
+        Assert.Equal("/memory", MemoryPresentationHelper.BuildMemoryPageUrl(null));
+        Assert.Equal(
+            "/w/5/memory?scope=local&path=MEMORY.md",
+            MemoryPresentationHelper.BuildMemoryPageUrl(5, AgentMemoryScope.LocalWorkspace, "MEMORY.md"));
+        Assert.Equal(
+            "/w/5/memory?scope=shared&path=.agents%2Fmemory%2Farch.md",
+            MemoryPresentationHelper.BuildMemoryPageUrl(5, AgentMemoryScope.SharedRepository, ".agents/memory/arch.md"));
+    }
+
+    [Theory]
+    [InlineData("local", true, AgentMemoryScope.LocalWorkspace)]
+    [InlineData("LocalWorkspace", true, AgentMemoryScope.LocalWorkspace)]
+    [InlineData("shared", true, AgentMemoryScope.SharedRepository)]
+    [InlineData("SharedGit", true, AgentMemoryScope.SharedRepository)]
+    [InlineData("SharedRepository", true, AgentMemoryScope.SharedRepository)]
+    [InlineData("invalid", false, AgentMemoryScope.None)]
+    public void TryParseScopeQueryValue_ParsesExpectedValues(string raw, bool expectedSuccess, AgentMemoryScope expectedScope)
+    {
+        var ok = MemoryPresentationHelper.TryParseScopeQueryValue(raw, out var scope);
+
+        Assert.Equal(expectedSuccess, ok);
+        Assert.Equal(expectedScope, scope);
+    }
+
+    [Fact]
+    public void ResolveDeepLink_HandlesValidInvalidAndPathOnlyCases()
+    {
+        var empty = MemoryPresentationHelper.ResolveDeepLink(null, null);
+        Assert.Null(empty.Scope);
+        Assert.Null(empty.RelativePath);
+        Assert.Null(empty.WarningMessage);
+
+        var invalid = MemoryPresentationHelper.ResolveDeepLink("bogus", "a.md");
+        Assert.Null(invalid.Scope);
+        Assert.NotNull(invalid.WarningMessage);
+
+        var sharedInferred = MemoryPresentationHelper.ResolveDeepLink(null, ".agents/memory/arch.md");
+        Assert.Equal(AgentMemoryScope.SharedRepository, sharedInferred.Scope);
+        Assert.Equal(".agents/memory/arch.md", sharedInferred.RelativePath);
+        Assert.Null(sharedInferred.WarningMessage);
+
+        var localExplicit = MemoryPresentationHelper.ResolveDeepLink("local", "MEMORY.md");
+        Assert.Equal(AgentMemoryScope.LocalWorkspace, localExplicit.Scope);
+        Assert.Equal("MEMORY.md", localExplicit.RelativePath);
+        Assert.Null(localExplicit.WarningMessage);
+    }
+
+    [Fact]
+    public void ComputeBudget_FlagsNearBudgetAndOverBudget()
+    {
+        var nearLines = string.Join("\n", Enumerable.Repeat("x", (int)Math.Ceiling(AgentMemoryConstants.MaxPinnedMemoryLines * 0.8)));
+        var near = MemoryPresentationHelper.ComputeBudget(nearLines);
+        Assert.True(near.IsNearBudget);
+        Assert.False(near.IsOverBudget);
+
+        var overLines = string.Join("\n", Enumerable.Repeat("x", AgentMemoryConstants.MaxPinnedMemoryLines + 1));
+        var over = MemoryPresentationHelper.ComputeBudget(overLines);
+        Assert.True(over.IsOverBudget);
+        Assert.False(over.IsNearBudget);
+    }
+
+    [Fact]
+    public void MemoryToolTarget_BadgeTooltip_ReferencesAgentMemoryPage()
+    {
+        var target = MemoryPresentationHelper.TryGetToolTarget("write", "{\"path\":\"/workspace/memory/a.md\"}");
+
+        Assert.NotNull(target);
+        Assert.Equal("Open a.md in Agent Memory", target.BadgeTooltip);
+    }
+
+    [Fact]
+    public void ResolveDeepLink_NormalizesVirtualLocalPath_PreservesTraversalForValidation_AndWarnsOnMissingPath()
+    {
+        var virtualLocal = MemoryPresentationHelper.ResolveDeepLink(null, "/workspace/memory/MEMORY.md");
+        Assert.Equal(AgentMemoryScope.LocalWorkspace, virtualLocal.Scope);
+        Assert.Equal("MEMORY.md", virtualLocal.RelativePath);
+        Assert.Null(virtualLocal.WarningMessage);
+
+        var traversal = MemoryPresentationHelper.ResolveDeepLink("local", "../secret.md");
+        Assert.Equal(AgentMemoryScope.LocalWorkspace, traversal.Scope);
+        Assert.Equal("../secret.md", traversal.RelativePath);
+
+        var missingPath = MemoryPresentationHelper.ResolveDeepLink("local", null);
+        Assert.Null(missingPath.Scope);
+        Assert.NotNull(missingPath.WarningMessage);
+    }
+
+    [Fact]
+    public void BuildMemoryNotificationUrl_OmitsFileParamsForDeletedOrEmptyPath()
+    {
+        Assert.Equal(
+            "/w/5/memory",
+            MemoryPresentationHelper.BuildMemoryNotificationUrl(5, AgentMemoryConstants.ScopeLocalMetadataValue, "/workspace/memory/a.md", "Deleted"));
+        Assert.Equal(
+            "/w/5/memory",
+            MemoryPresentationHelper.BuildMemoryNotificationUrl(5, AgentMemoryConstants.ScopeLocalMetadataValue, "", "Updated"));
+        Assert.Equal(
+            "/w/5/memory?scope=shared&path=.agents%2Fmemory%2Farch.md",
+            MemoryPresentationHelper.BuildMemoryNotificationUrl(5, AgentMemoryConstants.ScopeSharedGitMetadataValue, ".agents/memory/arch.md", "Updated"));
     }
 }

@@ -1,5 +1,7 @@
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
+using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Memory;
 using NightCodeForge.Web.Components.Layout;
 using NightCodeForge.Web.Services;
 using Xunit;
@@ -8,10 +10,14 @@ namespace NightCodeForge.Web.Tests;
 
 public class NavMenuShellTests : BunitContext
 {
+    private readonly OrchestratorHubClientConnection _hub = TestHubConnectionHelper.Create();
+
     public NavMenuShellTests()
     {
         Services.AddSingleton(WorkerStateTestHelper.Create(new Moq.Mock<NightCodeForge.Core.Interfaces.IOperationsTelemetryService>().Object));
         Services.AddSingleton(new WorkspaceStateService());
+        Services.AddSingleton(_hub);
+        Services.AddSingleton<MemoryUpdateTracker>();
     }
 
     [Fact]
@@ -318,5 +324,24 @@ public class NavMenuShellTests : BunitContext
 
         Assert.Equal(1, workerState.Current.PendingQuestionCount);
         Assert.Equal(2, workerState.Current.PendingReviewCount);
+    }
+
+    [Fact]
+    public void NavMenu_AgentMemoryLink_RendersLiveUnreadBadge_AndClearsOnReset()
+    {
+        var workspaceState = Services.GetRequiredService<WorkspaceStateService>();
+        workspaceState.SetActiveWorkspace(new Workspace { Id = 5, Name = "Mem WS", RepositoryPath = "/repos/mem" });
+        var tracker = Services.GetRequiredService<MemoryUpdateTracker>();
+
+        var cut = Render<NavMenu>();
+        var memoryLink = cut.Find("#nav-memory-link");
+        Assert.Equal("w/5/memory", memoryLink.GetAttribute("href"));
+        Assert.Empty(cut.FindAll("[data-testid=nav-memory-badge]"));
+
+        _hub.TriggerMemoryUpdated(5, null, "", AgentMemoryConstants.ScopeLocalMetadataValue, "/workspace/memory/a.md", "Updated", "x");
+        cut.WaitForAssertion(() => Assert.Equal("1", cut.Find("[data-testid=nav-memory-badge]").TextContent.Trim()));
+
+        tracker.Reset(5);
+        cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("[data-testid=nav-memory-badge]")));
     }
 }

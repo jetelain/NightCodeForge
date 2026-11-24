@@ -5,7 +5,7 @@ using NightCodeForge.Core.Memory;
 
 namespace NightCodeForge.Web.Services;
 
-/// <summary>Constants used by the agent memory UI (toast, badges, drawer).</summary>
+/// <summary>Constants used by the agent memory UI (page, toast, badges).</summary>
 public static class MemoryUiConstants
 {
     public const string ToastTitle = "🧠 Agent Memory Updated";
@@ -20,10 +20,11 @@ public static class MemoryUiConstants
     public const int MaxSummaryLength = AgentMemoryConstants.MaxCatalogDescriptionLength;
     public const int MaxMemoryFileBytes = 262_144;
     public const int MaxFileNameLength = 100;
+    public const double NearBudgetThresholdPercent = 80d;
     public const string FrontmatterDelimiter = "---";
     public const string FrontmatterDescriptionKey = "description:";
     public const string MemoryNotificationTag = "ncf-memory-updated";
-    public const string WorkspaceMemoryUrlSuffix = "ideation";
+    public const string WorkspaceMemoryUrlSuffix = "memory";
 
     public static class ToolNames
     {
@@ -42,7 +43,7 @@ public sealed record MemoryToolTarget(AgentMemoryScope Scope, string RelativePat
 {
     public string BadgeText => MemoryPresentationHelper.FormatBadgeText(Scope, ChangeKind);
 
-    public string BadgeTooltip => $"Open {RelativePath} in the Workspace Memory drawer";
+    public string BadgeTooltip => $"Open {RelativePath} in Agent Memory";
 }
 
 /// <summary>Line / byte budget of the pinned <c>MEMORY.md</c> file.</summary>
@@ -51,11 +52,22 @@ public sealed record MemoryBudget(int Lines, int Bytes, int MaxLines, int MaxByt
     public double LinesPercent => MaxLines <= 0 ? 0 : Math.Min(100d, Lines * 100d / MaxLines);
     public double BytesPercent => MaxBytes <= 0 ? 0 : Math.Min(100d, Bytes * 100d / MaxBytes);
     public bool IsOverBudget => Lines > MaxLines || Bytes > MaxBytes;
+    public bool IsNearBudget => !IsOverBudget &&
+        (LinesPercent >= MemoryUiConstants.NearBudgetThresholdPercent ||
+         BytesPercent >= MemoryUiConstants.NearBudgetThresholdPercent);
 }
 
-/// <summary>Pure presentation logic for agent memory: tool-call detection, labels, toast text, summaries, budgets.</summary>
+/// <summary>Resolved deep-link target for the Agent Memory Explorer page.</summary>
+public sealed record MemoryDeepLinkResolution(AgentMemoryScope? Scope, string? RelativePath, string? WarningMessage);
+
+/// <summary>Pure presentation logic for agent memory: tool-call detection, labels, toast text, deep links, summaries, budgets.</summary>
 public static class MemoryPresentationHelper
 {
+    public const string ScopeQueryParameter = "scope";
+    public const string PathQueryParameter = "path";
+    public const string ScopeLocalQueryValue = "local";
+    public const string ScopeSharedQueryValue = "shared";
+
     public static MemoryToolTarget? TryGetToolTarget(string? toolName, string? argumentsJson, string? result = null, bool isError = false)
     {
         if (isError || string.IsNullOrWhiteSpace(toolName) || string.IsNullOrWhiteSpace(argumentsJson))
@@ -89,7 +101,7 @@ public static class MemoryPresentationHelper
                 ? AgentMemoryChangeKind.Created
                 : AgentMemoryChangeKind.Updated);
 
-        return new MemoryToolTarget(scope, ToDrawerRelativePath(scope, path), kind);
+        return new MemoryToolTarget(scope, ToMemoryRelativePath(scope, path), kind);
     }
 
     public static string? TryExtractPath(string argumentsJson)
@@ -119,8 +131,8 @@ public static class MemoryPresentationHelper
         return null;
     }
 
-    /// <summary>Converts any classifier-recognised path into the drawer-relative path (file name for Local, repo-relative for Shared).</summary>
-    public static string ToDrawerRelativePath(AgentMemoryScope scope, string path)
+    /// <summary>Converts any classifier-recognised path into the memory-relative path (file name for Local, repo-relative for Shared).</summary>
+    public static string ToMemoryRelativePath(AgentMemoryScope scope, string path)
     {
         var p = path.Trim().Replace('\\', '/');
         if (scope == AgentMemoryScope.LocalWorkspace)
@@ -131,6 +143,144 @@ public static class MemoryPresentationHelper
         return AgentMemoryPathClassifier.TryGetCanonicalSharedRelativePath(p, repositoryRoot: null, out var canonical)
             ? canonical
             : p.TrimStart('/');
+    }
+
+    public static string FormatScopeQueryValue(AgentMemoryScope scope) => scope switch
+    {
+        AgentMemoryScope.LocalWorkspace => ScopeLocalQueryValue,
+        AgentMemoryScope.SharedRepository => ScopeSharedQueryValue,
+        _ => string.Empty
+    };
+
+    public static bool TryParseScopeQueryValue(string? value, out AgentMemoryScope scope)
+    {
+        scope = AgentMemoryScope.None;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        if (string.Equals(trimmed, ScopeLocalQueryValue, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, nameof(AgentMemoryScope.LocalWorkspace), StringComparison.OrdinalIgnoreCase))
+        {
+            scope = AgentMemoryScope.LocalWorkspace;
+            return true;
+        }
+
+        if (string.Equals(trimmed, ScopeSharedQueryValue, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, AgentMemoryConstants.ScopeSharedGitMetadataValue, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, nameof(AgentMemoryScope.SharedRepository), StringComparison.OrdinalIgnoreCase))
+        {
+            scope = AgentMemoryScope.SharedRepository;
+            return true;
+        }
+
+        return false;
+    }
+
+    public static string BuildMemoryPageUrl(int? workspaceId, AgentMemoryScope? scope = null, string? relativePath = null)
+    {
+        var queryParts = new List<string>(2);
+        if (scope.HasValue && scope.Value != AgentMemoryScope.None)
+        {
+            var scopeValue = FormatScopeQueryValue(scope.Value);
+            if (!string.IsNullOrEmpty(scopeValue))
+            {
+                queryParts.Add($"{ScopeQueryParameter}={Uri.EscapeDataString(scopeValue)}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(relativePath))
+        {
+            queryParts.Add($"{PathQueryParameter}={Uri.EscapeDataString(relativePath.Trim())}");
+        }
+
+        var subPath = queryParts.Count > 0
+            ? $"{MemoryUiConstants.WorkspaceMemoryUrlSuffix}?{string.Join('&', queryParts)}"
+            : MemoryUiConstants.WorkspaceMemoryUrlSuffix;
+
+        return WorkspaceUrlHelper.BuildPath(workspaceId, subPath);
+    }
+
+    public static string BuildMemoryNotificationUrl(int workspaceId, string? memoryScope, string? relativePath, string? changeKind)
+    {
+        if (ParseChangeKind(changeKind) == AgentMemoryChangeKind.Deleted || string.IsNullOrWhiteSpace(relativePath))
+        {
+            return BuildMemoryPageUrl(workspaceId);
+        }
+
+        var parsedScope = ParseScope(memoryScope);
+        AgentMemoryScope? scope = parsedScope == AgentMemoryScope.None ? null : parsedScope;
+        var normalizedPath = scope.HasValue
+            ? ToMemoryRelativePath(scope.Value, relativePath)
+            : relativePath.Trim();
+
+        return BuildMemoryPageUrl(workspaceId, scope, normalizedPath);
+    }
+
+    public static MemoryDeepLinkResolution ResolveDeepLink(string? scopeParam, string? pathParam)
+    {
+        var hasScope = !string.IsNullOrWhiteSpace(scopeParam);
+        var hasPath = !string.IsNullOrWhiteSpace(pathParam);
+
+        if (!hasScope && !hasPath)
+        {
+            return new MemoryDeepLinkResolution(null, null, null);
+        }
+
+        if (hasScope)
+        {
+            if (!TryParseScopeQueryValue(scopeParam, out var parsedScope))
+            {
+                return new MemoryDeepLinkResolution(null, null, $"Unknown memory scope '{scopeParam!.Trim()}'.");
+            }
+
+            if (!hasPath)
+            {
+                return new MemoryDeepLinkResolution(null, null, "Memory deep link is missing a file path.");
+            }
+
+            var trimmed = pathParam!.Trim();
+            var resolvedPath = AgentMemoryPathClassifier.Classify(trimmed) == parsedScope
+                ? ToMemoryRelativePath(parsedScope, trimmed)
+                : trimmed;
+
+            return new MemoryDeepLinkResolution(
+                parsedScope,
+                resolvedPath,
+                null);
+        }
+
+        var trimmedPath = pathParam!.Trim();
+        var classified = AgentMemoryPathClassifier.Classify(trimmedPath);
+        if (classified == AgentMemoryScope.SharedRepository)
+        {
+            return new MemoryDeepLinkResolution(
+                AgentMemoryScope.SharedRepository,
+                ToMemoryRelativePath(AgentMemoryScope.SharedRepository, trimmedPath),
+                null);
+        }
+
+        if (classified == AgentMemoryScope.LocalWorkspace)
+        {
+            return new MemoryDeepLinkResolution(
+                AgentMemoryScope.LocalWorkspace,
+                ToMemoryRelativePath(AgentMemoryScope.LocalWorkspace, trimmedPath),
+                null);
+        }
+
+        return new MemoryDeepLinkResolution(AgentMemoryScope.LocalWorkspace, trimmedPath, null);
+    }
+
+    public static MemoryBudget ComputeBudgetFromEntry(MemoryFileEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return new MemoryBudget(
+            entry.LineCount,
+            (int)Math.Min(entry.SizeBytes, int.MaxValue),
+            AgentMemoryConstants.MaxPinnedMemoryLines,
+            AgentMemoryConstants.MaxPinnedMemoryBytes);
     }
 
     public static string FormatScopeLabel(AgentMemoryScope scope) => scope switch

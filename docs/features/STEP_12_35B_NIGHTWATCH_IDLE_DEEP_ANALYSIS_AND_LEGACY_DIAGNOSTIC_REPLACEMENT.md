@@ -26,10 +26,10 @@ flowchart TD
     IdleCheck["Idle-GPU Background Scheduler<br/>(No active task stage running +<br/>Cooldown elapsed + New transcripts exist)"] --> LoadRecent["Load Recent Transcripts &<br/>12.35A Deterministic Friction Summary"]
     LoadRecent --> HasFriction{"New/Unanalyzed Friction<br/>or Manual Trigger?"}
     HasFriction -- "No" --> Sleep["Skip & Wait for Next Idle Window"]
-    HasFriction -- "Yes" --> NightwatchAgent["Nightwatch Deep Analysis Agent<br/>(CrucibleAgentHarness / RestrictedReadOnly)<br/>Full Read-Only Access to All Workspaces<br/>(+ Optional NCF Repo Path)"]
+    HasFriction -- "Yes" --> NightwatchAgent["Nightwatch Deep Analysis Agent<br/>(CrucibleAgentHarness / RestrictedReadOnly)<br/>Full Read-Only Access to All Workspaces &amp; Memory<br/>(+ Optional NCF Repo Path)"]
 
     NightwatchAgent --> Classify{"Structured Findings"}
-    Classify -- "User Codebase<br/>(Split large files, fix flaky tests,<br/>resolve recurring compiler errors)" --> DedupTask["Deduplicate & Create<br/>Suggested ForgeTask in Target Workspace"]
+    Classify -- "User Codebase &amp; Memory<br/>(Split large files, fix flaky tests,<br/>compact/prune/promote memory)" --> DedupTask["Deduplicate & Create<br/>Suggested ForgeTask in Target Workspace"]
     Classify -- "NightCodeForge Harness<br/>(Prompt directives, tool ergonomics,<br/>compaction / KV-cache / parser bugs)" --> UpsertIssue["Upsert HarnessIssue in Nightwatch Ledger<br/>(/diagnostics/nightwatch)"]
 ```
 
@@ -59,7 +59,13 @@ flowchart TD
      - `query_database(sql, limit = 100)`: In-process C# read-only SQLite tool (`Mode=ReadOnly`, `PRAGMA query_only = ON`, `SELECT`/`WITH`/`EXPLAIN`/`PRAGMA table_info` only, **with `SystemSettings` table access denied** per [Step 12.34A §3.3.4](STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md)) to correlate transcript friction with `ForgeTasks`, `Conversations`, `ConversationTurns`, `StageExecutions`, `ExecutionLogs`, and existing `HarnessIssues`.
      - `propose_workspace_task(workspace_id, title, description, rationale, affected_files, evidence_transcripts, priority?)`: Creates a deduplicated `TaskOverallStatus.Suggested` `ForgeTask` (`CreatedBy = AuditActors.Nightwatch`) in the target workspace.
      - `record_harness_issue(category, severity, component, normalized_signature, title, root_cause, suggested_fix, diagnostic_snippet?)`: Upserts a deduplicated `HarnessIssue` into the Nightwatch ledger (`/diagnostics/nightwatch`).
-   - Pre-seed the agent's initial context with the structured **Step 12.35A** deterministic fleet & per-session friction summary (high-friction/split-candidate files, failing tools, failing/hanging bash commands, top compiler error codes) and the `<database_schema>` summary so the agent immediately knows which files, logs, and tables to inspect.
+   - Pre-seed the agent's initial context with the structured **Step 12.35A** deterministic fleet & per-session friction summary (high-friction/split-candidate files, failing tools, failing/hanging bash commands, top compiler error codes), a lightweight **memory health summary** (workspaces with `MEMORY.md` approaching or exceeding `MaxPinnedMemoryLines`/`MaxPinnedMemoryBytes`, or high topic-file counts), and the `<database_schema>` summary so the agent immediately knows which files, memory stores, logs, and tables to inspect.
+2. **Two-Tier Agent Memory Scanning & Improvement Proposals ([Step 12.41](STEP_12_41_WORKSPACE_MEMORY_PAGE_AND_IDEATION_CLEANUP_PROMPTS.md)):**
+   - Using its read-only access to `/nightcodeforge/wks/{id}/memory/*.md` (Tier 2 Local Workspace Memory) and each workspace's `AGENTS.md` / `.agents/memory/*.md` (Tier 1 Committed Repository Memory), Nightwatch must also scan workspace and repository memory to detect:
+     - **Pinned Memory Bloat:** `MEMORY.md` exceeding or approaching `MaxPinnedMemoryLines` (`150`) or `MaxPinnedMemoryBytes` (`12_288`) that should be compacted into topic files.
+     - **Staleness, Duplication & Contradictions:** Outdated rules, duplicated notes across topic files, or contradictions between local workspace memory and committed repository memory / current code.
+     - **Promotion Opportunities:** Durable architectural invariants or recurring transcript lessons stored only in `/workspace/memory/*.md` that should be promoted into `AGENTS.md` or `.agents/memory/*.md`.
+   - Route these findings via `propose_workspace_task` into deduplicated `TaskOverallStatus.Suggested` `ForgeTask`s (tagged with affected memory/repo paths) so the user can approve them or click **Refine in Ideation** to clean up workspace memory and/or update repository memory.
 
 ---
 
@@ -97,7 +103,8 @@ Per the `AGENTS.md` Clean Break policy, remove the legacy single-transcript AI D
 
 - [ ] Extend `NightwatchOptions` and `NightwatchTriggerSource` (`IdleTranscriptAnalysis`) for idle-GPU transcript & workspace analysis.
 - [ ] Implement `INightwatchIdleAnalysisService` with idle-orchestrator detection, preemption on active task start, recent-transcript windowing, and multi-workspace `RestrictedReadOnly` tool access.
-- [ ] Route Nightwatch findings via `propose_workspace_task` and `record_harness_issue` tool calls into deduplicated `TaskOverallStatus.Suggested` `ForgeTask`s for user codebases and `HarnessIssue` upserts for NightCodeForge improvements.
+- [ ] Route Nightwatch findings via `propose_workspace_task` and `record_harness_issue` tool calls into deduplicated `TaskOverallStatus.Suggested` `ForgeTask`s for user codebases & memory improvements and `HarnessIssue` upserts for NightCodeForge improvements.
+- [ ] Scan Tier 1 (`AGENTS.md`, `.agents/memory/*.md`) and Tier 2 (`/workspace/memory/*.md`) memory during idle analysis to surface bloat, staleness, contradictions, and repo-promotion suggestions.
 - [ ] Remove legacy `TranscriptDiagnosticService`, `DiagnosticsModal.razor`, `DiagnosticReport`, and `RunDiagnosticsAsync`, and replace the trigger in `Transcripts.razor` with Nightwatch deep analysis + `/diagnostics/nightwatch` navigation.
 - [ ] Add idle-analysis settings to `NightwatchSettingsTab.razor` and cover scheduling, preemption, read-only boundary enforcement, deduplication, and UI updates with unit/component tests.
 

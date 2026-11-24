@@ -547,10 +547,10 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
 
         var message = MemoryPresentationHelper.FormatToastMessage(taskId, stageId, changeKind, relativePath, summary);
         _toastService.Show(MemoryUiConstants.ToastTitle, message, ToastLevel.Info);
-        _ = DispatchMemoryPushAsync(workspaceId, relativePath, message);
+        _ = DispatchMemoryPushAsync(workspaceId, memoryScope, relativePath, changeKind, message);
     }
 
-    private async Task DispatchMemoryPushAsync(int workspaceId, string relativePath, string message)
+    private async Task DispatchMemoryPushAsync(int workspaceId, string memoryScope, string relativePath, string changeKind, string message)
     {
         try
         {
@@ -560,12 +560,14 @@ public class WebNotificationService : IWebNotificationService, IAsyncDisposable
                 return;
             }
 
+            var clickUrl = MemoryPresentationHelper.BuildMemoryNotificationUrl(workspaceId, memoryScope, relativePath, changeKind);
+
             await DispatchNotificationAsync(
                 NotificationSubject.AgentMemory,
                 MemoryUiConstants.ToastTitle,
                 message,
                 NotificationConstants.Tags.AgentMemory(workspaceId, relativePath),
-                $"/{WorkspaceUrlHelper.WorkspacePrefixSegment}/{workspaceId}/{MemoryUiConstants.WorkspaceMemoryUrlSuffix}");
+                clickUrl);
         }
         catch (Exception ex)
         {

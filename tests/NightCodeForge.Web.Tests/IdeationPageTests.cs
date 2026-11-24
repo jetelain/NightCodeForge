@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Bunit;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
@@ -78,7 +79,7 @@ public class IdeationPageTests : BunitContext
     }
 
     [Fact]
-    public void MemoryHeaderButton_ShowsIndicatorOnUpdate_AndOpensDrawer()
+    public void MemoryHeaderButton_ShowsIndicatorOnUpdate_AndNavigatesToMemoryPage()
     {
         var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
         _workspaceState.SetActiveWorkspace(ws);
@@ -91,8 +92,239 @@ public class IdeationPageTests : BunitContext
 
         cut.WaitForAssertion(() => Assert.Equal("1", cut.Find("[data-testid=memory-indicator]").TextContent.Trim()));
         cut.Find("#ideation-memory-btn").Click();
-        Assert.NotEmpty(cut.FindAll("#workspace-memory-drawer"));
-        Assert.Empty(cut.FindAll("[data-testid=memory-indicator]"));
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        Assert.EndsWith("/w/1/memory", nav.Uri);
+    }
+
+    [Fact]
+    public void ToolCallMemoryBadge_NavigatesToMemoryPageDeepLink()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+        _sessionState.Messages.Add(new ChatMessage(
+            "assistant",
+            "Updated memory.",
+            Parts:
+            [
+                new ToolCallContentPart(new IdeationToolCallViewModel
+                {
+                    ToolCallId = "call_mem_1",
+                    ToolName = "write",
+                    Arguments = "{\"path\":\"/workspace/memory/vision.md\"}",
+                    Result = "File created",
+                    IsCompleted = true
+                })
+            ]));
+
+        var cut = Render<Ideation>();
+        cut.Find("[data-testid=memory-badge]").Click();
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        Assert.EndsWith("/w/1/memory?scope=local&path=vision.md", nav.Uri);
+    }
+
+    [Fact]
+    public async Task MemoryActionQueryParam_StartsFreshConversation_PreFillsComposer_AndDeduplicates()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        var existingConv = await _taskRepository.StartIdeationConversationAsync(1, "Existing Session");
+        await _taskRepository.AddConversationTurnAsync(existingConv.Id, StageTurnRole.User, content: "Previous turn");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/1/ideation?memoryAction={IdeationMemoryPromptHelper.SummarizePinnedActionValue}");
+
+        var cut = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(_sessionState.ActiveConversationId);
+            Assert.NotEqual(existingConv.Id, _sessionState.ActiveConversationId);
+            Assert.Empty(_sessionState.Messages);
+            var textareaVal = cut.Find("textarea.chat-textarea").GetAttribute("value");
+            Assert.Contains("/workspace/memory/MEMORY.md", textareaVal);
+            Assert.Contains("propose_tasks", textareaVal);
+        });
+
+        var createdConvId = _sessionState.ActiveConversationId;
+
+        // Re-rendering with the same query parameter must deduplicate and not start another session
+        cut.Find("textarea.chat-textarea").Input("Edited prompt");
+        cut.Render(p => p.Add(x => x.WorkspaceId, 1));
+
+        Assert.Equal(createdConvId, _sessionState.ActiveConversationId);
+        Assert.Equal("Edited prompt", cut.Find("textarea.chat-textarea").GetAttribute("value"));
+    }
+
+    [Fact]
+    public void MemoryActionQueryParam_WhenSessionIsGenerating_DoesNotClobberAndShowsWarning()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+        _sessionState.BoundWorkspaceId = 1;
+        _sessionState.IsGenerating = true;
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/1/ideation?memoryAction={IdeationMemoryPromptHelper.DeduplicateLocalActionValue}");
+
+        var cut = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+
+        Assert.True(_sessionState.IsGenerating);
+        Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "Ideation Busy");
+        Assert.Equal(string.Empty, cut.Find("textarea.chat-textarea").GetAttribute("value") ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task MemoryActionQueryParam_AfterDisposingAndRevisiting_AppliesActionAgain()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        var url = $"http://localhost/w/1/ideation?memoryAction={IdeationMemoryPromptHelper.SummarizePinnedActionValue}";
+        nav.NavigateTo(url);
+
+        var firstCut = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+        int? firstConvId = null;
+        firstCut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(_sessionState.ActiveConversationId);
+            firstConvId = _sessionState.ActiveConversationId;
+        });
+
+        await DisposeComponentsAsync();
+
+        nav.NavigateTo(url);
+        var secondCut = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+        secondCut.WaitForAssertion(() =>
+        {
+            Assert.NotNull(_sessionState.ActiveConversationId);
+            Assert.NotEqual(firstConvId, _sessionState.ActiveConversationId);
+            Assert.Contains("/workspace/memory/MEMORY.md", secondCut.Find("textarea.chat-textarea").GetAttribute("value"));
+        });
+    }
+
+    [Fact]
+    public async Task MemoryActionQueryParam_WhenActiveConversationStillGenerating_ReattachesLiveStreamAndDoesNotClobber()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _coordinator.StreamUpdatesToYield =
+        [
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Resumed stream response"),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Resumed stream response", Array.Empty<IdeationProposal>()))
+        ];
+        _coordinator.OnBeforeYieldUpdateAsync = async upd =>
+        {
+            if (upd.Kind == IdeationStreamUpdateKind.MessageDelta)
+            {
+                await gate.Task;
+            }
+        };
+
+        var cut1 = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+        cut1.Find("textarea.chat-textarea").Input("Initial prompt");
+        await cut1.InvokeAsync(() => cut1.Find("button.send-btn").Click());
+
+        cut1.WaitForAssertion(() => Assert.True(_sessionState.IsGenerating));
+        var activeConvId = _sessionState.ActiveConversationId;
+        await DisposeComponentsAsync();
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/1/ideation?memoryAction={IdeationMemoryPromptHelper.DeduplicateLocalActionValue}");
+
+        var cut2 = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+        cut2.WaitForAssertion(() =>
+        {
+            Assert.Equal(activeConvId, _sessionState.ActiveConversationId);
+            Assert.True(_sessionState.IsGenerating);
+            Assert.Contains(_toastService.Toasts, t => t.Level == ToastLevel.Warning && t.Title == "Ideation Busy");
+            Assert.Equal(string.Empty, cut2.Find("textarea.chat-textarea").GetAttribute("value") ?? string.Empty);
+        });
+
+        gate.SetResult();
+
+        cut2.WaitForAssertion(() =>
+        {
+            Assert.False(_sessionState.IsGenerating);
+            Assert.Contains(_sessionState.Messages, m => m.Role == "assistant" && m.Content.Contains("Resumed stream response"));
+        });
+    }
+
+    [Fact]
+    public async Task MemoryActionQueryParam_WhenDetachedTurnFinishedWhileAway_ClearsStaleIsGeneratingAndStartsMemoryPrompt()
+    {
+        var ws = new Workspace { Id = 1, Name = "Repo", DefaultBaseBranch = "main" };
+        _workspaceState.SetActiveWorkspace(ws);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _coordinator.StreamUpdatesToYield =
+        [
+            new(IdeationStreamUpdateKind.MessageDelta, TextDelta: "Finished while away"),
+            new(IdeationStreamUpdateKind.Completed, FinalResult: new IdeationResult("Finished while away", Array.Empty<IdeationProposal>()))
+        ];
+        _coordinator.OnBeforeYieldUpdateAsync = async upd =>
+        {
+            if (upd.Kind == IdeationStreamUpdateKind.MessageDelta)
+            {
+                await gate.Task;
+            }
+        };
+
+        var cut1 = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+        cut1.Find("textarea.chat-textarea").Input("Background prompt");
+        await cut1.InvokeAsync(() => cut1.Find("button.send-btn").Click());
+        cut1.WaitForAssertion(() => Assert.True(_sessionState.IsGenerating));
+        var oldConvId = _sessionState.ActiveConversationId!.Value;
+        await DisposeComponentsAsync();
+
+        gate.SetResult();
+        for (var i = 0; i < 50 && _coordinator.IsConversationGenerating(oldConvId); i++)
+        {
+            await Task.Delay(25);
+        }
+        Assert.False(_coordinator.IsConversationGenerating(oldConvId));
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/1/ideation?memoryAction={IdeationMemoryPromptHelper.SummarizePinnedActionValue}");
+
+        var cut2 = Render<Ideation>(p => p.Add(x => x.WorkspaceId, 1));
+
+        cut2.WaitForAssertion(() =>
+        {
+            Assert.NotNull(_sessionState.ActiveConversationId);
+            Assert.NotEqual(oldConvId, _sessionState.ActiveConversationId);
+            Assert.DoesNotContain(_toastService.Toasts, t => t.Title == "Ideation Busy");
+            Assert.Contains("/workspace/memory/MEMORY.md", cut2.Find("textarea.chat-textarea").GetAttribute("value"));
+        });
+    }
+
+    [Fact]
+    public async Task MemoryActionQueryParam_SwitchingWorkspaceWhileOldWorkspaceGenerating_DoesNotBlockNewWorkspace()
+    {
+        var ws1 = await _workspaceRepository.CreateAsync(new Workspace { Name = "Repo 1", DefaultBaseBranch = "main" });
+        var ws2 = await _workspaceRepository.CreateAsync(new Workspace { Name = "Repo 2", DefaultBaseBranch = "main" });
+        _workspaceState.SetActiveWorkspace(ws1);
+        _sessionState.BoundWorkspaceId = ws1.Id;
+        _sessionState.IsGenerating = true;
+
+        _workspaceState.SetActiveWorkspace(ws2);
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{ws2.Id}/ideation?memoryAction={IdeationMemoryPromptHelper.SummarizePinnedActionValue}");
+
+        var cut = Render<Ideation>(p => p.Add(x => x.WorkspaceId, ws2.Id));
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Equal(ws2.Id, _sessionState.BoundWorkspaceId);
+            Assert.NotNull(_sessionState.ActiveConversationId);
+            Assert.DoesNotContain(_toastService.Toasts, t => t.Title == "Ideation Busy");
+            Assert.Contains("/workspace/memory/MEMORY.md", cut.Find("textarea.chat-textarea").GetAttribute("value"));
+        });
     }
 
     [Fact]

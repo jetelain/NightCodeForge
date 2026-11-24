@@ -6,10 +6,10 @@
 @inject IJSRuntime JS
 @inject ILogger<Ideation> Logger
 @inject MemoryUpdateTracker MemoryTracker
+@inject NavigationManager Navigation
 @using NightCodeForge.Core.Domain
 @using NightCodeForge.Core.Interfaces
 @using NightCodeForge.Core.Memory
-@using NightCodeForge.Web.Components.Memory
 @using NightCodeForge.Web.Components.Transcripts
 @using NightCodeForge.Web.Services
 @implements IDisposable
@@ -27,7 +27,7 @@
             </div>
         </div>
         <div class="ideation-header-status">
-            <button type="button" id="ideation-memory-btn" class="forge-btn-ghost" title="Inspect and manage agent memory" @onclick="OpenMemoryDrawer">
+            <button type="button" id="ideation-memory-btn" class="forge-btn-ghost" title="Open Agent Memory Explorer" @onclick="OpenMemoryPage">
                 @MemoryUiConstants.BadgeLabel
                 @if (MemoryUpdateCount > 0)
                 {
@@ -288,7 +288,7 @@
                                                       Offset="@($"{tool.DurationMs}ms")"
                                                       MemoryBadgeText="@memoryTarget?.BadgeText"
                                                       MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
-                                                      OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
+                                                      OnMemoryBadgeClick="@(() => OpenMemoryPageForTarget(memoryTarget))" />
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
@@ -364,7 +364,7 @@
                                                           Offset="@($"{tool.DurationMs}ms")"
                                                           MemoryBadgeText="@memoryTarget?.BadgeText"
                                                           MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
-                                                          OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
+                                                          OnMemoryBadgeClick="@(() => OpenMemoryPageForTarget(memoryTarget))" />
                                         }
                                     </div>
                                 }
@@ -447,7 +447,7 @@
                                                       Offset="@($"{tool.DurationMs}ms")"
                                                       MemoryBadgeText="@memoryTarget?.BadgeText"
                                                       MemoryBadgeTooltip="@memoryTarget?.BadgeTooltip"
-                                                      OnMemoryBadgeClick="@(() => OpenMemoryDrawerForTarget(memoryTarget))" />
+                                                      OnMemoryBadgeClick="@(() => OpenMemoryPageForTarget(memoryTarget))" />
                                     }
                                     else if (part is QuestionContentPart qp)
                                     {
@@ -816,56 +816,34 @@
                              OnCiteInChat="CiteAttachmentInChat" />
 </div>
 
-@if (_memoryDrawerOpen && ActiveMemoryWorkspaceId.HasValue)
-{
-    <WorkspaceMemoryDrawer WorkspaceId="@ActiveMemoryWorkspaceId.Value"
-                           InitialScope="@_memoryScope"
-                           InitialRelativePath="@_memoryPath"
-                           OnClosed="CloseMemoryDrawer" />
-}
-
 @code {
-    private bool _memoryDrawerOpen;
     private bool _disposed;
-    private AgentMemoryScope _memoryScope = AgentMemoryScope.LocalWorkspace;
-    private string? _memoryPath;
 
     private int? ActiveMemoryWorkspaceId => WorkspaceState.ActiveWorkspaceId;
 
     private int MemoryUpdateCount => ActiveMemoryWorkspaceId.HasValue ? MemoryTracker.GetCount(ActiveMemoryWorkspaceId.Value) : 0;
 
-    private void OpenMemoryDrawer()
+    private void OpenMemoryPage()
     {
-        _memoryScope = AgentMemoryScope.LocalWorkspace;
-        _memoryPath = null;
-        _memoryDrawerOpen = true;
-        if (ActiveMemoryWorkspaceId.HasValue)
-        {
-            MemoryTracker.Reset(ActiveMemoryWorkspaceId.Value);
-        }
+        Navigation.NavigateTo(MemoryPresentationHelper.BuildMemoryPageUrl(ActiveMemoryWorkspaceId));
     }
 
-    private void OpenMemoryDrawerForTarget(MemoryToolTarget? target)
+    private void OpenMemoryPageForTarget(MemoryToolTarget? target)
     {
         if (target == null)
         {
             return;
         }
 
-        _memoryScope = target.Scope;
-        _memoryPath = target.RelativePath;
-        _memoryDrawerOpen = true;
-        if (ActiveMemoryWorkspaceId.HasValue)
-        {
-            MemoryTracker.Reset(ActiveMemoryWorkspaceId.Value);
-        }
+        Navigation.NavigateTo(MemoryPresentationHelper.BuildMemoryPageUrl(
+            ActiveMemoryWorkspaceId,
+            target.Scope,
+            target.RelativePath));
     }
 
-    private void CloseMemoryDrawer() => _memoryDrawerOpen = false;
-
-    private void HandleMemoryUpdated(MemoryUpdateNotice notice)
+    private void HandleMemoryCountChanged(int workspaceId)
     {
-        if (_disposed || notice.WorkspaceId != ActiveMemoryWorkspaceId)
+        if (_disposed || workspaceId != ActiveMemoryWorkspaceId)
         {
             return;
         }
@@ -880,6 +858,15 @@
 
     [SupplyParameterFromQuery(Name = IdeationRefinementHelper.DraftIdQueryParameter)]
     public string? DraftId { get; set; }
+
+    [SupplyParameterFromQuery(Name = IdeationMemoryPromptHelper.MemoryActionQueryParameter)]
+    public string? MemoryAction { get; set; }
+
+    [SupplyParameterFromQuery(Name = IdeationMemoryPromptHelper.MemoryScopeQueryParameter)]
+    public string? MemoryScope { get; set; }
+
+    [SupplyParameterFromQuery(Name = IdeationMemoryPromptHelper.MemoryPathQueryParameter)]
+    public string? MemoryPath { get; set; }
 
     private int? _handledRefinementTaskId;
     private string _userInput = string.Empty;
@@ -896,7 +883,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        MemoryTracker.OnMemoryUpdated += HandleMemoryUpdated;
+        MemoryTracker.OnCountChanged += HandleMemoryCountChanged;
         if (WorkspaceId.HasValue)
         {
             WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
@@ -908,7 +895,11 @@
         Session.OnNotification += HandleSessionNotification;
         Session.OnScrollRequested += HandleScrollRequested;
 
-        var result = await Session.ReloadWorkspaceContextAsync(WorkspaceState.ActiveWorkspace, TaskId, DraftId);
+        var result = await Session.ReloadWorkspaceContextAsync(
+            WorkspaceState.ActiveWorkspace,
+            TaskId,
+            DraftId,
+            new IdeationMemoryActionRequest(MemoryAction, MemoryScope, MemoryPath));
         _handledRefinementTaskId = result.HandledTaskId;
         if (!string.IsNullOrEmpty(result.SeedPrompt))
         {
@@ -934,6 +925,11 @@
             Session.ClearDraftDeduplication();
         }
 
+        if (string.IsNullOrWhiteSpace(MemoryAction))
+        {
+            Session.ClearMemoryActionDeduplication();
+        }
+
         if (WorkspaceState.ActiveWorkspaceId != previousWorkspaceId)
         {
             return;
@@ -952,6 +948,19 @@
         if (!string.IsNullOrWhiteSpace(DraftId) && WorkspaceState.ActiveWorkspace != null)
         {
             var (handled, seedPrompt) = await Session.TryInitializeCompanionDraftAsync(WorkspaceState.ActiveWorkspace.Id, DraftId);
+            if (handled && !string.IsNullOrEmpty(seedPrompt))
+            {
+                _userInput = seedPrompt;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(MemoryAction) && WorkspaceState.ActiveWorkspace != null)
+        {
+            var (handled, seedPrompt) = await Session.TryInitializeMemoryActionAsync(
+                WorkspaceState.ActiveWorkspace.Id,
+                MemoryAction,
+                MemoryScope,
+                MemoryPath);
             if (handled && !string.IsNullOrEmpty(seedPrompt))
             {
                 _userInput = seedPrompt;
@@ -996,7 +1005,11 @@
     {
         _ = InvokeAsync(async () =>
         {
-            var result = await Session.ReloadWorkspaceContextAsync(WorkspaceState.ActiveWorkspace, TaskId, DraftId);
+            var result = await Session.ReloadWorkspaceContextAsync(
+                WorkspaceState.ActiveWorkspace,
+                TaskId,
+                DraftId,
+                new IdeationMemoryActionRequest(MemoryAction, MemoryScope, MemoryPath));
             _handledRefinementTaskId = result.HandledTaskId;
             if (!string.IsNullOrEmpty(result.SeedPrompt))
             {
@@ -1220,11 +1233,12 @@
     public void Dispose()
     {
         _disposed = true;
-        MemoryTracker.OnMemoryUpdated -= HandleMemoryUpdated;
+        MemoryTracker.OnCountChanged -= HandleMemoryCountChanged;
         WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
         Session.OnChange -= HandleSessionChanged;
         Session.OnNotification -= HandleSessionNotification;
         Session.OnScrollRequested -= HandleScrollRequested;
+        Session.ClearMemoryActionDeduplication();
         Session.DetachUiDispatcher();
         Session.DetachStreamSubscription();
 

@@ -7962,3 +7962,175 @@ html, body, .forge-layout, .forge-main-content {
     min-width: 2.5rem;
     text-align: right;
 }
+
+/* Step 12.41: Full-Page Agent Memory Explorer */
+.memory-page-container {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0.25rem 0;
+}
+
+.memory-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.memory-page-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+}
+
+.memory-page-icon {
+    font-size: 2rem;
+    line-height: 1;
+}
+
+.memory-quick-actions-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+}
+
+.memory-quick-actions-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.memory-quick-actions-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.memory-action-emphasized {
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.55);
+}
+
+.memory-budget-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.65rem 0.9rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.84rem;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+}
+
+.memory-budget-banner.near-budget {
+    border-color: rgba(245, 158, 11, 0.5);
+    background: rgba(245, 158, 11, 0.1);
+    color: #fbbf24;
+}
+
+.memory-budget-banner.over-budget {
+    border-color: rgba(239, 68, 68, 0.55);
+    background: rgba(239, 68, 68, 0.12);
+    color: #fca5a5;
+}
+
+.memory-explorer-grid {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+@media (max-width: 900px) {
+    .memory-explorer-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.memory-sidebar-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.memory-tier-section {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.9rem;
+}
+
+.memory-tier-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.memory-tier-header h3 {
+    margin: 0;
+    font-size: 0.92rem;
+    color: var(--text-primary);
+}
+
+.memory-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.memory-file-item {
+    padding: 0.55rem 0.65rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: var(--bg-input);
+}
+
+.memory-file-item.active {
+    border-color: var(--accent-indigo);
+    background: rgba(99, 102, 241, 0.14);
+}
+
+.memory-main-pane {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.15rem;
+    min-height: 420px;
+}
+
+.memory-viewer-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-bottom: 0.75rem;
+    margin-bottom: 0.85rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.memory-empty-selection {
+    padding: 3rem 1rem;
+    text-align: center;
+}
+
+.memory-raw-pre {
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0.85rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    margin: 0;
+}
