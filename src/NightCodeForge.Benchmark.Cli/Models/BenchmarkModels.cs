@@ -115,6 +115,7 @@ public sealed record BenchmarkRunRequest
 {
     public required string SuiteName { get; init; }
     public required string DatasetPath { get; init; }
+    public string? ManifestPath { get; init; }
     public required string OutputDirectory { get; init; }
     public BenchmarkProblemCategory? CategoryOverride { get; init; }
     public IReadOnlyList<string>? InstanceIdFilter { get; init; }
@@ -302,6 +303,7 @@ public sealed record BenchmarkAgentOutcome
     public string? ModelPatch { get; init; }
     public string? Summary { get; init; }
     public string? ReviewerFeedback { get; init; }
+    public string? ReviewerRejectionReason { get; init; }
     public string? TargetRouting { get; init; }
     public IReadOnlyList<Question> PendingQuestions { get; init; } = Array.Empty<Question>();
     public string? UpdatedTaskMarkdown { get; init; }

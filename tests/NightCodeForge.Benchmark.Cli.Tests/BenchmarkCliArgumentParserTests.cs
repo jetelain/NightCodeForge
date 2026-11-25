@@ -13,6 +13,7 @@ public sealed class BenchmarkCliArgumentParserTests
         var args = new[]
         {
             "--dataset", "datasets/swe.jsonl",
+            "--manifest", "benchmarks/datasets/v1-smoke.manifest.json",
             "--suite=swe-csharp",
             "--models", "qwen3:8b,deepseek-coder:6.7b",
             "--provider", "ollama-router",
@@ -38,6 +39,7 @@ public sealed class BenchmarkCliArgumentParserTests
         Assert.Null(error);
         Assert.NotNull(options);
         Assert.Equal("datasets/swe.jsonl", options.DatasetPath);
+        Assert.Equal("benchmarks/datasets/v1-smoke.manifest.json", options.ManifestPath);
         Assert.Equal("swe-csharp", options.SuiteName);
         Assert.Equal("qwen3:8b,deepseek-coder:6.7b", options.ModelsCsv);
         Assert.Null(options.ConfigPath);
@@ -198,6 +200,7 @@ public sealed class BenchmarkCliArgumentParserTests
         var args = new[]
         {
             "--dataset", "benchmarks/datasets/v1-code-review.jsonl",
+            "--manifest=benchmarks/datasets/v1-smoke.manifest.json",
             "--category=code-review",
             "--filter", "ncf-cr-csharp-001,ncf-cr-ts-001",
             "--limit", "2",
@@ -209,6 +212,7 @@ public sealed class BenchmarkCliArgumentParserTests
         Assert.Null(error);
         Assert.NotNull(options);
         Assert.Equal("benchmarks/datasets/v1-code-review.jsonl", options.DatasetPath);
+        Assert.Equal("benchmarks/datasets/v1-smoke.manifest.json", options.ManifestPath);
         Assert.Equal(BenchmarkProblemCategory.CodeReview, options.Category);
         Assert.Equal(["ncf-cr-csharp-001", "ncf-cr-ts-001"], options.FilterInstanceIds);
         Assert.Equal(2, options.Limit);

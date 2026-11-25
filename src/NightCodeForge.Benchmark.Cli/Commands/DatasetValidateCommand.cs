@@ -40,6 +40,7 @@ public sealed class DatasetValidateCommand
             options.Limit,
             options.VerifyWithTests,
             writeLine,
+            options.ManifestPath,
             cancellationToken).ConfigureAwait(false);
 
         writeLine($"[{BenchmarkCliConstants.ToolName}] Validation complete: {report.PassedCount}/{report.TotalCount} passed, {report.FailedCount} failed.");

@@ -10,6 +10,8 @@ public interface IBenchmarkDatasetLoader
     Task<IReadOnlyList<BenchmarkInstance>> LoadAsync(
         string datasetPath,
         BenchmarkProblemCategory? categoryOverride = null,
+        string? manifestPath = null,
+        Action<string>? diagnosticCallback = null,
         CancellationToken cancellationToken = default);
 }
 

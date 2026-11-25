@@ -22,7 +22,93 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
     public async Task<IReadOnlyList<BenchmarkInstance>> LoadAsync(
         string datasetPath,
         BenchmarkProblemCategory? categoryOverride = null,
+        string? manifestPath = null,
+        Action<string>? diagnosticCallback = null,
         CancellationToken cancellationToken = default)
+    {
+        var rawInstances = await LoadRawAsync(datasetPath, categoryOverride, cancellationToken).ConfigureAwait(false);
+
+        var resolvedManifestPath = ResolveManifestPath(datasetPath, manifestPath);
+        if (resolvedManifestPath == null)
+        {
+            return rawInstances;
+        }
+
+        var manifest = await BenchmarkDatasetManifestLoader.LoadAsync(resolvedManifestPath, cancellationToken).ConfigureAwait(false);
+        var manifestDir = Path.GetDirectoryName(resolvedManifestPath)!;
+        var craftedById = await LoadSiblingCraftedInstancesAsync(manifestDir, cancellationToken).ConfigureAwait(false);
+        var manifestById = manifest.Entries.ToDictionary(e => e.InstanceId, StringComparer.OrdinalIgnoreCase);
+
+        var overlaid = new List<BenchmarkInstance>(rawInstances.Count);
+        int overlaidCount = 0;
+
+        foreach (var raw in rawInstances)
+        {
+            var effective = raw;
+            if (craftedById.TryGetValue(raw.InstanceId, out var crafted))
+            {
+                effective = crafted;
+            }
+
+            if (manifestById.TryGetValue(raw.InstanceId, out var entry))
+            {
+                effective = ApplyManifestEntryOverrides(effective, entry);
+            }
+
+            var changedFields = new List<string>();
+            CollectInstanceDifferences(raw, effective, changedFields);
+
+            if (changedFields.Count > 0)
+            {
+                var finalCategory = effective.ResolveEffectiveCategory(categoryOverride);
+                ValidateCategoryRequirements(
+                    finalCategory,
+                    datasetPath,
+                    effective.InstanceId,
+                    effective.CandidatePatch,
+                    effective.TaskSpecification,
+                    effective.ExpectedVerdict,
+                    effective.ExpectedDifficulty);
+
+                overlaidCount++;
+                diagnosticCallback?.Invoke(
+                    $"[dataset-sync] Overlaid '{effective.InstanceId}' from manifest/crafted dataset: {string.Join(", ", changedFields)}.");
+            }
+
+            overlaid.Add(effective);
+        }
+
+        diagnosticCallback?.Invoke(
+            $"[dataset-sync] Applied manifest '{resolvedManifestPath}' ({manifest.SuiteName} v{manifest.Version}): overlaid {overlaidCount}/{overlaid.Count} instance(s).");
+
+        var loadedIds = rawInstances.Select(i => i.InstanceId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var missingFromDataset = manifest.Entries
+            .Where(e => !loadedIds.Contains(e.InstanceId))
+            .Select(e => e.InstanceId)
+            .ToList();
+        if (missingFromDataset.Count > 0)
+        {
+            diagnosticCallback?.Invoke(
+                $"[dataset-sync] Warning: {missingFromDataset.Count} manifest instance(s) missing from materialized dataset '{datasetPath}': {string.Join(", ", missingFromDataset)}.");
+        }
+
+        var extraInDataset = rawInstances
+            .Where(i => !manifestById.ContainsKey(i.InstanceId))
+            .Select(i => i.InstanceId)
+            .ToList();
+        if (extraInDataset.Count > 0)
+        {
+            diagnosticCallback?.Invoke(
+                $"[dataset-sync] Note: {extraInDataset.Count} dataset instance(s) in '{datasetPath}' are not listed in manifest '{resolvedManifestPath}': {string.Join(", ", extraInDataset)}.");
+        }
+
+        return overlaid;
+    }
+
+    private async Task<IReadOnlyList<BenchmarkInstance>> LoadRawAsync(
+        string datasetPath,
+        BenchmarkProblemCategory? categoryOverride,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(datasetPath))
         {
@@ -149,6 +235,212 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         }
 
         return records;
+    }
+
+    private static string? ResolveManifestPath(string datasetPath, string? explicitManifestPath)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitManifestPath))
+        {
+            var fullExplicit = Path.GetFullPath(explicitManifestPath.Trim());
+            if (!File.Exists(fullExplicit))
+            {
+                throw new BenchmarkDatasetException(
+                    $"Benchmark manifest file '{explicitManifestPath}' does not exist.",
+                    explicitManifestPath);
+            }
+
+            return fullExplicit;
+        }
+
+        var fullDatasetPath = Path.GetFullPath(datasetPath);
+        var suiteStem = Path.GetFileNameWithoutExtension(fullDatasetPath);
+        if (string.IsNullOrWhiteSpace(suiteStem))
+        {
+            return null;
+        }
+
+        var manifestFileName = $"{suiteStem}{BenchmarkDatasetConstants.ManifestFileSuffix}";
+        var datasetDir = Path.GetDirectoryName(fullDatasetPath);
+        if (!string.IsNullOrWhiteSpace(datasetDir))
+        {
+            var adjacentManifest = Path.Combine(datasetDir, manifestFileName);
+            if (File.Exists(adjacentManifest))
+            {
+                return adjacentManifest;
+            }
+        }
+
+        foreach (var startDir in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            var repoManifest = FindManifestInBenchmarksTree(startDir, manifestFileName);
+            if (repoManifest != null)
+            {
+                return repoManifest;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindManifestInBenchmarksTree(string? startDirectory, string manifestFileName)
+    {
+        if (string.IsNullOrWhiteSpace(startDirectory))
+        {
+            return null;
+        }
+
+        var current = new DirectoryInfo(startDirectory);
+        while (current != null)
+        {
+            var candidate = Path.Combine(current.FullName, "benchmarks", "datasets", manifestFileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
+    private async Task<Dictionary<string, BenchmarkInstance>> LoadSiblingCraftedInstancesAsync(
+        string manifestDirectory,
+        CancellationToken cancellationToken)
+    {
+        var crafted = new Dictionary<string, BenchmarkInstance>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fileName in new[]
+                 {
+                     BenchmarkDatasetConstants.CraftedCodeReviewFileName,
+                     BenchmarkDatasetConstants.CraftedTaskReviewFileName
+                 })
+        {
+            var siblingPath = Path.Combine(manifestDirectory, fileName);
+            if (!File.Exists(siblingPath))
+            {
+                continue;
+            }
+
+            var instances = await LoadRawAsync(siblingPath, categoryOverride: null, cancellationToken).ConfigureAwait(false);
+            foreach (var inst in instances)
+            {
+                crafted[inst.InstanceId] = inst;
+            }
+        }
+
+        return crafted;
+    }
+
+    private static void CollectInstanceDifferences(
+        BenchmarkInstance raw,
+        BenchmarkInstance effective,
+        List<string> changedFields)
+    {
+        if (raw.Category != effective.Category)
+            changedFields.Add($"category '{raw.Category?.ToString() ?? "<null>"}' -> '{effective.Category?.ToString() ?? "<null>"}'");
+        if (!string.Equals(raw.Language, effective.Language, StringComparison.OrdinalIgnoreCase))
+            changedFields.Add($"language '{raw.Language}' -> '{effective.Language}'");
+        if (!string.Equals(raw.Repo, effective.Repo, StringComparison.Ordinal))
+            changedFields.Add($"repo '{raw.Repo}' -> '{effective.Repo}'");
+        if (!string.Equals(raw.BaseCommit, effective.BaseCommit, StringComparison.Ordinal))
+            changedFields.Add("base_commit");
+        if (!string.Equals(raw.ProblemStatement, effective.ProblemStatement, StringComparison.Ordinal))
+            changedFields.Add("problem_statement");
+        if (!string.Equals(raw.HintsText, effective.HintsText, StringComparison.Ordinal))
+            changedFields.Add("hints_text");
+        if (!string.Equals(raw.CustomContainerImage, effective.CustomContainerImage, StringComparison.Ordinal))
+            changedFields.Add($"custom_container_image '{raw.CustomContainerImage ?? "<null>"}' -> '{effective.CustomContainerImage ?? "<null>"}'");
+        if (!string.Equals(raw.CustomTestCommand, effective.CustomTestCommand, StringComparison.Ordinal))
+            changedFields.Add($"custom_test_command '{raw.CustomTestCommand ?? "<null>"}' -> '{effective.CustomTestCommand ?? "<null>"}'");
+        if (raw.TestResultFormat != effective.TestResultFormat)
+            changedFields.Add($"test_result_format '{raw.TestResultFormat?.ToString() ?? "<null>"}' -> '{effective.TestResultFormat?.ToString() ?? "<null>"}'");
+        if (!string.Equals(raw.GoldPatch, effective.GoldPatch, StringComparison.Ordinal))
+            changedFields.Add("patch");
+        if (!string.Equals(raw.TestPatch, effective.TestPatch, StringComparison.Ordinal))
+            changedFields.Add("test_patch");
+        if (!raw.FailToPass.SequenceEqual(effective.FailToPass, StringComparer.Ordinal))
+            changedFields.Add("fail_to_pass");
+        if (!raw.PassToPass.SequenceEqual(effective.PassToPass, StringComparer.Ordinal))
+            changedFields.Add("pass_to_pass");
+        if (!string.Equals(raw.CandidatePatch, effective.CandidatePatch, StringComparison.Ordinal))
+            changedFields.Add("candidate_patch");
+        if (!string.Equals(raw.TaskSpecification, effective.TaskSpecification, StringComparison.Ordinal))
+            changedFields.Add("task_specification");
+        if (!string.Equals(raw.ExpectedVerdict, effective.ExpectedVerdict, StringComparison.Ordinal))
+            changedFields.Add($"expected_verdict '{raw.ExpectedVerdict ?? "<null>"}' -> '{effective.ExpectedVerdict ?? "<null>"}'");
+        if (!string.Equals(raw.ExpectedDifficulty, effective.ExpectedDifficulty, StringComparison.Ordinal))
+            changedFields.Add($"expected_difficulty '{raw.ExpectedDifficulty ?? "<null>"}' -> '{effective.ExpectedDifficulty ?? "<null>"}'");
+        if (!AreExpectedFindingsEqual(raw.ExpectedFindings, effective.ExpectedFindings))
+            changedFields.Add("expected_findings");
+    }
+
+    private static bool AreExpectedFindingsEqual(
+        IReadOnlyList<BenchmarkExpectedFinding> left,
+        IReadOnlyList<BenchmarkExpectedFinding> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Count; i++)
+        {
+            var a = left[i];
+            var b = right[i];
+            if (!string.Equals(a.FilePath, b.FilePath, StringComparison.Ordinal) ||
+                !string.Equals(a.SymbolOrLineHint, b.SymbolOrLineHint, StringComparison.Ordinal) ||
+                !string.Equals(a.Severity, b.Severity, StringComparison.Ordinal) ||
+                !string.Equals(a.Summary, b.Summary, StringComparison.Ordinal) ||
+                !a.Keywords.SequenceEqual(b.Keywords, StringComparer.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static BenchmarkInstance ApplyManifestEntryOverrides(
+        BenchmarkInstance current,
+        BenchmarkManifestEntry entry)
+    {
+        var updated = current;
+
+        if (!string.IsNullOrWhiteSpace(entry.CustomContainerImage) &&
+            !string.Equals(current.CustomContainerImage, entry.CustomContainerImage, StringComparison.Ordinal))
+        {
+            updated = updated with { CustomContainerImage = entry.CustomContainerImage };
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.CustomTestCommand) &&
+            !string.Equals(current.CustomTestCommand, entry.CustomTestCommand, StringComparison.Ordinal))
+        {
+            updated = updated with { CustomTestCommand = entry.CustomTestCommand };
+        }
+
+        if (entry.TestResultFormat.HasValue && current.TestResultFormat != entry.TestResultFormat.Value)
+        {
+            updated = updated with { TestResultFormat = entry.TestResultFormat.Value };
+        }
+
+        if (entry.Category.HasValue && current.Category != entry.Category.Value)
+        {
+            updated = updated with { Category = entry.Category.Value };
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.Language) &&
+            !string.Equals(current.Language, entry.Language, StringComparison.OrdinalIgnoreCase))
+        {
+            updated = updated with { Language = entry.Language };
+        }
+
+        if (!string.IsNullOrWhiteSpace(entry.Repo) &&
+            !string.Equals(current.Repo, entry.Repo, StringComparison.Ordinal))
+        {
+            updated = updated with { Repo = entry.Repo };
+        }
+
+        return updated;
     }
 
     private static BenchmarkInstance ParseInstance(
@@ -327,8 +619,14 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         }
     }
 
-    private static bool IsValidDifficulty(string value) =>
-        Enum.TryParse<TaskDifficulty>(value.Trim(), ignoreCase: true, out _);
+    private static bool IsValidDifficulty(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 &&
+               char.IsLetter(trimmed[0]) &&
+               Enum.TryParse<TaskDifficulty>(trimmed, ignoreCase: true, out var tier) &&
+               Enum.IsDefined(tier);
+    }
 
     internal static BenchmarkProblemCategory? ParseOptionalCategory(string? raw, string datasetPath, string instanceId)
     {

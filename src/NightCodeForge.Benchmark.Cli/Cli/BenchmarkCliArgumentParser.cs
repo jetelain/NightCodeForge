@@ -51,6 +51,13 @@ public static class BenchmarkCliArgumentParser
                 continue;
             }
 
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionManifest, out var manifestVal, out error))
+            {
+                if (error != null) return null;
+                options.ManifestPath = manifestVal;
+                continue;
+            }
+
             if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionSuite, out var suiteVal, out error))
             {
                 if (error != null) return null;
@@ -397,6 +404,13 @@ public static class BenchmarkCliArgumentParser
             {
                 if (error != null) return null;
                 options.DatasetPath = datasetVal!;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionManifest, out var manifestVal, out error))
+            {
+                if (error != null) return null;
+                options.ManifestPath = manifestVal;
                 continue;
             }
 

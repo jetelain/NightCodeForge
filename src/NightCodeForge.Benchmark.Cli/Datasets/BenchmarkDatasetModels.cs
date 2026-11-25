@@ -69,6 +69,9 @@ public static class BenchmarkDatasetConstants
 
     public const string JsonExtension = ".json";
     public const string JsonlExtension = ".jsonl";
+    public const string ManifestFileSuffix = ".manifest.json";
+    public const string CraftedCodeReviewFileName = "v1-code-review.jsonl";
+    public const string CraftedTaskReviewFileName = "v1-task-review.jsonl";
 
     public const string StatusPass = "PASS";
     public const string StatusFail = "FAIL";

@@ -355,5 +355,57 @@ public sealed class BenchmarkStagePolicyResolverTests
 
         var trPolicy = BenchmarkStagePolicyResolver.Resolve(BenchmarkProblemCategory.TaskReview, enableStackSkills: false);
         Assert.Contains("docs/tasks/", trPolicy.StageDirective, StringComparison.Ordinal);
+        Assert.Contains("'standard'", trPolicy.StageDirective, StringComparison.Ordinal);
+        Assert.Contains("'difficult'", trPolicy.StageDirective, StringComparison.Ordinal);
+        Assert.Contains("'expert'", trPolicy.StageDirective, StringComparison.Ordinal);
+        Assert.Contains("'ask'", trPolicy.StageDirective, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetSandboxEnvironmentGuidance_ReturnsNodeFallbackGuidanceOnlyForJsAndTs()
+    {
+        var tsGuidance = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.TypeScript);
+        var jsGuidance = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.JavaScript);
+
+        Assert.NotNull(tsGuidance);
+        Assert.Contains("--ignore-scripts", tsGuidance, StringComparison.Ordinal);
+        Assert.Contains("/tmp/ncf-npm-global", tsGuidance, StringComparison.Ordinal);
+        Assert.Equal(tsGuidance, jsGuidance);
+
+        Assert.Null(BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.CSharp));
+        Assert.Null(BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.Python));
+        Assert.Null(BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.Rust));
+    }
+
+    [Fact]
+    public void BuildProjectConfig_PrefersMainSolutionOverAnalyzerSolutionInSubdirectory()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"ncf-spectre-policy-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(tempRoot, "src"));
+        try
+        {
+            File.WriteAllText(Path.Combine(tempRoot, "src", "Spectre.Console.Analyzer.sln"),
+                """
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console.Analyzer", "Spectre.Console.Analyzer\Spectre.Console.Analyzer.csproj", "{11111111-1111-1111-1111-111111111111}"
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console.Analyzer.Tests", "Tests\Spectre.Console.Analyzer.Tests\Spectre.Console.Analyzer.Tests.csproj", "{22222222-2222-2222-2222-222222222222}"
+                """);
+            File.WriteAllText(Path.Combine(tempRoot, "src", "Spectre.Console.sln"),
+                """
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console", "Spectre.Console\Spectre.Console.csproj", "{33333333-3333-3333-3333-333333333333}"
+                Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console.Tests", "Tests\Spectre.Console.Tests\Spectre.Console.Tests.csproj", "{44444444-4444-4444-4444-444444444444}"
+                """);
+
+            var config = BenchmarkStagePolicyResolver.BuildProjectConfig(
+                new BenchmarkInstance { InstanceId = "spectre-1", Language = BenchmarkLanguages.CSharp, Repo = "spectreconsole/spectre.console", BaseCommit = "abc", ProblemStatement = "Fix" },
+                tempRoot,
+                ExecutionMode.ContainerSandbox);
+
+            Assert.Equal("dotnet build src/Spectre.Console.sln", config.BuildCommand);
+            Assert.Equal("dotnet test src/Spectre.Console.sln --no-build", config.TestCommand);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
     }
 }

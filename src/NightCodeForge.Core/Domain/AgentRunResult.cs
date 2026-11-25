@@ -41,7 +41,8 @@ public record AgentRunResult(
     IReadOnlyDictionary<string, string>? DiagnosticArtifacts = null,
     string? TargetRouting = null,
     string? ReviewerFeedback = null,
-    IReadOnlyList<TaskProposal>? Proposals = null)
+    IReadOnlyList<TaskProposal>? Proposals = null,
+    string? ReviewerRejectionReason = null)
 {
     public static AgentRunResult Completed(
         AgentRunMetrics metrics,
@@ -51,8 +52,9 @@ public record AgentRunResult(
         IReadOnlyDictionary<string, string>? artifacts = null,
         string? targetRouting = null,
         string? reviewerFeedback = null,
-        IReadOnlyList<TaskProposal>? proposals = null) =>
-        new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts, targetRouting, reviewerFeedback, proposals);
+        IReadOnlyList<TaskProposal>? proposals = null,
+        string? reviewerRejectionReason = null) =>
+        new(AgentRunStatus.Completed, metrics, commitHash, updatedState, null, summary, null, artifacts, targetRouting, reviewerFeedback, proposals, reviewerRejectionReason);
 
     public static AgentRunResult WaitingForHuman(
         IReadOnlyList<Question> pendingQuestions,

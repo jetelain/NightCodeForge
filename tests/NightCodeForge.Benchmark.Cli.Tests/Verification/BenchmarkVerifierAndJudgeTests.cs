@@ -1239,7 +1239,7 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             judgeConfig: null);
 
         Assert.Contains("pnpm-lock.yaml", capturedCmd);
-        Assert.Contains("npm ci || npm install", capturedCmd);
+        Assert.Contains("npm ci || npm ci --ignore-scripts || npm install --ignore-scripts", capturedCmd);
         Assert.EndsWith("&& { npm run test:mocha; }", capturedCmd);
 
         await verifier.VerifyAsync(
@@ -1319,7 +1319,9 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             BenchmarkLanguages.TypeScript,
             ExecutionMode.ContainerSandbox);
         Assert.Contains("/tmp/ncf-npm-global/bin", wrappedJest);
-        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --no-save jest-junit", wrappedJest);
+        Assert.Contains("if [ -z \"${npm_config_cache:-}\" ] || [ ! -w \"${npm_config_cache}\" ]; then mkdir -p /tmp/ncf-npm-cache && export npm_config_cache=\"/tmp/ncf-npm-cache\"; fi", wrappedJest);
+        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedJest);
+        Assert.DoesNotContain("--cache /tmp/ncf-npm-cache", wrappedJest);
         Assert.Contains("NODE_PATH=\"/tmp/ncf-jest-junit/node_modules", wrappedJest);
         Assert.DoesNotContain("npm install --no-save jest-junit", wrappedJest);
         Assert.EndsWith("&& { JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results npx jest --reporters=jest-junit; }", wrappedJest);
@@ -1566,7 +1568,9 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             defaultMochaCmd,
             BenchmarkLanguages.JavaScript,
             ExecutionMode.ContainerSandbox);
-        Assert.Contains("npm install --prefix /tmp/ncf-mocha-junit --no-save mocha-junit-reporter", wrappedMocha);
+        Assert.Contains("if [ -z \"${npm_config_cache:-}\" ] || [ ! -w \"${npm_config_cache}\" ]; then mkdir -p /tmp/ncf-npm-cache && export npm_config_cache=\"/tmp/ncf-npm-cache\"; fi", wrappedMocha);
+        Assert.Contains("npm install --prefix /tmp/ncf-mocha-junit --ignore-scripts --no-audit --no-fund --no-save mocha-junit-reporter", wrappedMocha);
+        Assert.DoesNotContain("--cache /tmp/ncf-npm-cache", wrappedMocha);
         Assert.Contains("NODE_PATH=\"/tmp/ncf-mocha-junit/node_modules", wrappedMocha);
 
         // Python container wrapping installs pinned requirement files before conditional unpinned pytest fallback
@@ -1884,6 +1888,327 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             ModelPatch = lineWrapPatch,
             TargetRouting = StandardStageIds.Implementation
         }));
+
+        Assert.Equal(CodeReviewVerdict.RequestChanges, BenchmarkVerifier.ClassifyCodeReviewVerdict(new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ModelPatch = lineWrapPatch,
+            ReviewerRejectionReason = "Missing regression tests."
+        }));
+    }
+
+    [Fact]
+    public void DiscoverDotNetTargets_PrefersMainSolutionOverAuxiliarySolutions_AndPreservesAnalyzerCsprojFallback()
+    {
+        var spectreDir = Path.Combine(_tempDir, "spectre");
+        Directory.CreateDirectory(Path.Combine(spectreDir, "src", "Spectre.Console"));
+        Directory.CreateDirectory(Path.Combine(spectreDir, "src", "Spectre.Console.Tests"));
+        Directory.CreateDirectory(Path.Combine(spectreDir, "src", "Spectre.Console.Analyzer"));
+        Directory.CreateDirectory(Path.Combine(spectreDir, "src", "Spectre.Console.Analyzer.Tests"));
+
+        File.WriteAllText(Path.Combine(spectreDir, "src", "Spectre.Console.Analyzer.sln"),
+            """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console.Analyzer", "Spectre.Console.Analyzer\Spectre.Console.Analyzer.csproj", "{11111111-1111-1111-1111-111111111111}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console.Analyzer.Tests", "Spectre.Console.Analyzer.Tests\Spectre.Console.Analyzer.Tests.csproj", "{22222222-2222-2222-2222-222222222222}"
+            """);
+        File.WriteAllText(Path.Combine(spectreDir, "src", "Spectre.Console.sln"),
+            """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console", "Spectre.Console\Spectre.Console.csproj", "{33333333-3333-3333-3333-333333333333}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spectre.Console.Tests", "Spectre.Console.Tests\Spectre.Console.Tests.csproj", "{44444444-4444-4444-4444-444444444444}"
+            """);
+        File.WriteAllText(Path.Combine(spectreDir, "src", "Spectre.Console.Sandbox.sln"),
+            """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sandbox.Tests", "Sandbox.Tests\Sandbox.Tests.csproj", "{55555555-5555-5555-5555-555555555555}"
+            """);
+
+        var targets = BenchmarkTestCommandResolver.DiscoverDotNetTargets(spectreDir);
+        Assert.Equal(["src/Spectre.Console.sln"], targets);
+
+        // Tie-breaker by test project count then total project count when neither is auxiliary
+        var countDir = Path.Combine(_tempDir, "counts");
+        Directory.CreateDirectory(Path.Combine(countDir, "sub"));
+        File.WriteAllText(Path.Combine(countDir, "sub", "A.Small.sln"),
+            """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core", "Core.csproj", "{1}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core.Tests", "Core.Tests.csproj", "{2}"
+            """);
+        File.WriteAllText(Path.Combine(countDir, "sub", "Z.Full.sln"),
+            """
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core", "Core.csproj", "{1}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extra", "Extra.csproj", "{2}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core.Tests", "Core.Tests.csproj", "{3}"
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extra.Tests", "Extra.Tests.csproj", "{4}"
+            """);
+        Assert.Equal(["sub/Z.Full.sln"], BenchmarkTestCommandResolver.DiscoverDotNetTargets(countDir));
+
+        // No .sln/.slnx fallback must preserve analyzer test .csproj projects
+        var csprojOnlyDir = Path.Combine(_tempDir, "analyzer-csproj-only");
+        Directory.CreateDirectory(Path.Combine(csprojOnlyDir, "tests", "Spectre.Console.Analyzer.Tests"));
+        File.WriteAllText(Path.Combine(csprojOnlyDir, "tests", "Spectre.Console.Analyzer.Tests", "Spectre.Console.Analyzer.Tests.csproj"), "<Project />");
+        Assert.Equal(["tests/Spectre.Console.Analyzer.Tests/Spectre.Console.Analyzer.Tests.csproj"],
+            BenchmarkTestCommandResolver.DiscoverDotNetTargets(csprojOnlyDir));
+    }
+
+    [Fact]
+    public void WrapWithContainerDependencySetup_Node_UsesIgnoreScriptsFallbackAndDetectsPartialNodeModules()
+    {
+        var wrappedYarn = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results npx jest --ci --reporters=jest-junit",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.Contains("(yarn install --frozen-lockfile || yarn install --frozen-lockfile --ignore-scripts || yarn install --ignore-scripts)", wrappedYarn);
+        Assert.Contains("(pnpm install --frozen-lockfile || pnpm install --frozen-lockfile --ignore-scripts || pnpm install --ignore-scripts)", wrappedYarn);
+        Assert.Contains("(npm ci || npm ci --ignore-scripts || npm install --ignore-scripts)", wrappedYarn);
+        Assert.Contains("(npm install || npm install --ignore-scripts)", wrappedYarn);
+        Assert.Contains("if [ -z \"${npm_config_cache:-}\" ] || [ ! -w \"${npm_config_cache}\" ]; then mkdir -p /tmp/ncf-npm-cache && export npm_config_cache=\"/tmp/ncf-npm-cache\"; fi", wrappedYarn);
+        Assert.Contains("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund yarn", wrappedYarn);
+        Assert.Contains("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund pnpm", wrappedYarn);
+        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedYarn);
+        Assert.DoesNotContain("--cache /tmp/ncf-npm-cache", wrappedYarn);
+        Assert.Contains("ncf_node_deps_ready=0 && if [ -d node_modules ]; then", wrappedYarn);
+        Assert.DoesNotContain("ncf_node_deps_ready=0;", wrappedYarn);
+        Assert.Contains("node_modules/.ncf-bench-deps-ok", wrappedYarn);
+        Assert.Contains("node_modules/.bin", wrappedYarn);
+        Assert.Contains("node_modules/.yarn-integrity", wrappedYarn);
+        Assert.Contains("node_modules/.yarn-state.yml", wrappedYarn);
+        Assert.Contains("node_modules/.modules.yaml", wrappedYarn);
+        Assert.Contains("node_modules/.package-lock.json", wrappedYarn);
+        Assert.DoesNotContain("[ ! -d node_modules ]", wrappedYarn);
+    }
+
+    [Fact]
+    public async Task EvaluateExpectedFindings_AndVerifyCodeReview_HandleSymbolCorroborationRejectionReasonAndApproveTotals()
+    {
+        // ncf-cr-csharp-008 regression: omits literal filename RetryHelper.cs, but matches DecorrelatedJitterBackoffV2 + majority keywords
+        var pollyFindings = new[]
+        {
+            new BenchmarkExpectedFinding(
+                "src/Polly.Core/Retry/RetryHelper.cs",
+                "DecorrelatedJitterBackoffV2",
+                "high",
+                "Checks double.IsNaN instead of double.IsInfinity so +Infinity overflows to long.MinValue where Math.Abs throws OverflowException, and PR omits tests",
+                ["IsInfinity", "IsNaN", "Math.Abs", "OverflowException", "test"])
+        };
+
+        var qwenCorpus = "DecorrelatedJitterBackoffV2 checks double.IsNaN instead of double.IsInfinity, causing Inf - Inf = NaN and (long)NaN = long.MinValue where Math.Abs throws OverflowException. Missing RetryHelperTests.cs unit tests.";
+        var (score, missing) = BenchmarkVerifier.EvaluateExpectedFindings(pollyFindings, qwenCorpus);
+        Assert.Equal(1.0, score);
+        Assert.Empty(missing);
+
+        // Single weak generic keyword + symbol without filename must NOT pass corroboration
+        var weakCorpus = "DecorrelatedJitterBackoffV2 needs a test.";
+        var (weakScore, weakMissing) = BenchmarkVerifier.EvaluateExpectedFindings(pollyFindings, weakCorpus);
+        Assert.Equal(0.0, weakScore);
+        Assert.Single(weakMissing);
+
+        // Findings without symbol_or_line_hint (e.g. TaskReview) still strictly require file_path
+        var taskFindings = new[]
+        {
+            new BenchmarkExpectedFinding("src/CacheService.cs", Keywords: ["TTL", "eviction", "sliding"])
+        };
+        var (noSymbolScore, _) = BenchmarkVerifier.EvaluateExpectedFindings(taskFindings, "Add sliding TTL eviction policy.");
+        Assert.Equal(0.0, noSymbolScore);
+
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        // Approve review with non-empty FailToPass/PassToPass reports 0/0 when tests are skipped
+        var approveInstance = new BenchmarkInstance
+        {
+            InstanceId = "ncf-cr-csharp-001",
+            Category = BenchmarkProblemCategory.CodeReview,
+            Repo = "serilog/serilog",
+            BaseCommit = "abc",
+            ProblemStatement = "Review PR",
+            CandidatePatch = "diff",
+            ExpectedVerdict = "Approve",
+            FailToPass = ["TestA", "TestB"],
+            PassToPass = ["TestC"]
+        };
+        var approveResult = await verifier.VerifyAsync(
+            approveInstance,
+            new BenchmarkWorkspaceHandle { InstanceId = "ncf-cr-csharp-001", Category = BenchmarkProblemCategory.CodeReview, WorkspacePath = _tempDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, Summary = "Looks good." },
+            ExecutionMode.ContainerSandbox,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.True(approveResult.Passed);
+        Assert.Equal(0, approveResult.FailToPassTotal);
+        Assert.Equal(0, approveResult.FailToPassPassed);
+        Assert.Equal(0, approveResult.PassToPassTotal);
+        Assert.Equal(0, approveResult.PassToPassPassed);
+
+        // ReviewerRejectionReason is propagated into evaluated corpus and triggers RequestChanges with 0/0 test totals
+        var rejectInstance = new BenchmarkInstance
+        {
+            InstanceId = "ncf-cr-csharp-008",
+            Category = BenchmarkProblemCategory.CodeReview,
+            Repo = "App-vNext/Polly",
+            BaseCommit = "abc",
+            ProblemStatement = "Review PR",
+            CandidatePatch = "diff",
+            ExpectedVerdict = "RequestChanges",
+            ExpectedFindings = pollyFindings,
+            FailToPass = ["TestOverflow"]
+        };
+        var rejectResult = await verifier.VerifyAsync(
+            rejectInstance,
+            new BenchmarkWorkspaceHandle { InstanceId = "ncf-cr-csharp-008", Category = BenchmarkProblemCategory.CodeReview, WorkspacePath = _tempDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome
+            {
+                RunStatus = AgentRunStatus.Completed,
+                ReviewerFeedback = "DecorrelatedJitterBackoffV2 fails on overflow.",
+                ReviewerRejectionReason = "Checks double.IsNaN instead of double.IsInfinity; Math.Abs throws OverflowException and missing test.",
+                TargetRouting = StandardStageIds.Implementation
+            },
+            ExecutionMode.ContainerSandbox,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.True(rejectResult.Passed);
+        Assert.Equal("RequestChanges", rejectResult.ActualVerdict);
+        Assert.Equal(1.0, rejectResult.DeterministicScore);
+        Assert.Equal(0, rejectResult.FailToPassTotal);
+        Assert.Equal(0, rejectResult.PassToPassTotal);
+    }
+
+    [Theory]
+    [InlineData("expert", "expert", true, 1.0)]
+    [InlineData("expert", "difficult", true, 0.95)]
+    [InlineData("difficult", "expert", true, 0.95)]
+    [InlineData("expert", "standard", false, 0.80)]
+    [InlineData("difficult", "standard", false, 0.80)]
+    [InlineData("standard", "difficult", false, 0.80)]
+    [InlineData("standard", "expert", false, 0.80)]
+    public async Task VerifyAsync_TaskReview_CalibratesDifficultyScoringAcrossExactAdjacentAndMismatchedTiers(
+        string expectedDifficulty,
+        string actualDifficulty,
+        bool expectedPassed,
+        double expectedScore)
+    {
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "tr-calib",
+            Category = BenchmarkProblemCategory.TaskReview,
+            Repo = "vuejs/core",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix batchDepth",
+            TaskSpecification = "---\nid: 202\nstatus: Open\ndifficulty: standard\n---\n\nOriginal task.",
+            ExpectedVerdict = "Ready",
+            ExpectedDifficulty = expectedDifficulty,
+            ExpectedFindings = [new BenchmarkExpectedFinding("packages/reactivity/src/effect.ts", Keywords: ["endBatch"])]
+        };
+
+        var outcome = new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            TaskMarkdownBefore = instance.TaskSpecification,
+            UpdatedTaskMarkdown = $"---\nid: 202\nstatus: Open\ndifficulty: {actualDifficulty}\n---\n\nOriginal task.\n\n## Architecture & Plan\nUpdate endBatch in packages/reactivity/src/effect.ts so batchDepth decrements cleanly before draining queued effects.",
+            ModifiedFilesOutsideDocsTasks = Array.Empty<string>()
+        };
+
+        var result = await verifier.VerifyAsync(
+            instance,
+            new BenchmarkWorkspaceHandle { InstanceId = "tr-calib", Category = BenchmarkProblemCategory.TaskReview, WorkspacePath = _tempDir, BaseCommit = "abc" },
+            outcome,
+            ExecutionMode.BareHost,
+            verifyWithTests: false,
+            judgeConfig: null);
+
+        Assert.Equal(expectedPassed, result.Passed);
+        Assert.Equal(expectedScore, result.DeterministicScore, 4);
+    }
+
+    [Fact]
+    public void EvaluateTaskDifficulty_RejectsNumericEnumStrings()
+    {
+        Assert.Equal((false, 0.0), BenchmarkVerifier.EvaluateTaskDifficulty("expert", "2"));
+        Assert.Equal((false, 0.0), BenchmarkVerifier.EvaluateTaskDifficulty("difficult", "1"));
+        Assert.Equal((false, 0.0), BenchmarkVerifier.EvaluateTaskDifficulty("standard", "0"));
+        Assert.Equal((false, 0.0), BenchmarkVerifier.EvaluateTaskDifficulty("expert", "99"));
+    }
+
+    [Fact]
+    public void EvaluateExpectedFindings_DoesNotDoubleCountOverlappingSubstringKeywords()
+    {
+        var serilogFinding = new[]
+        {
+            new BenchmarkExpectedFinding(
+                "src/Serilog/Log.cs",
+                "CloseAndFlushAsync",
+                "high",
+                "Swallowed bare catch block hides disposal exceptions and PR omits regression tests",
+                ["catch", "Dispose", "test", "tests"])
+        };
+
+        // Single word "tests" matches both "test" and "tests" as substrings; must NOT double-count as 2 independent keywords.
+        var (singleWordScore, singleWordMissing) = BenchmarkVerifier.EvaluateExpectedFindings(
+            serilogFinding,
+            "CloseAndFlushAsync needs tests.");
+        Assert.Equal(0.0, singleWordScore);
+        Assert.Single(singleWordMissing);
+
+        // Two independent keywords ("catch" and "tests" -> canonical "test") alongside matching symbol satisfy corroboration.
+        var (corroboratedScore, corroboratedMissing) = BenchmarkVerifier.EvaluateExpectedFindings(
+            serilogFinding,
+            "CloseAndFlushAsync swallows exceptions in a catch block and needs tests.");
+        Assert.Equal(1.0, corroboratedScore);
+        Assert.Empty(corroboratedMissing);
+    }
+
+    [Fact]
+    public async Task BenchmarkLlmJudge_EvaluateCodeReviewAsync_IncludesReviewerRejectionReasonInPrompt()
+    {
+        var factory = new Mock<IBenchmarkJudgeClientFactory>();
+        var chatClient = new Mock<IChatClient>();
+        string? capturedUserPrompt = null;
+
+        chatClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken>((msgs, _, _) =>
+            {
+                capturedUserPrompt = msgs.Last().Text;
+            })
+            .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, """{"score": 0.95, "rationale": "Solid rejection."}""")));
+        factory.Setup(f => f.CreateJudgeClient(It.IsAny<BenchmarkJudgeConfig>())).Returns(chatClient.Object);
+
+        var judge = new BenchmarkLlmJudge(factory.Object, NullLogger<BenchmarkLlmJudge>.Instance);
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "ncf-cr-csharp-008",
+            Category = BenchmarkProblemCategory.CodeReview,
+            Repo = "App-vNext/Polly",
+            BaseCommit = "abc",
+            ProblemStatement = "Review PR",
+            CandidatePatch = "diff"
+        };
+        var outcome = new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            ReviewerFeedback = "DecorrelatedJitterBackoffV2 fails on infinity.",
+            ReviewerRejectionReason = "Checks double.IsNaN instead of double.IsInfinity causing OverflowException.",
+            TargetRouting = StandardStageIds.Implementation
+        };
+
+        var result = await judge.EvaluateCodeReviewAsync(instance, outcome, new BenchmarkJudgeConfig { ModelName = "judge" });
+
+        Assert.Equal(0.95, result.Score, 4);
+        Assert.NotNull(capturedUserPrompt);
+        Assert.Contains("DecorrelatedJitterBackoffV2 fails on infinity.", capturedUserPrompt, StringComparison.Ordinal);
+        Assert.Contains("Checks double.IsNaN instead of double.IsInfinity causing OverflowException.", capturedUserPrompt, StringComparison.Ordinal);
     }
 
     private static string RunGit(string workingDir, params string[] args)

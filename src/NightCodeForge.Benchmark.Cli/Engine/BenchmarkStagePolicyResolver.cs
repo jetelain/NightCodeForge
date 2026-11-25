@@ -113,6 +113,17 @@ public static class BenchmarkStagePolicyResolver
         }
     }
 
+    public static string? GetSandboxEnvironmentGuidance(string? language)
+    {
+        var normalized = BenchmarkLanguages.Normalize(language);
+        if (normalized is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript)
+        {
+            return $"[Sandbox Node Setup Guidance]: If `yarn install` / `pnpm install` / `npm install` fails on blocked native postinstall downloads (such as `sharp` from GitHub), retry directly with `--ignore-scripts` (prefer `--frozen-lockfile --ignore-scripts` first). If `yarn` or `pnpm` is missing, install into a user-writable prefix without sudo (`npm install -g --prefix {BenchmarkTestCommandResolver.NpmGlobalPrefix} --cache {BenchmarkTestCommandResolver.NpmCacheDir} --ignore-scripts yarn` and prepend `{BenchmarkTestCommandResolver.NpmGlobalPrefix}/bin` to `PATH`).";
+        }
+
+        return null;
+    }
+
     private static string ResolveBuildCommand(string stack, CodeStackPreset preset, string workspacePath)
     {
         if (!string.Equals(stack, CodeStack.DotNet, StringComparison.OrdinalIgnoreCase))

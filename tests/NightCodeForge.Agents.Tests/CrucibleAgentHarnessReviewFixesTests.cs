@@ -381,6 +381,49 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task RunStage_RequestChangesTool_PropagatesStructuredRejectionReasonIntoAgentRunResult()
+    {
+        var repo = new InMemoryTaskRepository();
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            var args = new Dictionary<string, object?>
+            {
+                ["feedback"] = "DecorrelatedJitterBackoffV2 fails on infinity.",
+                ["reason"] = "Checks double.IsNaN instead of double.IsInfinity causing OverflowException and missing unit tests."
+            };
+            return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>(
+            [
+                new ChatResponseUpdate { Contents = [new FunctionCallContent("call_rc_1", CanonicalToolNames.RequestChanges, args)] }
+            ]);
+        });
+        var harness = CreateHarness(client, repo: repo);
+
+        var profile = new AgentProfile
+        {
+            Id = "reviewer",
+            Mode = AgentMode.Full,
+            PermittedTools = [CanonicalToolNames.Read, CanonicalToolNames.RequestChanges]
+        };
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 42, Title = "Review task", Description = "Do the thing" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = _tempDir },
+            Profile = profile,
+            StageId = StandardStageIds.CodeReviewAndFix,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = _tempDir,
+            BootstrapPrompt = string.Empty
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
+        Assert.Equal("DecorrelatedJitterBackoffV2 fails on infinity.", result.ReviewerFeedback);
+        Assert.Equal("Checks double.IsNaN instead of double.IsInfinity causing OverflowException and missing unit tests.", result.ReviewerRejectionReason);
+    }
+
     // ---------- Helpers ----------
 
     private AgentSessionContext NewContext(AgentProfile? profile = null, string? state = null, string? bootstrap = null)

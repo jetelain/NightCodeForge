@@ -40,6 +40,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
         int? limit,
         bool verifyWithTests,
         Action<string>? progressCallback,
+        string? manifestPath = null,
         CancellationToken cancellationToken = default)
     {
         if (limit is <= 0)
@@ -47,7 +48,16 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             throw new BenchmarkDatasetException("Validation limit must be greater than zero when specified.", datasetPath);
         }
 
-        var allInstances = await _datasetLoader.LoadAsync(datasetPath, categoryOverride, cancellationToken).ConfigureAwait(false);
+        var allInstances = await _datasetLoader.LoadAsync(
+            datasetPath,
+            categoryOverride,
+            manifestPath,
+            msg =>
+            {
+                _logger.LogInformation("{Diagnostic}", msg);
+                progressCallback?.Invoke(msg);
+            },
+            cancellationToken).ConfigureAwait(false);
         var selected = FilterInstances(allInstances, datasetPath, instanceIdFilter, limit);
 
         var results = new List<BenchmarkInstanceValidationResult>(selected.Count);

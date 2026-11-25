@@ -21,6 +21,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     private const double ReviewVerdictWeightWithFindings = 0.6;
     private const double ReviewFindingsWeight = 0.4;
     private const double MinimumAnchorCoverageForPass = 0.5;
+    private const double AdjacentEscalatedDifficultyCredit = 0.75;
 
     [GeneratedRegex(@"[A-Za-z0-9_]{4,}", RegexOptions.CultureInvariant)]
     private static partial Regex SummaryTokenRegex();
@@ -386,14 +387,15 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         var combinedCorpus = string.Join(
             "\n",
             outcome.ReviewerFeedback ?? string.Empty,
+            outcome.ReviewerRejectionReason ?? string.Empty,
             outcome.Summary ?? string.Empty,
             outcome.ModelPatch ?? string.Empty);
 
         var (anchorScore, missingAnchors) = EvaluateExpectedFindings(instance.ExpectedFindings, combinedCorpus);
 
         bool minorFixTestsPassed = true;
-        int f2pPassed = 0, f2pTotal = instance.FailToPass.Count;
-        int p2pPassed = 0, p2pTotal = instance.PassToPass.Count;
+        int f2pPassed = 0, f2pTotal = 0;
+        int p2pPassed = 0, p2pTotal = 0;
         IReadOnlyList<string> failedTests = Array.Empty<string>();
         string? testLog = null;
         string? testError = null;
@@ -402,6 +404,8 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             verifyWithTests &&
             (!string.IsNullOrWhiteSpace(instance.TestPatch) || instance.FailToPass.Count > 0 || instance.PassToPass.Count > 0))
         {
+            f2pTotal = instance.FailToPass.Count;
+            p2pTotal = instance.PassToPass.Count;
             await _workspaceManager.ResetToBaseAsync(workspace.WorkspacePath, workspace.BaseCommit, cancellationToken).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(instance.CandidatePatch))
             {
@@ -442,7 +446,9 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                     var testRes = await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, cancellationToken).ConfigureAwait(false);
                     minorFixTestsPassed = testRes.Passed;
                     f2pPassed = testRes.FailToPassPassed;
+                    f2pTotal = testRes.FailToPassTotal;
                     p2pPassed = testRes.PassToPassPassed;
+                    p2pTotal = testRes.PassToPassTotal;
                     failedTests = testRes.FailedTests;
                     testLog = testRes.VerificationLog;
                     testError = testRes.ErrorMessage;
@@ -514,7 +520,8 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         bool scopeValid = outcome.ModifiedFilesOutsideDocsTasks.Count == 0;
         bool frontmatterPreserved = true;
         bool nonTrivialEnrichment = true;
-        bool difficultyMatched = true;
+        bool difficultyPassed = true;
+        double difficultyScore = 1.0;
         string? detectedDifficulty = null;
         var failureReasons = new List<string>();
 
@@ -563,11 +570,8 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 detectedDifficulty = afterFm.Difficulty?.Trim().ToLowerInvariant();
                 if (!string.IsNullOrWhiteSpace(instance.ExpectedDifficulty))
                 {
-                    difficultyMatched = string.Equals(
-                        detectedDifficulty,
-                        instance.ExpectedDifficulty.Trim(),
-                        StringComparison.OrdinalIgnoreCase);
-                    if (!difficultyMatched)
+                    (difficultyPassed, difficultyScore) = EvaluateTaskDifficulty(instance.ExpectedDifficulty, detectedDifficulty);
+                    if (!difficultyPassed)
                     {
                         failureReasons.Add($"Expected difficulty '{instance.ExpectedDifficulty}' but got '{detectedDifficulty ?? "<none>"}'.");
                     }
@@ -598,7 +602,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                       scopeValid &&
                       frontmatterPreserved &&
                       nonTrivialEnrichment &&
-                      difficultyMatched &&
+                      difficultyPassed &&
                       (instance.ExpectedFindings.Count == 0 || anchorScore >= MinimumAnchorCoverageForPass);
 
         double deterministicScore;
@@ -619,7 +623,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 checks.Add(nonTrivialEnrichment ? 1.0 : 0.0);
                 if (!string.IsNullOrWhiteSpace(instance.ExpectedDifficulty))
                 {
-                    checks.Add(difficultyMatched ? 1.0 : 0.0);
+                    checks.Add(difficultyScore);
                 }
             }
 
@@ -652,6 +656,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     internal static CodeReviewVerdict ClassifyCodeReviewVerdict(BenchmarkAgentOutcome outcome)
     {
         if (!string.IsNullOrWhiteSpace(outcome.ReviewerFeedback) ||
+            !string.IsNullOrWhiteSpace(outcome.ReviewerRejectionReason) ||
             string.Equals(outcome.TargetRouting, StandardStageIds.Implementation, StringComparison.OrdinalIgnoreCase))
         {
             return CodeReviewVerdict.RequestChanges;
@@ -664,6 +669,53 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         }
 
         return CodeReviewVerdict.Approve;
+    }
+
+    internal static (bool Passed, double Score) EvaluateTaskDifficulty(string? expectedDifficulty, string? actualDifficulty)
+    {
+        if (string.IsNullOrWhiteSpace(expectedDifficulty))
+        {
+            return (true, 1.0);
+        }
+
+        if (!TryParseTaskDifficulty(expectedDifficulty, out var expectedTier))
+        {
+            bool exactText = string.Equals(actualDifficulty?.Trim(), expectedDifficulty.Trim(), StringComparison.OrdinalIgnoreCase);
+            return (exactText, exactText ? 1.0 : 0.0);
+        }
+
+        if (!TryParseTaskDifficulty(actualDifficulty, out var actualTier))
+        {
+            return (false, 0.0);
+        }
+
+        if (expectedTier == actualTier)
+        {
+            return (true, 1.0);
+        }
+
+        if ((expectedTier == TaskDifficulty.Expert && actualTier == TaskDifficulty.Difficult) ||
+            (expectedTier == TaskDifficulty.Difficult && actualTier == TaskDifficulty.Expert))
+        {
+            return (true, AdjacentEscalatedDifficultyCredit);
+        }
+
+        return (false, 0.0);
+    }
+
+    private static bool TryParseTaskDifficulty(string? value, out TaskDifficulty tier)
+    {
+        tier = default;
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 &&
+               char.IsLetter(trimmed[0]) &&
+               Enum.TryParse(trimmed, ignoreCase: true, out tier) &&
+               Enum.IsDefined(tier);
     }
 
     private static readonly HashSet<string> IndentationSensitiveExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -1125,7 +1177,15 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 summaryMatched = MatchesSummaryAnchor(finding.Summary, normalizedCorpus);
             }
 
-            if (fileMatched && symbolMatched && keywordsMatched && summaryMatched)
+            bool strongSymbolKeywordCorroboration = false;
+            if (!fileMatched && hasFile && hasSymbol && symbolMatched && hasKeywords)
+            {
+                var (independentTotal, independentMatched) = CountIndependentKeywords(nonEmptyKeywords, normalizedCorpus);
+                strongSymbolKeywordCorroboration = independentTotal >= 2 &&
+                                                   independentMatched >= Math.Max(2, (independentTotal + 1) / 2);
+            }
+
+            if ((fileMatched || strongSymbolKeywordCorroboration) && symbolMatched && keywordsMatched && summaryMatched)
             {
                 matchedCount++;
             }
@@ -1136,6 +1196,27 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         }
 
         return ((double)matchedCount / findings.Count, missing);
+    }
+
+    private static (int Total, int Matched) CountIndependentKeywords(
+        IReadOnlyList<string> keywords,
+        string normalizedCorpus)
+    {
+        var uniqueKeywords = keywords
+            .Select(k => k.Trim())
+            .Where(k => k.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Drop superstring variants (e.g., "tests" when "test" is present) so one word cannot satisfy multiple slots.
+        var independent = uniqueKeywords
+            .Where(candidate => !uniqueKeywords.Any(other =>
+                other.Length < candidate.Length &&
+                candidate.Contains(other, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        int matched = independent.Count(k => normalizedCorpus.Contains(k, StringComparison.OrdinalIgnoreCase));
+        return (independent.Count, matched);
     }
 
     private static bool MatchesSummaryAnchor(string? summary, string normalizedCorpus)

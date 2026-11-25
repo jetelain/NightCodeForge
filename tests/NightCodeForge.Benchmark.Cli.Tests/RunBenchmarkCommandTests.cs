@@ -75,6 +75,7 @@ public sealed class RunBenchmarkCommandTests : IDisposable
         var options = new RunCommandOptions
         {
             DatasetPath = datasetPath,
+            ManifestPath = Path.Combine(_tempDir, "smoke.manifest.json"),
             SuiteName = "code-review-suite",
             Provider = LlmProviderType.OllamaRouter,
             Endpoint = "http://localhost:11435",
@@ -108,6 +109,7 @@ public sealed class RunBenchmarkCommandTests : IDisposable
         Assert.NotNull(capturedRequest);
         Assert.Equal("code-review-suite", capturedRequest.SuiteName);
         Assert.Equal(Path.GetFullPath(datasetPath), capturedRequest.DatasetPath);
+        Assert.Equal(Path.GetFullPath(Path.Combine(_tempDir, "smoke.manifest.json")), capturedRequest.ManifestPath);
         Assert.Equal(Path.GetFullPath(outDir), capturedRequest.OutputDirectory);
         Assert.Equal(BenchmarkProblemCategory.CodeReview, capturedRequest.CategoryOverride);
         Assert.Equal(["rev-1"], capturedRequest.InstanceIdFilter);
@@ -256,7 +258,7 @@ public sealed class RunBenchmarkCommandTests : IDisposable
 
         var datasetLoader = new Mock<IBenchmarkDatasetLoader>();
         datasetLoader
-            .Setup(l => l.LoadAsync(It.IsAny<string>(), It.IsAny<BenchmarkProblemCategory?>(), It.IsAny<CancellationToken>()))
+            .Setup(l => l.LoadAsync(It.IsAny<string>(), It.IsAny<BenchmarkProblemCategory?>(), It.IsAny<string?>(), It.IsAny<Action<string>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(datasetInstances);
 
         var evaluatedInstances = new List<string>();

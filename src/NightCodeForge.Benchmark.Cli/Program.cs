@@ -266,15 +266,16 @@ public static class Program
         writer.WriteLine(@"NightCodeForge Standalone Benchmark CLI (ncf-bench)
 
 USAGE:
-  ncf-bench run --dataset <path.jsonl|json> (--models <m1,m2> | --config <candidates.json>) [options]
+  ncf-bench run --dataset <path.jsonl|json> (--models <m1,m2> | --config <candidates.json>) [--manifest <manifest.json>] [options]
   ncf-bench report <resultsDir1> [<resultsDir2> ...] [--baseline <resultsDir>] [--format markdown|ascii|json]
   ncf-bench dataset import --source <swe-sharp-bench|swebench-multilingual|multi-swe-bench|swebench-verified> --input <path> --manifest <manifest.json> --out <path.jsonl>
-  ncf-bench dataset validate --dataset <path.jsonl> [--category <implementation|code-review|task-review>] [--filter <id1,id2>] [--limit <N>] [--verify|--no-verify]
+  ncf-bench dataset validate --dataset <path.jsonl> [--manifest <manifest.json>] [--category <implementation|code-review|task-review>] [--filter <id1,id2>] [--limit <N>] [--verify|--no-verify]
   ncf-bench --version
   ncf-bench --help
 
 RUN OPTIONS:
   --dataset <path>              Path to benchmark dataset (.jsonl or .json)
+  --manifest <manifest.json>    Optional pinned manifest for metadata & crafted review overlay (auto-discovered if omitted)
   --models <m1,m2>              Comma-separated model names to evaluate
   --config <candidates.json>    JSON manifest of candidate model configurations
   --suite <name>                Optional suite name (default: dataset file stem)
@@ -307,6 +308,7 @@ DATASET OPTIONS:
     --out <path.jsonl>          Destination normalized BenchmarkInstance JSONL file
   validate:
     --dataset <path>            Path to benchmark dataset (.jsonl or .json)
+    --manifest <manifest.json>  Optional pinned manifest for metadata & crafted review overlay
     --category <name>           Optional category override (implementation | code-review | task-review)
     --filter <id1,id2>          Comma-separated instance IDs to validate
     --limit <N>                 Maximum number of dataset instances to validate

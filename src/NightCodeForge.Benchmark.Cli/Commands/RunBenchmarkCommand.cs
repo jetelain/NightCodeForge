@@ -39,6 +39,7 @@ public sealed class RunBenchmarkCommand
         {
             SuiteName = suiteName,
             DatasetPath = Path.GetFullPath(options.DatasetPath),
+            ManifestPath = string.IsNullOrWhiteSpace(options.ManifestPath) ? null : Path.GetFullPath(options.ManifestPath),
             OutputDirectory = outputDir,
             CategoryOverride = options.Category,
             InstanceIdFilter = options.FilterInstanceIds.Count > 0 ? options.FilterInstanceIds.ToList() : null,

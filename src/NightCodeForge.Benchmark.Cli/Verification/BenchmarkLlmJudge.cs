@@ -312,6 +312,10 @@ public sealed partial class BenchmarkLlmJudge : IBenchmarkLlmJudge
         {
             sb.AppendLine($"\nActual Reviewer Feedback (request_changes):\n{outcome.ReviewerFeedback}");
         }
+        if (!string.IsNullOrWhiteSpace(outcome.ReviewerRejectionReason))
+        {
+            sb.AppendLine($"\nActual Reviewer Rejection Reason (request_changes):\n{outcome.ReviewerRejectionReason}");
+        }
         if (!string.IsNullOrWhiteSpace(outcome.ModelPatch))
         {
             sb.AppendLine($"\nActual Minor Fix Patch Produced:\n{outcome.ModelPatch}");

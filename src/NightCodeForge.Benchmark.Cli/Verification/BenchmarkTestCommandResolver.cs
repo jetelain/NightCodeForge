@@ -11,7 +11,9 @@ namespace NightCodeForge.Benchmark.Cli.Verification;
 internal static partial class BenchmarkTestCommandResolver
 {
     private const string PythonVenvDir = "/tmp/ncf-bench-venv";
-    private const string NpmGlobalPrefix = "/tmp/ncf-npm-global";
+    internal const string NpmGlobalPrefix = "/tmp/ncf-npm-global";
+    internal const string NpmCacheDir = "/tmp/ncf-npm-cache";
+    private const string NodeDepsReadyMarker = "node_modules/.ncf-bench-deps-ok";
     private const string JestJUnitPrefix = "/tmp/ncf-jest-junit";
     private const string MochaJUnitPrefix = "/tmp/ncf-mocha-junit";
 
@@ -55,6 +57,14 @@ internal static partial class BenchmarkTestCommandResolver
         "scripts",
         "tools"
     };
+
+    private static readonly string[] AuxiliarySolutionNameTokens =
+    [
+        ".analyzer",
+        ".sandbox",
+        ".benchmarks",
+        ".samples"
+    ];
 
     [GeneratedRegex(@"^\s*dotnet\s+test(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex BareDotNetTestRegex();
@@ -219,11 +229,27 @@ internal static partial class BenchmarkTestCommandResolver
         if (solutions.Count > 0)
         {
             var bestSolution = solutions
-                .OrderBy(IsLowPriorityTarget)
-                .ThenByDescending(p => SolutionReferencesTestProject(workspacePath, p))
-                .ThenBy(CountPathSegments)
-                .ThenBy(p => p, StringComparer.OrdinalIgnoreCase)
-                .First();
+                .Select(p =>
+                {
+                    var (testCount, totalCount) = InspectSolutionProjects(workspacePath, p);
+                    return (
+                        Path: p,
+                        IsLowPriority: IsLowPriorityTarget(p),
+                        HasTests: testCount > 0,
+                        IsAuxiliary: IsAuxiliarySolution(p),
+                        TestCount: testCount,
+                        TotalCount: totalCount,
+                        Depth: CountPathSegments(p));
+                })
+                .OrderBy(c => c.IsLowPriority)
+                .ThenByDescending(c => c.HasTests)
+                .ThenBy(c => c.IsAuxiliary)
+                .ThenByDescending(c => c.TestCount)
+                .ThenByDescending(c => c.TotalCount)
+                .ThenBy(c => c.Depth)
+                .ThenBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+                .First()
+                .Path;
             return [bestSolution];
         }
 
@@ -467,21 +493,37 @@ internal static partial class BenchmarkTestCommandResolver
         $"export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
         $"fi && {WrapPosixCompoundBody(testCommand)}";
 
+    private static string BuildWritableNpmCacheGuard() =>
+        $"if [ -z \"${{npm_config_cache:-}}\" ] || [ ! -w \"${{npm_config_cache}}\" ]; then mkdir -p {NpmCacheDir} && export npm_config_cache=\"{NpmCacheDir}\"; fi";
+
     private static string WrapNodeContainerCommand(string testCommand)
     {
         var pathGuard =
             $"if [ -d \"{NpmGlobalPrefix}/bin\" ]; then case \":$PATH:\" in *\":{NpmGlobalPrefix}/bin:\"*) ;; *) export PATH=\"{NpmGlobalPrefix}/bin:$PATH\" ;; esac; fi";
 
+        var depsReadyCheck =
+            "ncf_node_deps_ready=0 && if [ -d node_modules ]; then " +
+            $"if [ -f {NodeDepsReadyMarker} ] || {{ [ -d node_modules/.bin ] && {{ " +
+            "{ [ -f pnpm-lock.yaml ] && [ -f node_modules/.modules.yaml ]; } || " +
+            "{ [ ! -f pnpm-lock.yaml ] && [ -f yarn.lock ] && { [ -f node_modules/.yarn-integrity ] || [ -f node_modules/.yarn-state.yml ]; }; } || " +
+            "{ [ ! -f pnpm-lock.yaml ] && [ ! -f yarn.lock ] && [ -f node_modules/.package-lock.json ]; }; }; }; then " +
+            "ncf_node_deps_ready=1; fi; fi";
+
+        var cacheSetup = $"mkdir -p {NpmGlobalPrefix} && {BuildWritableNpmCacheGuard()}";
+
         var installStep =
-            "if [ -f package.json ] && [ ! -d node_modules ]; then " +
+            $"{depsReadyCheck} && " +
+            "if [ -f package.json ] && [ \"$ncf_node_deps_ready\" -eq 0 ]; then " +
+            $"{cacheSetup} && " +
             "if [ -f pnpm-lock.yaml ]; then " +
-            $"if ! command -v pnpm >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/pnpm ]; then npm install -g --prefix {NpmGlobalPrefix} pnpm; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi && " +
-            "(pnpm install --frozen-lockfile || pnpm install); " +
+            $"if ! command -v pnpm >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/pnpm ]; then npm install -g --prefix {NpmGlobalPrefix} --ignore-scripts --no-audit --no-fund pnpm; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi && " +
+            "(pnpm install --frozen-lockfile || pnpm install --frozen-lockfile --ignore-scripts || pnpm install --ignore-scripts); " +
             "elif [ -f yarn.lock ]; then " +
-            $"if ! command -v yarn >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/yarn ]; then npm install -g --prefix {NpmGlobalPrefix} yarn; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi && " +
-            "(yarn install --frozen-lockfile || yarn install); " +
-            "elif [ -f package-lock.json ]; then (npm ci || npm install); " +
-            "else npm install; fi; " +
+            $"if ! command -v yarn >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/yarn ]; then npm install -g --prefix {NpmGlobalPrefix} --ignore-scripts --no-audit --no-fund yarn; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi && " +
+            "(yarn install --frozen-lockfile || yarn install --frozen-lockfile --ignore-scripts || yarn install --ignore-scripts); " +
+            "elif [ -f package-lock.json ]; then (npm ci || npm ci --ignore-scripts || npm install --ignore-scripts); " +
+            "else (npm install || npm install --ignore-scripts); fi && " +
+            $"if [ -d node_modules ]; then touch {NodeDepsReadyMarker}; fi; " +
             "fi";
 
         installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "jest-junit", JestJUnitPrefix);
@@ -503,7 +545,7 @@ internal static partial class BenchmarkTestCommandResolver
 
         return installStep +
                $" && if [ -f package.json ] && [ ! -d node_modules/{packageName} ]; then " +
-               $"if [ ! -d {prefix}/node_modules/{packageName} ]; then mkdir -p {prefix} && (npm install --prefix {prefix} --no-save {packageName} || true); fi; " +
+               $"if [ ! -d {prefix}/node_modules/{packageName} ]; then mkdir -p {prefix} && {BuildWritableNpmCacheGuard()} && (npm install --prefix {prefix} --ignore-scripts --no-audit --no-fund --no-save {packageName} || true); fi; " +
                $"if [ -d {prefix}/node_modules/{packageName} ]; then export NODE_PATH=\"{prefix}/node_modules${{NODE_PATH:+:$NODE_PATH}}\"; fi; " +
                "fi";
     }
@@ -684,7 +726,13 @@ internal static partial class BenchmarkTestCommandResolver
         return LowPriorityExactSegmentNames.Contains(fileNameWithoutExt);
     }
 
-    private static bool SolutionReferencesTestProject(string workspacePath, string relativeSolutionPath)
+    private static bool IsAuxiliarySolution(string relativePosixPath)
+    {
+        var fileNameWithoutExt = Path.GetFileNameWithoutExtension(relativePosixPath);
+        return AuxiliarySolutionNameTokens.Any(tok => fileNameWithoutExt.Contains(tok, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static (int TestProjectCount, int TotalProjectCount) InspectSolutionProjects(string workspacePath, string relativeSolutionPath)
     {
         var fullPath = Path.Combine(workspacePath, relativeSolutionPath.Replace('/', Path.DirectorySeparatorChar));
         string content;
@@ -694,34 +742,39 @@ internal static partial class BenchmarkTestCommandResolver
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return false;
+            return (0, 0);
         }
+
+        int testCount = 0;
+        int totalCount = 0;
 
         if (relativeSolutionPath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase))
         {
             foreach (Match match in SlnxProjectEntryRegex().Matches(content))
             {
+                totalCount++;
                 var projPath = match.Groups["path"].Value.Replace('\\', '/');
                 if (IsTestProjectPath(projPath))
                 {
-                    return true;
+                    testCount++;
                 }
             }
 
-            return false;
+            return (testCount, totalCount);
         }
 
         foreach (Match match in SlnProjectEntryRegex().Matches(content))
         {
+            totalCount++;
             var projName = match.Groups["name"].Value;
             var projPath = match.Groups["path"].Value.Replace('\\', '/');
             if (IsTestProjectPath(projPath) || projName.Contains("test", StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                testCount++;
             }
         }
 
-        return false;
+        return (testCount, totalCount);
     }
 
     internal static string QuotePathArgument(string value)

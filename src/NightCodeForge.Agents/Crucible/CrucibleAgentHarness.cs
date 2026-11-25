@@ -547,7 +547,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 summary: summary,
                 targetRouting: reqChange.TargetStageId,
                 reviewerFeedback: reqChange.Feedback,
-                proposals: proposals);
+                proposals: proposals,
+                reviewerRejectionReason: reqChange.Reason);
         }
 
         async Task<AgentRunResult> CompleteWithInterruptionAsync(HumanInterruptionException interruption)

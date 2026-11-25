@@ -309,6 +309,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<int?>(),
                 It.IsAny<bool>(),
                 It.IsAny<Action<string>?>(),
+                It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkDatasetValidationReport
             {
@@ -604,5 +605,67 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
         Assert.Contains("install rustup", report.Results[0].ErrorMessage);
         Assert.True(report.Results[1].Passed);
         workspaceManager.Verify(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rust-1"), It.IsAny<BenchmarkProblemCategory>(), null, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DatasetValidateCommand_ExecuteAsync_ForwardsManifestPathAndThrowsWhenMissing()
+    {
+        var manifestPath = Path.Combine(_tempDir, "suite.manifest.json");
+        var validatorMock = new Mock<IBenchmarkDatasetValidator>();
+        string? capturedManifest = null;
+        validatorMock
+            .Setup(v => v.ValidateAsync(
+                It.IsAny<string>(),
+                It.IsAny<BenchmarkProblemCategory?>(),
+                It.IsAny<IReadOnlyList<string>?>(),
+                It.IsAny<int?>(),
+                It.IsAny<bool>(),
+                It.IsAny<Action<string>?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, BenchmarkProblemCategory?, IReadOnlyList<string>?, int?, bool, Action<string>?, string?, CancellationToken>(
+                (_, _, _, _, _, _, m, _) => capturedManifest = m)
+            .ReturnsAsync(new BenchmarkDatasetValidationReport
+            {
+                DatasetPath = "ds.jsonl",
+                Results =
+                [
+                    new BenchmarkInstanceValidationResult
+                    {
+                        InstanceId = "inst-1",
+                        Category = BenchmarkProblemCategory.Implementation,
+                        Language = BenchmarkLanguages.CSharp,
+                        Passed = true
+                    }
+                ]
+            });
+
+        var command = new DatasetValidateCommand(validatorMock.Object);
+        var exitCode = await command.ExecuteAsync(
+            new DatasetValidateCommandOptions { DatasetPath = "ds.jsonl", ManifestPath = manifestPath, VerifyWithTests = false },
+            _ => { });
+
+        Assert.Equal(BenchmarkCliConstants.ExitSuccess, exitCode);
+        Assert.Equal(manifestPath, capturedManifest);
+
+        var realValidator = new BenchmarkDatasetValidator(
+            _loader,
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+        var datasetPath = Path.Combine(_tempDir, "ad-hoc.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cs-1","category":"Implementation","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Fix","patch":"diff"}""");
+
+        await Assert.ThrowsAsync<BenchmarkDatasetException>(() =>
+            realValidator.ValidateAsync(
+                datasetPath,
+                null,
+                null,
+                null,
+                verifyWithTests: false,
+                progressCallback: null,
+                manifestPath: Path.Combine(_tempDir, "nonexistent.manifest.json")));
     }
 }

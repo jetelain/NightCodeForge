@@ -16,6 +16,7 @@ param(
     [string]$Models = "Flint:latest",
     [string]$Suite = "v1-smoke",
     [string]$Dataset = "",
+    [string]$Manifest = "",
     [string]$Provider = "ollama-router",
     [string]$Endpoint = "http://localhost:11434",
     [int]$Timeout = 1800,
@@ -33,12 +34,34 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $projectPath = Join-Path $repoRoot "src\NightCodeForge.Benchmark.Cli"
 
+$datasetExplicit = $PSBoundParameters.ContainsKey('Dataset') -and -not [string]::IsNullOrWhiteSpace($Dataset)
+$suiteExplicit = $PSBoundParameters.ContainsKey('Suite') -and -not [string]::IsNullOrWhiteSpace($Suite)
+
 if ([string]::IsNullOrWhiteSpace($Dataset)) {
     $Dataset = Join-Path $env:USERPROFILE ".nightcodeforge\benchmarks\datasets\$Suite.jsonl"
 }
 
 if (-not (Test-Path -LiteralPath $Dataset -PathType Leaf)) {
     Write-Error "Benchmark dataset not found: $Dataset"
+    exit 1
+}
+
+if ([string]::IsNullOrWhiteSpace($Manifest)) {
+    $manifestSuite = if ($datasetExplicit -and -not $suiteExplicit) {
+        [System.IO.Path]::GetFileNameWithoutExtension($Dataset)
+    }
+    else {
+        $Suite
+    }
+    if (-not [string]::IsNullOrWhiteSpace($manifestSuite)) {
+        $repoManifest = Join-Path $repoRoot "benchmarks\datasets\$manifestSuite.manifest.json"
+        if (Test-Path -LiteralPath $repoManifest -PathType Leaf) {
+            $Manifest = $repoManifest
+        }
+    }
+}
+elseif (-not (Test-Path -LiteralPath $Manifest -PathType Leaf)) {
+    Write-Error "Benchmark manifest not found: $Manifest"
     exit 1
 }
 
@@ -78,6 +101,10 @@ $dotnetArgs += @(
     "--concurrency", "$Concurrency",
     "--out", $OutDir
 )
+
+if (-not [string]::IsNullOrWhiteSpace($Manifest)) {
+    $dotnetArgs += @("--manifest", $Manifest)
+}
 
 if (-not $NoVerify) {
     $dotnetArgs += "--verify"

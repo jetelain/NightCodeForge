@@ -119,6 +119,12 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         var allInstances = await _datasetLoader.LoadAsync(
             request.DatasetPath,
             request.CategoryOverride,
+            request.ManifestPath,
+            msg =>
+            {
+                _logger.LogInformation("{Diagnostic}", msg);
+                request.ProgressCallback?.Invoke(msg);
+            },
             cancellationToken).ConfigureAwait(false);
 
         IEnumerable<BenchmarkInstance> filtered = allInstances;
@@ -418,7 +424,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 StageId = policy.StageId,
                 StageDirective = policy.StageDirective,
                 RequiredMode = policy.RequiredMode,
-                BootstrapPrompt = BuildBootstrapPrompt(category, workspace),
+                BootstrapPrompt = BuildBootstrapPrompt(category, workspace, instance.Language),
                 WorkspacePath = workspace.WorkspacePath,
                 ProjectConfig = projectConfig,
                 TaskMarkdownPath = workspace.TaskMarkdownPath,
@@ -568,6 +574,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 ModelPatch = modelPatch,
                 Summary = runResult.Summary,
                 ReviewerFeedback = runResult.ReviewerFeedback,
+                ReviewerRejectionReason = runResult.ReviewerRejectionReason,
                 TargetRouting = runResult.TargetRouting,
                 PendingQuestions = runResult.PendingQuestions ?? Array.Empty<Question>(),
                 UpdatedTaskMarkdown = updatedTaskMarkdown,
@@ -851,16 +858,19 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
     private static string BuildBootstrapPrompt(
         BenchmarkProblemCategory category,
-        BenchmarkWorkspaceHandle workspace)
+        BenchmarkWorkspaceHandle workspace,
+        string? language = null)
     {
+        var sandboxGuidance = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(language);
         return category switch
         {
             BenchmarkProblemCategory.Implementation =>
                 "Execute stage 'Implementation'.\n" +
-                "Inspect the repository and solve the problem described in <task>. Verify your fix with build/test commands using 'bash'.",
+                "Inspect the repository and solve the problem described in <task>. Verify your fix with build/test commands using 'bash'." +
+                (sandboxGuidance != null ? $"\n\n{sandboxGuidance}" : string.Empty),
 
             BenchmarkProblemCategory.CodeReview =>
-                BuildCodeReviewBootstrapPrompt(workspace),
+                BuildCodeReviewBootstrapPrompt(workspace, sandboxGuidance),
 
             BenchmarkProblemCategory.TaskReview =>
                 "Execute stage 'ForgeTask Review'.\n" +
@@ -871,11 +881,16 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         };
     }
 
-    private static string BuildCodeReviewBootstrapPrompt(BenchmarkWorkspaceHandle workspace)
+    private static string BuildCodeReviewBootstrapPrompt(BenchmarkWorkspaceHandle workspace, string? sandboxGuidance = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Execute stage 'Code Review & Fix'.");
         sb.AppendLine($"Compare branch '{workspace.FeatureBranch}' against base branch '{workspace.BaseBranch}'.");
+        if (!string.IsNullOrWhiteSpace(sandboxGuidance))
+        {
+            sb.AppendLine();
+            sb.AppendLine(sandboxGuidance);
+        }
 
         var diff = workspace.ReviewDiff ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(diff) && diff.Length <= MaxInlineReviewDiffChars)

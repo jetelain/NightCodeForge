@@ -55,5 +55,12 @@ public class StandardWorkflowDefinitionsTests
 
         var postReviewGate = orderedStages[5];
         Assert.Contains(StandardStageIds.Implementation, postReviewGate.ConfigurationJson);
+
+        var taskReviewStage = orderedStages[0];
+        Assert.Contains("standard", taskReviewStage.ConfigurationJson);
+        Assert.Contains("difficult", taskReviewStage.ConfigurationJson);
+        Assert.Contains("expert", taskReviewStage.ConfigurationJson);
+        Assert.Contains("YAML frontmatter", taskReviewStage.ConfigurationJson);
+        Assert.Contains("'ask'", taskReviewStage.ConfigurationJson);
     }
 }

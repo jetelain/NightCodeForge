@@ -20,6 +20,7 @@ public enum ReportOutputFormat
 public sealed class RunCommandOptions
 {
     public string DatasetPath { get; set; } = string.Empty;
+    public string? ManifestPath { get; set; }
     public string? SuiteName { get; set; }
     public string? ModelsCsv { get; set; }
     public string? ConfigPath { get; set; }
@@ -67,6 +68,7 @@ public sealed class DatasetImportCommandOptions
 public sealed class DatasetValidateCommandOptions
 {
     public string DatasetPath { get; set; } = string.Empty;
+    public string? ManifestPath { get; set; }
     public BenchmarkProblemCategory? Category { get; set; }
     public List<string> FilterInstanceIds { get; } = [];
     public int? Limit { get; set; }
