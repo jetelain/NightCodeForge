@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,27 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     private const double ReviewFindingsWeight = 0.4;
     private const double MinimumAnchorCoverageForPass = 0.5;
     private const double AdjacentEscalatedDifficultyCredit = 0.75;
+    private const int MinimumFileStemCorroborationLength = 5;
+
+    private static readonly HashSet<string> GenericFileStems = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "index",
+        "utils",
+        "helpers",
+        "common",
+        "types",
+        "config",
+        "tests",
+        "program",
+        "__init__",
+        "default",
+        "error",
+        "errors",
+        "client",
+        "server",
+        "model",
+        "models"
+    };
 
     [GeneratedRegex(@"[A-Za-z0-9_]{4,}", RegexOptions.CultureInvariant)]
     private static partial Regex SummaryTokenRegex();
@@ -579,7 +601,15 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             }
         }
 
-        var questionText = string.Join("\n", outcome.PendingQuestions.Select(q => $"{q.Prompt} {q.Rationale}"));
+        var questionText = string.Join(
+            "\n",
+            outcome.PendingQuestions.Select(q =>
+            {
+                var optionsText = ExtractQuestionOptionsText(q.OptionsJson);
+                return string.IsNullOrWhiteSpace(optionsText)
+                    ? $"{q.Prompt} {q.Rationale}"
+                    : $"{q.Prompt} {q.Rationale} {optionsText}";
+            }));
         var combinedCorpus = string.Join(
             "\n",
             outcome.UpdatedTaskMarkdown ?? string.Empty,
@@ -1177,15 +1207,19 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 summaryMatched = MatchesSummaryAnchor(finding.Summary, normalizedCorpus);
             }
 
-            bool strongSymbolKeywordCorroboration = false;
-            if (!fileMatched && hasFile && hasSymbol && symbolMatched && hasKeywords)
+            bool hasStrongKeywordCoverage = false;
+            if (hasFile && hasSymbol && hasKeywords)
             {
                 var (independentTotal, independentMatched) = CountIndependentKeywords(nonEmptyKeywords, normalizedCorpus);
-                strongSymbolKeywordCorroboration = independentTotal >= 2 &&
-                                                   independentMatched >= Math.Max(2, (independentTotal + 1) / 2);
+                hasStrongKeywordCoverage = independentTotal >= 2 &&
+                                           independentMatched >= Math.Max(2, (independentTotal + 1) / 2);
             }
 
-            if ((fileMatched || strongSymbolKeywordCorroboration) && symbolMatched && keywordsMatched && summaryMatched)
+            bool fileStemMatched = hasFile && !fileMatched && MatchesIdentifierBoundedFileStem(finding.FilePath, normalizedCorpus);
+            bool strongCorroboratedMatch = hasFile && hasSymbol && hasStrongKeywordCoverage &&
+                                           (symbolMatched || fileMatched || fileStemMatched);
+
+            if (((fileMatched && symbolMatched && keywordsMatched) || strongCorroboratedMatch) && summaryMatched)
             {
                 matchedCount++;
             }
@@ -1197,6 +1231,113 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
 
         return ((double)matchedCount / findings.Count, missing);
     }
+
+    internal static string ExtractQuestionOptionsText(string? optionsJson)
+    {
+        if (string.IsNullOrWhiteSpace(optionsJson))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = optionsJson.Trim();
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            var parts = new List<string>();
+            CollectOptionText(doc.RootElement, parts);
+            return parts.Count > 0 ? string.Join(", ", parts) : trimmed;
+        }
+        catch (JsonException)
+        {
+            return trimmed;
+        }
+    }
+
+    private static void CollectOptionText(JsonElement element, List<string> parts)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+            {
+                var text = element.GetString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    parts.Add(text);
+                }
+                break;
+            }
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    CollectOptionText(item, parts);
+                }
+                break;
+            case JsonValueKind.Object:
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String)
+                    {
+                        var val = prop.Value.GetString()?.Trim();
+                        if (!string.IsNullOrWhiteSpace(val))
+                        {
+                            parts.Add(val);
+                        }
+                    }
+                    else if (prop.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                    {
+                        CollectOptionText(prop.Value, parts);
+                    }
+                }
+                break;
+            case JsonValueKind.Number:
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                parts.Add(element.ToString());
+                break;
+        }
+    }
+
+    private static bool MatchesIdentifierBoundedFileStem(string? filePath, string normalizedCorpus)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || string.IsNullOrWhiteSpace(normalizedCorpus))
+        {
+            return false;
+        }
+
+        var normFile = filePath.Replace('\\', '/').TrimStart('/');
+        var fileName = Path.GetFileName(normFile);
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        if (string.IsNullOrWhiteSpace(stem) ||
+            stem.Length < MinimumFileStemCorroborationLength ||
+            GenericFileStems.Contains(stem))
+        {
+            return false;
+        }
+
+        int searchIndex = 0;
+        while (searchIndex <= normalizedCorpus.Length - stem.Length)
+        {
+            int idx = normalizedCorpus.IndexOf(stem, searchIndex, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                return false;
+            }
+
+            bool startBounded = idx == 0 || !IsIdentifierChar(normalizedCorpus[idx - 1]);
+            int endIdx = idx + stem.Length;
+            bool endBounded = endIdx == normalizedCorpus.Length || !IsIdentifierChar(normalizedCorpus[endIdx]);
+            if (startBounded && endBounded)
+            {
+                return true;
+            }
+
+            searchIndex = idx + 1;
+        }
+
+        return false;
+    }
+
+    private static bool IsIdentifierChar(char ch) => char.IsLetterOrDigit(ch) || ch == '_';
 
     private static (int Total, int Matched) CountIndependentKeywords(
         IReadOnlyList<string> keywords,

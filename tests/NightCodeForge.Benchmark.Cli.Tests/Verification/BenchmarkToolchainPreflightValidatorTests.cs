@@ -213,4 +213,67 @@ public sealed class BenchmarkToolchainPreflightValidatorTests
         Assert.NotNull(error);
         Assert.Contains("RUSTUP_HOME", error);
     }
+
+    [Fact]
+    public async Task ValidateAsync_WhenDistroPackagedRustupToolchainPresent_Passes()
+    {
+        var validator = CreateValidator(new HostSdkDiscoveryDetails(
+            MountPaths: ["/etc/ssl/certs", "/home/user/.rustup"],
+            EnvironmentVariables: new Dictionary<string, string>(),
+            CommandPaths: new Dictionary<string, string>
+            {
+                ["cargo"] = "/home/user/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+                ["rustc"] = "/home/user/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc"
+            }));
+
+        var error = await validator.ValidateAsync(
+            CreateRustInstance(),
+            BenchmarkProblemCategory.Implementation,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenDistroRustupHasNoActiveToolchain_FailsFast()
+    {
+        var validator = CreateValidator(new HostSdkDiscoveryDetails(
+            MountPaths: ["/etc/ssl/certs", "/home/user/.rustup"],
+            EnvironmentVariables: new Dictionary<string, string>(),
+            CommandPaths: new Dictionary<string, string>
+            {
+                ["cargo"] = "/usr/bin/cargo",
+                ["rustc"] = "/usr/bin/rustc"
+            }));
+
+        var error = await validator.ValidateAsync(
+            CreateRustInstance(),
+            BenchmarkProblemCategory.Implementation,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.NotNull(error);
+        Assert.Contains("excluded system directory", error);
+        Assert.Contains("rustup default stable", error);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenToolchainPathUsedWithoutMountableRustupHome_FailsFast()
+    {
+        var validator = CreateValidator(new HostSdkDiscoveryDetails(
+            MountPaths: ["/opt/rust/custom-toolchains"],
+            EnvironmentVariables: new Dictionary<string, string>(),
+            CommandPaths: new Dictionary<string, string>
+            {
+                ["cargo"] = "/opt/rust/custom-toolchains/toolchains/stable/bin/cargo",
+                ["rustc"] = "/opt/rust/custom-toolchains/toolchains/stable/bin/rustc"
+            }));
+
+        var error = await validator.ValidateAsync(
+            CreateRustInstance(),
+            BenchmarkProblemCategory.Implementation,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.NotNull(error);
+        Assert.Contains("RUSTUP_HOME", error);
+    }
 }

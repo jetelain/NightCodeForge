@@ -286,11 +286,17 @@ public class ContainerMountAndDriftBuilder
         // 3. Heavy SDK mounts
         if (options.MountHostSdks && options.SdkMountPaths != null)
         {
+            var isManagedBaseImage = IsManagedBaseImage(options.ContainerImage);
             var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
             var hasMappedHomeDotnet = false;
             var userDotnetRoots = options.SdkMountPaths
                 .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.TrimEnd('/')))
                 .Select(p => p.TrimEnd('/'))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var rustupHomes = options.SdkMountPaths
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => NormalizeContainerPath(ResolveHostPath(p, options)))
+                .Where(IsRustupHomePath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             foreach (var sdkPath in options.SdkMountPaths)
@@ -301,6 +307,12 @@ public class ContainerMountAndDriftBuilder
                 }
 
                 var trimmedSdk = sdkPath.TrimEnd('/');
+                var normSdk = NormalizeContainerPath(sdkPath);
+                if (!isManagedBaseImage && IsHostMultiarchSharedLibraryPath(normSdk))
+                {
+                    continue;
+                }
+
                 if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
                 {
                     if (!options.MountHostDotnetTools)
@@ -316,6 +328,13 @@ public class ContainerMountAndDriftBuilder
                 }
 
                 var resolvedHostSdk = ResolveHostPath(sdkPath, options);
+                var normResolvedHostSdk = NormalizeContainerPath(resolvedHostSdk);
+                if (!IsRustupHomePath(normResolvedHostSdk) &&
+                    rustupHomes.Any(home => normResolvedHostSdk.StartsWith(home + "/", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
                 var isUserDotnetRoot = userDotnetRoots.Contains(trimmedSdk);
 
                 if (isUserDotnetRoot)
@@ -731,6 +750,23 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
+        if (!IsManagedBaseImage(options.ContainerImage))
+        {
+            var expectedDestSet = expectedMounts
+                .Select(m => NormalizeContainerPath(m.ContainerPath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var (dest, info) in actual)
+            {
+                if (IsHostMultiarchSharedLibraryPath(dest) &&
+                    !string.IsNullOrEmpty(info.Source) &&
+                    !expectedDestSet.Contains(dest))
+                {
+                    problems.Add($"{dest} (expected absent)");
+                }
+            }
+        }
+
         if (problems.Count > 0)
         {
             return $"Missing/Mismatched mounts: {string.Join(", ", problems)}";
@@ -1071,8 +1107,7 @@ public class ContainerMountAndDriftBuilder
                 if (trimmedSdk.StartsWith("/etc/", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.Equals("/etc", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.StartsWith("/usr/share/fonts", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.Equals("/usr/lib/x86_64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedSdk.Equals("/usr/lib/aarch64-linux-gnu", StringComparison.OrdinalIgnoreCase) ||
+                    IsHostMultiarchSharedLibraryPath(trimmedSdk) ||
                     trimmedSdk.Equals("/usr/lib/snapd", StringComparison.OrdinalIgnoreCase) ||
                     trimmedSdk.StartsWith("/snap", StringComparison.OrdinalIgnoreCase) ||
                     IsRustupHomePath(trimmedSdk))
@@ -1154,6 +1189,12 @@ public class ContainerMountAndDriftBuilder
                         pathEntries.Add($"{trimmedSdk}/platform-tools");
                         pathEntries.Add($"{trimmedSdk}/cmdline-tools/latest/bin");
                     }
+                }
+                else if (trimmedSdk.Contains("/toolchains/", StringComparison.OrdinalIgnoreCase))
+                {
+                    pathEntries.Add(trimmedSdk.EndsWith("/bin", StringComparison.OrdinalIgnoreCase)
+                        ? trimmedSdk
+                        : $"{trimmedSdk}/bin");
                 }
                 else if (trimmedSdk.EndsWith("/bin", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1240,6 +1281,38 @@ public class ContainerMountAndDriftBuilder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="path"/> is a host OS multiarch shared-library directory
+    /// (such as <c>/usr/lib/x86_64-linux-gnu</c>, <c>/usr/lib/aarch64-linux-gnu</c>, or <c>/lib/*-linux-gnu*</c>).
+    /// </summary>
+    public static bool IsHostMultiarchSharedLibraryPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var norm = NormalizeContainerPath(path);
+        string? remainder = null;
+        if (norm.StartsWith("/usr/lib/", StringComparison.OrdinalIgnoreCase))
+        {
+            remainder = norm["/usr/lib/".Length..];
+        }
+        else if (norm.StartsWith("/lib/", StringComparison.OrdinalIgnoreCase))
+        {
+            remainder = norm["/lib/".Length..];
+        }
+
+        if (string.IsNullOrEmpty(remainder))
+        {
+            return false;
+        }
+
+        var slashIndex = remainder.IndexOf('/');
+        var firstSegment = slashIndex >= 0 ? remainder[..slashIndex] : remainder;
+        return firstSegment.Contains("-linux-gnu", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRustupHomePath(string trimmedPath) =>

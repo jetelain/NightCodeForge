@@ -589,6 +589,8 @@ public class Step122BAttachmentToolsAndPromptDigestTests : IDisposable
 
         var hostSdkMock = new Mock<IHostSdkDiscoveryService>();
         hostSdkMock.Setup(s => s.DiscoverSdkMountPaths(It.IsAny<string?>())).Returns(Array.Empty<string>());
+        hostSdkMock.Setup(s => s.DiscoverSdkDetails(It.IsAny<string?>()))
+            .Returns(new HostSdkDiscoveryDetails([], new Dictionary<string, string>(), new Dictionary<string, string>()));
         hostSdkMock.Setup(s => s.DiscoverSdkDetailsAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HostSdkDiscoveryDetails([], new Dictionary<string, string>(), new Dictionary<string, string>()));
         var identityMock = new Mock<IHostUserIdentityResolver>();

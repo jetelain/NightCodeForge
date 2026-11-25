@@ -1320,9 +1320,9 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             ExecutionMode.ContainerSandbox);
         Assert.Contains("/tmp/ncf-npm-global/bin", wrappedJest);
         Assert.Contains("if [ -z \"${npm_config_cache:-}\" ] || [ ! -w \"${npm_config_cache}\" ]; then mkdir -p /tmp/ncf-npm-cache && export npm_config_cache=\"/tmp/ncf-npm-cache\"; fi", wrappedJest);
-        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedJest);
+        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --legacy-peer-deps --omit=peer --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedJest);
         Assert.DoesNotContain("--cache /tmp/ncf-npm-cache", wrappedJest);
-        Assert.Contains("NODE_PATH=\"/tmp/ncf-jest-junit/node_modules", wrappedJest);
+        Assert.Contains("NODE_PATH=\"$PWD/node_modules:/tmp/ncf-jest-junit/node_modules", wrappedJest);
         Assert.DoesNotContain("npm install --no-save jest-junit", wrappedJest);
         Assert.EndsWith("&& { JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results npx jest --reporters=jest-junit; }", wrappedJest);
 
@@ -1569,9 +1569,9 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             BenchmarkLanguages.JavaScript,
             ExecutionMode.ContainerSandbox);
         Assert.Contains("if [ -z \"${npm_config_cache:-}\" ] || [ ! -w \"${npm_config_cache}\" ]; then mkdir -p /tmp/ncf-npm-cache && export npm_config_cache=\"/tmp/ncf-npm-cache\"; fi", wrappedMocha);
-        Assert.Contains("npm install --prefix /tmp/ncf-mocha-junit --ignore-scripts --no-audit --no-fund --no-save mocha-junit-reporter", wrappedMocha);
+        Assert.Contains("npm install --prefix /tmp/ncf-mocha-junit --legacy-peer-deps --omit=peer --ignore-scripts --no-audit --no-fund --no-save mocha-junit-reporter", wrappedMocha);
         Assert.DoesNotContain("--cache /tmp/ncf-npm-cache", wrappedMocha);
-        Assert.Contains("NODE_PATH=\"/tmp/ncf-mocha-junit/node_modules", wrappedMocha);
+        Assert.Contains("NODE_PATH=\"$PWD/node_modules:/tmp/ncf-mocha-junit/node_modules", wrappedMocha);
 
         // Python container wrapping installs pinned requirement files before conditional unpinned pytest fallback
         var wrappedPy = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
@@ -1964,7 +1964,7 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("if [ -z \"${npm_config_cache:-}\" ] || [ ! -w \"${npm_config_cache}\" ]; then mkdir -p /tmp/ncf-npm-cache && export npm_config_cache=\"/tmp/ncf-npm-cache\"; fi", wrappedYarn);
         Assert.Contains("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund yarn", wrappedYarn);
         Assert.Contains("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund pnpm", wrappedYarn);
-        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedYarn);
+        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --legacy-peer-deps --omit=peer --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedYarn);
         Assert.DoesNotContain("--cache /tmp/ncf-npm-cache", wrappedYarn);
         Assert.Contains("ncf_node_deps_ready=0 && if [ -d node_modules ]; then", wrappedYarn);
         Assert.DoesNotContain("ncf_node_deps_ready=0;", wrappedYarn);
@@ -2209,6 +2209,242 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.NotNull(capturedUserPrompt);
         Assert.Contains("DecorrelatedJitterBackoffV2 fails on infinity.", capturedUserPrompt, StringComparison.Ordinal);
         Assert.Contains("Checks double.IsNaN instead of double.IsInfinity causing OverflowException.", capturedUserPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Step1162_EvaluateExpectedFindings_AndTaskReview_PreservePreAskCorpusOptionsAndIdentifierBoundedFileStem()
+    {
+        // 1. ncf-cr-csharp-008: Qwen review names RetryHelper + 4/5 independent keywords without literal RetryHelper.cs or DecorrelatedJitterBackoffV2
+        var pollyFindings = new[]
+        {
+            new BenchmarkExpectedFinding(
+                "src/Polly.Core/Retry/RetryHelper.cs",
+                "DecorrelatedJitterBackoffV2",
+                "high",
+                "Checks double.IsNaN instead of double.IsInfinity so +Infinity overflows to long.MinValue where Math.Abs throws OverflowException, and PR omits tests",
+                ["IsInfinity", "IsNaN", "Math.Abs", "OverflowException", "test"])
+        };
+
+        var qwenPollyCorpus = "In RetryHelper, checking double.IsNaN still overflows to long.MinValue where Math.Abs throws OverflowException; missing unit test coverage in RetryHelperTests.cs.";
+        var (pollyScore, pollyMissing) = BenchmarkVerifier.EvaluateExpectedFindings(pollyFindings, qwenPollyCorpus);
+        Assert.Equal(1.0, pollyScore);
+        Assert.Empty(pollyMissing);
+
+        // Reject short or generic stems and substring-only collisions
+        var shortStemFindings = new[]
+        {
+            new BenchmarkExpectedFinding("src/Serilog/Log.cs", "CloseAndFlushAsync", "high", "Swallowed exception", ["catch", "Dispose", "test"]),
+            new BenchmarkExpectedFinding("src/http.py", "send_request", "high", "Timeout handling", ["timeout", "retry", "socket"]),
+            new BenchmarkExpectedFinding("src/index.ts", "createRouter", "high", "Route guard", ["route", "guard", "fallback"])
+        };
+        var substringCollisionCorpus = "The catalog service handles https requests at index 0 with catch, Dispose, test, timeout, retry, socket, route, guard, fallback.";
+        var (collisionScore, collisionMissing) = BenchmarkVerifier.EvaluateExpectedFindings(shortStemFindings, substringCollisionCorpus);
+        Assert.Equal(0.0, collisionScore);
+        Assert.Equal(3, collisionMissing.Count);
+
+        // RetryHelperTests.cs alone must NOT satisfy identifier-bounded stem RetryHelper
+        var testFileOnlyCorpus = "RetryHelperTests.cs is missing IsNaN, Math.Abs, OverflowException, test coverage.";
+        var (testFileScore, _) = BenchmarkVerifier.EvaluateExpectedFindings(pollyFindings, testFileOnlyCorpus);
+        Assert.Equal(0.0, testFileScore);
+
+        // 2. ncf-tr-rust-002: pre-ask visible assistant analysis (Summary) + Question.OptionsJson evaluated by VerifyTaskReviewAsync & BenchmarkLlmJudge
+        var trInstance = new BenchmarkInstance
+        {
+            InstanceId = "ncf-tr-rust-002",
+            Category = BenchmarkProblemCategory.TaskReview,
+            Language = BenchmarkLanguages.Rust,
+            Repo = "tokio-rs/tokio",
+            BaseCommit = "ab53bf",
+            ProblemStatement = "Clarify DelayQueue::remove wakeup semantics",
+            TaskSpecification = "---\nid: 402\nstatus: Open\ndifficulty: standard\n---\n\nSpecify remove wakeup behavior.",
+            ExpectedVerdict = "NeedsClarification",
+            ExpectedFindings =
+            [
+                new BenchmarkExpectedFinding("tokio-util/src/time/delay_queue.rs", Keywords: ["DelayQueue", "waker", "slab", "deadline"])
+            ]
+        };
+
+        var trOutcome = new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.WaitingForHuman,
+            Summary = "Inspected tokio-util/src/time/delay_queue.rs:579 and saw DelayQueue::remove mutates slab entries without waking stored wakers.",
+            PendingQuestions =
+            [
+                new Question
+                {
+                    Prompt = "When should stored wakers be notified?",
+                    Rationale = "Unclear if notification applies only when empty or when earliest deadline shifts.",
+                    OptionsJson = """[{"label":"Empty only","description":"Wake only on empty transition"},{"label":"Deadline shift","description":"Wake whenever earliest deadline moves"}]"""
+                }
+            ]
+        };
+
+        var factory = new Mock<IBenchmarkJudgeClientFactory>();
+        var chatClient = new Mock<IChatClient>();
+        string? capturedJudgePrompt = null;
+        chatClient
+            .Setup(c => c.GetResponseAsync(It.IsAny<IEnumerable<ChatMessage>>(), It.IsAny<ChatOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<ChatMessage>, ChatOptions?, CancellationToken>((msgs, _, _) => capturedJudgePrompt = msgs.Last().Text)
+            .ReturnsAsync(new ChatResponse(new ChatMessage(ChatRole.Assistant, """{"score": 0.91, "rationale": "Grounded question."}""")));
+        factory.Setup(f => f.CreateJudgeClient(It.IsAny<BenchmarkJudgeConfig>())).Returns(chatClient.Object);
+
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            new BenchmarkLlmJudge(factory.Object, NullLogger<BenchmarkLlmJudge>.Instance),
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var trResult = await verifier.VerifyAsync(
+            trInstance,
+            new BenchmarkWorkspaceHandle { InstanceId = "ncf-tr-rust-002", Category = BenchmarkProblemCategory.TaskReview, WorkspacePath = _tempDir, BaseCommit = "ab53bf" },
+            trOutcome,
+            ExecutionMode.BareHost,
+            verifyWithTests: false,
+            judgeConfig: new BenchmarkJudgeConfig { ModelName = "judge" });
+
+        Assert.True(trResult.Passed);
+        Assert.Equal(1.0, trResult.DeterministicScore);
+        Assert.NotNull(capturedJudgePrompt);
+        Assert.Contains("tokio-util/src/time/delay_queue.rs:579", capturedJudgePrompt);
+        Assert.Contains("Empty only", capturedJudgePrompt);
+        Assert.Contains("Wake whenever earliest deadline moves", capturedJudgePrompt);
+
+        // OptionsJson fallback: string array & non-JSON raw text
+        Assert.Equal("Option A, Option B", BenchmarkVerifier.ExtractQuestionOptionsText("""["Option A", "Option B"]"""));
+        Assert.Equal("plain raw fallback", BenchmarkVerifier.ExtractQuestionOptionsText("plain raw fallback"));
+    }
+
+    [Fact]
+    public void Step1162_ResolveAgentTestCommand_StripsVerifierFlagsAndEnvVars_WhileKeepingResolveTestCommandIntact()
+    {
+        var csSubDir = Path.Combine(_tempDir, "cs-strip");
+        Directory.CreateDirectory(Path.Combine(csSubDir, "src"));
+        File.WriteAllText(Path.Combine(csSubDir, "src", "App.sln"), "<Project />");
+
+        var csInstance = new BenchmarkInstance
+        {
+            InstanceId = "cs-strip",
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "owner/app",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+        };
+        Assert.Equal("dotnet test src/App.sln --nologo", BenchmarkTestCommandResolver.ResolveAgentTestCommand(csInstance, csSubDir));
+        Assert.Contains("--logger trx", BenchmarkTestCommandResolver.ResolveTestCommand(csInstance, csSubDir));
+        Assert.Contains("--results-directory /workspace/.ncf-bench-results", BenchmarkTestCommandResolver.ResolveTestCommand(csInstance, csSubDir));
+
+        var csColonInstance = csInstance with
+        {
+            CustomTestCommand = "dotnet test -r linux-x64 --logger:trx --results-directory:/workspace/.ncf-bench-results -l console"
+        };
+        Assert.Equal("dotnet test src/App.sln -r linux-x64", BenchmarkTestCommandResolver.ResolveAgentTestCommand(csColonInstance, csSubDir));
+
+        var jestInstance = new BenchmarkInstance
+        {
+            InstanceId = "jest-strip",
+            Language = BenchmarkLanguages.TypeScript,
+            Repo = "facebook/docusaurus",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+        };
+        Assert.Equal("npx jest --ci --reporters=default", BenchmarkTestCommandResolver.ResolveAgentTestCommand(jestInstance, _tempDir));
+        Assert.Contains("--reporters=jest-junit", BenchmarkTestCommandResolver.ResolveTestCommand(jestInstance, _tempDir));
+
+        var jestTrailingDashInstance = jestInstance with
+        {
+            CustomTestCommand = "JEST_JUNIT_OUTPUT_DIR=/tmp npm test -- --reporters=jest-junit"
+        };
+        Assert.Equal("npm test", BenchmarkTestCommandResolver.ResolveAgentTestCommand(jestTrailingDashInstance, _tempDir));
+
+        var jestRemainingFlagInstance = jestInstance with
+        {
+            CustomTestCommand = "JEST_JUNIT_OUTPUT_DIR=/tmp npm test -- --watchAll=false --reporters=jest-junit"
+        };
+        Assert.Equal("npm test -- --watchAll=false", BenchmarkTestCommandResolver.ResolveAgentTestCommand(jestRemainingFlagInstance, _tempDir));
+
+        var envOnlyTrailingDashInstance = jestInstance with
+        {
+            CustomTestCommand = "MOCHA_FILE=/tmp/junit.xml npm run test:mocha --"
+        };
+        Assert.Equal("npm run test:mocha --", BenchmarkTestCommandResolver.ResolveAgentTestCommand(envOnlyTrailingDashInstance, _tempDir));
+
+        var mochaTrailingDashInstance = new BenchmarkInstance
+        {
+            InstanceId = "mocha-strip-1",
+            Language = BenchmarkLanguages.JavaScript,
+            Repo = "axios/axios",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter"
+        };
+        Assert.Equal("npm run test:mocha", BenchmarkTestCommandResolver.ResolveAgentTestCommand(mochaTrailingDashInstance, _tempDir));
+        Assert.Contains("mocha-junit-reporter", BenchmarkTestCommandResolver.ResolveTestCommand(mochaTrailingDashInstance, _tempDir));
+
+        var mochaRemainingFlagInstance = mochaTrailingDashInstance with
+        {
+            CustomTestCommand = "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --grep foo -R mocha-junit-reporter"
+        };
+        Assert.Equal("npm run test:mocha -- --grep foo", BenchmarkTestCommandResolver.ResolveAgentTestCommand(mochaRemainingFlagInstance, _tempDir));
+
+        var vitestDir = Path.Combine(_tempDir, "vitest-strip");
+        Directory.CreateDirectory(vitestDir);
+        File.WriteAllText(Path.Combine(vitestDir, "vitest.unit.config.ts"), "export default {}");
+        var vitestInstance = new BenchmarkInstance
+        {
+            InstanceId = "vitest-strip",
+            Language = BenchmarkLanguages.TypeScript,
+            Repo = "vuejs/core",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
+        };
+        Assert.Equal("npx vitest run -c vitest.unit.config.ts", BenchmarkTestCommandResolver.ResolveAgentTestCommand(vitestInstance, vitestDir));
+        Assert.Contains("--reporter=junit", BenchmarkTestCommandResolver.ResolveTestCommand(vitestInstance, vitestDir));
+
+        var vitestTrailingDashAndEmptyInstance = vitestInstance with
+        {
+            CustomTestCommand = "npm run test:unit -- --reporter=junit --outputFile="
+        };
+        Assert.Equal("npm run test:unit", BenchmarkTestCommandResolver.ResolveAgentTestCommand(vitestTrailingDashAndEmptyInstance, _tempDir));
+
+        var pytestInstance = new BenchmarkInstance
+        {
+            InstanceId = "pytest-strip",
+            Language = BenchmarkLanguages.Python,
+            Repo = "pallets/flask",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "pytest -q --junitxml=/workspace/.ncf-bench-results/junit.xml --junit-xml /tmp/other.xml --junitxml="
+        };
+        Assert.Equal("pytest -q", BenchmarkTestCommandResolver.ResolveAgentTestCommand(pytestInstance, _tempDir));
+        Assert.Contains("--junitxml=/workspace/.ncf-bench-results/junit.xml", BenchmarkTestCommandResolver.ResolveTestCommand(pytestInstance, _tempDir));
+    }
+
+    [Fact]
+    public void Step1162_WrapWithContainerDependencySetup_Node_IsolatesPeerDepsWiresWorkspaceNodePathAndPrunesStaleRunners()
+    {
+        var wrappedMocha = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter",
+            BenchmarkLanguages.JavaScript,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.Contains("if [ -d /tmp/ncf-mocha-junit/node_modules/mocha ]; then rm -rf /tmp/ncf-mocha-junit; fi;", wrappedMocha);
+        Assert.Contains("npm install --prefix /tmp/ncf-mocha-junit --legacy-peer-deps --omit=peer --ignore-scripts --no-audit --no-fund --no-save mocha-junit-reporter", wrappedMocha);
+        Assert.Contains("rm -rf /tmp/ncf-mocha-junit/node_modules/mocha", wrappedMocha);
+        Assert.Contains("export NODE_PATH=\"$PWD/node_modules:/tmp/ncf-mocha-junit/node_modules${NODE_PATH:+:$NODE_PATH}\"", wrappedMocha);
+
+        var wrappedJest = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results npx jest --ci --reporters=jest-junit",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.Contains("if [ -d /tmp/ncf-jest-junit/node_modules/jest ]; then rm -rf /tmp/ncf-jest-junit; fi;", wrappedJest);
+        Assert.Contains("npm install --prefix /tmp/ncf-jest-junit --legacy-peer-deps --omit=peer --ignore-scripts --no-audit --no-fund --no-save jest-junit", wrappedJest);
+        Assert.Contains("rm -rf /tmp/ncf-jest-junit/node_modules/jest", wrappedJest);
+        Assert.Contains("export NODE_PATH=\"$PWD/node_modules:/tmp/ncf-jest-junit/node_modules${NODE_PATH:+:$NODE_PATH}\"", wrappedJest);
     }
 
     private static string RunGit(string workingDir, params string[] args)

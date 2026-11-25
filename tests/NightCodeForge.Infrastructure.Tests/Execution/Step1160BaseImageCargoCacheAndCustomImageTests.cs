@@ -169,6 +169,8 @@ public sealed class Step1160BaseImageCargoCacheAndCustomImageTests : IDisposable
 
         var sdkMock = new Mock<IHostSdkDiscoveryService>();
         sdkMock.Setup(s => s.DiscoverSdkMountPaths(It.IsAny<string?>())).Returns([]);
+        sdkMock.Setup(s => s.DiscoverSdkDetails(It.IsAny<string?>()))
+            .Returns(new HostSdkDiscoveryDetails([], new Dictionary<string, string>(), new Dictionary<string, string>()));
         var identityMock = new Mock<IHostUserIdentityResolver>();
         identityMock.Setup(i => i.ResolveUserIdentity(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<string>())).Returns("1000:1000");
 

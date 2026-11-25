@@ -39,6 +39,8 @@ public partial class CrucibleAgentHarness : IAgentHarness
     public const string TruncationContinuationPrompt =
         "[System Notice]: Your previous response was interrupted mid-thought before calling a tool. Please resume immediately and proceed with your planned action or tool call.";
 
+    public const string DefaultWaitingForHumanSummary = "Crucible paused awaiting human clarification";
+
     private const string UnresolvedImageRefPropertyKey = "vision.unresolved_image_ref";
 
     private readonly ICanonicalToolsetFactory _toolsetFactory;
@@ -151,6 +153,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         var conversation = conversationState.Conversation;
         var chatHistory = conversationState.ChatHistory;
         StripAttribution(chatHistory);
+        int runStartHistoryCount = chatHistory.Count;
 
         // Announced once the conversation record exists so a live UI can find and follow it.
         var stageMetadata = new Dictionary<string, object?>
@@ -399,6 +402,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 chatHistory.Clear();
                 chatHistory.AddRange(compactedMessages);
                 StripAttribution(chatHistory);
+                runStartHistoryCount = 0;
                 latestSerializedState = SerializeSession(chatHistory);
 
                 await conversationState.DrainAsync();
@@ -554,6 +558,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         async Task<AgentRunResult> CompleteWithInterruptionAsync(HumanInterruptionException interruption)
         {
             stopwatch.Stop();
+            FlushTurnToHistory();
 
             var answeredCallIds = new HashSet<string>(
                 chatHistory.SelectMany(m => m.Contents)
@@ -590,10 +595,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 )).ToList();
 
                 var askArgs = new Dictionary<string, object?> { ["questions"] = questionItems };
-                chatHistory.Add(new ChatMessage(ChatRole.Assistant, new List<AIContent>
+                var askCall = new FunctionCallContent(callId, CanonicalToolNames.Ask, askArgs);
+                var lastMsg = chatHistory.LastOrDefault();
+                if (lastMsg != null && lastMsg.Role == ChatRole.Assistant)
                 {
-                    new FunctionCallContent(callId, CanonicalToolNames.Ask, askArgs)
-                }));
+                    lastMsg.Contents.Add(askCall);
+                }
+                else
+                {
+                    chatHistory.Add(new ChatMessage(ChatRole.Assistant, new List<AIContent> { askCall }));
+                }
             }
 
             // Exactly one Tool turn for ask with callId must be present in DB
@@ -619,6 +630,11 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
             latestSerializedState = SerializeSession(chatHistory);
 
+            var capturedAssistantText = CollectVisibleAssistantText(chatHistory, runStartHistoryCount);
+            var waitingSummary = !string.IsNullOrWhiteSpace(capturedAssistantText)
+                ? capturedAssistantText
+                : DefaultWaitingForHumanSummary;
+
             var summaryPrompt = string.Join("; ", interruption.Questions.Select(q => q.Prompt));
             await BroadcastAsync(sessionId, context.ForgeTask.Id, context.StageId, AgentActivityKind.Interrupted, summaryPrompt, cancellationToken);
             await SaveAsync(AgentRunStatus.WaitingForHuman, summaryPrompt, cancellationToken);
@@ -627,7 +643,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
                 interruption.Questions,
                 CurrentMetrics(),
                 updatedState: latestSerializedState,
-                summary: "Crucible paused awaiting human clarification");
+                summary: waitingSummary);
         }
 
         Task<AgentRunResult>? TryCompleteWithCapturedInterruptionAsync() =>
@@ -1544,6 +1560,37 @@ public partial class CrucibleAgentHarness : IAgentHarness
         await _conversationCoordinator.ReleaseSessionAffinityAsync(conversationState.SessionId, cancellationToken);
 
         return true;
+    }
+
+    internal static string? CollectVisibleAssistantText(IEnumerable<ChatMessage> messages, int startIndex = 0)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+
+        var segments = new List<string>();
+        int index = 0;
+        foreach (var message in messages)
+        {
+            if (index++ < startIndex)
+            {
+                continue;
+            }
+
+            if (message.Role != ChatRole.Assistant ||
+                PiStyleCrucibleCompactionStrategy.IsCompactionCheckpointMessage(message))
+            {
+                continue;
+            }
+
+            foreach (var textContent in message.Contents.OfType<TextContent>())
+            {
+                if (!string.IsNullOrWhiteSpace(textContent.Text))
+                {
+                    segments.Add(textContent.Text.Trim());
+                }
+            }
+        }
+
+        return segments.Count > 0 ? string.Join("\n\n", segments) : null;
     }
 
     internal static int? ResolveCompactionCutTurnIndex(

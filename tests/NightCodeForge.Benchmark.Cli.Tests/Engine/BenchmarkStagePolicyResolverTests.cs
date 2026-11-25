@@ -408,4 +408,68 @@ public sealed class BenchmarkStagePolicyResolverTests
             Directory.Delete(tempRoot, recursive: true);
         }
     }
+
+    [Fact]
+    public void BuildProjectConfig_NodeMonorepo_SelectsPackageOnlyBuildScriptMatchingLockfileAndFallsBackCleanly()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"ncf-node-build-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+        try
+        {
+            var yarnDir = Path.Combine(tempRoot, "docusaurus");
+            var pnpmDir = Path.Combine(tempRoot, "pnpm-mono");
+            var npmDir = Path.Combine(tempRoot, "npm-mono");
+            var malformedDir = Path.Combine(tempRoot, "malformed");
+            var missingDir = Path.Combine(tempRoot, "missing");
+            Directory.CreateDirectory(yarnDir);
+            Directory.CreateDirectory(pnpmDir);
+            Directory.CreateDirectory(npmDir);
+            Directory.CreateDirectory(malformedDir);
+            Directory.CreateDirectory(missingDir);
+
+            File.WriteAllText(Path.Combine(yarnDir, "package.json"), """{"scripts":{"build":"yarn build:packages && yarn build:website","build:packages":"lerna run build:packages"}}""");
+            File.WriteAllText(Path.Combine(yarnDir, "yarn.lock"), "");
+
+            File.WriteAllText(Path.Combine(pnpmDir, "package.json"), """{"scripts":{"build":"turbo build","build:packages":"pnpm -r --filter ./packages/* build"}}""");
+            File.WriteAllText(Path.Combine(pnpmDir, "pnpm-lock.yaml"), "");
+
+            File.WriteAllText(Path.Combine(npmDir, "package.json"), """{"scripts":{"build":"npm run build:packages && npm run build:docs","build:packages":"tsc -b packages"}}""");
+
+            File.WriteAllText(Path.Combine(malformedDir, "package.json"), "{ invalid json");
+
+            var yarnConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
+                new BenchmarkInstance { InstanceId = "docusaurus", Language = BenchmarkLanguages.TypeScript, Repo = "facebook/docusaurus", BaseCommit = "abc", ProblemStatement = "Fix" },
+                yarnDir,
+                ExecutionMode.ContainerSandbox);
+            Assert.Equal("yarn build:packages", yarnConfig.BuildCommand);
+
+            var pnpmConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
+                new BenchmarkInstance { InstanceId = "pnpm-1", Language = BenchmarkLanguages.TypeScript, Repo = "owner/pnpm", BaseCommit = "abc", ProblemStatement = "Fix" },
+                pnpmDir,
+                ExecutionMode.ContainerSandbox);
+            Assert.Equal("pnpm run build:packages", pnpmConfig.BuildCommand);
+
+            var npmConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
+                new BenchmarkInstance { InstanceId = "npm-1", Language = BenchmarkLanguages.JavaScript, Repo = "owner/npm", BaseCommit = "abc", ProblemStatement = "Fix" },
+                npmDir,
+                ExecutionMode.ContainerSandbox);
+            Assert.Equal("npm run build:packages", npmConfig.BuildCommand);
+
+            var malformedConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
+                new BenchmarkInstance { InstanceId = "bad-1", Language = BenchmarkLanguages.TypeScript, Repo = "owner/bad", BaseCommit = "abc", ProblemStatement = "Fix" },
+                malformedDir,
+                ExecutionMode.ContainerSandbox);
+            Assert.Equal(CodeStackPresets.Node.BuildCommand, malformedConfig.BuildCommand);
+
+            var missingConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
+                new BenchmarkInstance { InstanceId = "miss-1", Language = BenchmarkLanguages.TypeScript, Repo = "owner/miss", BaseCommit = "abc", ProblemStatement = "Fix" },
+                missingDir,
+                ExecutionMode.ContainerSandbox);
+            Assert.Equal(CodeStackPresets.Node.BuildCommand, missingConfig.BuildCommand);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
 }

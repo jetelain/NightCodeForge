@@ -34,6 +34,8 @@ public class ContainerEnvironmentFactoryTests
         _pathResolverMock.Setup(p => p.ToHostPath(It.IsAny<string>())).Returns<string>(p => p);
         _pathResolverMock.Setup(p => p.GetWslUserName()).Returns("testuser");
         _sdkDiscoveryMock.Setup(s => s.DiscoverSdkMountPaths(It.IsAny<string?>())).Returns(["/host/dotnet"]);
+        _sdkDiscoveryMock.Setup(s => s.DiscoverSdkDetails(It.IsAny<string?>()))
+            .Returns(new HostSdkDiscoveryDetails(["/host/dotnet"], new Dictionary<string, string>(), new Dictionary<string, string>()));
         _identityResolverMock.Setup(i => i.ResolveUserIdentity(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<string>()))
             .Returns("1000:1000");
     }

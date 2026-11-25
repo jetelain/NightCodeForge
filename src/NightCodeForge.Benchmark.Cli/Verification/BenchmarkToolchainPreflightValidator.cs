@@ -14,6 +14,7 @@ public sealed class BenchmarkToolchainPreflightValidator : IBenchmarkToolchainPr
     private const string CargoCommandName = "cargo";
     private const string RustcCommandName = "rustc";
     private const string CargoProxySegment = "/.cargo/";
+    private const string RustupToolchainsSegment = "/toolchains/";
     private const string RustupSuffixDot = "/.rustup";
     private const string RustupSuffixPlain = "/rustup";
 
@@ -70,20 +71,25 @@ public sealed class BenchmarkToolchainPreflightValidator : IBenchmarkToolchainPr
         if (!cargoMountable || !rustcMountable)
         {
             return $"Pre-flight Rust toolchain check failed for '{instance.InstanceId}': host 'cargo' ('{normalizedCargo}') and/or 'rustc' ('{normalizedRustc}') " +
-                   "reside in an excluded system directory (such as /usr/bin) that is not bind-mounted into containers. " +
-                   "Install rustup on the host/WSL distribution (providing mountable ~/.cargo and ~/.rustup) or configure 'custom_container_image'.";
+                   "reside in an excluded system directory (such as /usr/bin) that is not bind-mounted into containers (or rustup has no active toolchain configured). " +
+                   "Install rustup on the host/WSL distribution and ensure an active toolchain is configured (e.g. 'rustup default stable' providing mountable ~/.rustup/toolchains/... or ~/.cargo and ~/.rustup), or configure 'custom_container_image'.";
         }
 
         bool usesCargoProxy = UsesCargoProxyDirectory(normalizedCargo, details.EnvironmentVariables) ||
                               UsesCargoProxyDirectory(normalizedRustc, details.EnvironmentVariables);
-        if (usesCargoProxy && !HasMountableRustupDirectory(mountablePrefixes))
+        bool usesToolchainPath = IsRustupToolchainPath(normalizedCargo) ||
+                                 IsRustupToolchainPath(normalizedRustc);
+        if ((usesCargoProxy || usesToolchainPath) && !HasMountableRustupDirectory(mountablePrefixes))
         {
-            return $"Pre-flight Rust toolchain check failed for '{instance.InstanceId}': host 'cargo'/'rustc' use ~/.cargo without a mountable rustup toolchain directory (~/.rustup / RUSTUP_HOME). " +
-                   "Install rustup on the host/WSL distribution or configure 'custom_container_image'.";
+            return $"Pre-flight Rust toolchain check failed for '{instance.InstanceId}': host 'cargo'/'rustc' use rustup without a mountable rustup toolchain directory (~/.rustup / RUSTUP_HOME). " +
+                   "Install rustup on the host/WSL distribution (or configure an active toolchain with 'rustup default stable') or configure 'custom_container_image'.";
         }
 
         return null;
     }
+
+    private static bool IsRustupToolchainPath(string normalizedCommandPath) =>
+        normalizedCommandPath.Contains(RustupToolchainsSegment, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsBackedByMountableDirectory(string normalizedCommandPath, IReadOnlyList<string> mountablePrefixes) =>
         mountablePrefixes.Any(prefix =>

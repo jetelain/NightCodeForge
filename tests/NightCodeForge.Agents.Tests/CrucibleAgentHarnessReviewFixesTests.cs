@@ -8,6 +8,7 @@ using NightCodeForge.Agents.Tools;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Repositories;
 using NightCodeForge.Core.Streaming;
+using NightCodeForge.Core.Workflow;
 using NightCodeForge.Infrastructure.Execution;
 
 namespace NightCodeForge.Agents.Tests;
@@ -422,6 +423,142 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         Assert.Equal(StandardStageIds.Implementation, result.TargetRouting);
         Assert.Equal("DecorrelatedJitterBackoffV2 fails on infinity.", result.ReviewerFeedback);
         Assert.Equal("Checks double.IsNaN instead of double.IsInfinity causing OverflowException and missing unit tests.", result.ReviewerRejectionReason);
+    }
+
+    [Fact]
+    public async Task RunStage_AskTool_PreservesVisiblePreAskAssistantTextAndExcludesReasoningTraces()
+    {
+        var repo = new InMemoryTaskRepository();
+        int turn = 0;
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            turn++;
+            if (turn == 1)
+            {
+                return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>(
+                [
+                    new ChatResponseUpdate { Contents = [new TextReasoningContent("hidden chain-of-thought token SECRET_THINK")] },
+                    new ChatResponseUpdate { Contents = [new TextContent("Earlier turn analysis: checked tokio-util/src/time/delay_queue.rs:579.")] },
+                    new ChatResponseUpdate { Contents = [new FunctionCallContent("call_read_1", CanonicalToolNames.Read, new Dictionary<string, object?> { ["path"] = "missing.txt" })] }
+                ]);
+            }
+
+            var askArgs = new Dictionary<string, object?>
+            {
+                ["questions"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["prompt"] = "Should remove wake only on empty or also when earliest deadline shifts?",
+                        ["rationale"] = "DelayQueue::remove currently never wakes stored wakers.",
+                        ["options"] = new[] { "Empty only", "Earliest deadline shifts" }
+                    }
+                }
+            };
+            return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>(
+            [
+                new ChatResponseUpdate { Contents = [new TextReasoningContent("more hidden thinking DO_NOT_EXPOSE")] },
+                new ChatResponseUpdate { Contents = [new TextContent("Pre-ask finding: slab entry removal leaves waker unnotified.")] },
+                new ChatResponseUpdate { Contents = [new FunctionCallContent("call_ask_1", CanonicalToolNames.Ask, askArgs)] }
+            ]);
+        });
+        var harness = CreateHarness(client, repo: repo);
+
+        var profile = new AgentProfile
+        {
+            Id = "architect",
+            Mode = AgentMode.Full,
+            PermittedTools = [CanonicalToolNames.Read, CanonicalToolNames.Ask]
+        };
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 402, Title = "DelayQueue::remove waker policy", Description = "Clarify semantics" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = _tempDir },
+            Profile = profile,
+            StageId = StandardStageIds.TaskReview,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = _tempDir,
+            BootstrapPrompt = string.Empty
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.Equal(AgentRunStatus.WaitingForHuman, result.Status);
+        Assert.NotNull(result.Summary);
+        Assert.Contains("tokio-util/src/time/delay_queue.rs:579", result.Summary);
+        Assert.Contains("Pre-ask finding: slab entry removal leaves waker unnotified.", result.Summary);
+        Assert.DoesNotContain("SECRET_THINK", result.Summary);
+        Assert.DoesNotContain("DO_NOT_EXPOSE", result.Summary);
+        Assert.NotNull(result.PendingQuestions);
+        Assert.Single(result.PendingQuestions);
+
+        Assert.NotNull(result.UpdatedState);
+        var serializedItems = ConversationHistorySerializer.Deserialize(result.UpdatedState!);
+        for (int i = 1; i < serializedItems.Count; i++)
+        {
+            Assert.False(
+                string.Equals(serializedItems[i - 1].Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(serializedItems[i].Role, "assistant", StringComparison.OrdinalIgnoreCase),
+                $"Found consecutive assistant messages at indices {i - 1} and {i}.");
+        }
+
+        var lastAssistant = Assert.Single(serializedItems.TakeLast(1));
+        Assert.Equal("assistant", lastAssistant.Role);
+        Assert.Contains(lastAssistant.Contents ?? [], c =>
+            c.Type == ConversationHistorySerializer.ContentTypeText &&
+            c.Text != null &&
+            c.Text.Contains("Pre-ask finding: slab entry removal leaves waker unnotified.", StringComparison.Ordinal));
+        Assert.Contains(lastAssistant.Contents ?? [], c =>
+            c.Type == ConversationHistorySerializer.ContentTypeCall &&
+            string.Equals(c.Name, CanonicalToolNames.Ask, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RunStage_AskToolWithoutVisibleText_FallsBackToDefaultWaitingSummary()
+    {
+        var repo = new InMemoryTaskRepository();
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            var askArgs = new Dictionary<string, object?>
+            {
+                ["questions"] = new object[]
+                {
+                    new Dictionary<string, object?>
+                    {
+                        ["prompt"] = "Need clarification?",
+                        ["rationale"] = "Missing spec detail."
+                    }
+                }
+            };
+            return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>(
+            [
+                new ChatResponseUpdate { Contents = [new TextReasoningContent("only internal reasoning")] },
+                new ChatResponseUpdate { Contents = [new FunctionCallContent("call_ask_only", CanonicalToolNames.Ask, askArgs)] }
+            ]);
+        });
+        var harness = CreateHarness(client, repo: repo);
+
+        var profile = new AgentProfile
+        {
+            Id = "architect",
+            Mode = AgentMode.Full,
+            PermittedTools = [CanonicalToolNames.Ask]
+        };
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 403, Title = "Clarify", Description = "Spec" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = _tempDir },
+            Profile = profile,
+            StageId = StandardStageIds.TaskReview,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = _tempDir,
+            BootstrapPrompt = string.Empty
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.Equal(AgentRunStatus.WaitingForHuman, result.Status);
+        Assert.Equal(CrucibleAgentHarness.DefaultWaitingForHumanSummary, result.Summary);
     }
 
     // ---------- Helpers ----------

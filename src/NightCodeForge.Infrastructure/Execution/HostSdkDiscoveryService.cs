@@ -43,6 +43,19 @@ for c in dotnet node npm java javac go rustc cargo python3 python uv mvn gradle 
   if [ -z ""$p"" ] && [ -x ""$HOME/.dotnet/tools/$c"" ]; then
     p=""$HOME/.dotnet/tools/$c""
   fi
+  if [ -n ""$p"" ] && { [ ""$c"" = ""cargo"" ] || [ ""$c"" = ""rustc"" ]; }; then
+    p_dir=$(dirname ""$p"" 2>/dev/null)
+    case ""$p_dir"" in
+      /usr/bin|/usr/local/bin|/bin|/sbin|/usr/sbin|/usr/local/sbin|/snap/bin)
+        if command -v rustup >/dev/null 2>&1; then
+          rt_bin=$(rustup which ""$c"" 2>/dev/null)
+          if [ -n ""$rt_bin"" ] && [ -x ""$rt_bin"" ]; then
+            p=""$rt_bin""
+          fi
+        fi
+        ;;
+    esac
+  fi
   if [ -n ""$p"" ]; then
     real=$(readlink -f ""$p"" 2>/dev/null || realpath ""$p"" 2>/dev/null || echo ""$p"")
     echo ""$c=$p=$real""
@@ -394,6 +407,20 @@ done";
                 : null;
         }
 
+        if ((string.Equals(cmdName, "cargo", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(cmdName, "rustc", StringComparison.OrdinalIgnoreCase)) &&
+            dir.EndsWith("/bin", StringComparison.OrdinalIgnoreCase))
+        {
+            var toolchainsIdx = dir.IndexOf("/toolchains/", StringComparison.OrdinalIgnoreCase);
+            if (toolchainsIdx > 0)
+            {
+                var rustupRoot = dir[..toolchainsIdx];
+                return !string.IsNullOrWhiteSpace(rustupRoot) && !IsExcludedDirectory(rustupRoot)
+                    ? rustupRoot
+                    : null;
+            }
+        }
+
         if (dir.EndsWith("/bin", StringComparison.OrdinalIgnoreCase) ||
             dir.EndsWith("/platform-tools", StringComparison.OrdinalIgnoreCase))
         {
@@ -404,6 +431,59 @@ done";
         }
 
         return dir;
+    }
+
+    /// <summary>
+    /// Resolves mountable rustup toolchain <c>bin</c> directories (e.g., <c>$RUSTUP_HOME/toolchains/&lt;active&gt;/bin</c>)
+    /// for <c>cargo</c> and <c>rustc</c> when the discovered binaries reside inside a mountable <c>MountPaths</c> entry.
+    /// </summary>
+    public static IReadOnlyList<string> ResolveMountableRustToolchainBinDirectories(HostSdkDiscoveryDetails? details)
+    {
+        if (details == null || details.CommandPaths.Count == 0 || details.MountPaths.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var mountablePrefixes = details.MountPaths
+            .Where(p => !string.IsNullOrWhiteSpace(p) && !IsExcludedDirectory(p))
+            .Select(NormalizePath)
+            .ToList();
+
+        if (mountablePrefixes.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var binDirs = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var cmdName in new[] { "cargo", "rustc" })
+        {
+            if (!details.CommandPaths.TryGetValue(cmdName, out var cmdPath) || string.IsNullOrWhiteSpace(cmdPath))
+            {
+                continue;
+            }
+
+            var normCmd = NormalizePath(cmdPath);
+            var binDir = GetDirectory(normCmd);
+            if (string.IsNullOrWhiteSpace(binDir) ||
+                !binDir.EndsWith("/bin", StringComparison.OrdinalIgnoreCase) ||
+                !binDir.Contains("/toolchains/", StringComparison.OrdinalIgnoreCase) ||
+                IsExcludedDirectory(binDir))
+            {
+                continue;
+            }
+
+            bool isMountable = mountablePrefixes.Any(prefix =>
+                normCmd.StartsWith(prefix + "/", StringComparison.Ordinal) ||
+                string.Equals(normCmd, prefix, StringComparison.Ordinal));
+            if (isMountable && seen.Add(binDir))
+            {
+                binDirs.Add(binDir);
+            }
+        }
+
+        return binDirs;
     }
 
     private static string? GetDirectory(string path)

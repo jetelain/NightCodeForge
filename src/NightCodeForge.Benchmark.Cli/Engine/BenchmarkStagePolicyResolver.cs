@@ -21,6 +21,12 @@ public sealed record BenchmarkStagePolicy(
 /// </summary>
 public static class BenchmarkStagePolicyResolver
 {
+    private const string PackageJsonFileName = "package.json";
+    private const string ScriptsPropertyName = "scripts";
+    private const string PnpmLockFileName = "pnpm-lock.yaml";
+    private const string YarnLockFileName = "yarn.lock";
+    private static readonly string[] PackageBuildScriptCandidates = ["build:packages", "build-packages"];
+
     public static BenchmarkStagePolicy Resolve(BenchmarkProblemCategory category, bool enableStackSkills)
     {
         var workflow = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
@@ -126,6 +132,11 @@ public static class BenchmarkStagePolicyResolver
 
     private static string ResolveBuildCommand(string stack, CodeStackPreset preset, string workspacePath)
     {
+        if (string.Equals(stack, CodeStack.Node, StringComparison.OrdinalIgnoreCase))
+        {
+            return ResolveNodeBuildCommand(workspacePath);
+        }
+
         if (!string.Equals(stack, CodeStack.DotNet, StringComparison.OrdinalIgnoreCase))
         {
             return preset.BuildCommand;
@@ -135,6 +146,65 @@ public static class BenchmarkStagePolicyResolver
         return targets.Count == 0
             ? CodeStackPresets.DotNet.BuildCommand
             : string.Join(" && ", targets.Select(t => $"dotnet build {BenchmarkTestCommandResolver.QuotePathArgument(t)}"));
+    }
+
+    private static string ResolveNodeBuildCommand(string workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath))
+        {
+            return CodeStackPresets.Node.BuildCommand;
+        }
+
+        var pkgJsonPath = Path.Combine(workspacePath, PackageJsonFileName);
+        if (!File.Exists(pkgJsonPath))
+        {
+            return CodeStackPresets.Node.BuildCommand;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(pkgJsonPath);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                !doc.RootElement.TryGetProperty(ScriptsPropertyName, out var scripts) ||
+                scripts.ValueKind != JsonValueKind.Object)
+            {
+                return CodeStackPresets.Node.BuildCommand;
+            }
+
+            string? packageBuildScript = null;
+            foreach (var candidateName in PackageBuildScriptCandidates)
+            {
+                if (scripts.TryGetProperty(candidateName, out var scriptProp) &&
+                    scriptProp.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrWhiteSpace(scriptProp.GetString()))
+                {
+                    packageBuildScript = candidateName;
+                    break;
+                }
+            }
+
+            if (packageBuildScript == null)
+            {
+                return CodeStackPresets.Node.BuildCommand;
+            }
+
+            if (File.Exists(Path.Combine(workspacePath, PnpmLockFileName)))
+            {
+                return $"pnpm run {packageBuildScript}";
+            }
+
+            if (File.Exists(Path.Combine(workspacePath, YarnLockFileName)))
+            {
+                return $"yarn {packageBuildScript}";
+            }
+
+            return $"npm run {packageBuildScript}";
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return CodeStackPresets.Node.BuildCommand;
+        }
     }
 
     private static string AdaptDirectiveForBenchmark(string directive, BenchmarkProblemCategory category)

@@ -343,7 +343,15 @@ public sealed partial class BenchmarkLlmJudge : IBenchmarkLlmJudge
             sb.AppendLine("\nQuestions Asked via 'ask':");
             foreach (var q in outcome.PendingQuestions)
             {
-                sb.AppendLine($"- {q.Prompt} (Rationale: {q.Rationale})");
+                var optionsText = BenchmarkVerifier.ExtractQuestionOptionsText(q.OptionsJson);
+                if (string.IsNullOrWhiteSpace(optionsText))
+                {
+                    sb.AppendLine($"- {q.Prompt} (Rationale: {q.Rationale})");
+                }
+                else
+                {
+                    sb.AppendLine($"- {q.Prompt} (Rationale: {q.Rationale}; Options: {optionsText})");
+                }
             }
         }
         if (!string.IsNullOrWhiteSpace(outcome.UpdatedTaskMarkdown))

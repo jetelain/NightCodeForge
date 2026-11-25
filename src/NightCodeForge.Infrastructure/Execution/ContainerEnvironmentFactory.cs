@@ -173,7 +173,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         {
             EnsureHostMemoryDirectory(scope.WorkspaceId.Value);
         }
-        var sdkMountPaths = _sdkDiscoveryService.DiscoverSdkMountPaths(useWsl ? targetDistro : null);
+        var sdkDetails = _sdkDiscoveryService.DiscoverSdkDetails(useWsl ? targetDistro : null);
+        var sdkMountPaths = sdkDetails?.MountPaths ?? Array.Empty<string>();
 
         if (scope.MountHostDotnetTools)
         {
@@ -189,6 +190,10 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
 
         var additionalMounts = new List<ContainerVolumeMount>();
         var extraPathDirectories = new List<string>();
+        foreach (var rustBinDir in HostSdkDiscoveryService.ResolveMountableRustToolchainBinDirectories(sdkDetails))
+        {
+            extraPathDirectories.Add(rustBinDir);
+        }
 
         if (scope.ScopeKind != SandboxScopeKind.SystemNightwatch)
         {

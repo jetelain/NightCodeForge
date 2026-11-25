@@ -144,7 +144,7 @@ internal static partial class BenchmarkTestCommandResolver
 
         if (!string.IsNullOrWhiteSpace(instance.CustomTestCommand))
         {
-            var custom = instance.CustomTestCommand.Trim();
+            var custom = StripVerifierReportingFlags(instance.CustomTestCommand.Trim(), normalizedLanguage);
             if (string.Equals(normalizedLanguage, BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase))
             {
                 return ApplyDiscoveredDotNetTargetsToCustomCommand(custom, workspacePath, executionMode);
@@ -526,8 +526,8 @@ internal static partial class BenchmarkTestCommandResolver
             $"if [ -d node_modules ]; then touch {NodeDepsReadyMarker}; fi; " +
             "fi";
 
-        installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "jest-junit", JestJUnitPrefix);
-        installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "mocha-junit-reporter", MochaJUnitPrefix);
+        installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "jest-junit", JestJUnitPrefix, "jest");
+        installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "mocha-junit-reporter", MochaJUnitPrefix, "mocha");
 
         return $"{pathGuard} && {installStep} && {WrapPosixCompoundBody(testCommand)}";
     }
@@ -536,7 +536,8 @@ internal static partial class BenchmarkTestCommandResolver
         string installStep,
         string testCommand,
         string packageName,
-        string prefix)
+        string prefix,
+        string peerRunnerPackage)
     {
         if (!testCommand.Contains(packageName, StringComparison.OrdinalIgnoreCase))
         {
@@ -545,8 +546,9 @@ internal static partial class BenchmarkTestCommandResolver
 
         return installStep +
                $" && if [ -f package.json ] && [ ! -d node_modules/{packageName} ]; then " +
-               $"if [ ! -d {prefix}/node_modules/{packageName} ]; then mkdir -p {prefix} && {BuildWritableNpmCacheGuard()} && (npm install --prefix {prefix} --ignore-scripts --no-audit --no-fund --no-save {packageName} || true); fi; " +
-               $"if [ -d {prefix}/node_modules/{packageName} ]; then export NODE_PATH=\"{prefix}/node_modules${{NODE_PATH:+:$NODE_PATH}}\"; fi; " +
+               $"if [ -d {prefix}/node_modules/{peerRunnerPackage} ]; then rm -rf {prefix}; fi; " +
+               $"if [ ! -d {prefix}/node_modules/{packageName} ]; then mkdir -p {prefix} && {BuildWritableNpmCacheGuard()} && (npm install --prefix {prefix} --legacy-peer-deps --omit=peer --ignore-scripts --no-audit --no-fund --no-save {packageName} || true) && rm -rf {prefix}/node_modules/{peerRunnerPackage}; fi; " +
+               $"if [ -d {prefix}/node_modules/{packageName} ]; then export NODE_PATH=\"$PWD/node_modules:{prefix}/node_modules${{NODE_PATH:+:$NODE_PATH}}\"; fi; " +
                "fi";
     }
 
@@ -775,6 +777,302 @@ internal static partial class BenchmarkTestCommandResolver
         }
 
         return (testCount, totalCount);
+    }
+
+    internal static string StripVerifierReportingFlags(string command, string normalizedLanguage)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return command;
+        }
+
+        var tokens = TokenizeShellCommand(command);
+        if (tokens.Count == 0)
+        {
+            return command;
+        }
+
+        var kept = new List<string>(tokens.Count);
+        bool strippedNodeFlag = false;
+        bool isCSharp = string.Equals(normalizedLanguage, BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase);
+        bool isNode = normalizedLanguage is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript;
+        bool isPython = string.Equals(normalizedLanguage, BenchmarkLanguages.Python, StringComparison.OrdinalIgnoreCase);
+
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (IsShellOperatorToken(token))
+            {
+                if (strippedNodeFlag)
+                {
+                    TrimTrailingDoubleDash(kept);
+                    strippedNodeFlag = false;
+                }
+                kept.Add(token);
+                continue;
+            }
+
+            if (isCSharp)
+            {
+                if (IsFlagWithValue(token, "--logger", out var hasInlineValue, out _) ||
+                    IsFlagWithValue(token, "-l", out hasInlineValue, out _) ||
+                    IsFlagWithValue(token, "--results-directory", out hasInlineValue, out _))
+                {
+                    if (!hasInlineValue && i + 1 < tokens.Count && !IsShellOperatorToken(tokens[i + 1]))
+                    {
+                        i++;
+                    }
+                    continue;
+                }
+            }
+            else if (isNode)
+            {
+                if (IsEnvAssignmentToken(token, "JEST_JUNIT_OUTPUT_DIR") ||
+                    IsEnvAssignmentToken(token, "JEST_JUNIT_OUTPUT_NAME") ||
+                    IsEnvAssignmentToken(token, "MOCHA_FILE"))
+                {
+                    continue;
+                }
+
+                if (IsFlagWithValue(token, "--reporters", out var hasReportersInline, out var reportersInlineVal))
+                {
+                    if (hasReportersInline)
+                    {
+                        if (string.Equals(UnquoteShellToken(reportersInlineVal), "jest-junit", StringComparison.OrdinalIgnoreCase))
+                        {
+                            strippedNodeFlag = true;
+                            continue;
+                        }
+                    }
+                    else if (i + 1 < tokens.Count &&
+                             string.Equals(UnquoteShellToken(tokens[i + 1]), "jest-junit", StringComparison.OrdinalIgnoreCase))
+                    {
+                        strippedNodeFlag = true;
+                        i++;
+                        continue;
+                    }
+                }
+
+                if (IsFlagWithValue(token, "--reporter", out var hasReporterInline, out var reporterInlineVal) ||
+                    IsFlagWithValue(token, "-R", out hasReporterInline, out reporterInlineVal))
+                {
+                    var isLongFlag = token.StartsWith("--reporter", StringComparison.Ordinal);
+                    if (hasReporterInline)
+                    {
+                        var val = UnquoteShellToken(reporterInlineVal);
+                        if (string.Equals(val, "mocha-junit-reporter", StringComparison.OrdinalIgnoreCase) ||
+                            (isLongFlag && string.Equals(val, "junit", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            strippedNodeFlag = true;
+                            continue;
+                        }
+                    }
+                    else if (i + 1 < tokens.Count && !IsShellOperatorToken(tokens[i + 1]))
+                    {
+                        var nextVal = UnquoteShellToken(tokens[i + 1]);
+                        if (string.Equals(nextVal, "mocha-junit-reporter", StringComparison.OrdinalIgnoreCase) ||
+                            (isLongFlag && string.Equals(nextVal, "junit", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            strippedNodeFlag = true;
+                            i++;
+                            continue;
+                        }
+                    }
+                }
+
+                if (IsFlagWithValue(token, "--outputFile", out var hasOutputFileInline, out _, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!hasOutputFileInline && i + 1 < tokens.Count && !IsShellOperatorToken(tokens[i + 1]))
+                    {
+                        i++;
+                    }
+                    strippedNodeFlag = true;
+                    continue;
+                }
+            }
+            else if (isPython)
+            {
+                if (IsFlagWithValue(token, "--junitxml", out var hasJunitXmlInline, out _, StringComparison.OrdinalIgnoreCase) ||
+                    IsFlagWithValue(token, "--junit-xml", out hasJunitXmlInline, out _, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!hasJunitXmlInline && i + 1 < tokens.Count && !IsShellOperatorToken(tokens[i + 1]))
+                    {
+                        i++;
+                    }
+                    continue;
+                }
+            }
+
+            kept.Add(token);
+        }
+
+        if (strippedNodeFlag)
+        {
+            TrimTrailingDoubleDash(kept);
+        }
+
+        return kept.Count > 0 ? string.Join(" ", kept) : command;
+    }
+
+    private static void TrimTrailingDoubleDash(List<string> tokens)
+    {
+        if (tokens.Count > 0 && string.Equals(tokens[^1], "--", StringComparison.Ordinal))
+        {
+            tokens.RemoveAt(tokens.Count - 1);
+        }
+    }
+
+    private static bool IsShellOperatorToken(string token) =>
+        token is "&&" or "||" or ";" or "|";
+
+    private static bool IsEnvAssignmentToken(string token, string variableName) =>
+        token.StartsWith(variableName + "=", StringComparison.Ordinal);
+
+    private static bool IsFlagWithValue(
+        string token,
+        string flag,
+        out bool hasInlineValue,
+        out string inlineValue,
+        StringComparison comparison = StringComparison.Ordinal)
+    {
+        if (string.Equals(token, flag, comparison))
+        {
+            hasInlineValue = false;
+            inlineValue = string.Empty;
+            return true;
+        }
+
+        if (token.Length >= flag.Length + 1 &&
+            token.StartsWith(flag, comparison) &&
+            (token[flag.Length] == '=' || token[flag.Length] == ':'))
+        {
+            hasInlineValue = true;
+            inlineValue = token[(flag.Length + 1)..];
+            return true;
+        }
+
+        hasInlineValue = false;
+        inlineValue = string.Empty;
+        return false;
+    }
+
+    private static string UnquoteShellToken(string token)
+    {
+        var trimmed = token.Trim();
+        if (trimmed.Length >= 2 &&
+            ((trimmed[0] == '"' && trimmed[^1] == '"') ||
+             (trimmed[0] == '\'' && trimmed[^1] == '\'')))
+        {
+            return trimmed[1..^1];
+        }
+        return trimmed;
+    }
+
+    private static List<string> TokenizeShellCommand(string command)
+    {
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        bool inSingleQuote = false;
+        bool inDoubleQuote = false;
+        bool escaped = false;
+
+        void FlushCurrent()
+        {
+            if (current.Length > 0)
+            {
+                tokens.Add(current.ToString());
+                current.Clear();
+            }
+        }
+
+        for (int i = 0; i < command.Length; i++)
+        {
+            char ch = command[i];
+
+            if (escaped)
+            {
+                current.Append(ch);
+                escaped = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                current.Append(ch);
+                if (ch == '\'')
+                {
+                    inSingleQuote = false;
+                }
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                current.Append(ch);
+                escaped = true;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                current.Append(ch);
+                if (ch == '"')
+                {
+                    inDoubleQuote = false;
+                }
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+                current.Append(ch);
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inDoubleQuote = true;
+                current.Append(ch);
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                FlushCurrent();
+                continue;
+            }
+
+            if (ch == ';')
+            {
+                FlushCurrent();
+                tokens.Add(";");
+                continue;
+            }
+
+            if (ch is '&' or '|')
+            {
+                if (i + 1 < command.Length && command[i + 1] == ch)
+                {
+                    FlushCurrent();
+                    tokens.Add(new string(ch, 2));
+                    i++;
+                    continue;
+                }
+
+                if (ch == '|')
+                {
+                    FlushCurrent();
+                    tokens.Add("|");
+                    continue;
+                }
+            }
+
+            current.Append(ch);
+        }
+
+        FlushCurrent();
+        return tokens;
     }
 
     internal static string QuotePathArgument(string value)

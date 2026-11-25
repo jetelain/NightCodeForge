@@ -99,6 +99,8 @@ public class Step1236ASandboxMountAndLifecycleTests
 
         var sdkMock = new Mock<IHostSdkDiscoveryService>();
         sdkMock.Setup(s => s.DiscoverSdkMountPaths(It.IsAny<string?>())).Returns(["/usr/share/dotnet"]);
+        sdkMock.Setup(s => s.DiscoverSdkDetails(It.IsAny<string?>()))
+            .Returns(new HostSdkDiscoveryDetails(["/usr/share/dotnet"], new Dictionary<string, string>(), new Dictionary<string, string>()));
 
         var identityMock = new Mock<IHostUserIdentityResolver>();
         identityMock.Setup(i => i.ResolveUserIdentity(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<string>())).Returns("1000:1000");
@@ -426,6 +428,8 @@ public class Step1236ASandboxMountAndLifecycleTests
 
         var sdkMock = new Mock<IHostSdkDiscoveryService>();
         sdkMock.Setup(s => s.DiscoverSdkMountPaths(It.IsAny<string?>())).Returns(["/usr/share/dotnet"]);
+        sdkMock.Setup(s => s.DiscoverSdkDetails(It.IsAny<string?>()))
+            .Returns(new HostSdkDiscoveryDetails(["/usr/share/dotnet"], new Dictionary<string, string>(), new Dictionary<string, string>()));
 
         var identityMock = new Mock<IHostUserIdentityResolver>();
         identityMock.Setup(i => i.ResolveUserIdentity(It.IsAny<bool>(), It.IsAny<string?>(), It.IsAny<string>())).Returns("1000:1000");
