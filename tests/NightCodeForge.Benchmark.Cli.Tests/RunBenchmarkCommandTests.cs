@@ -319,6 +319,7 @@ public sealed class RunBenchmarkCommandTests : IDisposable
             verifier.Object,
             provenanceProvider.Object,
             envProvider.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var options = new RunCommandOptions

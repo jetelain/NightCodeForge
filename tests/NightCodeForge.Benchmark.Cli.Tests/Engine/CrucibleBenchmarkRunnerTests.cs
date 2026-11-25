@@ -119,6 +119,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             envProvider.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var candidate = new BenchmarkModelCandidate
@@ -240,6 +241,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             envProvider.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -315,6 +317,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         await Assert.ThrowsAsync<BenchmarkException>(() => runner.RunAsync(new BenchmarkRunRequest
@@ -521,6 +524,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -595,6 +599,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var candidate = new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" };
@@ -679,6 +684,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             new Mock<IBenchmarkVerifier>().Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -761,6 +767,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -860,6 +867,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -935,6 +943,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             new Mock<IBenchmarkVerifier>().Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -1017,6 +1026,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             new Mock<IBenchmarkVerifier>().Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -1143,6 +1153,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         await runner.RunAsync(new BenchmarkRunRequest
@@ -1246,6 +1257,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             new Mock<IBenchmarkVerifier>().Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -1335,6 +1347,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             new Mock<IBenchmarkVerifier>().Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -1479,6 +1492,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         var report = await runner.RunAsync(new BenchmarkRunRequest
@@ -1553,6 +1567,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             verifier.Object,
             provenance.Object,
             new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<CrucibleBenchmarkRunner>.Instance);
 
         await runner.RunAsync(new BenchmarkRunRequest
@@ -1578,5 +1593,77 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.DoesNotContain("--junitxml", pyCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(".ncf-bench-results", pyCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("dotnet", pyCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenRustToolchainPreflightFails_FailsFastOnRustWithoutAbortingOtherInstances()
+    {
+        var datasetPath = Path.Combine(_tempDir, "mixed-runner-preflight.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"rust-missing","category":"Implementation","language":"rust","repo":"burntsushi/ripgrep","base_commit":"c1","problem_statement":"Fix rust"}""",
+            """{"instance_id":"cs-ok","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"c2","problem_statement":"Fix cs"}"""
+        ]));
+
+        var wksCs = Path.Combine(_tempDir, "wks-cs-ok");
+        Directory.CreateDirectory(wksCs);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "cs-ok"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cs-ok", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wksCs, BaseCommit = "c2" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wksCs, "c2", It.IsAny<CancellationToken>()))
+            .ReturnsAsync("diff --git a/A.cs b/A.cs\n+fix");
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(10, 10, 5, 15), summary: "Done"));
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "cs-ok"), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.ContainerSandbox, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var preflight = new Mock<IBenchmarkToolchainPreflightValidator>();
+        preflight.Setup(p => p.ValidateAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rust-missing"), BenchmarkProblemCategory.Implementation, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Pre-flight Rust toolchain check failed for 'rust-missing': install rustup.");
+        preflight.Setup(p => p.ValidateAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "cs-ok"), BenchmarkProblemCategory.Implementation, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string?)null);
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            preflight.Object,
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "preflight",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-preflight"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand-1", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            ProviderType = LlmProviderType.Ollama,
+            Endpoint = "http://localhost:11434"
+        });
+
+        Assert.Equal(2, report.Results.Count);
+        var rustResult = Assert.Single(report.Results, r => r.InstanceId == "rust-missing");
+        Assert.Equal(BenchmarkInstanceOutcome.Error, rustResult.Outcome);
+        Assert.Contains("install rustup", rustResult.ErrorMessage);
+
+        var csResult = Assert.Single(report.Results, r => r.InstanceId == "cs-ok");
+        Assert.Equal(BenchmarkInstanceOutcome.Passed, csResult.Outcome);
+
+        workspaceMgr.Verify(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rust-missing"), It.IsAny<BenchmarkProblemCategory>(), null, It.IsAny<CancellationToken>()), Times.Never);
     }
 }

@@ -69,6 +69,12 @@ public sealed partial class CuratedDatasetsValidationTests
 
         var flaskSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pallets__flask-5014");
         Assert.False(string.IsNullOrWhiteSpace(flaskSmoke.CustomContainerImage));
+
+        var crPy1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-py-001");
+        Assert.Equal("python:3.9", crPy1Smoke.CustomContainerImage);
+
+        var crPy2Full = Assert.Single(full.Entries, e => e.InstanceId == "ncf-cr-py-002");
+        Assert.Equal("python:3.11", crPy2Full.CustomContainerImage);
     }
 
     [Fact]
@@ -95,6 +101,7 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(BenchmarkProblemCategory.CodeReview, instance.Category);
             Assert.Equal(manifestEntry.Repo, instance.Repo);
             Assert.Equal(manifestEntry.Language, instance.Language);
+            Assert.Equal(manifestEntry.CustomContainerImage, instance.CustomContainerImage);
             Assert.Equal(manifestEntry.TestResultFormat, instance.ResolveEffectiveTestResultFormat());
             AssertAuthenticCommitSha(instance.BaseCommit, instance.InstanceId);
             AssertNoLeakedMetaInstructions(instance.TaskSpecification, instance.InstanceId);
@@ -150,6 +157,7 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(BenchmarkProblemCategory.TaskReview, instance.Category);
             Assert.Equal(manifestEntry.Repo, instance.Repo);
             Assert.Equal(manifestEntry.Language, instance.Language);
+            Assert.Equal(manifestEntry.CustomContainerImage, instance.CustomContainerImage);
             Assert.Equal(manifestEntry.TestResultFormat, instance.ResolveEffectiveTestResultFormat());
             AssertAuthenticCommitSha(instance.BaseCommit, instance.InstanceId);
             AssertNoLeakedMetaInstructions(instance.TaskSpecification, instance.InstanceId);

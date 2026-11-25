@@ -75,6 +75,7 @@ public class ExecutionEnvironmentTests
         Assert.Contains(mounts, m => m.ContainerPath == "/cache/uv" && !m.IsReadOnly);
         Assert.Contains(mounts, m => m.ContainerPath == "/cache/m2" && !m.IsReadOnly);
         Assert.Contains(mounts, m => m.ContainerPath == "/cache/ms-playwright" && !m.IsReadOnly);
+        Assert.Contains(mounts, m => m.ContainerPath == "/cache/cargo" && !m.IsReadOnly);
     }
 
     [Fact]
@@ -218,10 +219,12 @@ public class ExecutionEnvironmentTests
     [InlineData("ncf-agent-base:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("ncf-agent-base:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("ncf-agent-base:v4", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("ncf-agent-base:v5", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:latest", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v2", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v3", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("nightcodeforge-agent:v4", ContainerExecutorOptions.DefaultAgentBaseImage)]
+    [InlineData("nightcodeforge-agent:v5", ContainerExecutorOptions.DefaultAgentBaseImage)]
     [InlineData("alpine:3.19", "alpine:3.19")]
     public async Task ExecutionEnvironmentProvider_ContainerMode_UpgradesLegacyManagedBaseImages(string configuredImage, string expectedImage)
     {
@@ -523,6 +526,10 @@ public class ExecutionEnvironmentTests
             {
                 return new ProcessExecutionResult(0, user + "\n", string.Empty);
             }
+            if (args.Contains("inspect") && args.Contains(".Config.Env"))
+            {
+                return new ProcessExecutionResult(0, $"{ContainerExecutorOptions.CargoHomeEnvVarName}={ContainerExecutorOptions.ContainerCargoCachePath}\n", string.Empty);
+            }
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
 
@@ -775,6 +782,10 @@ public class ExecutionEnvironmentTests
             if (args.Contains("inspect") && args.Contains(".Config.Image"))
             {
                 return new ProcessExecutionResult(0, "alpine\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".Config.Env"))
+            {
+                return new ProcessExecutionResult(0, $"{ContainerExecutorOptions.CargoHomeEnvVarName}={ContainerExecutorOptions.ContainerCargoCachePath}\n", string.Empty);
             }
             if (args.StartsWith("start") || args.Contains(" start "))
             {

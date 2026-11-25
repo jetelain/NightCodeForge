@@ -161,8 +161,39 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         }
 
         await _stdin.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0");
-        await _stdin.WriteLineAsync("export LANG=en_US.UTF-8");
-        await _stdin.WriteLineAsync("export LC_ALL=en_US.UTF-8");
+        var hasCustomLang = environmentVariables != null && environmentVariables.ContainsKey("LANG");
+        var hasCustomLcAll = environmentVariables != null && environmentVariables.ContainsKey("LC_ALL");
+        if (!hasCustomLang || !hasCustomLcAll)
+        {
+            if (ContainerMountAndDriftBuilder.IsManagedBaseImage(_options.ContainerImage))
+            {
+                if (!hasCustomLang)
+                {
+                    await _stdin.WriteLineAsync($"export LANG={ContainerExecutorOptions.ManagedBaseImageLocale}");
+                }
+
+                if (!hasCustomLcAll)
+                {
+                    await _stdin.WriteLineAsync($"export LC_ALL={ContainerExecutorOptions.ManagedBaseImageLocale}");
+                }
+            }
+            else
+            {
+                var localeAssignments = new List<string>(2);
+                if (!hasCustomLang)
+                {
+                    localeAssignments.Add("LANG=\"$_ncf_locale\"");
+                }
+
+                if (!hasCustomLcAll)
+                {
+                    localeAssignments.Add("LC_ALL=\"$_ncf_locale\"");
+                }
+
+                await _stdin.WriteLineAsync(
+                    $"if locale -a 2>/dev/null | grep -qiE '^en_US\\.utf-?8$'; then _ncf_locale={ContainerExecutorOptions.ManagedBaseImageLocale}; else _ncf_locale={ContainerExecutorOptions.CustomImageFallbackLocale}; fi; export {string.Join(" ", localeAssignments)}; unset _ncf_locale");
+            }
+        }
         await _stdin.WriteLineAsync($"mkdir -p {ContainerExecutorOptions.ContainerHomePath}/.dotnet 2>/dev/null || true");
         await _stdin.WriteLineAsync($"if [ ! -w {ContainerExecutorOptions.ContainerHomePath} ] || [ ! -w {ContainerExecutorOptions.ContainerHomePath}/.dotnet ]; then export HOME=\"{FallbackHomePathExpression}\"; mkdir -p \"$HOME/.dotnet\" 2>/dev/null || true; else export HOME=\"{ContainerExecutorOptions.ContainerHomePath}\"; fi");
         if (!hasCustomPath)
@@ -183,6 +214,17 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         {
             foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
             {
+                if (string.Equals(name, ContainerExecutorOptions.CargoHomeEnvVarName, StringComparison.Ordinal) &&
+                    string.IsNullOrWhiteSpace(_options.CargoCachePath))
+                {
+                    continue;
+                }
+
+                if (environmentVariables != null && environmentVariables.ContainsKey(name))
+                {
+                    continue;
+                }
+
                 await _stdin.WriteLineAsync($"export {name}=\"{value}\"");
             }
         }

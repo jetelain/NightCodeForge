@@ -27,6 +27,7 @@ public static class BenchmarkServiceCollectionExtensions
         services.TryAddSingleton<IBenchmarkWorkspaceManager, BenchmarkWorkspaceManager>();
         services.TryAddSingleton<IBenchmarkJudgeClientFactory, DefaultBenchmarkJudgeClientFactory>();
         services.TryAddSingleton<IBenchmarkLlmJudge, BenchmarkLlmJudge>();
+        services.TryAddSingleton<IBenchmarkToolchainPreflightValidator, BenchmarkToolchainPreflightValidator>();
         services.TryAddScoped<IBenchmarkVerifier, BenchmarkVerifier>();
         services.TryAddSingleton<IBenchmarkProvenanceProvider, BenchmarkProvenanceProvider>();
         services.TryAddScoped<ICrucibleBenchmarkRunner, CrucibleBenchmarkRunner>();

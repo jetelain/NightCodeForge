@@ -78,6 +78,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var progress = new List<string>();
@@ -167,6 +168,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
@@ -218,6 +220,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var crReport = await validator.ValidateAsync(crDataset, null, null, null, verifyWithTests: false, progressCallback: null);
@@ -283,6 +286,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             new Mock<IBenchmarkWorkspaceManager>().Object,
             new Mock<IBenchmarkVerifier>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var ex = await Assert.ThrowsAsync<BenchmarkDatasetException>(() =>
@@ -375,6 +379,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             new Mock<IBenchmarkVerifier>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var failedReport = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: false, progressCallback: null);
@@ -446,6 +451,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var verifyReport = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
@@ -490,6 +496,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             new Mock<IBenchmarkVerifier>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: false, progressCallback: null);
@@ -527,6 +534,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             _loader,
             workspaceManager.Object,
             new Mock<IBenchmarkVerifier>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
             NullLogger<BenchmarkDatasetValidator>.Instance);
 
         var failedReport = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: false, progressCallback: null);
@@ -549,5 +557,52 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
         var command = new DatasetValidateCommand(new Mock<IBenchmarkDatasetValidator>().Object);
         await Assert.ThrowsAsync<BenchmarkDatasetException>(() =>
             command.ExecuteAsync(new DatasetValidateCommandOptions { DatasetPath = "   " }, _ => { }));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_RustPreFlightFailure_FailsWithoutProvisioningWorkspaceAndLeavesOtherStacksPassing()
+    {
+        var datasetPath = Path.Combine(_tempDir, "mixed-preflight.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"rust-1","category":"Implementation","language":"rust","repo":"burntsushi/ripgrep","base_commit":"abc","problem_statement":"Bug","patch":"diff --git a/a.rs b/a.rs\n"}""",
+            """{"instance_id":"cs-1","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc","problem_statement":"Bug","patch":"diff --git a/A.cs b/A.cs\n"}"""
+        ]));
+
+        var csWks = Path.Combine(_tempDir, "wks-cs");
+        Directory.CreateDirectory(csWks);
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "cs-1"), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle
+            {
+                InstanceId = "cs-1",
+                Category = BenchmarkProblemCategory.Implementation,
+                WorkspacePath = csWks,
+                BaseCommit = "abc"
+            });
+
+        var preflight = new Mock<IBenchmarkToolchainPreflightValidator>();
+        preflight
+            .Setup(p => p.ValidateAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rust-1"), BenchmarkProblemCategory.Implementation, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .ReturnsAsync("Pre-flight Rust toolchain check failed for 'rust-1': install rustup.");
+        preflight
+            .Setup(p => p.ValidateAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "cs-1"), BenchmarkProblemCategory.Implementation, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string?)null);
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            new Mock<IBenchmarkVerifier>().Object,
+            preflight.Object,
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: false, progressCallback: null);
+
+        Assert.Equal(2, report.TotalCount);
+        Assert.False(report.Results[0].Passed);
+        Assert.Contains("install rustup", report.Results[0].ErrorMessage);
+        Assert.True(report.Results[1].Passed);
+        workspaceManager.Verify(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rust-1"), It.IsAny<BenchmarkProblemCategory>(), null, It.IsAny<CancellationToken>()), Times.Never);
     }
 }

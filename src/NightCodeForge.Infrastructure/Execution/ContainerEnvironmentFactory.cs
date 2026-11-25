@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Memory;
 using NightCodeForge.Core.Security;
@@ -19,6 +20,7 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
     private const string WslAgyBinaryPath = "~/.local/bin/agy";
     private const string WslGeminiConfigDir = "~/.gemini";
     private const int AcpHostProbeTimeoutSeconds = 5;
+    private const int PackageCacheSetupTimeoutSeconds = 15;
     private const UnixFileMode SharedMemoryDirectoryUnixMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
         UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
         UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
@@ -34,8 +36,10 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
     private readonly ILogger<NightCodeForgeContainerExecutor> _containerLogger;
     private readonly ConcurrentDictionary<(string Stack, bool UseWsl, string Distro), bool> _verifiedCompanionToolStacks = new();
     private readonly ConcurrentDictionary<(bool UseWsl, string Distro), (bool HasAgyBinary, bool HasGeminiDir)> _verifiedAcpHostPaths = new();
+    private readonly ConcurrentDictionary<(bool UseWsl, string Distro), bool> _verifiedPackageCacheTargets = new();
     private readonly SemaphoreSlim _companionToolLock = new(1, 1);
     private readonly SemaphoreSlim _acpProbeLock = new(1, 1);
+    private readonly SemaphoreSlim _packageCacheLock = new(1, 1);
 
     public ContainerEnvironmentFactory(
         IProcessRunner processRunner,
@@ -287,6 +291,8 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             BlockedHosts = scope.BlockedHosts?.ToList() ?? new List<string>(),
             UserUidGid = _userIdentityResolver.ResolveUserIdentity(useWsl, targetDistro, _options.WslExecutable)
         };
+
+        await EnsureHostPackageCacheDirectoriesOnceAsync(options, cancellationToken);
 
         return new NightCodeForgeContainerExecutor(options, _processRunner, _containerLogger, _userIdentityResolver, _telemetryService);
     }
@@ -683,6 +689,180 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
         return rawMemoryDir;
     }
 
+    internal async Task EnsureHostPackageCacheDirectoriesOnceAsync(
+        ContainerExecutorOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        if (!options.MountPackageCaches)
+        {
+            return;
+        }
+
+        var key = (options.UseWsl, (options.WslDistribution ?? string.Empty).ToLowerInvariant());
+        if (_verifiedPackageCacheTargets.ContainsKey(key))
+        {
+            return;
+        }
+
+        await _packageCacheLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_verifiedPackageCacheTargets.ContainsKey(key))
+            {
+                return;
+            }
+
+            var rawCachePaths = new[]
+            {
+                options.NugetPackageCachePath,
+                options.NpmCachePath,
+                options.PnpmCachePath,
+                options.UvCachePath,
+                options.MavenCachePath,
+                options.PlaywrightCachePath,
+                options.CargoCachePath
+            }
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!.Trim())
+            .ToList();
+
+            if (rawCachePaths.Count == 0)
+            {
+                _verifiedPackageCacheTargets[key] = true;
+                return;
+            }
+
+            var allSucceeded = false;
+            if (options.UseWsl)
+            {
+                var shellTargets = new List<string>(rawCachePaths.Count);
+                foreach (var rawPath in rawCachePaths)
+                {
+                    if (rawPath == "~" || rawPath.StartsWith("~/") || rawPath.StartsWith("~\\"))
+                    {
+                        var subPath = rawPath.Length > 1 ? rawPath[1..].TrimStart('/', '\\').Replace('\\', '/') : string.Empty;
+                        if (string.IsNullOrEmpty(subPath))
+                        {
+                            _containerLogger.LogWarning("Skipped pre-creating WSL package cache directory '{RawCachePath}' because it resolves to the home root.", rawPath);
+                            continue;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(options.WslUserName))
+                        {
+                            shellTargets.Add(ShellQuoting.QuotePosix($"/home/{options.WslUserName}/{subPath}"));
+                        }
+                        else
+                        {
+                            shellTargets.Add($"\"$HOME\"/{ShellQuoting.QuotePosix(subPath)}");
+                        }
+                    }
+                    else
+                    {
+                        shellTargets.Add(ShellQuoting.QuotePosix(ContainerMountAndDriftBuilder.ResolveHostPath(rawPath, options)));
+                    }
+                }
+
+                if (shellTargets.Count == 0)
+                {
+                    _verifiedPackageCacheTargets[key] = true;
+                    return;
+                }
+
+                var targetList = string.Join(" ", shellTargets);
+                var wslArgs = new List<string>();
+                if (!string.IsNullOrWhiteSpace(options.WslDistribution))
+                {
+                    wslArgs.AddRange(["-d", options.WslDistribution.Trim()]);
+                }
+                wslArgs.AddRange(["--", "sh", "-c", $"mkdir -p {targetList} && chmod 777 {targetList}"]);
+
+                try
+                {
+                    var result = await _processRunner.RunAsync(new ProcessStartSpec
+                    {
+                        FileName = options.WslExecutable,
+                        ArgumentList = wslArgs,
+                        TimeoutSeconds = PackageCacheSetupTimeoutSeconds
+                    }, cancellationToken);
+
+                    if (result == null)
+                    {
+                        _containerLogger.LogWarning("Failed to pre-create WSL package cache directories: process runner returned null.");
+                    }
+                    else if (result.ExitCode != 0)
+                    {
+                        _containerLogger.LogWarning(
+                            "Failed to pre-create WSL package cache directories (exit code {ExitCode}): {Error}",
+                            result.ExitCode, result.StandardError);
+                    }
+                    else
+                    {
+                        allSucceeded = true;
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _containerLogger.LogWarning(ex, "Failed to pre-create WSL package cache directories");
+                }
+            }
+            else
+            {
+                allSucceeded = true;
+                foreach (var rawPath in rawCachePaths)
+                {
+                    if (rawPath == "~" ||
+                        ((rawPath.StartsWith("~/") || rawPath.StartsWith("~\\")) &&
+                         string.IsNullOrEmpty(rawPath[1..].TrimStart('/', '\\'))))
+                    {
+                        _containerLogger.LogWarning("Skipped pre-creating host package cache directory '{RawCachePath}' because it resolves to the home root.", rawPath);
+                        continue;
+                    }
+
+                    var resolved = ContainerMountAndDriftBuilder.ResolveHostPath(rawPath, options);
+                    if (string.IsNullOrWhiteSpace(resolved) || resolved.StartsWith('~'))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (AgentMemoryReparseGuard.IsReparsePoint(resolved))
+                        {
+                            _containerLogger.LogWarning(
+                                "Skipped creating or updating permissions on host cache directory '{HostCacheDir}' because it is a symbolic link or reparse point.",
+                                resolved);
+                            continue;
+                        }
+
+                        Directory.CreateDirectory(resolved);
+                        if (!OperatingSystem.IsWindows())
+                        {
+                            File.SetUnixFileMode(resolved, SharedMemoryDirectoryUnixMode);
+                        }
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+                    {
+                        allSucceeded = false;
+                        _containerLogger.LogWarning(ex, "Failed to pre-create host package cache directory at {HostCacheDir}", resolved);
+                    }
+                }
+            }
+
+            if (allSucceeded)
+            {
+                _verifiedPackageCacheTargets[key] = true;
+            }
+        }
+        finally
+        {
+            _packageCacheLock.Release();
+        }
+    }
+
     private string? ResolveContainerAttachmentsPath(SandboxScopeDescriptor scope)
     {
         if (scope.ScopeKind == SandboxScopeKind.SystemNightwatch)
@@ -790,12 +970,14 @@ public class ContainerEnvironmentFactory : IContainerEnvironmentFactory
             trimmed.Equals("ncf-agent-base:v2", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("ncf-agent-base:v3", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("ncf-agent-base:v4", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("ncf-agent-base:v5", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent:latest", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent:v1", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent:v2", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("nightcodeforge-agent:v3", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("nightcodeforge-agent:v4", StringComparison.OrdinalIgnoreCase))
+            trimmed.Equals("nightcodeforge-agent:v4", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("nightcodeforge-agent:v5", StringComparison.OrdinalIgnoreCase))
         {
             return ContainerExecutorOptions.DefaultAgentBaseImage;
         }

@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Infrastructure`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `benchmarks/datasets`  
 > **Dependencies:** `NightCodeForgeContainerExecutor`, `ContainerMountAndDriftBuilder`, `ContainerEnvironmentFactory`, `HostSdkDiscoveryService`, `CrucibleBenchmarkRunner`, `BenchmarkVerifier`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
@@ -57,7 +57,7 @@ Analysis of the November 24 `v1-smoke` benchmark runs (`Flint:latest` and `Qwen3
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Bump default base image to `ncf-agent-base:v6` / `nightcodeforge-agent:v6`, install `tzdata` and `tzdata-legacy`, pre-create `/cache/cargo` with `ENV CARGO_HOME=/cache/cargo`, and add `v5` legacy alias resolution, with unit tests verifying Dockerfile content and image alias/drift rules.
-- [ ] Wire persistent writable `/cache/cargo` (`CARGO_HOME=/cache/cargo`, with pre-created non-root-writable host directory, drift detection, and preamble override respect) alongside read-only host `~/.cargo` / `~/.rustup` SDK mounts, and add a fast pre-flight diagnostic for `Implementation`/`CodeReview` Rust instances in `ContainerSandbox` lacking a mountable host `cargo`/`rustc` toolchain (in both `run` and `dataset validate`), with unit tests.
-- [ ] Add compatible `custom_container_image` values (`python:3.9` for `ncf-cr-py-001`, `python:3.11` for `ncf-cr-py-002`) across `v1-code-review.jsonl` and the corresponding manifests, and harden non-managed custom images against unavailable `en_US.UTF-8` locale exports and missing `/ncf-home`/`/cache/*` directories, with unit and dataset parity tests.
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Bump default base image to `ncf-agent-base:v6` / `nightcodeforge-agent:v6`, install `tzdata` and `tzdata-legacy`, pre-create `/cache/cargo` with `ENV CARGO_HOME=/cache/cargo`, and add `v5` legacy alias resolution, with unit tests verifying Dockerfile content and image alias/drift rules.
+- [x] Wire persistent writable `/cache/cargo` (`CARGO_HOME=/cache/cargo`, with pre-created non-root-writable host directory, drift detection, and preamble override respect) alongside read-only host `~/.cargo` / `~/.rustup` SDK mounts, and add a fast pre-flight diagnostic for `Implementation`/`CodeReview` Rust instances in `ContainerSandbox` lacking a mountable host `cargo`/`rustc` toolchain (in both `run` and `dataset validate`), with unit tests.
+- [x] Add compatible `custom_container_image` values (`python:3.9` for `ncf-cr-py-001`, `python:3.11` for `ncf-cr-py-002`) across `v1-code-review.jsonl` and the corresponding manifests, and harden non-managed custom images against unavailable `en_US.UTF-8` locale exports and missing `/ncf-home`/`/cache/*` directories, with unit and dataset parity tests.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

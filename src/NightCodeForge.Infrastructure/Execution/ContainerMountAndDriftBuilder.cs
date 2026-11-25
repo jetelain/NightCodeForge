@@ -273,6 +273,14 @@ public class ContainerMountAndDriftBuilder
             {
                 AddMount(ResolveHostPath(options.PlaywrightCachePath, options), "/cache/ms-playwright", isReadOnly: false);
             }
+
+            if (!string.IsNullOrWhiteSpace(options.CargoCachePath))
+            {
+                AddMount(
+                    ResolveHostPath(options.CargoCachePath, options),
+                    ContainerExecutorOptions.ContainerCargoCachePath,
+                    isReadOnly: options.IsRestrictedReadOnly);
+            }
         }
 
         // 3. Heavy SDK mounts
@@ -544,7 +552,8 @@ public class ContainerMountAndDriftBuilder
         }
 
         var expectedRustupHome = ResolveRustupHomePath(options);
-        if (!string.IsNullOrWhiteSpace(expectedRustupHome))
+        var expectCargoHome = options.MountPackageCaches && !string.IsNullOrWhiteSpace(options.CargoCachePath);
+        if (!string.IsNullOrWhiteSpace(expectedRustupHome) || expectCargoHome)
         {
             var envResult = await runInspect(BuildDockerProcessSpec(
                 options,
@@ -555,10 +564,25 @@ public class ContainerMountAndDriftBuilder
                 return $"Failed to inspect environment of container (exit code {envResult.ExitCode}): {envResult.StandardError}";
             }
 
-            var rustupDrift = EvaluateRustupHomeEnvDrift(envResult.StandardOutput, expectedRustupHome);
-            if (rustupDrift != null)
+            if (!string.IsNullOrWhiteSpace(expectedRustupHome))
             {
-                return rustupDrift;
+                var rustupDrift = EvaluateRequiredEnvVarDrift(envResult.StandardOutput, RustupHomeEnvVarName, expectedRustupHome);
+                if (rustupDrift != null)
+                {
+                    return rustupDrift;
+                }
+            }
+
+            if (expectCargoHome)
+            {
+                var cargoDrift = EvaluateRequiredEnvVarDrift(
+                    envResult.StandardOutput,
+                    ContainerExecutorOptions.CargoHomeEnvVarName,
+                    ContainerExecutorOptions.ContainerCargoCachePath);
+                if (cargoDrift != null)
+                {
+                    return cargoDrift;
+                }
             }
         }
 
@@ -792,9 +816,9 @@ public class ContainerMountAndDriftBuilder
             : null;
     }
 
-    private static string? EvaluateRustupHomeEnvDrift(string envInspectOutput, string expectedRustupHome)
+    private static string? EvaluateRequiredEnvVarDrift(string envInspectOutput, string envVarName, string expectedValue)
     {
-        var expectedEntry = $"{RustupHomeEnvVarName}={expectedRustupHome}";
+        var expectedEntry = $"{envVarName}={expectedValue}";
         var envEntries = (envInspectOutput ?? string.Empty)
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
 
@@ -806,7 +830,7 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
-        return $"Environment mismatch: missing {RustupHomeEnvVarName}='{expectedRustupHome}'";
+        return $"Environment mismatch: missing {envVarName}='{expectedValue}'";
     }
 
     private static List<string> NormalizeBlockedHosts(IEnumerable<string>? blockedHosts)
@@ -1231,14 +1255,22 @@ public class ContainerMountAndDriftBuilder
             args.AddRange(["--name", options.ContainerNameOrId]);
         }
 
+        var isManagedBaseImage = IsManagedBaseImage(options.ContainerImage);
+        var containerHome = isManagedBaseImage
+            ? ContainerExecutorOptions.ContainerHomePath
+            : ContainerExecutorOptions.CustomImageDefaultHomePath;
+        var containerLocale = isManagedBaseImage
+            ? ContainerExecutorOptions.ManagedBaseImageLocale
+            : ContainerExecutorOptions.CustomImageFallbackLocale;
+
         var computedPath = ComputePathEnvironmentVariable(options);
         args.AddRange(["-e", $"PATH={computedPath}"]);
-        args.AddRange(["-e", $"HOME={ContainerExecutorOptions.ContainerHomePath}"]);
+        args.AddRange(["-e", $"HOME={containerHome}"]);
         args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
         args.AddRange(["-e", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"]);
         args.AddRange(["-e", $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}"]);
-        args.AddRange(["-e", "LANG=en_US.UTF-8"]);
-        args.AddRange(["-e", "LC_ALL=en_US.UTF-8"]);
+        args.AddRange(["-e", $"LANG={containerLocale}"]);
+        args.AddRange(["-e", $"LC_ALL={containerLocale}"]);
 
         var dotnetSdkPath = options.SdkMountPaths?
             .FirstOrDefault(p => p.Equals("/usr/lib/dotnet", StringComparison.OrdinalIgnoreCase))
@@ -1260,6 +1292,12 @@ public class ContainerMountAndDriftBuilder
         {
             foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
             {
+                if (string.Equals(name, ContainerExecutorOptions.CargoHomeEnvVarName, StringComparison.Ordinal) &&
+                    string.IsNullOrWhiteSpace(options.CargoCachePath))
+                {
+                    continue;
+                }
+
                 args.AddRange(["-e", $"{name}={value}"]);
             }
         }
@@ -1448,6 +1486,19 @@ public class ContainerMountAndDriftBuilder
         };
     }
 
+    /// <summary>
+    /// Returns <see langword="true"/> when the configured image is a managed NightCodeForge base image (<c>ncf-agent-base*</c> or <c>nightcodeforge-agent*</c>).
+    /// </summary>
+    public static bool IsManagedBaseImage(string? containerImage)
+    {
+        var image = !string.IsNullOrWhiteSpace(containerImage)
+            ? containerImage.Trim()
+            : ContainerExecutorOptions.DefaultAgentBaseImage;
+
+        return image.StartsWith("ncf-agent-base", StringComparison.OrdinalIgnoreCase) ||
+               image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static void EnsureImageReady(
         IProcessRunner processRunner,
         ContainerExecutorOptions options,
@@ -1457,11 +1508,7 @@ public class ContainerMountAndDriftBuilder
             ? options.ContainerImage
             : ContainerExecutorOptions.DefaultAgentBaseImage;
 
-        bool isManagedBaseImage =
-            image.StartsWith("ncf-agent-base", StringComparison.OrdinalIgnoreCase) ||
-            image.StartsWith("nightcodeforge-agent", StringComparison.OrdinalIgnoreCase);
-
-        if (!isManagedBaseImage)
+        if (!IsManagedBaseImage(image))
         {
             return;
         }

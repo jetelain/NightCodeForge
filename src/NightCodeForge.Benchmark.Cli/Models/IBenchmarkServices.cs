@@ -114,6 +114,18 @@ public interface IBenchmarkProvenanceProvider
 }
 
 /// <summary>
+/// Validates host-mounted toolchain availability for sandboxed benchmark runs before provisioning workspaces.
+/// </summary>
+public interface IBenchmarkToolchainPreflightValidator
+{
+    Task<string?> ValidateAsync(
+        BenchmarkInstance instance,
+        BenchmarkProblemCategory category,
+        ExecutionMode executionMode,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Standalone stateless Crucible benchmark runner sweeping model candidates over dataset instances.
 /// </summary>
 public interface ICrucibleBenchmarkRunner

@@ -36,9 +36,15 @@ public class ContainerVolumeMount
 
 public class ContainerExecutorOptions
 {
-    public const string DefaultAgentBaseImage = "ncf-agent-base:v5";
-    public const string AlternateAgentBaseImage = "nightcodeforge-agent:v5";
+    public const string DefaultAgentBaseImage = "ncf-agent-base:v6";
+    public const string AlternateAgentBaseImage = "nightcodeforge-agent:v6";
     public const string ContainerHomePath = "/ncf-home";
+    public const string CustomImageDefaultHomePath = "/tmp";
+    public const string ManagedBaseImageLocale = "en_US.UTF-8";
+    public const string CustomImageFallbackLocale = "C.UTF-8";
+    public const string CargoHomeEnvVarName = "CARGO_HOME";
+    public const string ContainerCargoCachePath = "/cache/cargo";
+    public const string DefaultCargoCachePath = "~/.cache/ncf-cargo";
     public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
     public const string HostAgyContainerDirectory = "/opt/ncf-acp";
     public const string HostAgyContainerBinaryPath = "/opt/ncf-acp/agy";
@@ -67,6 +73,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     locales \
+    tzdata \
+    tzdata-legacy \
     libicu-dev \
     libunwind8 \
     fontconfig \
@@ -75,7 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && locale-gen en_US.UTF-8 fr_FR.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /cache/ms-playwright /ncf-home/.dotnet /ncf-home/.local/bin /ncf-home/.vstest-artifacts /opt/ncf-dotnet-tools \
+RUN mkdir -p /cache/nuget /cache/npm /cache/pnpm /cache/uv /cache/m2 /cache/ms-playwright /cache/cargo /ncf-home/.dotnet /ncf-home/.local/bin /ncf-home/.vstest-artifacts /opt/ncf-dotnet-tools \
     && chmod -R 777 /cache /ncf-home
 
 ENV HOME=/ncf-home
@@ -88,6 +96,7 @@ ENV NUGET_PACKAGES=/cache/nuget
 ENV npm_config_cache=/cache/npm
 ENV UV_CACHE_DIR=/cache/uv
 ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
+ENV CARGO_HOME=/cache/cargo
 """;
 
     public const string DefaultSharedMemorySize = "2g";
@@ -186,6 +195,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
         new("UV_CACHE_DIR", "/cache/uv"),
         new("MAVEN_OPTS", "-Dmaven.repo.local=/cache/m2"),
         new("PLAYWRIGHT_BROWSERS_PATH", "/cache/ms-playwright"),
+        new(CargoHomeEnvVarName, ContainerCargoCachePath),
     ];
 
     public string? NugetPackageCachePath { get; set; } = "~/.nuget/packages";
@@ -194,6 +204,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/cache/ms-playwright
     public string? UvCachePath { get; set; } = "~/.cache/uv";
     public string? MavenCachePath { get; set; } = "~/.m2/repository";
     public string? PlaywrightCachePath { get; set; } = "~/.cache/ms-playwright";
+    public string? CargoCachePath { get; set; } = DefaultCargoCachePath;
 
     public bool MountHostSdks { get; set; } = true;
     public bool MountHostDotnetTools { get; set; } = true;

@@ -310,7 +310,10 @@ public class ContainerEnvironmentFactoryTests
     {
         var probeCallCount = 0;
         _processRunnerMock
-            .Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s =>
+                    s.ArgumentList != null &&
+                    s.ArgumentList.Any(a => a.Contains("test -f ~/.local/bin/agy") || a.Contains("test -d ~/.gemini"))),
+                It.IsAny<CancellationToken>()))
             .Callback<ProcessStartSpec, CancellationToken>((_, _) => Interlocked.Increment(ref probeCallCount))
             .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
 

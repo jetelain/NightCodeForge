@@ -185,6 +185,7 @@
       "category": "CodeReview",
       "language": "python",
       "repo": "psf/requests",
+      "custom_container_image": "python:3.9",
       "test_result_format": "JUnitXml"
     },
     {

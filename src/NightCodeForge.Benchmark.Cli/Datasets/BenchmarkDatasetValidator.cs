@@ -16,17 +16,20 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
     private readonly IBenchmarkDatasetLoader _datasetLoader;
     private readonly IBenchmarkWorkspaceManager _workspaceManager;
     private readonly IBenchmarkVerifier _verifier;
+    private readonly IBenchmarkToolchainPreflightValidator _toolchainPreflightValidator;
     private readonly ILogger<BenchmarkDatasetValidator> _logger;
 
     public BenchmarkDatasetValidator(
         IBenchmarkDatasetLoader datasetLoader,
         IBenchmarkWorkspaceManager workspaceManager,
         IBenchmarkVerifier verifier,
+        IBenchmarkToolchainPreflightValidator toolchainPreflightValidator,
         ILogger<BenchmarkDatasetValidator> logger)
     {
         _datasetLoader = datasetLoader ?? throw new ArgumentNullException(nameof(datasetLoader));
         _workspaceManager = workspaceManager ?? throw new ArgumentNullException(nameof(workspaceManager));
         _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
+        _toolchainPreflightValidator = toolchainPreflightValidator ?? throw new ArgumentNullException(nameof(toolchainPreflightValidator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -121,6 +124,23 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
 
         try
         {
+            var preflightError = await _toolchainPreflightValidator
+                .ValidateAsync(instance, category, ExecutionMode.ContainerSandbox, cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(preflightError))
+            {
+                sw.Stop();
+                return new BenchmarkInstanceValidationResult
+                {
+                    InstanceId = instance.InstanceId,
+                    Category = category,
+                    Language = instance.Language,
+                    Passed = false,
+                    ErrorMessage = preflightError,
+                    DurationMs = sw.ElapsedMilliseconds
+                };
+            }
+
             handle = await _workspaceManager.ProvisionAsync(instance, category, cancellationToken: cancellationToken).ConfigureAwait(false);
 
             var (passed, summary, error) = category switch

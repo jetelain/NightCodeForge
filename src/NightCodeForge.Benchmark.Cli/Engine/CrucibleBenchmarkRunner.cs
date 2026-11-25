@@ -49,6 +49,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
     private readonly IBenchmarkVerifier _verifier;
     private readonly IBenchmarkProvenanceProvider _provenanceProvider;
     private readonly IExecutionEnvironmentProvider _envProvider;
+    private readonly IBenchmarkToolchainPreflightValidator _toolchainPreflightValidator;
     private readonly ILogger<CrucibleBenchmarkRunner> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _predictionFileLocks = new(StringComparer.OrdinalIgnoreCase);
 
@@ -59,6 +60,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         IBenchmarkVerifier verifier,
         IBenchmarkProvenanceProvider provenanceProvider,
         IExecutionEnvironmentProvider envProvider,
+        IBenchmarkToolchainPreflightValidator toolchainPreflightValidator,
         ILogger<CrucibleBenchmarkRunner> logger)
     {
         _datasetLoader = datasetLoader ?? throw new ArgumentNullException(nameof(datasetLoader));
@@ -67,6 +69,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         _verifier = verifier ?? throw new ArgumentNullException(nameof(verifier));
         _provenanceProvider = provenanceProvider ?? throw new ArgumentNullException(nameof(provenanceProvider));
         _envProvider = envProvider ?? throw new ArgumentNullException(nameof(envProvider));
+        _toolchainPreflightValidator = toolchainPreflightValidator ?? throw new ArgumentNullException(nameof(toolchainPreflightValidator));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -333,6 +336,28 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
         try
         {
+            var preflightError = await _toolchainPreflightValidator
+                .ValidateAsync(instance, category, request.ExecutionMode, cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(preflightError))
+            {
+                stopwatch.Stop();
+                var preflightResult = BuildAbnormalResult(
+                    instance,
+                    candidate,
+                    category,
+                    BenchmarkInstanceOutcome.Error,
+                    stopwatch.ElapsedMilliseconds,
+                    0,
+                    capture,
+                    new AgentRunMetrics(),
+                    new ToolCallTelemetryBreakdown(),
+                    preflightError,
+                    modelPatch: null);
+                request.ProgressCallback?.Invoke($"[ERROR] {candidate.CandidateId} | {instance.InstanceId}: {preflightResult.ErrorMessage}");
+                return preflightResult;
+            }
+
             workspace = await _workspaceManager.ProvisionAsync(instance, category, cancellationToken: cancellationToken).ConfigureAwait(false);
             workspace = workspace with { ContainerName = containerName };
 
