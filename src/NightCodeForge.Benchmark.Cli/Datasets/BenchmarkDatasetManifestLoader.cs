@@ -138,6 +138,9 @@ public static class BenchmarkDatasetManifestLoader
                 var repo = BenchmarkDatasetLoader.GetOptionalString(item, BenchmarkDatasetConstants.FieldRepo, manifestPath, instanceId)?.Trim();
                 var customImage = BenchmarkDatasetLoader.GetOptionalString(item, BenchmarkDatasetConstants.FieldCustomContainerImage, manifestPath, instanceId)?.Trim();
                 var customTestCmd = BenchmarkDatasetLoader.GetOptionalString(item, BenchmarkDatasetConstants.FieldCustomTestCommand, manifestPath, instanceId)?.Trim();
+                var pipConstraints = BenchmarkDatasetLoader.ParseOptionalStringArrayOrJsonString(item, BenchmarkDatasetConstants.FieldPipConstraints, manifestPath, instanceId);
+                var failToPass = BenchmarkDatasetLoader.ParseOptionalStringArrayOrJsonString(item, BenchmarkDatasetConstants.FieldFailToPass, manifestPath, instanceId);
+                var passToPass = BenchmarkDatasetLoader.ParseOptionalStringArrayOrJsonString(item, BenchmarkDatasetConstants.FieldPassToPass, manifestPath, instanceId);
                 var notes = BenchmarkDatasetLoader.GetOptionalString(item, BenchmarkDatasetConstants.ManifestNotes, manifestPath, instanceId)?.Trim();
 
                 entries.Add(new BenchmarkManifestEntry
@@ -150,6 +153,9 @@ public static class BenchmarkDatasetManifestLoader
                     CustomContainerImage = string.IsNullOrWhiteSpace(customImage) ? null : customImage,
                     CustomTestCommand = string.IsNullOrWhiteSpace(customTestCmd) ? null : customTestCmd,
                     TestResultFormat = testResultFormat,
+                    PipConstraints = pipConstraints,
+                    FailToPass = failToPass,
+                    PassToPass = passToPass,
                     Notes = string.IsNullOrWhiteSpace(notes) ? null : notes
                 });
                 index++;

@@ -331,4 +331,74 @@ public sealed class TestResultParsersTests
         Assert.False(normalizedEval.AllPassed);
         Assert.Equal(["SuiteA::test_foo"], normalizedEval.FailedTests);
     }
+
+    [Fact]
+    public void Step1163_TestAssertionEvaluator_MatchesUpstreamTruncatedPytestParameterizedIdsSafely()
+    {
+        var outcomes = new[]
+        {
+            new ParsedTestOutcome("testing.test_mark.test_pytest_param_id_allows_none_or_string[hello world]", Passed: true),
+            new ParsedTestOutcome("testing.test_mark.test_mark_option[not xyz-expected_passed3]", Passed: true),
+            new ParsedTestOutcome("tests.config.test_config.test_csv_regex_comma_in_quantifier[foo,bar]", Passed: true),
+            new ParsedTestOutcome("testing.test_mark.test_mark_option_custom[not failed]", Passed: false)
+        };
+
+        var eval = TestAssertionEvaluator.Evaluate(
+            ["testing/test_mark.py::test_mark_option[not"],
+            [
+                "testing/test_mark.py::test_pytest_param_id_allows_none_or_string[hello",
+                "tests/config/test_config.py::test_csv_regex_comma_in_quantifier[foo,"
+            ],
+            outcomes);
+
+        Assert.True(eval.AllPassed);
+        Assert.Equal(1, eval.FailToPassPassed);
+        Assert.Equal(2, eval.PassToPassPassed);
+
+        // Failing outcome under matching prefix must still fail evaluation
+        var failEval = TestAssertionEvaluator.Evaluate(
+            ["testing/test_mark.py::test_mark_option_custom[not"],
+            [],
+            outcomes);
+        Assert.False(failEval.AllPassed);
+
+        // Different method name must NOT match an unrelated passing test
+        var mismatchEval = TestAssertionEvaluator.Evaluate(
+            ["testing/test_mark.py::test_mark_other[not"],
+            [],
+            outcomes);
+        Assert.False(mismatchEval.AllPassed);
+
+        // Closing bracket before an unbalanced opening bracket must still be detected as unbalanced
+        var outcomesWithClosing = new[]
+        {
+            new ParsedTestOutcome("testing.test_mark.test_bracket[a]b[c d]", Passed: true)
+        };
+        var closingBeforeOpenEval = TestAssertionEvaluator.Evaluate(
+            ["testing/test_mark.py::test_bracket[a]b[c"],
+            [],
+            outcomesWithClosing);
+        Assert.True(closingBeforeOpenEval.AllPassed);
+
+        // Truncated alphanumeric prefix must match delimiter-separated full parameter IDs without colliding with longer alphanumeric tokens
+        var delimiterOutcomes = new[]
+        {
+            new ParsedTestOutcome("testing.test_mark.test_keyword_option_custom[1 or 2]", Passed: true)
+        };
+        var delimiterMatchEval = TestAssertionEvaluator.Evaluate(
+            ["testing/test_mark.py::test_keyword_option_custom[1"],
+            [],
+            delimiterOutcomes);
+        Assert.True(delimiterMatchEval.AllPassed);
+
+        var numericBoundaryOutcomes = new[]
+        {
+            new ParsedTestOutcome("testing.test_mark.test_keyword_option_custom[10]", Passed: true)
+        };
+        var numericBoundaryEval = TestAssertionEvaluator.Evaluate(
+            ["testing/test_mark.py::test_keyword_option_custom[1"],
+            [],
+            numericBoundaryOutcomes);
+        Assert.False(numericBoundaryEval.AllPassed);
+    }
 }

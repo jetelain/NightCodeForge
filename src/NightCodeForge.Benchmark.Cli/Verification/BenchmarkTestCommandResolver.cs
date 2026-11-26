@@ -11,8 +11,13 @@ namespace NightCodeForge.Benchmark.Cli.Verification;
 internal static partial class BenchmarkTestCommandResolver
 {
     private const string PythonVenvDir = "/tmp/ncf-bench-venv";
+    internal const string PythonPipConstraintsPath = "/tmp/ncf-pip-constraints.txt";
+    private const string PythonPipConstraintsMarker = "/tmp/ncf-bench-venv/.ncf-pip-constraints";
+    private const string SystemCaBundlePath = "/etc/ssl/certs/ca-certificates.crt";
+    private const string DefaultSetuptoolsScmPretendVersion = "9.9.9";
     internal const string NpmGlobalPrefix = "/tmp/ncf-npm-global";
     internal const string NpmCacheDir = "/tmp/ncf-npm-cache";
+    internal const string PnpmStoreDir = "/tmp/ncf-pnpm-store";
     private const string NodeDepsReadyMarker = "node_modules/.ncf-bench-deps-ok";
     private const string JestJUnitPrefix = "/tmp/ncf-jest-junit";
     private const string MochaJUnitPrefix = "/tmp/ncf-mocha-junit";
@@ -96,6 +101,12 @@ internal static partial class BenchmarkTestCommandResolver
     [GeneratedRegex(@"(?:^|\s)--(?:\s|$)", RegexOptions.CultureInvariant)]
     private static partial Regex DoubleDashSeparatorRegex();
 
+    [GeneratedRegex(@"(?:^|[\s;&|()])yarn(?:\s|$|[;&|)])", RegexOptions.CultureInvariant)]
+    private static partial Regex YarnCommandTokenRegex();
+
+    [GeneratedRegex(@"(?:^|[\s;&|()])pnpm(?:\s|$|[;&|)])", RegexOptions.CultureInvariant)]
+    private static partial Regex PnpmCommandTokenRegex();
+
     internal static string ResolveTestCommand(
         BenchmarkInstance instance,
         string workspacePath,
@@ -173,7 +184,14 @@ internal static partial class BenchmarkTestCommandResolver
     internal static string WrapWithContainerDependencySetup(
         string testCommand,
         string language,
-        ExecutionMode executionMode)
+        ExecutionMode executionMode) =>
+        WrapWithContainerDependencySetup(testCommand, language, executionMode, pipConstraints: null);
+
+    internal static string WrapWithContainerDependencySetup(
+        string testCommand,
+        string language,
+        ExecutionMode executionMode,
+        IReadOnlyList<string>? pipConstraints)
     {
         if (executionMode != ExecutionMode.ContainerSandbox || string.IsNullOrWhiteSpace(testCommand))
         {
@@ -183,7 +201,7 @@ internal static partial class BenchmarkTestCommandResolver
         var normalizedLanguage = BenchmarkLanguages.Normalize(language);
         return normalizedLanguage switch
         {
-            BenchmarkLanguages.Python => WrapPythonContainerCommand(testCommand),
+            BenchmarkLanguages.Python => WrapPythonContainerCommand(testCommand, pipConstraints),
             BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript => WrapNodeContainerCommand(testCommand),
             _ => testCommand
         };
@@ -482,19 +500,64 @@ internal static partial class BenchmarkTestCommandResolver
             : $"MOCHA_FILE={resultsDir}/{BenchmarkPaths.JUnitFileName} {rewritten}";
     }
 
-    private static string WrapPythonContainerCommand(string testCommand) =>
-        "if ! command -v pytest >/dev/null 2>&1; then " +
-        $"if [ ! -d {PythonVenvDir}/bin ]; then python3 -m venv {PythonVenvDir}; fi && " +
-        "(for req in requirements/tests.txt requirements/test.txt requirements-test.txt test-requirements.txt requirements/dev.txt requirements-dev.txt requirements.txt; do " +
-        $"[ -f \"$req\" ] && {PythonVenvDir}/bin/pip install -q -r \"$req\" || true; done) && " +
-        "(if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ]; then " +
-        $"{PythonVenvDir}/bin/pip install -q -e . || {PythonVenvDir}/bin/pip install -q --no-build-isolation -e . || true; fi) && " +
-        $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then {PythonVenvDir}/bin/pip install -q pytest; fi && " +
-        $"export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
-        $"fi && {WrapPosixCompoundBody(testCommand)}";
+    private static string WrapPythonContainerCommand(string testCommand, IReadOnlyList<string>? pipConstraints)
+    {
+        var caBundleExport =
+            $"if [ -z \"${{REQUESTS_CA_BUNDLE:-}}\" ] && [ -f {SystemCaBundlePath} ]; then export REQUESTS_CA_BUNDLE={SystemCaBundlePath}; fi";
+        var scmVersionGuard =
+            $"if [ -z \"${{SETUPTOOLS_SCM_PRETEND_VERSION:-}}\" ] && grep -qE \"setuptools[-_]scm\" pyproject.toml setup.cfg setup.py 2>/dev/null && ! git describe --tags --abbrev=0 >/dev/null 2>&1; then export SETUPTOOLS_SCM_PRETEND_VERSION={DefaultSetuptoolsScmPretendVersion}; fi";
+
+        var sanitizedConstraints = pipConstraints?
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Select(c => c.Trim())
+            .ToList() ?? [];
+
+        string constraintSetup = string.Empty;
+        string staleVenvGuard;
+        string constraintArg = string.Empty;
+        string constraintMarkerUpdate = string.Empty;
+
+        if (sanitizedConstraints.Count > 0)
+        {
+            var quotedLines = string.Join(" ", sanitizedConstraints.Select(QuoteSinglePosix));
+            constraintSetup =
+                $"printf '%s\\n' {quotedLines} > {PythonPipConstraintsPath} && export PIP_CONSTRAINT={PythonPipConstraintsPath} && ";
+            staleVenvGuard =
+                $"if [ -d {PythonVenvDir} ] && ! cmp -s {PythonPipConstraintsPath} {PythonPipConstraintsMarker} 2>/dev/null; then rm -rf {PythonVenvDir}; fi && ";
+            constraintArg = $"-c {PythonPipConstraintsPath} ";
+            constraintMarkerUpdate = $"cp {PythonPipConstraintsPath} {PythonPipConstraintsMarker} && ";
+        }
+        else
+        {
+            staleVenvGuard =
+                $"if [ -f {PythonPipConstraintsMarker} ]; then rm -rf {PythonVenvDir} {PythonPipConstraintsPath}; fi && ";
+        }
+
+        return $"{caBundleExport} && {scmVersionGuard} && {constraintSetup}" +
+               "if ! command -v pytest >/dev/null 2>&1; then " +
+               $"{staleVenvGuard}" +
+               $"if [ ! -d {PythonVenvDir}/bin ]; then python3 -m venv {PythonVenvDir}; fi && " +
+               "(for req in requirements/tests.txt requirements/test.txt requirements-test.txt test-requirements.txt requirements/dev.txt requirements-dev.txt requirements.txt; do " +
+               $"[ -f \"$req\" ] && {PythonVenvDir}/bin/pip install -q {constraintArg}-r \"$req\" || true; done) && " +
+               "(if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ]; then " +
+               $"{PythonVenvDir}/bin/pip install -q {constraintArg}-e . || {PythonVenvDir}/bin/pip install -q {constraintArg}--no-build-isolation -e . || true; fi) && " +
+               $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then {PythonVenvDir}/bin/pip install -q {constraintArg}pytest; fi && " +
+               $"{constraintMarkerUpdate}" +
+               $"export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
+               $"fi && {WrapPosixCompoundBody(testCommand)}";
+    }
+
+    private static string QuoteSinglePosix(string value) =>
+        "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
 
     private static string BuildWritableNpmCacheGuard() =>
         $"if [ -z \"${{npm_config_cache:-}}\" ] || [ ! -w \"${{npm_config_cache}}\" ]; then mkdir -p {NpmCacheDir} && export npm_config_cache=\"{NpmCacheDir}\"; fi";
+
+    private static string BuildWritablePnpmStoreGuard() =>
+        $"if [ -z \"${{npm_config_store_dir:-}}\" ] || [ ! -w \"${{npm_config_store_dir}}\" ]; then mkdir -p {PnpmStoreDir} && export npm_config_store_dir=\"{PnpmStoreDir}\"; fi";
+
+    private static string BuildEnsureNodePackageManagerGuard(string packageManager) =>
+        $"if ! command -v {packageManager} >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/{packageManager} ]; then mkdir -p {NpmGlobalPrefix} && npm install -g --prefix {NpmGlobalPrefix} --ignore-scripts --no-audit --no-fund {packageManager}; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi";
 
     private static string WrapNodeContainerCommand(string testCommand)
     {
@@ -509,22 +572,33 @@ internal static partial class BenchmarkTestCommandResolver
             "{ [ ! -f pnpm-lock.yaml ] && [ ! -f yarn.lock ] && [ -f node_modules/.package-lock.json ]; }; }; }; then " +
             "ncf_node_deps_ready=1; fi; fi";
 
-        var cacheSetup = $"mkdir -p {NpmGlobalPrefix} && {BuildWritableNpmCacheGuard()}";
+        var cacheSetup = $"mkdir -p {NpmGlobalPrefix}";
 
         var installStep =
+            $"{BuildWritableNpmCacheGuard()} && {BuildWritablePnpmStoreGuard()} && " +
             $"{depsReadyCheck} && " +
             "if [ -f package.json ] && [ \"$ncf_node_deps_ready\" -eq 0 ]; then " +
             $"{cacheSetup} && " +
             "if [ -f pnpm-lock.yaml ]; then " +
-            $"if ! command -v pnpm >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/pnpm ]; then npm install -g --prefix {NpmGlobalPrefix} --ignore-scripts --no-audit --no-fund pnpm; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi && " +
+            $"{BuildEnsureNodePackageManagerGuard("pnpm")} && " +
             "(pnpm install --frozen-lockfile || pnpm install --frozen-lockfile --ignore-scripts || pnpm install --ignore-scripts); " +
             "elif [ -f yarn.lock ]; then " +
-            $"if ! command -v yarn >/dev/null 2>&1; then if [ ! -x {NpmGlobalPrefix}/bin/yarn ]; then npm install -g --prefix {NpmGlobalPrefix} --ignore-scripts --no-audit --no-fund yarn; fi && export PATH=\"{NpmGlobalPrefix}/bin:$PATH\"; fi && " +
+            $"{BuildEnsureNodePackageManagerGuard("yarn")} && " +
             "(yarn install --frozen-lockfile || yarn install --frozen-lockfile --ignore-scripts || yarn install --ignore-scripts); " +
             "elif [ -f package-lock.json ]; then (npm ci || npm ci --ignore-scripts || npm install --ignore-scripts); " +
             "else (npm install || npm install --ignore-scripts); fi && " +
             $"if [ -d node_modules ]; then touch {NodeDepsReadyMarker}; fi; " +
             "fi";
+
+        if (YarnCommandTokenRegex().IsMatch(testCommand))
+        {
+            installStep += $" && {BuildEnsureNodePackageManagerGuard("yarn")}";
+        }
+
+        if (PnpmCommandTokenRegex().IsMatch(testCommand))
+        {
+            installStep += $" && {BuildEnsureNodePackageManagerGuard("pnpm")}";
+        }
 
         installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "jest-junit", JestJUnitPrefix, "jest");
         installStep = AppendIsolatedNodeReporterSetup(installStep, testCommand, "mocha-junit-reporter", MochaJUnitPrefix, "mocha");

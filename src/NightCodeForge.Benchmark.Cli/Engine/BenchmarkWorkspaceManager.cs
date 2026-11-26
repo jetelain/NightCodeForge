@@ -359,7 +359,7 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
         try
         {
             await _gitCliRunner.ExecuteAsync(workspacePath, ["reset", "--hard", baseCommitOrRef], cancellationToken: cancellationToken).ConfigureAwait(false);
-            await _gitCliRunner.ExecuteAsync(workspacePath, ["clean", "-fd"], cancellationToken: cancellationToken).ConfigureAwait(false);
+            await _gitCliRunner.ExecuteAsync(workspacePath, ["clean", "-fdx", "-e", "node_modules", "-e", ".venv"], cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1012,20 +1012,143 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
 
         try
         {
-            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            var pending = new Stack<string>();
+            var dirsToDelete = new Stack<string>();
+            pending.Push(path);
+
+            while (pending.Count > 0)
             {
-                var attrs = File.GetAttributes(file);
-                if ((attrs & FileAttributes.ReadOnly) != 0)
+                var currentDir = pending.Pop();
+                FileAttributes dirAttrs;
+                try
                 {
-                    File.SetAttributes(file, attrs & ~FileAttributes.ReadOnly);
+                    dirAttrs = File.GetAttributes(currentDir);
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    TryDeleteDirectoryEntry(currentDir);
+                    continue;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogDebug(ex, "Failed to inspect directory attributes for '{Path}'.", currentDir);
+                    continue;
+                }
+
+                if ((dirAttrs & FileAttributes.ReparsePoint) != 0)
+                {
+                    TryDeleteDirectoryEntry(currentDir);
+                    continue;
+                }
+
+                if ((dirAttrs & FileAttributes.ReadOnly) != 0)
+                {
+                    try
+                    {
+                        File.SetAttributes(currentDir, dirAttrs & ~FileAttributes.ReadOnly);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        _logger.LogDebug(ex, "Failed to clear ReadOnly attribute on directory '{Path}'.", currentDir);
+                    }
+                }
+
+                try
+                {
+                    foreach (var file in Directory.EnumerateFiles(currentDir))
+                    {
+                        try
+                        {
+                            var fileAttrs = File.GetAttributes(file);
+                            if ((fileAttrs & FileAttributes.ReparsePoint) == 0 &&
+                                (fileAttrs & FileAttributes.ReadOnly) != 0)
+                            {
+                                File.SetAttributes(file, fileAttrs & ~FileAttributes.ReadOnly);
+                            }
+
+                            File.Delete(file);
+                        }
+                        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+                        {
+                            TryDeleteFileEntry(file);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            if (ex is UnauthorizedAccessException)
+                            {
+                                TryDeleteDirectoryEntry(file);
+                            }
+
+                            _logger.LogDebug(ex, "Failed to delete file '{Path}'.", file);
+                        }
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogDebug(ex, "Failed to enumerate files in directory '{Path}'.", currentDir);
+                }
+
+                try
+                {
+                    foreach (var subDir in Directory.EnumerateDirectories(currentDir))
+                    {
+                        pending.Push(subDir);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger.LogDebug(ex, "Failed to enumerate subdirectories in '{Path}'.", currentDir);
+                }
+
+                dirsToDelete.Push(currentDir);
+            }
+
+            while (dirsToDelete.Count > 0)
+            {
+                var dir = dirsToDelete.Pop();
+                if (Directory.Exists(dir))
+                {
+                    TryDeleteDirectoryEntry(dir);
                 }
             }
 
-            Directory.Delete(path, recursive: true);
+            if (Directory.Exists(path))
+            {
+                _logger.LogWarning("Failed to fully delete directory '{Path}'.", path);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Failed to delete directory '{Path}'.", path);
+        }
+    }
+
+    private void TryDeleteDirectoryEntry(string dirPath)
+    {
+        try
+        {
+            Directory.Delete(dirPath, recursive: false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogDebug(ex, "Failed to delete directory entry '{Path}'.", dirPath);
+        }
+    }
+
+    private void TryDeleteFileEntry(string filePath)
+    {
+        try
+        {
+            File.Delete(filePath);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogDebug(ex, "Failed to delete file entry '{Path}'; attempting directory-entry unlink.", filePath);
+            TryDeleteDirectoryEntry(filePath);
+        }
+        catch (IOException ex)
+        {
+            _logger.LogDebug(ex, "Failed to delete file entry '{Path}'.", filePath);
         }
     }
 }

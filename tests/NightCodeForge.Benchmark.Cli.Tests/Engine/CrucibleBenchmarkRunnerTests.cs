@@ -1666,4 +1666,73 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
 
         workspaceMgr.Verify(m => m.ProvisionAsync(It.Is<BenchmarkInstance>(i => i.InstanceId == "rust-missing"), It.IsAny<BenchmarkProblemCategory>(), null, It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public async Task Step1163_RunAsync_WhenAgentReachesMaxTurns_ReportsExplicitMaxTurnsExhaustionDiagnostic()
+    {
+        var datasetPath = Path.Combine(_tempDir, "max-turns.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"cr-timeout","category":"CodeReview","language":"python","repo":"pallets/flask","custom_container_image":"python:3.11","pip_constraints":["Werkzeug<3.0"],"base_commit":"c1","problem_statement":"Review PR","candidate_patch":"diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a\n+b","expected_verdict":"Approve"}""");
+
+        var wks = Path.Combine(_tempDir, "wks-max-turns");
+        Directory.CreateDirectory(wks);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.CodeReview, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "cr-timeout", Category = BenchmarkProblemCategory.CodeReview, WorkspacePath = wks, BaseCommit = "c1" });
+
+        string? capturedPrompt = null;
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                capturedPrompt = ctx.BootstrapPrompt;
+                var sink = InMemoryCrucibleConversationCoordinator.CurrentCapture!.TurnSink;
+                await sink.AddTurnAsync(1, StageTurnRole.Assistant, content: "Inspecting...", cancellationToken: ct);
+                await sink.AddTurnAsync(2, StageTurnRole.Assistant, content: "Still checking...", cancellationToken: ct);
+                await sink.AddTurnAsync(3, StageTurnRole.Assistant, content: "Running tests...", cancellationToken: ct);
+                return AgentRunResult.Completed(new AgentRunMetrics(100, 50, 20, 70), summary: "Stopped at budget");
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, false, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = false, ErrorMessage = "Model did not invoke approve or request_changes." });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "max-turns",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-max-turns"),
+            VerifyWithTests = false,
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand-mt", ModelName = "m1", MaxTurns = 3 }],
+            ExecutionMode = ExecutionMode.BareHost,
+            ProviderType = LlmProviderType.Ollama,
+            Endpoint = "http://localhost:11434"
+        });
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Failed, result.Outcome);
+        Assert.Contains("Agent reached MaxTurns limit (3/3) without completing the task.", result.ErrorMessage);
+        Assert.Contains("Model did not invoke approve or request_changes.", result.ErrorMessage);
+        Assert.NotNull(capturedPrompt);
+        Assert.Contains("Werkzeug<3.0", capturedPrompt);
+        Assert.Contains("PIP_CONSTRAINT=/tmp/ncf-pip-constraints.txt", capturedPrompt);
+    }
 }

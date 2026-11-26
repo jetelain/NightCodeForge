@@ -58,23 +58,44 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(fullEntry.TestResultFormat, smokeEntry.TestResultFormat);
             Assert.Equal(fullEntry.CustomTestCommand, smokeEntry.CustomTestCommand);
             Assert.Equal(fullEntry.CustomContainerImage, smokeEntry.CustomContainerImage);
+            Assert.Equal(fullEntry.PipConstraints ?? [], smokeEntry.PipConstraints ?? []);
+            Assert.Equal(fullEntry.FailToPass ?? [], smokeEntry.FailToPass ?? []);
+            Assert.Equal(fullEntry.PassToPass ?? [], smokeEntry.PassToPass ?? []);
         }
+
+        var serilog1903 = Assert.Single(full.Entries, e => e.InstanceId == "serilog__serilog-1903");
+        Assert.Equal(
+            [
+                "Serilog.Tests.Debugging.SelfLogTests.SelfLogReportsErrorWhenPositionalParameterCountIsMismatched",
+                "Serilog.Tests.Debugging.SelfLogTests.SelfLogDoesNotReportErrorWhenPositionalParameterIsRepeated"
+            ],
+            serilog1903.FailToPass ?? []);
+        Assert.Equal(
+            ["Serilog.Tests.Capturing.GettablePropertyFinderTests.GetPropertiesRecursiveIntegerTypeYieldNoResult"],
+            serilog1903.PassToPass ?? []);
 
         var axiosSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "axios__axios-5892");
         Assert.Equal(TestResultFormat.JUnitXml, axiosSmoke.TestResultFormat);
         Assert.Contains("mocha-junit-reporter", axiosSmoke.CustomTestCommand);
 
-        var requestsSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "psf__requests-1921");
-        Assert.False(string.IsNullOrWhiteSpace(requestsSmoke.CustomContainerImage));
+        var pytestSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pytest-dev__pytest-10356");
+        Assert.Equal("python:3.11", pytestSmoke.CustomContainerImage);
 
         var flaskSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pallets__flask-5014");
-        Assert.False(string.IsNullOrWhiteSpace(flaskSmoke.CustomContainerImage));
+        Assert.Equal("python:3.11", flaskSmoke.CustomContainerImage);
+        Assert.Contains("Werkzeug<3.0", flaskSmoke.PipConstraints ?? []);
 
         var crPy1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-py-001");
-        Assert.Equal("python:3.9", crPy1Smoke.CustomContainerImage);
+        Assert.Equal("python:3.11", crPy1Smoke.CustomContainerImage);
+        Assert.Contains("tests/test_utils.py", crPy1Smoke.CustomTestCommand);
+        Assert.Contains("MarkupSafe<2.1", crPy1Smoke.PipConstraints ?? []);
 
         var crPy2Full = Assert.Single(full.Entries, e => e.InstanceId == "ncf-cr-py-002");
         Assert.Equal("python:3.11", crPy2Full.CustomContainerImage);
+        Assert.Contains("Werkzeug<3.0", crPy2Full.PipConstraints ?? []);
+
+        var crRust1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-rust-001");
+        Assert.Contains("grep-regex", crRust1Smoke.CustomTestCommand);
     }
 
     [Fact]
@@ -102,6 +123,8 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(manifestEntry.Repo, instance.Repo);
             Assert.Equal(manifestEntry.Language, instance.Language);
             Assert.Equal(manifestEntry.CustomContainerImage, instance.CustomContainerImage);
+            Assert.Equal(manifestEntry.CustomTestCommand, instance.CustomTestCommand);
+            Assert.Equal(manifestEntry.PipConstraints ?? [], instance.PipConstraints ?? []);
             Assert.Equal(manifestEntry.TestResultFormat, instance.ResolveEffectiveTestResultFormat());
             AssertAuthenticCommitSha(instance.BaseCommit, instance.InstanceId);
             AssertNoLeakedMetaInstructions(instance.TaskSpecification, instance.InstanceId);
@@ -158,6 +181,8 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(manifestEntry.Repo, instance.Repo);
             Assert.Equal(manifestEntry.Language, instance.Language);
             Assert.Equal(manifestEntry.CustomContainerImage, instance.CustomContainerImage);
+            Assert.Equal(manifestEntry.CustomTestCommand, instance.CustomTestCommand);
+            Assert.Equal(manifestEntry.PipConstraints ?? [], instance.PipConstraints ?? []);
             Assert.Equal(manifestEntry.TestResultFormat, instance.ResolveEffectiveTestResultFormat());
             AssertAuthenticCommitSha(instance.BaseCommit, instance.InstanceId);
             AssertNoLeakedMetaInstructions(instance.TaskSpecification, instance.InstanceId);

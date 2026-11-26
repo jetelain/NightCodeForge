@@ -260,8 +260,15 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
         {
             if (baseResult.FailToPassPassed > 0)
             {
+                var failedSet = baseResult.FailedTests.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var passedOnBase = instance.FailToPass
+                    .Where(t => !failedSet.Contains(t))
+                    .ToList();
+                var passedDetail = passedOnBase.Count > 0
+                    ? $" Passing test(s): {string.Join(", ", passedOnBase)}"
+                    : string.Empty;
                 return (false, null,
-                    $"Pre-flight FailToPass invariant violated: {baseResult.FailToPassPassed}/{baseResult.FailToPassTotal} FailToPass test(s) already pass on BaseCommit without GoldPatch.");
+                    $"Pre-flight FailToPass invariant violated: {baseResult.FailToPassPassed}/{baseResult.FailToPassTotal} FailToPass test(s) already pass on BaseCommit without GoldPatch.{passedDetail}");
             }
         }
         else if (baseResult.Passed)

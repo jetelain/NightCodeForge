@@ -51,6 +51,29 @@ ncf-bench dataset validate --dataset benchmarks/datasets/v1-code-review.jsonl --
 ncf-bench dataset validate --dataset benchmarks/datasets/v1-task-review.jsonl
 ```
 
+### Resumable Golden Patch Revalidation Script (`benchmarks/validate-golden.ps1`)
+
+After changing NightCodeForge container management, verification wrappers, or test scorers, use `benchmarks/validate-golden.ps1` to revalidate the full suite (defaults to `v1-full`) with once-upfront compilation, incremental `summary.json`/`summary.md`/`validation.log` persistence, and `-Resume` support:
+
+```powershell
+# Revalidate the full v1-full suite (90 instances) with container verification
+.\benchmarks\validate-golden.ps1 -CleanContainers
+
+# Revalidate the fast v1-smoke suite (28 instances)
+.\benchmarks\validate-golden.ps1 -Suite v1-smoke -CleanContainers
+
+# Scope validation to specific stacks or categories
+.\benchmarks\validate-golden.ps1 -Language csharp -CleanContainers
+.\benchmarks\validate-golden.ps1 -Language python,rust -CleanContainers
+.\benchmarks\validate-golden.ps1 -Category implementation -CleanContainers
+
+# Fast patch-application and frontmatter-only check (no containers)
+.\benchmarks\validate-golden.ps1 -Suite v1-full -NoVerify
+
+# Resume an interrupted or partially failing validation (skips already-passed instances)
+.\benchmarks\validate-golden.ps1 -Resume "$env:USERPROFILE\.nightcodeforge\benchmarks\validations\v1-full-<timestamp>" -CleanContainers
+```
+
 ## Running Benchmarks with OllamaRouter
 
 All commands below assume `ollama-router` is running and reachable at its default endpoint (`http://localhost:11434`; omit `--endpoint` to use this default, or pass `--endpoint <url>` to override).

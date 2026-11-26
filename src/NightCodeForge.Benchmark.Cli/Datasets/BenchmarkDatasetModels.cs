@@ -38,6 +38,7 @@ public static class BenchmarkDatasetConstants
     public const string FieldCustomContainerImage = "custom_container_image";
     public const string FieldCustomTestCommand = "custom_test_command";
     public const string FieldTestResultFormat = "test_result_format";
+    public const string FieldPipConstraints = "pip_constraints";
     public const string FieldPatch = "patch";
     public const string FieldGoldPatch = "gold_patch";
     public const string FieldFixPatch = "fix_patch";
@@ -97,6 +98,9 @@ public sealed record BenchmarkManifestEntry
     public string? CustomContainerImage { get; init; }
     public string? CustomTestCommand { get; init; }
     public TestResultFormat? TestResultFormat { get; init; }
+    public IReadOnlyList<string>? PipConstraints { get; init; }
+    public IReadOnlyList<string>? FailToPass { get; init; }
+    public IReadOnlyList<string>? PassToPass { get; init; }
     public string? Notes { get; init; }
 }
 

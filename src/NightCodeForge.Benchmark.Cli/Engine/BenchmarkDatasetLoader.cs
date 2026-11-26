@@ -354,6 +354,8 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
             changedFields.Add($"custom_test_command '{raw.CustomTestCommand ?? "<null>"}' -> '{effective.CustomTestCommand ?? "<null>"}'");
         if (raw.TestResultFormat != effective.TestResultFormat)
             changedFields.Add($"test_result_format '{raw.TestResultFormat?.ToString() ?? "<null>"}' -> '{effective.TestResultFormat?.ToString() ?? "<null>"}'");
+        if (!raw.PipConstraints.SequenceEqual(effective.PipConstraints, StringComparer.Ordinal))
+            changedFields.Add("pip_constraints");
         if (!string.Equals(raw.GoldPatch, effective.GoldPatch, StringComparison.Ordinal))
             changedFields.Add("patch");
         if (!string.Equals(raw.TestPatch, effective.TestPatch, StringComparison.Ordinal))
@@ -423,6 +425,21 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
             updated = updated with { TestResultFormat = entry.TestResultFormat.Value };
         }
 
+        if (entry.PipConstraints != null && !current.PipConstraints.SequenceEqual(entry.PipConstraints, StringComparer.Ordinal))
+        {
+            updated = updated with { PipConstraints = entry.PipConstraints };
+        }
+
+        if (entry.FailToPass != null && !current.FailToPass.SequenceEqual(entry.FailToPass, StringComparer.Ordinal))
+        {
+            updated = updated with { FailToPass = entry.FailToPass };
+        }
+
+        if (entry.PassToPass != null && !current.PassToPass.SequenceEqual(entry.PassToPass, StringComparer.Ordinal))
+        {
+            updated = updated with { PassToPass = entry.PassToPass };
+        }
+
         if (entry.Category.HasValue && current.Category != entry.Category.Value)
         {
             updated = updated with { Category = entry.Category.Value };
@@ -474,6 +491,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
         var hintsText = GetOptionalString(element, BenchmarkDatasetConstants.FieldHintsText, datasetPath, instanceId);
         var customImage = GetOptionalString(element, BenchmarkDatasetConstants.FieldCustomContainerImage, datasetPath, instanceId)?.Trim();
         var customTestCmd = GetOptionalString(element, BenchmarkDatasetConstants.FieldCustomTestCommand, datasetPath, instanceId)?.Trim();
+        var pipConstraints = ParseStringArrayOrJsonString(element, BenchmarkDatasetConstants.FieldPipConstraints, datasetPath, instanceId);
         var goldPatch = GetOptionalString(element, BenchmarkDatasetConstants.FieldPatch, datasetPath, instanceId)
             ?? GetOptionalString(element, BenchmarkDatasetConstants.FieldGoldPatch, datasetPath, instanceId);
         var testPatch = GetOptionalString(element, BenchmarkDatasetConstants.FieldTestPatch, datasetPath, instanceId);
@@ -506,6 +524,7 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
             CustomContainerImage = customImage,
             CustomTestCommand = customTestCmd,
             TestResultFormat = testResultFormat,
+            PipConstraints = pipConstraints,
             GoldPatch = goldPatch,
             TestPatch = testPatch,
             FailToPass = failToPass,
@@ -705,6 +724,20 @@ public sealed class BenchmarkDatasetLoader : IBenchmarkDatasetLoader
                 datasetPath,
                 instanceId)
         };
+    }
+
+    internal static IReadOnlyList<string>? ParseOptionalStringArrayOrJsonString(
+        JsonElement obj,
+        string propertyName,
+        string datasetPath,
+        string instanceId)
+    {
+        if (!TryGetPropertyIgnoreCase(obj, propertyName, out var prop) || prop.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        return ParseStringArrayOrJsonString(obj, propertyName, datasetPath, instanceId);
     }
 
     internal static IReadOnlyList<string> ParseStringArrayOrJsonString(

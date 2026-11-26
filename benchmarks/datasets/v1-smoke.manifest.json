@@ -58,7 +58,7 @@
       "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
-      "instance_id": "messagepack-csharp__messagepack-csharp-1798",
+      "instance_id": "messagepack-csharp__messagepack-csharp-2045",
       "source": "swe-sharp-bench",
       "category": "Implementation",
       "language": "csharp",
@@ -85,13 +85,13 @@
       "custom_test_command": "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml"
     },
     {
-      "instance_id": "facebook__docusaurus-9897",
+      "instance_id": "facebook__docusaurus-10130",
       "source": "swebench-multilingual",
       "category": "Implementation",
       "language": "typescript",
       "repo": "facebook/docusaurus",
       "test_result_format": "JUnitXml",
-      "custom_test_command": "JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit"
+      "custom_test_command": "yarn build:packages && JEST_JUNIT_OUTPUT_DIR=/workspace/.ncf-bench-results JEST_JUNIT_OUTPUT_NAME=junit.xml npx jest --ci --reporters=default --reporters=jest-junit -- packages/docusaurus/src/server/__tests__/brokenLinks.test.ts"
     },
     {
       "instance_id": "axios__axios-5892",
@@ -103,14 +103,14 @@
       "custom_test_command": "MOCHA_FILE=/workspace/.ncf-bench-results/junit.xml npm run test:mocha -- --reporter mocha-junit-reporter"
     },
     {
-      "instance_id": "psf__requests-1921",
+      "instance_id": "pytest-dev__pytest-10356",
       "source": "swebench-verified",
       "category": "Implementation",
       "language": "python",
-      "repo": "psf/requests",
-      "custom_container_image": "python:3.9",
+      "repo": "pytest-dev/pytest",
+      "custom_container_image": "python:3.11",
       "test_result_format": "JUnitXml",
-      "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+      "custom_test_command": "pytest testing/test_mark.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
     {
       "instance_id": "pallets__flask-5014",
@@ -119,17 +119,20 @@
       "language": "python",
       "repo": "pallets/flask",
       "custom_container_image": "python:3.11",
+      "pip_constraints": [
+        "Werkzeug<3.0"
+      ],
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
     {
-      "instance_id": "burntsushi__ripgrep-2576",
+      "instance_id": "tokio-rs__tokio-6752",
       "source": "swebench-multilingual",
       "category": "Implementation",
       "language": "rust",
-      "repo": "burntsushi/ripgrep",
+      "repo": "tokio-rs/tokio",
       "test_result_format": "CargoTest",
-      "custom_test_command": "cargo test --no-fail-fast"
+      "custom_test_command": "cargo test -p tokio-util --features full --test time_delay_queue --no-fail-fast"
     },
     {
       "instance_id": "ncf-cr-csharp-001",
@@ -185,8 +188,13 @@
       "category": "CodeReview",
       "language": "python",
       "repo": "psf/requests",
-      "custom_container_image": "python:3.9",
-      "test_result_format": "JUnitXml"
+      "custom_container_image": "python:3.11",
+      "pip_constraints": [
+        "MarkupSafe<2.1",
+        "Werkzeug<2.1"
+      ],
+      "test_result_format": "JUnitXml",
+      "custom_test_command": "pytest tests/test_utils.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
     {
       "instance_id": "ncf-cr-rust-001",
@@ -194,7 +202,8 @@
       "category": "CodeReview",
       "language": "rust",
       "repo": "burntsushi/ripgrep",
-      "test_result_format": "CargoTest"
+      "test_result_format": "CargoTest",
+      "custom_test_command": "cargo test -p grep-regex --no-fail-fast"
     },
     {
       "instance_id": "ncf-tr-csharp-001",

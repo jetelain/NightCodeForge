@@ -119,12 +119,24 @@ public static class BenchmarkStagePolicyResolver
         }
     }
 
-    public static string? GetSandboxEnvironmentGuidance(string? language)
+    public static string? GetSandboxEnvironmentGuidance(string? language) =>
+        GetSandboxEnvironmentGuidance(language, pipConstraints: null);
+
+    public static string? GetSandboxEnvironmentGuidance(string? language, IReadOnlyList<string>? pipConstraints)
     {
         var normalized = BenchmarkLanguages.Normalize(language);
         if (normalized is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript)
         {
             return $"[Sandbox Node Setup Guidance]: If `yarn install` / `pnpm install` / `npm install` fails on blocked native postinstall downloads (such as `sharp` from GitHub), retry directly with `--ignore-scripts` (prefer `--frozen-lockfile --ignore-scripts` first). If `yarn` or `pnpm` is missing, install into a user-writable prefix without sudo (`npm install -g --prefix {BenchmarkTestCommandResolver.NpmGlobalPrefix} --cache {BenchmarkTestCommandResolver.NpmCacheDir} --ignore-scripts yarn` and prepend `{BenchmarkTestCommandResolver.NpmGlobalPrefix}/bin` to `PATH`).";
+        }
+
+        if (normalized == BenchmarkLanguages.Python && pipConstraints is { Count: > 0 })
+        {
+            var joined = string.Join(", ", pipConstraints.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()));
+            if (!string.IsNullOrWhiteSpace(joined))
+            {
+                return $"[Sandbox Python Setup Guidance]: Install/verify test dependencies using pip constraints ({joined}) — e.g. write them to `{BenchmarkTestCommandResolver.PythonPipConstraintsPath}` and `export PIP_CONSTRAINT={BenchmarkTestCommandResolver.PythonPipConstraintsPath}` (or pass `-c {BenchmarkTestCommandResolver.PythonPipConstraintsPath}` to `pip install`) so dependency versions match verification.";
+            }
         }
 
         return null;

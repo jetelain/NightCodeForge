@@ -234,7 +234,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         var containerName = $"ncf-bench-verify-{Guid.NewGuid():N}"[..32];
         var scope = CreateVerificationScope(workspacePath, instance.CustomContainerImage, executionMode, containerName);
         var testCommand = ResolveTestCommand(instance, workspacePath, executionMode);
-        var effectiveCommand = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(testCommand, instance.Language, executionMode);
+        var effectiveCommand = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(testCommand, instance.Language, executionMode, instance.PipConstraints);
         var format = instance.ResolveEffectiveTestResultFormat();
         var testRunStartedUtc = DateTime.UtcNow;
 
@@ -1208,7 +1208,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             }
 
             bool hasStrongKeywordCoverage = false;
-            if (hasFile && hasSymbol && hasKeywords)
+            if (hasFile && hasKeywords)
             {
                 var (independentTotal, independentMatched) = CountIndependentKeywords(nonEmptyKeywords, normalizedCorpus);
                 hasStrongKeywordCoverage = independentTotal >= 2 &&
@@ -1216,8 +1216,10 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             }
 
             bool fileStemMatched = hasFile && !fileMatched && MatchesIdentifierBoundedFileStem(finding.FilePath, normalizedCorpus);
-            bool strongCorroboratedMatch = hasFile && hasSymbol && hasStrongKeywordCoverage &&
-                                           (symbolMatched || fileMatched || fileStemMatched);
+            bool strongCorroboratedMatch = hasFile && hasStrongKeywordCoverage &&
+                                           (hasSymbol
+                                               ? (symbolMatched || fileMatched || fileStemMatched)
+                                               : (fileMatched || fileStemMatched));
 
             if (((fileMatched && symbolMatched && keywordsMatched) || strongCorroboratedMatch) && summaryMatched)
             {
@@ -1307,24 +1309,41 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         var normFile = filePath.Replace('\\', '/').TrimStart('/');
         var fileName = Path.GetFileName(normFile);
         var stem = Path.GetFileNameWithoutExtension(fileName);
-        if (string.IsNullOrWhiteSpace(stem) ||
-            stem.Length < MinimumFileStemCorroborationLength ||
-            GenericFileStems.Contains(stem))
+        if (IsEligibleStemForCorroboration(stem) && ContainsIdentifierBoundedToken(normalizedCorpus, stem))
         {
-            return false;
+            return true;
         }
 
-        int searchIndex = 0;
-        while (searchIndex <= normalizedCorpus.Length - stem.Length)
+        if (!string.IsNullOrWhiteSpace(stem) && (stem.Contains('_', StringComparison.Ordinal) || stem.Contains('-', StringComparison.Ordinal)))
         {
-            int idx = normalizedCorpus.IndexOf(stem, searchIndex, StringComparison.OrdinalIgnoreCase);
+            var compactStem = stem.Replace("_", string.Empty, StringComparison.Ordinal).Replace("-", string.Empty, StringComparison.Ordinal);
+            if (IsEligibleStemForCorroboration(compactStem) && ContainsIdentifierBoundedToken(normalizedCorpus, compactStem))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsEligibleStemForCorroboration(string? stem) =>
+        !string.IsNullOrWhiteSpace(stem) &&
+        stem.Length >= MinimumFileStemCorroborationLength &&
+        !GenericFileStems.Contains(stem);
+
+    private static bool ContainsIdentifierBoundedToken(string normalizedCorpus, string token)
+    {
+        int searchIndex = 0;
+        while (searchIndex <= normalizedCorpus.Length - token.Length)
+        {
+            int idx = normalizedCorpus.IndexOf(token, searchIndex, StringComparison.OrdinalIgnoreCase);
             if (idx < 0)
             {
                 return false;
             }
 
             bool startBounded = idx == 0 || !IsIdentifierChar(normalizedCorpus[idx - 1]);
-            int endIdx = idx + stem.Length;
+            int endIdx = idx + token.Length;
             bool endBounded = endIdx == normalizedCorpus.Length || !IsIdentifierChar(normalizedCorpus[endIdx]);
             if (startBounded && endBounded)
             {

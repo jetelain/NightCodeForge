@@ -117,6 +117,7 @@ public static class BenchmarkDatasetJsonlWriter
         CustomContainerImage = instance.CustomContainerImage,
         CustomTestCommand = instance.CustomTestCommand,
         TestResultFormat = instance.TestResultFormat?.ToString(),
+        PipConstraints = instance.PipConstraints is { Count: > 0 } ? instance.PipConstraints : null,
         Patch = instance.GoldPatch,
         TestPatch = instance.TestPatch,
         FailToPass = instance.FailToPass is { Count: > 0 } ? instance.FailToPass : null,
@@ -168,6 +169,9 @@ public static class BenchmarkDatasetJsonlWriter
 
         [JsonPropertyName(BenchmarkDatasetConstants.FieldTestResultFormat)]
         public string? TestResultFormat { get; init; }
+
+        [JsonPropertyName(BenchmarkDatasetConstants.FieldPipConstraints)]
+        public IReadOnlyList<string>? PipConstraints { get; init; }
 
         [JsonPropertyName(BenchmarkDatasetConstants.FieldPatch)]
         public string? Patch { get; init; }

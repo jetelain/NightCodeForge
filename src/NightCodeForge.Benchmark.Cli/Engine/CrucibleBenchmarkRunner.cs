@@ -424,7 +424,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 StageId = policy.StageId,
                 StageDirective = policy.StageDirective,
                 RequiredMode = policy.RequiredMode,
-                BootstrapPrompt = BuildBootstrapPrompt(category, workspace, instance.Language),
+                BootstrapPrompt = BuildBootstrapPrompt(category, workspace, instance.Language, instance.PipConstraints),
                 WorkspacePath = workspace.WorkspacePath,
                 ProjectConfig = projectConfig,
                 TaskMarkdownPath = workspace.TaskMarkdownPath,
@@ -608,6 +608,8 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
             var telemetry = BuildTelemetryBreakdown(capture.TurnSink.Turns, dispatchTelemetry.CreateSnapshot());
             var finalOutcome = verification.Passed ? BenchmarkInstanceOutcome.Passed : BenchmarkInstanceOutcome.Failed;
+            int turns = ResolveTurnCount(capture);
+            var errorMessage = ResolveFinalErrorMessage(runResult, verification, turns, candidate.MaxTurns);
 
             var instanceResult = new BenchmarkInstanceResult
             {
@@ -618,7 +620,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 Language = instance.Language,
                 Outcome = finalOutcome,
                 DurationMs = durationMs,
-                Turns = ResolveTurnCount(capture),
+                Turns = turns,
                 PromptTokens = promptTokens,
                 CompletionTokens = completionTokens,
                 TotalTokens = totalTokens,
@@ -636,7 +638,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 PassToPassPassed = verification.PassToPassPassed,
                 PassToPassTotal = verification.PassToPassTotal,
                 Telemetry = telemetry,
-                ErrorMessage = verification.ErrorMessage,
+                ErrorMessage = errorMessage,
                 CompletedAtUtc = DateTimeOffset.UtcNow
             };
 
@@ -859,9 +861,10 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
     private static string BuildBootstrapPrompt(
         BenchmarkProblemCategory category,
         BenchmarkWorkspaceHandle workspace,
-        string? language = null)
+        string? language = null,
+        IReadOnlyList<string>? pipConstraints = null)
     {
-        var sandboxGuidance = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(language);
+        var sandboxGuidance = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(language, pipConstraints);
         return category switch
         {
             BenchmarkProblemCategory.Implementation =>
@@ -912,6 +915,28 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         }
 
         return sb.ToString();
+    }
+
+    internal static string? ResolveFinalErrorMessage(
+        AgentRunResult runResult,
+        BenchmarkVerificationResult verification,
+        int turns,
+        int maxTurns)
+    {
+        if (verification.Passed)
+        {
+            return verification.ErrorMessage;
+        }
+
+        if (runResult.Status == AgentRunStatus.Completed && maxTurns > 0 && turns >= maxTurns)
+        {
+            var prefix = $"Agent reached MaxTurns limit ({turns}/{maxTurns}) without completing the task.";
+            return string.IsNullOrWhiteSpace(verification.ErrorMessage)
+                ? prefix
+                : $"{prefix} {verification.ErrorMessage}";
+        }
+
+        return verification.ErrorMessage;
     }
 
     private static string TruncateTitle(string text)

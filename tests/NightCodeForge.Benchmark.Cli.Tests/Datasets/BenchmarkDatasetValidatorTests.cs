@@ -668,4 +668,54 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 progressCallback: null,
                 manifestPath: Path.Combine(_tempDir, "nonexistent.manifest.json")));
     }
+
+    [Fact]
+    public async Task ValidateAsync_Implementation_PartialFailToPassOnBase_ReportsSpecificPassingTestNames()
+    {
+        var datasetPath = Path.Combine(_tempDir, "impl-partial-base.jsonl");
+        await File.WriteAllTextAsync(datasetPath, """
+        {"instance_id":"impl-partial","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc123","problem_statement":"Bug","patch":"diff gold","fail_to_pass":["Test.RealFailA","Test.AlreadyPasses","Test.RealFailB"]}
+        """);
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "impl-partial",
+            Category = BenchmarkProblemCategory.Implementation,
+            WorkspacePath = Path.Combine(_tempDir, "wks-partial"),
+            BaseCommit = "abc123"
+        };
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(handle);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                FailToPassPassed = 1,
+                FailToPassTotal = 3,
+                FailedTests = ["Test.RealFailA", "Test.RealFailB"]
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.False(report.AllPassed);
+        var error = report.Results[0].ErrorMessage;
+        Assert.NotNull(error);
+        Assert.Contains("1/3 FailToPass test(s) already pass on BaseCommit without GoldPatch.", error);
+        Assert.Contains("Passing test(s): Test.AlreadyPasses", error);
+        Assert.DoesNotContain("Test.RealFailA", error);
+        Assert.DoesNotContain("Test.RealFailB", error);
+    }
 }

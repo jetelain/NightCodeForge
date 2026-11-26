@@ -333,4 +333,154 @@ public sealed class BenchmarkDatasetLoaderTests : IDisposable
 
         await Assert.ThrowsAsync<BenchmarkDatasetException>(() => _loader.LoadAsync(path));
     }
+
+    [Fact]
+    public async Task Step1163_LoadAsync_OverlaysAndDiffsPipConstraintsFromManifest()
+    {
+        var manifestDir = Path.Combine(_tempDir, "pip-constraints-manifest");
+        Directory.CreateDirectory(manifestDir);
+
+        var manifestPath = Path.Combine(manifestDir, "v1-smoke.manifest.json");
+        await File.WriteAllTextAsync(manifestPath, """
+        {
+          "suite_name": "v1-smoke",
+          "version": "1.0.2",
+          "entries": [
+            {
+              "instance_id": "pallets__flask-5014",
+              "source": "swebench-verified",
+              "category": "Implementation",
+              "language": "python",
+              "repo": "pallets/flask",
+              "custom_container_image": "python:3.11",
+              "pip_constraints": [ "Werkzeug<3.0" ],
+              "test_result_format": "JUnitXml",
+              "custom_test_command": "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml"
+            }
+          ]
+        }
+        """);
+
+        var datasetPath = Path.Combine(_tempDir, "flask-stale.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"pallets__flask-5014","category":"Implementation","language":"python","repo":"pallets/flask","base_commit":"abc","problem_statement":"Fix","custom_container_image":"python:3.11","test_result_format":"JUnitXml"}""");
+
+        var diagnostics = new List<string>();
+        var items = await _loader.LoadAsync(datasetPath, categoryOverride: null, manifestPath, diagnostics.Add);
+
+        var flask = Assert.Single(items);
+        Assert.Equal(["Werkzeug<3.0"], flask.PipConstraints);
+        Assert.Contains(diagnostics, d => d.Contains("pallets__flask-5014") && d.Contains("pip_constraints"));
+        Assert.Contains(diagnostics, d => d.Contains("overlaid 1/1"));
+    }
+
+    [Fact]
+    public async Task Step1163_LoadAsync_ClearsPipConstraintsWhenManifestHasEmptyArrayAndPreservesWhenOmitted()
+    {
+        var manifestDir = Path.Combine(_tempDir, "pip-constraints-clear");
+        Directory.CreateDirectory(manifestDir);
+
+        var manifestPath = Path.Combine(manifestDir, "v1-smoke.manifest.json");
+        await File.WriteAllTextAsync(manifestPath, """
+        {
+          "suite_name": "v1-smoke",
+          "version": "1.0.3",
+          "entries": [
+            {
+              "instance_id": "py-clear",
+              "source": "swebench-verified",
+              "category": "Implementation",
+              "language": "python",
+              "repo": "pallets/flask",
+              "custom_container_image": "python:3.11",
+              "pip_constraints": []
+            },
+            {
+              "instance_id": "py-preserve",
+              "source": "swebench-verified",
+              "category": "Implementation",
+              "language": "python",
+              "repo": "psf/requests",
+              "custom_container_image": "python:3.11"
+            }
+          ]
+        }
+        """);
+
+        var datasetPath = Path.Combine(_tempDir, "pip-constraints-clear.jsonl");
+        await File.WriteAllLinesAsync(datasetPath,
+        [
+            """{"instance_id":"py-clear","category":"Implementation","language":"python","repo":"pallets/flask","base_commit":"abc","problem_statement":"Fix","custom_container_image":"python:3.11","pip_constraints":["Werkzeug<3.0"]}""",
+            """{"instance_id":"py-preserve","category":"Implementation","language":"python","repo":"psf/requests","base_commit":"def","problem_statement":"Fix","custom_container_image":"python:3.11","pip_constraints":["MarkupSafe<2.1"]}"""
+        ]);
+
+        var diagnostics = new List<string>();
+        var items = await _loader.LoadAsync(datasetPath, categoryOverride: null, manifestPath, diagnostics.Add);
+
+        Assert.Equal(2, items.Count);
+        var cleared = Assert.Single(items, i => i.InstanceId == "py-clear");
+        Assert.Empty(cleared.PipConstraints);
+        Assert.Contains(diagnostics, d => d.Contains("py-clear") && d.Contains("pip_constraints"));
+
+        var preserved = Assert.Single(items, i => i.InstanceId == "py-preserve");
+        Assert.Equal(["MarkupSafe<2.1"], preserved.PipConstraints);
+    }
+
+    [Fact]
+    public async Task LoadAsync_OverlaysFailToPassAndPassToPassFromManifest_AndPreservesWhenOmitted()
+    {
+        var manifestDir = Path.Combine(_tempDir, "test-list-manifest");
+        Directory.CreateDirectory(manifestDir);
+
+        var manifestPath = Path.Combine(manifestDir, "v1-full.manifest.json");
+        await File.WriteAllTextAsync(manifestPath, """
+        {
+          "suite_name": "v1-full",
+          "version": "1.0.4",
+          "entries": [
+            {
+              "instance_id": "cs-override",
+              "source": "swe-sharp-bench",
+              "category": "Implementation",
+              "language": "csharp",
+              "repo": "serilog/serilog",
+              "fail_to_pass": [ "Test.F2P.A", "Test.F2P.B" ],
+              "pass_to_pass": [ "Test.P2P.Renamed" ]
+            },
+            {
+              "instance_id": "cs-preserve",
+              "source": "swe-sharp-bench",
+              "category": "Implementation",
+              "language": "csharp",
+              "repo": "serilog/serilog"
+            }
+          ]
+        }
+        """);
+
+        var datasetPath = Path.Combine(_tempDir, "test-list.jsonl");
+        await File.WriteAllLinesAsync(datasetPath,
+        [
+            """{"instance_id":"cs-override","category":"Implementation","language":"csharp","repo":"serilog/serilog","base_commit":"abc","problem_statement":"Fix","fail_to_pass":["Test.F2P.A","Test.F2P.B","Test.P2P.Renamed"],"pass_to_pass":[]}""",
+            """{"instance_id":"cs-preserve","category":"Implementation","language":"csharp","repo":"serilog/serilog","base_commit":"def","problem_statement":"Fix","fail_to_pass":["Test.Original.F2P"],"pass_to_pass":["Test.Original.P2P"]}"""
+        ]);
+
+        var diagnostics = new List<string>();
+        var items = await _loader.LoadAsync(datasetPath, categoryOverride: null, manifestPath, diagnostics.Add);
+
+        Assert.Equal(2, items.Count);
+
+        var overridden = Assert.Single(items, i => i.InstanceId == "cs-override");
+        Assert.Equal(["Test.F2P.A", "Test.F2P.B"], overridden.FailToPass);
+        Assert.Equal(["Test.P2P.Renamed"], overridden.PassToPass);
+        Assert.Contains(diagnostics, d =>
+            d.Contains("cs-override", StringComparison.Ordinal) &&
+            d.Contains("fail_to_pass", StringComparison.Ordinal) &&
+            d.Contains("pass_to_pass", StringComparison.Ordinal));
+
+        var preserved = Assert.Single(items, i => i.InstanceId == "cs-preserve");
+        Assert.Equal(["Test.Original.F2P"], preserved.FailToPass);
+        Assert.Equal(["Test.Original.P2P"], preserved.PassToPass);
+        Assert.DoesNotContain(diagnostics, d => d.Contains("cs-preserve", StringComparison.Ordinal));
+    }
 }

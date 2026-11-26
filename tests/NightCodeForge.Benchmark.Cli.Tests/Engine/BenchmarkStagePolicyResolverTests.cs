@@ -472,4 +472,17 @@ public sealed class BenchmarkStagePolicyResolverTests
             Directory.Delete(tempRoot, recursive: true);
         }
     }
+
+    [Fact]
+    public void Step1163_GetSandboxEnvironmentGuidance_PythonWithPipConstraints_SurfacesConstraintsAndEnvVar()
+    {
+        var unpinned = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.Python, null);
+        Assert.Null(unpinned);
+
+        var pinned = BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance(BenchmarkLanguages.Python, ["Werkzeug<3.0"]);
+        Assert.NotNull(pinned);
+        Assert.Contains("Werkzeug<3.0", pinned);
+        Assert.Contains("PIP_CONSTRAINT=/tmp/ncf-pip-constraints.txt", pinned);
+        Assert.Contains("/tmp/ncf-pip-constraints.txt", pinned);
+    }
 }

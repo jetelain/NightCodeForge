@@ -621,4 +621,86 @@ public sealed class BenchmarkDatasetImporterTests : IDisposable
         Assert.Throws<BenchmarkDatasetException>(() =>
             new BenchmarkDatasetImporterRegistry([new SweSharpBenchImporter(), new SweSharpBenchImporter()]));
     }
+
+    [Fact]
+    public async Task SweSharpBenchImporter_AppliesManifestFailToPassAndPassToPassOverrides()
+    {
+        var manifestPath = Path.Combine(_tempDir, "override-manifest.json");
+        await File.WriteAllTextAsync(manifestPath, """
+        {
+          "suite_name": "override-test",
+          "version": "1.0.0",
+          "entries": [
+            {
+              "instance_id": "serilog__serilog-1903",
+              "source": "swe-sharp-bench",
+              "category": "Implementation",
+              "language": "csharp",
+              "fail_to_pass": [ "SelfLogTests.TestA", "SelfLogTests.TestB" ],
+              "pass_to_pass": [ "GettablePropertyFinderTests.RenamedTest" ]
+            }
+          ]
+        }
+        """);
+
+        var inputPath = Path.Combine(_tempDir, "raw-override.jsonl");
+        await File.WriteAllTextAsync(inputPath, """
+        {"instance_id":"serilog__serilog-1903","repo":"serilog/serilog","base_commit":"33de1c86","problem_statement":"Fix","patch":"diff","fail_to_pass":["SelfLogTests.TestA","GettablePropertyFinderTests.RenamedTest","SelfLogTests.TestB"],"pass_to_pass":[]}
+        """);
+
+        var manifest = await BenchmarkDatasetManifestLoader.LoadAsync(manifestPath);
+        var importer = new SweSharpBenchImporter();
+
+        var imported = await importer.ImportAsync(inputPath, manifest);
+
+        var single = Assert.Single(imported);
+        Assert.Equal(["SelfLogTests.TestA", "SelfLogTests.TestB"], single.FailToPass);
+        Assert.Equal(["GettablePropertyFinderTests.RenamedTest"], single.PassToPass);
+    }
+
+    [Fact]
+    public async Task SweBenchVerifiedImporter_AppliesManifestPipConstraintsOverrideAndPreservesRawWhenOmitted()
+    {
+        var manifestPath = Path.Combine(_tempDir, "pip-constraints-manifest.json");
+        await File.WriteAllTextAsync(manifestPath, """
+        {
+          "suite_name": "pip-test",
+          "version": "1.0.0",
+          "entries": [
+            {
+              "instance_id": "pallets__flask-5014",
+              "source": "swebench-verified",
+              "category": "Implementation",
+              "language": "python",
+              "pip_constraints": [ "Werkzeug<3.0" ]
+            },
+            {
+              "instance_id": "psf__requests-5414",
+              "source": "swebench-verified",
+              "category": "Implementation",
+              "language": "python"
+            }
+          ]
+        }
+        """);
+
+        var inputPath = Path.Combine(_tempDir, "raw-pip.jsonl");
+        await File.WriteAllLinesAsync(inputPath,
+        [
+            """{"instance_id":"pallets__flask-5014","repo":"pallets/flask","base_commit":"abc123","problem_statement":"Fix","patch":"diff","pip_constraints":["Werkzeug<2.0"]}""",
+            """{"instance_id":"psf__requests-5414","repo":"psf/requests","base_commit":"def456","problem_statement":"Fix","patch":"diff","pip_constraints":["MarkupSafe<2.1","Werkzeug<2.1"]}"""
+        ]);
+
+        var manifest = await BenchmarkDatasetManifestLoader.LoadAsync(manifestPath);
+        var importer = new SweBenchVerifiedImporter();
+
+        var imported = await importer.ImportAsync(inputPath, manifest);
+
+        Assert.Equal(2, imported.Count);
+        var flask = Assert.Single(imported, i => i.InstanceId == "pallets__flask-5014");
+        Assert.Equal(["Werkzeug<3.0"], flask.PipConstraints);
+
+        var requests = Assert.Single(imported, i => i.InstanceId == "psf__requests-5414");
+        Assert.Equal(["MarkupSafe<2.1", "Werkzeug<2.1"], requests.PipConstraints);
+    }
 }

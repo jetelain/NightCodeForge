@@ -2447,6 +2447,114 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("export NODE_PATH=\"$PWD/node_modules:/tmp/ncf-jest-junit/node_modules${NODE_PATH:+:$NODE_PATH}\"", wrappedJest);
     }
 
+    [Fact]
+    public void Step1163_WrapWithContainerDependencySetup_Python_ExportsCaBundleAndAppliesPipConstraints()
+    {
+        var wrappedDefault = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml",
+            BenchmarkLanguages.Python,
+            ExecutionMode.ContainerSandbox);
+
+        Assert.Contains("REQUESTS_CA_BUNDLE", wrappedDefault);
+        Assert.Contains("/etc/ssl/certs/ca-certificates.crt", wrappedDefault);
+        Assert.Contains("SETUPTOOLS_SCM_PRETEND_VERSION", wrappedDefault);
+        Assert.DoesNotContain("ncf-pip-constraints.txt\"", wrappedDefault);
+        Assert.Contains("if [ -f /tmp/ncf-bench-venv/.ncf-pip-constraints ]; then rm -rf /tmp/ncf-bench-venv /tmp/ncf-pip-constraints.txt; fi", wrappedDefault);
+
+        var wrappedNode = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int npmCacheGuardIdx = wrappedNode.IndexOf("export npm_config_cache=", StringComparison.Ordinal);
+        int pnpmStoreGuardIdx = wrappedNode.IndexOf("export npm_config_store_dir=\"/tmp/ncf-pnpm-store\"", StringComparison.Ordinal);
+        int depsReadyCheckIdx = wrappedNode.IndexOf("ncf_node_deps_ready=0", StringComparison.Ordinal);
+        Assert.True(npmCacheGuardIdx >= 0 && pnpmStoreGuardIdx > npmCacheGuardIdx && depsReadyCheckIdx > pnpmStoreGuardIdx,
+            $"Expected writable npm_config_cache and npm_config_store_dir guards before ncf_node_deps_ready check in: {wrappedNode}");
+
+        var wrappedYarnCmd = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "yarn build:packages && npx jest --ci --reporters=jest-junit -- foo.test.ts",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int installEndIdx = wrappedYarnCmd.IndexOf($"touch node_modules/.ncf-bench-deps-ok", StringComparison.Ordinal);
+        int yarnGuardAfterInstallIdx = wrappedYarnCmd.IndexOf("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund yarn", installEndIdx, StringComparison.Ordinal);
+        Assert.True(installEndIdx > 0 && yarnGuardAfterInstallIdx > installEndIdx,
+            $"Expected standalone yarn guard after cached-node_modules check in: {wrappedYarnCmd}");
+
+        var wrappedPnpmCmd = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "cd sub && pnpm test",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int pnpmInstallEndIdx = wrappedPnpmCmd.IndexOf("touch node_modules/.ncf-bench-deps-ok", StringComparison.Ordinal);
+        int pnpmGuardAfterInstallIdx = wrappedPnpmCmd.IndexOf("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund pnpm", pnpmInstallEndIdx, StringComparison.Ordinal);
+        Assert.True(pnpmInstallEndIdx > 0 && pnpmGuardAfterInstallIdx > pnpmInstallEndIdx,
+            $"Expected standalone pnpm guard after cached-node_modules check in: {wrappedPnpmCmd}");
+
+        var wrappedBareYarn = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "yarn",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int bareYarnInstallEndIdx = wrappedBareYarn.IndexOf("touch node_modules/.ncf-bench-deps-ok", StringComparison.Ordinal);
+        Assert.True(bareYarnInstallEndIdx > 0 &&
+                    wrappedBareYarn.IndexOf("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund yarn", bareYarnInstallEndIdx, StringComparison.Ordinal) > bareYarnInstallEndIdx);
+
+        var wrappedBarePnpm = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "pnpm",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int barePnpmInstallEndIdx = wrappedBarePnpm.IndexOf("touch node_modules/.ncf-bench-deps-ok", StringComparison.Ordinal);
+        Assert.True(barePnpmInstallEndIdx > 0 &&
+                    wrappedBarePnpm.IndexOf("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund pnpm", barePnpmInstallEndIdx, StringComparison.Ordinal) > barePnpmInstallEndIdx);
+
+        var wrappedYarnPathArg = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "npx jest packages/yarn/foo.test.ts",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int pathArgInstallEndIdx = wrappedYarnPathArg.IndexOf("touch node_modules/.ncf-bench-deps-ok", StringComparison.Ordinal);
+        Assert.Equal(-1, wrappedYarnPathArg.IndexOf("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund yarn", pathArgInstallEndIdx, StringComparison.Ordinal));
+
+        var wrappedPnpmPathArg = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "npx vitest run tests/pnpm-helper.spec.ts",
+            BenchmarkLanguages.TypeScript,
+            ExecutionMode.ContainerSandbox);
+        int pnpmPathArgInstallEndIdx = wrappedPnpmPathArg.IndexOf("touch node_modules/.ncf-bench-deps-ok", StringComparison.Ordinal);
+        Assert.Equal(-1, wrappedPnpmPathArg.IndexOf("npm install -g --prefix /tmp/ncf-npm-global --ignore-scripts --no-audit --no-fund pnpm", pnpmPathArgInstallEndIdx, StringComparison.Ordinal));
+
+        var wrappedPinned = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
+            "pytest --junitxml=/workspace/.ncf-bench-results/junit.xml",
+            BenchmarkLanguages.Python,
+            ExecutionMode.ContainerSandbox,
+            ["Werkzeug<3.0", "click>=8.0"]);
+
+        Assert.Contains("REQUESTS_CA_BUNDLE", wrappedPinned);
+        Assert.Contains("/tmp/ncf-pip-constraints.txt", wrappedPinned);
+        Assert.Contains("export PIP_CONSTRAINT=/tmp/ncf-pip-constraints.txt", wrappedPinned);
+        Assert.Contains("-c /tmp/ncf-pip-constraints.txt", wrappedPinned);
+        Assert.Contains("Werkzeug<3.0", wrappedPinned);
+        Assert.Contains("click>=8.0", wrappedPinned);
+        Assert.Contains(".ncf-pip-constraints", wrappedPinned);
+    }
+
+    [Fact]
+    public void Step1163_EvaluateExpectedFindings_MatchesSnakeCaseFileStemAgainstPascalCaseTypeWithoutSymbolHint()
+    {
+        var delayQueueFindings = new[]
+        {
+            new BenchmarkExpectedFinding(
+                "tokio-util/src/time/delay_queue.rs",
+                Keywords: ["DelayQueue", "waker", "slab", "deadline"])
+        };
+
+        var flintAskCorpus = "Clarify DelayQueue::remove wakeup behavior: should remove wake the stored waker whenever an entry changes the earliest deadline in the slab?";
+        var (score, missing) = BenchmarkVerifier.EvaluateExpectedFindings(delayQueueFindings, flintAskCorpus);
+        Assert.Equal(1.0, score);
+        Assert.Empty(missing);
+
+        var testFileOnlyCorpus = "Check DelayQueueTests for waker and deadline in slab.";
+        var (testScore, testMissing) = BenchmarkVerifier.EvaluateExpectedFindings(delayQueueFindings, testFileOnlyCorpus);
+        Assert.Equal(0.0, testScore);
+        Assert.Single(testMissing);
+    }
+
     private static string RunGit(string workingDir, params string[] args)
     {
         using var process = new System.Diagnostics.Process();

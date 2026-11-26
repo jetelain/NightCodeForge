@@ -347,7 +347,77 @@ public static partial class TestAssertionEvaluator
                    candidate.Contains("." + bracketPrefix, StringComparison.OrdinalIgnoreCase);
         }).ToList();
 
-        return paramMatches.Count > 0 ? paramMatches.All(o => o.Passed) : null;
+        if (paramMatches.Count > 0)
+        {
+            return paramMatches.All(o => o.Passed);
+        }
+
+        // Upstream SWE-bench log parsers sometimes split parameterized pytest node IDs at spaces
+        // or commas, leaving an unbalanced '[' prefix (e.g. "test_foo[hello" for "test_foo[hello world]").
+        if (HasUnbalancedOpenBracket(target))
+        {
+            var truncatedMatches = outcomes
+                .Where(o => MatchesTruncatedBracketCandidate(nameSelector(o), target))
+                .ToList();
+
+            if (truncatedMatches.Count > 0)
+            {
+                return truncatedMatches.All(o => o.Passed);
+            }
+        }
+
+        return null;
+    }
+
+    private static bool MatchesTruncatedBracketCandidate(string candidate, string target)
+    {
+        if (!candidate.EndsWith(']'))
+        {
+            return false;
+        }
+
+        int nextIndex = -1;
+        if (candidate.StartsWith(target, StringComparison.OrdinalIgnoreCase))
+        {
+            nextIndex = target.Length;
+        }
+        else
+        {
+            var dottedTarget = "." + target;
+            int matchIndex = candidate.IndexOf(dottedTarget, StringComparison.OrdinalIgnoreCase);
+            if (matchIndex >= 0)
+            {
+                nextIndex = matchIndex + dottedTarget.Length;
+            }
+        }
+
+        if (nextIndex < 0 || nextIndex >= candidate.Length)
+        {
+            return false;
+        }
+
+        // Upstream SWE-bench splits occur at delimiters (spaces/commas), so either the truncated
+        // prefix already ends on a non-alphanumeric delimiter (e.g. "[foo," or "[(((") or the next
+        // character in the full candidate ID is a delimiter rather than continuing an identifier/number.
+        return !char.IsLetterOrDigit(target[^1]) || !char.IsLetterOrDigit(candidate[nextIndex]);
+    }
+
+    private static bool HasUnbalancedOpenBracket(string value)
+    {
+        int depth = 0;
+        foreach (var ch in value)
+        {
+            if (ch == '[')
+            {
+                depth++;
+            }
+            else if (ch == ']' && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return depth > 0;
     }
 
     internal static string NormalizeTestIdentifier(string name)

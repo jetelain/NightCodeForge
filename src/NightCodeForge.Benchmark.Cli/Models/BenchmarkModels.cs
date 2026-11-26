@@ -50,6 +50,7 @@ public sealed record BenchmarkInstance
     public string? CustomContainerImage { get; init; }
     public string? CustomTestCommand { get; init; }
     public TestResultFormat? TestResultFormat { get; init; }
+    public IReadOnlyList<string> PipConstraints { get; init; } = Array.Empty<string>();
 
     // Implementation fields
     public string? GoldPatch { get; init; }

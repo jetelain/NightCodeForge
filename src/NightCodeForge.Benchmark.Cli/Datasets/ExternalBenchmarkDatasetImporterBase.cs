@@ -138,8 +138,10 @@ public abstract class ExternalBenchmarkDatasetImporterBase : IBenchmarkDatasetIm
         var goldPatch = ExtractGoldPatch(raw, inputPath, instanceId);
         var testPatch = NullIfWhiteSpacePreserve(BenchmarkDatasetLoader.GetOptionalString(raw, BenchmarkDatasetConstants.FieldTestPatch, inputPath, instanceId));
 
-        var failToPass = ExtractTestList(raw, inputPath, instanceId, BenchmarkDatasetConstants.FieldFailToPass, BenchmarkDatasetConstants.FieldF2pTests);
-        var passToPass = ExtractTestList(raw, inputPath, instanceId, BenchmarkDatasetConstants.FieldPassToPass, BenchmarkDatasetConstants.FieldP2pTests);
+        var failToPass = manifestEntry.FailToPass
+            ?? ExtractTestList(raw, inputPath, instanceId, BenchmarkDatasetConstants.FieldFailToPass, BenchmarkDatasetConstants.FieldF2pTests);
+        var passToPass = manifestEntry.PassToPass
+            ?? ExtractTestList(raw, inputPath, instanceId, BenchmarkDatasetConstants.FieldPassToPass, BenchmarkDatasetConstants.FieldP2pTests);
 
         var rawFormatStr = BenchmarkDatasetLoader.GetOptionalString(raw, BenchmarkDatasetConstants.FieldTestResultFormat, inputPath, instanceId);
         var rawFormat = BenchmarkDatasetLoader.ParseOptionalTestResultFormat(rawFormatStr, inputPath, instanceId);
@@ -155,6 +157,9 @@ public abstract class ExternalBenchmarkDatasetImporterBase : IBenchmarkDatasetIm
             ?? NullIfWhiteSpace(BenchmarkDatasetLoader.GetOptionalString(raw, BenchmarkDatasetConstants.FieldCustomTestCommand, inputPath, instanceId))
             ?? DefaultTestCommand;
 
+        var pipConstraints = manifestEntry.PipConstraints
+            ?? BenchmarkDatasetLoader.ParseStringArrayOrJsonString(raw, BenchmarkDatasetConstants.FieldPipConstraints, inputPath, instanceId);
+
         return new BenchmarkInstance
         {
             InstanceId = instanceId,
@@ -167,6 +172,7 @@ public abstract class ExternalBenchmarkDatasetImporterBase : IBenchmarkDatasetIm
             CustomContainerImage = customImage,
             CustomTestCommand = customTestCmd,
             TestResultFormat = effectiveFormat,
+            PipConstraints = pipConstraints,
             GoldPatch = goldPatch,
             TestPatch = testPatch,
             FailToPass = failToPass,

@@ -605,6 +605,181 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         Assert.Contains("class NewEvalTests {}", await File.ReadAllTextAsync(Path.Combine(handle.WorkspacePath, "test", "SubA", "NewEvalTests.cs")));
     }
 
+    [Fact]
+    public async Task Step1163_ResetToBaseAsync_PurgesGitignoredTargetArtifactsWhilePreservingNodeModulesAndVenv()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, ".gitignore"), "target/\nnode_modules/\n.venv/\n");
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "lib.rs"), "pub fn v() -> i32 { 1 }\n");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Base with gitignore\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "reset-clean-ignores",
+                Language = BenchmarkLanguages.Rust,
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Fix rust"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        var targetOutDir = Path.Combine(handle.WorkspacePath, "target", "debug", "build");
+        var nodeModulesDir = Path.Combine(handle.WorkspacePath, "node_modules", "pkg");
+        var venvDir = Path.Combine(handle.WorkspacePath, ".venv", "bin");
+        Directory.CreateDirectory(targetOutDir);
+        Directory.CreateDirectory(nodeModulesDir);
+        Directory.CreateDirectory(venvDir);
+
+        await File.WriteAllTextAsync(Path.Combine(targetOutDir, "stale-out.bin"), "stale-target");
+        await File.WriteAllTextAsync(Path.Combine(nodeModulesDir, "index.js"), "module.exports = 1;");
+        await File.WriteAllTextAsync(Path.Combine(venvDir, "pytest"), "#!/bin/sh\n");
+
+        await _manager.ResetToBaseAsync(handle.WorkspacePath, handle.BaseCommit);
+
+        Assert.False(Directory.Exists(Path.Combine(handle.WorkspacePath, "target")));
+        Assert.True(File.Exists(Path.Combine(nodeModulesDir, "index.js")));
+        Assert.True(File.Exists(Path.Combine(venvDir, "pytest")));
+    }
+
+    [Fact]
+    public async Task Step1163_CleanupAsync_HandlesCyclicDirectoryReparsePointsWithoutHanging()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "pkg.json"), "{}");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Base\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "cleanup-cyclic-reparse",
+                Language = BenchmarkLanguages.TypeScript,
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Fix"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        var packagesDir = Path.Combine(handle.WorkspacePath, "packages");
+        var pkgA = Path.Combine(packagesDir, "pkg-a", "node_modules");
+        var pkgB = Path.Combine(packagesDir, "pkg-b", "node_modules");
+        Directory.CreateDirectory(pkgA);
+        Directory.CreateDirectory(pkgB);
+        await File.WriteAllTextAsync(Path.Combine(packagesDir, "pkg-a", "index.ts"), "export const a = 1;");
+
+        var linkAtoB = Path.Combine(pkgA, "pkg-b");
+        var linkBtoA = Path.Combine(pkgB, "pkg-a");
+        if (OperatingSystem.IsWindows())
+        {
+            using var p1 = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkAtoB}\" \"{Path.Combine(packagesDir, "pkg-b")}\"") { CreateNoWindow = true, UseShellExecute = false })!;
+            p1.WaitForExit(5000);
+            using var p2 = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{linkBtoA}\" \"{Path.Combine(packagesDir, "pkg-a")}\"") { CreateNoWindow = true, UseShellExecute = false })!;
+            p2.WaitForExit(5000);
+        }
+        else
+        {
+            Directory.CreateSymbolicLink(linkAtoB, Path.Combine(packagesDir, "pkg-b"));
+            Directory.CreateSymbolicLink(linkBtoA, Path.Combine(packagesDir, "pkg-a"));
+        }
+
+        await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(Directory.Exists(handle.WorkspacePath));
+    }
+
+    [Fact]
+    public async Task Step1163_CleanupAsync_HandlesDanglingDirectoryReparsePointsAndReadOnlyFiles()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "pkg.json"), "{}");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Base\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "cleanup-dangling-reparse",
+                Language = BenchmarkLanguages.TypeScript,
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Fix"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        var targetDir = Path.Combine(handle.WorkspacePath, "deleted-target");
+        var linkParent = Path.Combine(handle.WorkspacePath, "a-links");
+        var siblingDir = Path.Combine(handle.WorkspacePath, "z-sibling");
+        Directory.CreateDirectory(targetDir);
+        Directory.CreateDirectory(linkParent);
+        Directory.CreateDirectory(siblingDir);
+
+        var danglingLink = Path.Combine(linkParent, "broken-link");
+        if (OperatingSystem.IsWindows())
+        {
+            using var p = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{danglingLink}\" \"{targetDir}\"") { CreateNoWindow = true, UseShellExecute = false })!;
+            p.WaitForExit(5000);
+        }
+        else
+        {
+            Directory.CreateSymbolicLink(danglingLink, targetDir);
+        }
+
+        // Delete target so the junction/symlink becomes dangling before cleanup.
+        Directory.Delete(targetDir, recursive: true);
+
+        var readOnlyFile = Path.Combine(siblingDir, "readonly.txt");
+        await File.WriteAllTextAsync(readOnlyFile, "locked");
+        File.SetAttributes(readOnlyFile, FileAttributes.ReadOnly);
+
+        await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(Directory.Exists(handle.WorkspacePath));
+    }
+
+    [Fact]
+    public async Task CleanupAsync_ContinuesDeletingSiblingFilesAndDirectoriesWhenOneFileIsLocked()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "pkg.json"), "{}");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Base\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "cleanup-locked-file",
+                Language = BenchmarkLanguages.CSharp,
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Fix"
+            },
+            BenchmarkProblemCategory.Implementation);
+
+        var lockedDir = Path.Combine(handle.WorkspacePath, "a-locked");
+        var siblingDir = Path.Combine(handle.WorkspacePath, "z-sibling");
+        Directory.CreateDirectory(lockedDir);
+        Directory.CreateDirectory(siblingDir);
+
+        var lockedFile = Path.Combine(lockedDir, "locked.bin");
+        var lockedSiblingFile = Path.Combine(lockedDir, "removable.txt");
+        var siblingFile = Path.Combine(siblingDir, "sibling.txt");
+        await File.WriteAllTextAsync(lockedFile, "lock");
+        await File.WriteAllTextAsync(lockedSiblingFile, "delete-me");
+        await File.WriteAllTextAsync(siblingFile, "delete-me-too");
+
+        using (var lockStream = new FileStream(lockedFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+
+            Assert.True(File.Exists(lockedFile));
+            Assert.False(File.Exists(lockedSiblingFile));
+            Assert.False(Directory.Exists(siblingDir));
+        }
+
+        await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.False(Directory.Exists(handle.WorkspacePath));
+    }
+
     private (GitCliRunner GitRunner, BenchmarkWorkspaceManager Manager) CreateGitRunnerAndManager(IProcessRunner processRunner)
     {
         var wslMetadata = new Mock<IWslMetadataService>();
