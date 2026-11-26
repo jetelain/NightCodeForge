@@ -11,15 +11,20 @@
     Uninstalls the existing global tool and wipes the cache before reinstalling.
 .PARAMETER SkipBuild
     Skips the build/pack step and installs the existing .nupkg from the output folder.
+.PARAMETER InstallSkills
+    Automatically installs the NightCodeForge agent skills globally to ~/.gemini/config/skills/ and ~/.agents/skills/.
 .EXAMPLE
     .\install-cli.ps1
 .EXAMPLE
     .\install-cli.ps1 -Force
+.EXAMPLE
+    .\install-cli.ps1 -InstallSkills
 #>
 param(
     [string]$Configuration = "Release",
     [switch]$Force,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [Alias("InstallSkill")][switch]$InstallSkills
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,6 +90,33 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+if ($InstallSkills) {
+    Write-Host "`nInstalling NightCodeForge AI agent skills globally..." -ForegroundColor Cyan
+    $dotnetToolsDir = Join-Path $HOME ".dotnet/tools"
+    $candidates = @(
+        (Join-Path $dotnetToolsDir "$toolCommand.exe"),
+        (Join-Path $dotnetToolsDir $toolCommand)
+    )
+    $toolExe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $toolExe) {
+        $resolvedTool = Get-Command $toolCommand -ErrorAction SilentlyContinue
+        if ($resolvedTool) {
+            $toolExe = $resolvedTool.Source
+        }
+    }
+
+    if (-not $toolExe) {
+        Write-Error "Could not locate installed '$toolCommand' executable in '$dotnetToolsDir' or PATH."
+        exit 1
+    }
+
+    & $toolExe skills install --global
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to install NightCodeForge agent skills globally."
+        exit $LASTEXITCODE
+    }
+}
+
 Write-Host "`n==========================================================" -ForegroundColor Green
 Write-Host " Installation Successful!                                 " -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Green
@@ -98,3 +130,6 @@ try {
 }
 
 Write-Host "`nYou can now run 'ncf init' or 'ncf audit' in any repository." -ForegroundColor Cyan
+if (-not $InstallSkills) {
+    Write-Host "Tip: Run '$toolCommand skills install --global' to install NightCodeForge agent skills globally." -ForegroundColor Gray
+}
