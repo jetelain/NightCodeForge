@@ -108,7 +108,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pytest-dev/pytest",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest testing/test_mark.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -118,7 +118,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pallets/flask",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "pip_constraints": [
         "Werkzeug<3.0"
       ],
@@ -230,7 +230,16 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "fail_to_pass": [
+        "Polly.Core.Tests.Issues.IssuesTests.InfiniteRetry_Delay_Does_Not_Overflow_2163",
+        "Polly.Core.Tests.Retry.RetryHelperTests.GetRetryDelay_Exponential_Is_Positive_When_No_Maximum_Delay",
+        "Polly.Core.Tests.Retry.RetryHelperTests.GetRetryDelay_Exponential_Does_Not_Exceed_MaxDelay"
+      ],
+      "pass_to_pass": [
+        "Polly.Core.Tests.Retry.RetryHelperTests.ExponentialWithJitter_Ok"
+      ],
+      "notes": "Reclassify RetryHelperTests.ExponentialWithJitter_Ok from fail_to_pass to pass_to_pass (loops i=0..1024 and passes on BaseCommit without GoldPatch)."
     },
     {
       "instance_id": "polly-1316",
@@ -260,13 +269,14 @@
       "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
-      "instance_id": "restsharp__restsharp-2020",
+      "instance_id": "restsharp__restsharp-1962",
       "source": "swe-sharp-bench",
       "category": "Implementation",
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "notes": "Replaces restsharp__restsharp-2020 whose SimpleServer fixture races HttpListener.Start() asynchronously on Linux/.NET 10."
     },
     {
       "instance_id": "messagepack-csharp__messagepack-csharp-2022",
@@ -302,7 +312,39 @@
       "language": "csharp",
       "repo": "autofac/Autofac",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/Autofac.Specification.Test/Autofac.Specification.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Autofac.Specification.Test/Autofac.Specification.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "fail_to_pass": [
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.WithPropertyDelegateAllowsNullValue"
+      ],
+      "pass_to_pass": [
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.WithPropertyNamedAllowsNullValue",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.WithPropertyTypedAllowsNullValue",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.ParameterForConstructorShouldNotAttachToProperty",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.InjectPropertiesOverwritesSetProperties",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredCanSetBaseClassProperties",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.DecoratedInstanceWithPropertyInjectionAllowingCircularReferencesStillInjects",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredUsingDelegateSelector",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredOverwritesSetProperties",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredDoesNotSetStaticSetter",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredUsingPropertySelector",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesNotSetIfNotSpecified",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredSetsWriteOnlyPublicProperty",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertyInjectionPassesNamedParameterOfTheInstanceTypeBeingInjectedOnto",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.InjectUnsetPropertiesUsesPublicOnly",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.InjectPropertiesWithPropertySelectorAllowsPrivateSet",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredDoesNotSetNonPublicSetter",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.SetterInjectionPrivateGet",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredUsingInlineDelegate",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertySpecifiedAsResolveParameterWhenAutowiredMayBeBothConstructorAndProperty",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.InjectUnsetPropertiesSkipsSetProperties",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.InjectPropertiesAllowsSeparationOfConstructorAndPropertyParameters",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.InjectPropertiesWithDelegateSelectorAllowsPrivateSet",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredSetsUnsetPublicSetter",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertiesAutowiredWithDelegateFactory",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.PropertySpecifiedAsResolveParameterWhenAutowired",
+        "Autofac.Specification.Test.Features.PropertyInjectionTests.EnumPropertiesCanBeAutowired"
+      ],
+      "notes": "Reclassify WithPropertyNamedAllowsNullValue and WithPropertyTypedAllowsNullValue from fail_to_pass to pass_to_pass (already pass on BaseCommit; GoldPatch only changed compile-time nullability annotations for those overloads)."
     },
     {
       "instance_id": "autofac__autofac-1451",
@@ -320,7 +362,14 @@
       "language": "csharp",
       "repo": "devlooped/moq",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test tests/Moq.Tests/Moq.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/Moq.Tests/Moq.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "fail_to_pass": [
+        "Moq.Tests.ComCompatibilityFixture.Can_create_mock_of_Excel_Workbook_using_Mock_Of_2"
+      ],
+      "pass_to_pass": [
+        "Moq.Tests.ComCompatibilityFixture.Can_create_mock_of_Excel_Workbook_using_Mock_Of_1"
+      ],
+      "notes": "Reclassify GoodWorkbook control test Can_create_mock_of_Excel_Workbook_using_Mock_Of_1 from fail_to_pass to pass_to_pass (already passes on BaseCommit)."
     },
     {
       "instance_id": "devlooped__moq-1081",
@@ -329,7 +378,14 @@
       "language": "csharp",
       "repo": "devlooped/moq",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test tests/Moq.Tests/Moq.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/Moq.Tests/Moq.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "fail_to_pass": [
+        "Moq.Tests.Regressions.IssueReportsFixture+Issue1054.String_constant"
+      ],
+      "pass_to_pass": [
+        "Moq.Tests.Regressions.IssueReportsFixture+Issue1054.String_variable"
+      ],
+      "notes": "Reclassify Issue1054.String_variable from fail_to_pass to pass_to_pass (captured MemberExpression vs MemberExpression already passes on BaseCommit)."
     },
     {
       "instance_id": "ardalis__cleanarchitecture-546",
@@ -418,7 +474,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "sympy/sympy",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest sympy/parsing/tests/test_sympy_parser.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -428,7 +484,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "psf/requests",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "pip_constraints": [
         "MarkupSafe<2.1",
         "Werkzeug<2.1"
@@ -442,7 +498,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pytest-dev/pytest",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest testing/test_unittest.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -452,7 +508,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pytest-dev/pytest",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest testing/logging/test_fixture.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -462,7 +518,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pylint-dev/pylint",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest tests/config/test_config.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -472,7 +528,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "sympy/sympy",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest sympy/physics/units/tests/test_quantities.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -482,7 +538,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "sympy/sympy",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest sympy/polys/tests/test_rings.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -492,7 +548,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "sympy/sympy",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest sympy/combinatorics/tests/test_homomorphisms.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -659,7 +715,7 @@
       "category": "CodeReview",
       "language": "python",
       "repo": "psf/requests",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "pip_constraints": [
         "MarkupSafe<2.1",
         "Werkzeug<2.1"
@@ -673,7 +729,7 @@
       "category": "CodeReview",
       "language": "python",
       "repo": "pallets/flask",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "pip_constraints": [
         "Werkzeug<3.0"
       ],

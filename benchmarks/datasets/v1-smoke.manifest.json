@@ -108,7 +108,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pytest-dev/pytest",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml",
       "custom_test_command": "pytest testing/test_mark.py --junitxml=/workspace/.ncf-bench-results/junit.xml"
     },
@@ -118,7 +118,7 @@
       "category": "Implementation",
       "language": "python",
       "repo": "pallets/flask",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "pip_constraints": [
         "Werkzeug<3.0"
       ],
@@ -188,7 +188,7 @@
       "category": "CodeReview",
       "language": "python",
       "repo": "psf/requests",
-      "custom_container_image": "python:3.11",
+      "custom_container_image": "python:3.11-bookworm",
       "pip_constraints": [
         "MarkupSafe<2.1",
         "Werkzeug<2.1"

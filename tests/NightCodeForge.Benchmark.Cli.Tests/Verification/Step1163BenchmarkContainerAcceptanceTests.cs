@@ -86,7 +86,7 @@ public sealed class Step1163BenchmarkContainerAcceptanceTests : IDisposable
         var factory = CreateRuntimeServices();
         var scope = BenchmarkVerifier.CreateVerificationScope(
             workDir,
-            customContainerImage: "python:3.11",
+            customContainerImage: "python:3.11-bookworm",
             ExecutionMode.ContainerSandbox,
             containerName);
 

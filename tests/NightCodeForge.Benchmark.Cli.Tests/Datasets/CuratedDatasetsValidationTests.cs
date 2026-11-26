@@ -79,23 +79,55 @@ public sealed partial class CuratedDatasetsValidationTests
         Assert.Contains("mocha-junit-reporter", axiosSmoke.CustomTestCommand);
 
         var pytestSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pytest-dev__pytest-10356");
-        Assert.Equal("python:3.11", pytestSmoke.CustomContainerImage);
+        Assert.Equal("python:3.11-bookworm", pytestSmoke.CustomContainerImage);
 
         var flaskSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pallets__flask-5014");
-        Assert.Equal("python:3.11", flaskSmoke.CustomContainerImage);
+        Assert.Equal("python:3.11-bookworm", flaskSmoke.CustomContainerImage);
         Assert.Contains("Werkzeug<3.0", flaskSmoke.PipConstraints ?? []);
 
         var crPy1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-py-001");
-        Assert.Equal("python:3.11", crPy1Smoke.CustomContainerImage);
+        Assert.Equal("python:3.11-bookworm", crPy1Smoke.CustomContainerImage);
         Assert.Contains("tests/test_utils.py", crPy1Smoke.CustomTestCommand);
         Assert.Contains("MarkupSafe<2.1", crPy1Smoke.PipConstraints ?? []);
 
         var crPy2Full = Assert.Single(full.Entries, e => e.InstanceId == "ncf-cr-py-002");
-        Assert.Equal("python:3.11", crPy2Full.CustomContainerImage);
+        Assert.Equal("python:3.11-bookworm", crPy2Full.CustomContainerImage);
         Assert.Contains("Werkzeug<3.0", crPy2Full.PipConstraints ?? []);
 
         var crRust1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-rust-001");
         Assert.Contains("grep-regex", crRust1Smoke.CustomTestCommand);
+
+        Assert.DoesNotContain(full.Entries, e => e.InstanceId == "restsharp__restsharp-2020");
+        var restSharp1962 = Assert.Single(full.Entries, e => e.InstanceId == "restsharp__restsharp-1962");
+        Assert.Equal("restsharp/RestSharp", restSharp1962.Repo);
+
+        var polly2164 = Assert.Single(full.Entries, e => e.InstanceId == "polly-2164");
+        Assert.Equal(3, polly2164.FailToPass?.Count);
+        Assert.Equal(["Polly.Core.Tests.Retry.RetryHelperTests.ExponentialWithJitter_Ok"], polly2164.PassToPass ?? []);
+
+        var autofac1428 = Assert.Single(full.Entries, e => e.InstanceId == "autofac__autofac-1428");
+        Assert.Equal(
+            ["Autofac.Specification.Test.Features.PropertyInjectionTests.WithPropertyDelegateAllowsNullValue"],
+            autofac1428.FailToPass ?? []);
+        Assert.Equal(26, autofac1428.PassToPass?.Count);
+        Assert.Contains("Autofac.Specification.Test.Features.PropertyInjectionTests.WithPropertyNamedAllowsNullValue", autofac1428.PassToPass ?? []);
+        Assert.Contains("Autofac.Specification.Test.Features.PropertyInjectionTests.WithPropertyTypedAllowsNullValue", autofac1428.PassToPass ?? []);
+
+        var moq1076 = Assert.Single(full.Entries, e => e.InstanceId == "devlooped__moq-1076");
+        Assert.Equal(
+            ["Moq.Tests.ComCompatibilityFixture.Can_create_mock_of_Excel_Workbook_using_Mock_Of_2"],
+            moq1076.FailToPass ?? []);
+        Assert.Equal(
+            ["Moq.Tests.ComCompatibilityFixture.Can_create_mock_of_Excel_Workbook_using_Mock_Of_1"],
+            moq1076.PassToPass ?? []);
+
+        var moq1081 = Assert.Single(full.Entries, e => e.InstanceId == "devlooped__moq-1081");
+        Assert.Equal(
+            ["Moq.Tests.Regressions.IssueReportsFixture+Issue1054.String_constant"],
+            moq1081.FailToPass ?? []);
+        Assert.Equal(
+            ["Moq.Tests.Regressions.IssueReportsFixture+Issue1054.String_variable"],
+            moq1081.PassToPass ?? []);
     }
 
     [Fact]

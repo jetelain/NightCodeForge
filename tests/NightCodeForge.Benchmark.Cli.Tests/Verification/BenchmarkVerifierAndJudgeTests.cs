@@ -2658,6 +2658,64 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Equal("/home/gruearbre/.nightcodeforge/benchmarks/workspaces/serilog-123", scope.MountTable.Entries.First(e => e.VirtualMountPath == "/workspace").WslTargetDirectoryPath);
     }
 
+    [Fact]
+    public async Task VerifyAsync_Implementation_ZeroParsedResultsWithNonZeroExit_IncludesSanitizedOutputTail()
+    {
+        var workspaceDir = Path.Combine(_tempDir, "wks-zero-parsed");
+        Directory.CreateDirectory(workspaceDir);
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var judge = new Mock<IBenchmarkLlmJudge>();
+
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommandResult(
+                ExitCode: 139,
+                StandardOutput: "line 1\nline 2\ncollecting ... 90 items",
+                StandardError: "bash: line 1: 49 Segmentation fault (core dumped)\n",
+                Duration: TimeSpan.FromSeconds(2)));
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            containerFactory.Object,
+            envProvider.Object,
+            judge.Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "py-crash",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.Python,
+            Repo = "pytest-dev/pytest",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix crash",
+            TestResultFormat = TestResultFormat.JUnitXml,
+            FailToPass = ["testing/test_mark.py::test_mark_mro"]
+        };
+
+        var result = await verifier.VerifyAsync(
+            instance,
+            new BenchmarkWorkspaceHandle { InstanceId = "py-crash", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.False(result.Passed);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("exited with code 139", result.ErrorMessage);
+        Assert.Contains("Output tail:", result.ErrorMessage);
+        Assert.Contains("Segmentation fault", result.ErrorMessage);
+        Assert.DoesNotContain("\n", result.ErrorMessage);
+        Assert.DoesNotContain("\r", result.ErrorMessage);
+    }
+
     private static string RunGit(string workingDir, params string[] args)
     {
         using var process = new System.Diagnostics.Process();

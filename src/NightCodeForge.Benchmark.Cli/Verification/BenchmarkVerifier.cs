@@ -25,6 +25,8 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     private const double MinimumAnchorCoverageForPass = 0.5;
     private const double AdjacentEscalatedDifficultyCredit = 0.75;
     private const int MinimumFileStemCorroborationLength = 5;
+    private const int MaxZeroResultOutputTailChars = 400;
+    private const int MaxZeroResultOutputTailLines = 5;
 
     private static readonly HashSet<string> GenericFileStems = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -48,6 +50,9 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
 
     [GeneratedRegex(@"[A-Za-z0-9_]{4,}", RegexOptions.CultureInvariant)]
     private static partial Regex SummaryTokenRegex();
+
+    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
+    private static partial Regex WhitespaceCollapseRegex();
 
     private readonly IBenchmarkWorkspaceManager _workspaceManager;
     private readonly IContainerEnvironmentFactory _containerFactory;
@@ -385,10 +390,50 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             VerificationLog = combinedOutput,
             ErrorMessage = eval.AllPassed
                 ? null
-                : (parsedOutcomes.Count == 0 && cmdResult.ExitCode != 0
-                    ? $"Test command exited with code {cmdResult.ExitCode} and produced no parsed test results. Failed tests: {string.Join(", ", eval.FailedTests)}"
-                    : $"Failed tests: {string.Join(", ", eval.FailedTests)}")
+                : BuildAssertionFailureMessage(cmdResult.ExitCode, parsedOutcomes.Count, combinedOutput, eval.FailedTests)
         };
+    }
+
+    private static string BuildAssertionFailureMessage(
+        int exitCode,
+        int parsedOutcomeCount,
+        string combinedOutput,
+        IReadOnlyList<string> failedTests)
+    {
+        var failedList = string.Join(", ", failedTests);
+        if (parsedOutcomeCount == 0 && exitCode != 0)
+        {
+            var outputTail = FormatCommandOutputTailForError(combinedOutput);
+            return string.IsNullOrEmpty(outputTail)
+                ? $"Test command exited with code {exitCode} and produced no parsed test results. Failed tests: {failedList}"
+                : $"Test command exited with code {exitCode} and produced no parsed test results. Output tail: {outputTail} | Failed tests: {failedList}";
+        }
+
+        return $"Failed tests: {failedList}";
+    }
+
+    private static string FormatCommandOutputTailForError(string? combinedOutput, int maxChars = MaxZeroResultOutputTailChars)
+    {
+        if (string.IsNullOrWhiteSpace(combinedOutput) || maxChars <= 0)
+        {
+            return string.Empty;
+        }
+
+        var tailLines = combinedOutput
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(l => !string.Equals(l, "[STDERR]", StringComparison.Ordinal))
+            .TakeLast(MaxZeroResultOutputTailLines);
+
+        var collapsed = WhitespaceCollapseRegex().Replace(string.Join(" ", tailLines), " ").Trim();
+        if (collapsed.Length <= maxChars)
+        {
+            return collapsed;
+        }
+
+        const string ellipsis = "...";
+        return maxChars > ellipsis.Length
+            ? ellipsis + collapsed[^((maxChars - ellipsis.Length))..]
+            : collapsed[^maxChars..];
     }
 
     private async Task<BenchmarkVerificationResult> VerifyCodeReviewAsync(
