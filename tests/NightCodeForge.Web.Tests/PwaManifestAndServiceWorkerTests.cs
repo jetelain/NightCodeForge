@@ -12,41 +12,8 @@ namespace NightCodeForge.Web.Tests;
 
 public class PwaManifestAndServiceWorkerTests
 {
-    private static string FindWebRoot()
-    {
-        var dir = AppContext.BaseDirectory;
-        while (!string.IsNullOrEmpty(dir))
-        {
-            var candidate = Path.Combine(dir, "src", "NightCodeForge.Web", "wwwroot");
-            if (Directory.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            var parent = Directory.GetParent(dir);
-            dir = parent?.FullName;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate src/NightCodeForge.Web/wwwroot from " + AppContext.BaseDirectory);
-    }
-
-    private static string FindWebProjectRoot()
-    {
-        var dir = AppContext.BaseDirectory;
-        while (!string.IsNullOrEmpty(dir))
-        {
-            var candidate = Path.Combine(dir, "src", "NightCodeForge.Web");
-            if (File.Exists(Path.Combine(candidate, "NightCodeForge.Web.csproj")))
-            {
-                return candidate;
-            }
-
-            var parent = Directory.GetParent(dir);
-            dir = parent?.FullName;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate src/NightCodeForge.Web from " + AppContext.BaseDirectory);
-    }
+    private static string FindWebRoot() =>
+        Path.Combine(WebProjectTestHelper.FindWebProjectRoot(), "wwwroot");
 
     [Fact]
     public void FileExtensionContentTypeProvider_ShouldMapWebmanifestAndServiceWorkerMimeTypes()
@@ -174,7 +141,7 @@ public class PwaManifestAndServiceWorkerTests
     [Fact]
     public void AppRazorAndAppJs_ShouldContainManifestAndMobileMetaTagsAndServiceWorkerRegistration()
     {
-        var webRoot = FindWebProjectRoot();
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
         var appRazorPath = Path.Combine(webRoot, "Components", "App.razor");
         Assert.True(File.Exists(appRazorPath), "App.razor must exist");
 

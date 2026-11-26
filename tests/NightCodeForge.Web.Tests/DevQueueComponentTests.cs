@@ -255,4 +255,39 @@ public class DevQueueComponentTests : BunitContext
         Assert.Contains("Dev-Queue &amp; Concurrency Operations", cut.Markup);
         Assert.Contains(_toastService.Toasts, t => t.Title == "Refresh Failed");
     }
+
+    [Fact]
+    public void DevQueueStyles_AreDefinedInAppCss()
+    {
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
+        var appCssPath = Path.Combine(webRoot, "wwwroot", "css", "app.css");
+        Assert.True(File.Exists(appCssPath), $"Missing app.css at {appCssPath}");
+
+        var appCss = File.ReadAllText(appCssPath);
+        string[] requiredSelectors =
+        [
+            ".devqueue-metrics-grid",
+            ".table-responsive",
+            ".table",
+            ".table-dark",
+            ".table-hover",
+            ".responsive-card-table tbody td",
+            ".badge",
+            ".alert-warning",
+            ".fs-1",
+            ".text-center",
+            ".text-end",
+            ".ms-2",
+            ".me-2",
+            ".btn-outline-warning",
+            ".btn-outline-danger"
+        ];
+
+        foreach (var selector in requiredSelectors)
+        {
+            Assert.True(
+                WebProjectTestHelper.ContainsCssSelector(appCss, selector),
+                $"Expected CSS selector '{selector}' to be defined in app.css");
+        }
+    }
 }

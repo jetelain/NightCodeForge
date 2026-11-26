@@ -24,14 +24,14 @@
                 Monitor the sequential GPU inference queue (<code>WorkerCount = 1</code>), manage task priority, and inspect active workspace locks.
             </p>
         </div>
-        <div class="d-flex gap-2 align-items-center">
-            <button class="btn btn-secondary" style="border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; padding: 0.5rem 1rem;" @onclick="ReorderQueueByPriorityAsync" disabled="@(_isReordering || _isRefreshing)" id="sort-priority-btn">
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+            <button class="btn btn-secondary" style="font-size: 0.9rem; padding: 0.5rem 1rem;" @onclick="ReorderQueueByPriorityAsync" disabled="@(_isReordering || _isRefreshing)" id="sort-priority-btn">
                 @(_isReordering ? "⏳ Reordering..." : "⚡ Sort by Priority")
             </button>
-            <a href="/hangfire" target="_blank" class="btn btn-secondary" style="border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font-size: 0.9rem; padding: 0.5rem 1rem;" id="open-hangfire-link">
+            <a href="/hangfire" target="_blank" class="btn btn-secondary" style="font-size: 0.9rem; padding: 0.5rem 1rem;" id="open-hangfire-link">
                 📊 Open Hangfire Dashboard ↗
             </a>
-            <button class="btn btn-primary" style="background: var(--accent-indigo); border: none; font-size: 0.9rem; padding: 0.5rem 1.25rem; font-weight: 600;" @onclick="RefreshQueueStateAsync" disabled="@_isRefreshing" id="refresh-devqueue-btn">
+            <button class="btn btn-primary" style="font-size: 0.9rem; padding: 0.5rem 1.25rem; font-weight: 600;" @onclick="RefreshQueueStateAsync" disabled="@_isRefreshing" id="refresh-devqueue-btn">
                 @(_isRefreshing ? "🔄 Refreshing..." : "🔄 Refresh")
             </button>
         </div>
