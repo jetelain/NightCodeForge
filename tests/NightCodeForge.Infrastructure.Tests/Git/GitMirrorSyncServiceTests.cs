@@ -4,6 +4,7 @@ using Moq;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 
@@ -308,6 +309,47 @@ public class GitMirrorSyncServiceTests : IDisposable
         // Verify fallback branch exists on host with agent's commit
         var hostBranchLog = await _runner.ExecuteAsync(_hostRepo.RepositoryPath, ["log", "main-ncf", "-1", "--pretty=%B"]);
         Assert.Contains("Agent base branch update", hostBranchLog.StandardOutput);
+    }
+
+    [Fact]
+    public async Task PullFromHostAsync_WhenWorktreeMetadataContainsContainerPaths_RepairsMetadataAndFetchesSuccessfully()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_mirror_sanitize_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var worktreeDir = Path.Combine(tempRoot, "task-171");
+
+        try
+        {
+            await _syncService.InitializeMirrorAsync(_workspace, cloneDir);
+            await _runner.ExecuteAsync(cloneDir, ["worktree", "add", "-b", "feature/task-171", worktreeDir, "main"]);
+
+            var adminDir = Path.Combine(cloneDir, ".git", "worktrees", "task-171");
+            var gitDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.GitDirFileName);
+            var commonDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.CommonDirFileName);
+            var lockedFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.LockedFileName);
+
+            await File.WriteAllTextAsync(gitDirFile, "/workspace/task-171/.git\n");
+            await File.WriteAllTextAsync(commonDirFile, "/workspace/clone/.git\n");
+            if (File.Exists(lockedFile))
+            {
+                File.Delete(lockedFile);
+            }
+
+            _hostRepo.CreateFile("after_poison.txt", "new commit");
+            _hostRepo.CommitAll("Host commit after poison");
+
+            await _syncService.PullFromHostAsync(cloneDir, "main");
+
+            var logResult = await _runner.ExecuteAsync(cloneDir, ["log", "host-origin/main", "-1", "--pretty=%B"]);
+            Assert.Contains("Host commit after poison", logResult.StandardOutput);
+            Assert.Equal("../..", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+            Assert.False(GitWorktreeMetadataSanitizer.IsContainerVirtualPath(await File.ReadAllTextAsync(gitDirFile)));
+            Assert.True(File.Exists(lockedFile));
+        }
+        finally
+        {
+            TestGitRepository.DeleteDirectorySafe(tempRoot);
+        }
     }
 
     private Task CommitMirrorAsync(string message) =>

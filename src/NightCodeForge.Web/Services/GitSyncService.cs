@@ -24,6 +24,7 @@ public class GitSyncService : IGitSyncService
     private readonly IWorkspacePathResolver _pathResolver;
     private readonly IWslMetadataService _wslMetadataService;
     private readonly IExecutionEnvironmentProvider _environmentProvider;
+    private readonly IWorkspaceLockProvider _workspaceLockProvider;
     private readonly ILogger<GitSyncService> _logger;
 
     private static readonly ConcurrentDictionary<int, DateTime> LastFetchedTimes = new();
@@ -37,6 +38,7 @@ public class GitSyncService : IGitSyncService
         IWorkspacePathResolver pathResolver,
         IWslMetadataService wslMetadataService,
         IExecutionEnvironmentProvider environmentProvider,
+        IWorkspaceLockProvider workspaceLockProvider,
         ILogger<GitSyncService> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
@@ -46,6 +48,7 @@ public class GitSyncService : IGitSyncService
         _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
         _wslMetadataService = wslMetadataService ?? throw new ArgumentNullException(nameof(wslMetadataService));
         _environmentProvider = environmentProvider ?? throw new ArgumentNullException(nameof(environmentProvider));
+        _workspaceLockProvider = workspaceLockProvider ?? throw new ArgumentNullException(nameof(workspaceLockProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -236,18 +239,45 @@ public class GitSyncService : IGitSyncService
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        var targetPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && IsDirectoryAccessible(workspace.Ext4MirrorPath)
+        var targetPath = ResolveWorktreeInspectPath(workspace);
+        if (string.IsNullOrWhiteSpace(targetPath) || !IsDirectoryAccessible(targetPath))
+        {
+            return new List<WorktreeSnapshot>();
+        }
+
+        return await GetWorktreesCoreAsync(workspace, targetPath, sanitizeMetadata: true, cancellationToken);
+    }
+
+    private string? ResolveWorktreeInspectPath(Workspace workspace) =>
+        !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && IsDirectoryAccessible(workspace.Ext4MirrorPath)
             ? workspace.Ext4MirrorPath
             : workspace.RepositoryPath;
 
+    private async Task<List<WorktreeSnapshot>> GetWorktreesCoreAsync(
+        Workspace workspace,
+        string targetPath,
+        bool sanitizeMetadata,
+        CancellationToken cancellationToken)
+    {
         var snapshots = new List<WorktreeSnapshot>();
-        if (string.IsNullOrWhiteSpace(targetPath) || !IsDirectoryAccessible(targetPath))
-        {
-            return snapshots;
-        }
 
         try
         {
+            if (sanitizeMetadata)
+            {
+                if (_workspaceLockProvider.TryAcquireLock(workspace.Id, out var wsLock))
+                {
+                    using (wsLock)
+                    {
+                        GitWorktreeMetadataSanitizer.Sanitize(targetPath, _pathResolver, _logger);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("Skipping worktree metadata sanitization during read for workspace #{WorkspaceId} because workspace lock is active.", workspace.Id);
+                }
+            }
+
             var result = await _gitCliRunner.ExecuteAsync(
                 targetPath,
                 ["worktree", "list", "--porcelain"],
@@ -341,10 +371,7 @@ public class GitSyncService : IGitSyncService
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        var targetPath = !string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath) && IsDirectoryAccessible(workspace.Ext4MirrorPath)
-            ? workspace.Ext4MirrorPath
-            : workspace.RepositoryPath;
-
+        var targetPath = ResolveWorktreeInspectPath(workspace);
         if (string.IsNullOrWhiteSpace(targetPath) || !IsDirectoryAccessible(targetPath))
         {
             return;
@@ -352,11 +379,15 @@ public class GitSyncService : IGitSyncService
 
         _logger.LogInformation("Pruning stale Git worktrees for workspace #{WorkspaceId}", workspace.Id);
 
+        using var wsLock = await _workspaceLockProvider.AcquireLockAsync(workspace.Id, cancellationToken);
+
+        GitWorktreeMetadataSanitizer.Sanitize(targetPath, _pathResolver, _logger);
+
         try
         {
             await _gitCliRunner.ExecuteAsync(targetPath, ["worktree", "prune"], cancellationToken: cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed executing git worktree prune on '{TargetPath}'", targetPath);
         }
@@ -374,30 +405,30 @@ public class GitSyncService : IGitSyncService
         // Clean up inactive/done task worktrees
         try
         {
-            var worktrees = await GetWorktreesAsync(workspace, cancellationToken);
+            var worktrees = await GetWorktreesCoreAsync(workspace, targetPath, sanitizeMetadata: false, cancellationToken);
             var tasks = await _taskRepository.GetByWorkspaceIdAsync(workspace.Id, cancellationToken);
             var taskDict = tasks.ToDictionary(t => t.Id);
 
-                foreach (var wt in worktrees)
+            foreach (var wt in worktrees)
+            {
+                if (taskDict.TryGetValue(wt.TaskId, out var task))
                 {
-                    if (taskDict.TryGetValue(wt.TaskId, out var task))
+                    if (task.Status == TaskOverallStatus.Triage ||
+                        task.Status == TaskOverallStatus.Closed ||
+                        task.Status == TaskOverallStatus.Failed ||
+                        task.Status == TaskOverallStatus.Cancelled ||
+                        task.Status == TaskOverallStatus.Rejected)
                     {
-                        if (task.Status == TaskOverallStatus.Triage ||
-                            task.Status == TaskOverallStatus.Closed ||
-                            task.Status == TaskOverallStatus.Failed ||
-                            task.Status == TaskOverallStatus.Cancelled ||
-                            task.Status == TaskOverallStatus.Rejected)
-                        {
-                            _logger.LogInformation("Removing inactive worktree for completed task #{TaskId}", wt.TaskId);
-                            await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, wt.TaskId, cancellationToken);
-                        }
+                        _logger.LogInformation("Removing inactive worktree for completed task #{TaskId}", wt.TaskId);
+                        await _gitWorkspaceManager.RemoveWorktreeAsync(workspace, wt.TaskId, cancellationToken);
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to prune inactive task worktrees");
-            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to prune inactive task worktrees");
+        }
     }
 
     /// <inheritdoc />

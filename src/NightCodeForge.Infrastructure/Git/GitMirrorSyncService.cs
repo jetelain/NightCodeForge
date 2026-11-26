@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Infrastructure.Git;
 
@@ -344,6 +345,21 @@ public class GitMirrorSyncService : IGitMirrorSyncService
             ["config", "checkout.defaultRemote", "host-origin"],
             cancellationToken: cancellationToken);
 
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(
+                targetMirrorDir,
+                ["config", GitWorktreeMetadataSanitizer.WorktreePruneExpireConfigKey, GitWorktreeMetadataSanitizer.WorktreePruneExpireNeverValue],
+                cancellationToken: cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to configure {ConfigKey}={ConfigValue} in mirror '{MirrorDir}'",
+                GitWorktreeMetadataSanitizer.WorktreePruneExpireConfigKey,
+                GitWorktreeMetadataSanitizer.WorktreePruneExpireNeverValue,
+                targetMirrorDir);
+        }
+
         workspace.Ext4MirrorPath = targetMirrorDir;
         return targetMirrorDir;
     }
@@ -359,6 +375,8 @@ public class GitMirrorSyncService : IGitMirrorSyncService
 
         _logger.LogInformation("Pulling latest base branch '{BaseBranch}' from host-origin into mirror '{MirrorRepoPath}'",
             baseBranch, mirrorRepoPath);
+
+        GitWorktreeMetadataSanitizer.Sanitize(mirrorRepoPath, _pathResolver, _logger);
 
         // 1. Fetch latest commits from host-origin
         await _gitCliRunner.ExecuteAsync(

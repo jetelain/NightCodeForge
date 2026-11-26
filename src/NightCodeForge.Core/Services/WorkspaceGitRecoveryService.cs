@@ -51,16 +51,17 @@ public class WorkspaceGitRecoveryService : IWorkspaceGitRecoveryService
             basePaths.Add(workspace.Ext4MirrorPath);
         }
 
-        // 1. Purge stale .git/*.lock files on base repos (clone and host)
+        // 1. Purge stale .git/*.lock files on base repos (clone and host) and sanitize worktree metadata
         foreach (var path in basePaths)
         {
             PurgeStaleGitLocks(path, workspace.Id);
+            GitWorktreeMetadataSanitizer.Sanitize(path, _pathResolver, _logger);
         }
 
         // 2. Align Ext4 mirror with host-origin base branch so Ideation and Triage work on up-to-date code
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
-            await AlignMirrorWithHostOriginAsync(workspace, cancellationToken);
+            await AlignMirrorWithHostOriginCoreAsync(workspace, sanitizeMetadata: false, cancellationToken);
         }
 
         // 3. Discover and rescue active agent worktrees ONLY (clone and host repo are strictly untouched)
@@ -190,7 +191,10 @@ public class WorkspaceGitRecoveryService : IWorkspaceGitRecoveryService
         return worktrees;
     }
 
-    public async Task AlignMirrorWithHostOriginAsync(Workspace workspace, CancellationToken cancellationToken = default)
+    public Task AlignMirrorWithHostOriginAsync(Workspace workspace, CancellationToken cancellationToken = default) =>
+        AlignMirrorWithHostOriginCoreAsync(workspace, sanitizeMetadata: true, cancellationToken);
+
+    private async Task AlignMirrorWithHostOriginCoreAsync(Workspace workspace, bool sanitizeMetadata, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
@@ -205,6 +209,11 @@ public class WorkspaceGitRecoveryService : IWorkspaceGitRecoveryService
         try
         {
             _logger.LogInformation("Aligning mirror '{MirrorPath}' with host-origin base branch '{BaseBranch}'", mirrorPath, baseBranch);
+
+            if (sanitizeMetadata)
+            {
+                GitWorktreeMetadataSanitizer.Sanitize(mirrorPath, _pathResolver, _logger);
+            }
 
             // Fetch latest commits from host-origin
             await _gitCliRunner.ExecuteAsync(

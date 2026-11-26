@@ -275,4 +275,64 @@ public class WorkspaceGitRecoveryServiceTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.GetWorktreesToRescueAsync(workspace, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.RescueUncommittedChangesAsync(_tempDir, cts.Token));
     }
+
+    [Fact]
+    public async Task RecoverWorkspaceAsync_SanitizesPoisonedWorktreeMetadataBeforeGitCommands()
+    {
+        var cloneDir = Path.Combine(_tempDir, "clone");
+        var wtDir = Path.Combine(_tempDir, "task-171");
+        var adminDir = Path.Combine(cloneDir, ".git", "worktrees", "task-171");
+        Directory.CreateDirectory(adminDir);
+        Directory.CreateDirectory(wtDir);
+
+        var gitDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.GitDirFileName);
+        var commonDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.CommonDirFileName);
+        var forwardGitFile = Path.Combine(wtDir, ".git");
+
+        await File.WriteAllTextAsync(gitDirFile, "/workspace/task-171/.git\n");
+        await File.WriteAllTextAsync(commonDirFile, "/workspace/clone/.git\n");
+        await File.WriteAllTextAsync(forwardGitFile, "gitdir: /workspace/clone/.git/worktrees/task-171\n");
+
+        var sut = CreateSut();
+        var workspace = new Workspace
+        {
+            Id = 7,
+            Name = "Sanitize Recovery WS",
+            RepositoryPath = cloneDir,
+            Ext4MirrorPath = cloneDir,
+            DefaultBaseBranch = "main"
+        };
+
+        var sanitizedBeforeFetch = false;
+        var sanitizedBeforeWorktreeList = false;
+
+        _gitCliRunner.Handler = (_, args) =>
+        {
+            var currentGitDir = File.ReadAllText(gitDirFile).Trim();
+            var currentCommonDir = File.ReadAllText(commonDirFile).Trim();
+            var isSanitized = !GitWorktreeMetadataSanitizer.IsContainerVirtualPath(currentGitDir) &&
+                              currentCommonDir == GitWorktreeMetadataSanitizer.ExpectedCommonDirContent;
+
+            if (args == "fetch host-origin main")
+            {
+                sanitizedBeforeFetch = isSanitized;
+            }
+            else if (args == "worktree list --porcelain")
+            {
+                sanitizedBeforeWorktreeList = isSanitized;
+                return new GitCommandResult(0, $"worktree {cloneDir}\nHEAD abcdef\n", string.Empty, TimeSpan.Zero);
+            }
+
+            return new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero);
+        };
+
+        await sut.RecoverWorkspaceAsync(workspace);
+
+        Assert.True(sanitizedBeforeFetch);
+        Assert.True(sanitizedBeforeWorktreeList);
+        Assert.Equal("../..", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+        Assert.Equal($"{wtDir.Replace('\\', '/')}/.git", (await File.ReadAllTextAsync(gitDirFile)).Trim());
+        Assert.True(File.Exists(Path.Combine(adminDir, GitWorktreeMetadataSanitizer.LockedFileName)));
+        Assert.Equal("gitdir: ../clone/.git/worktrees/task-171", (await File.ReadAllTextAsync(forwardGitFile)).Trim());
+    }
 }

@@ -779,6 +779,7 @@ public class Step1238TriageWebAndInspectorTests : BunitContext
                 new Mock<IWorkspacePathResolver>().Object,
                 new Mock<IWslMetadataService>().Object,
                 new SingleExecutionEnvironmentProvider(envMock.Object),
+                new NightCodeForge.Core.Concurrency.WorkspaceLockProvider(),
                 NullLogger<GitSyncService>.Instance);
 
             var worktrees = await gitSync.GetWorktreesAsync(ws);

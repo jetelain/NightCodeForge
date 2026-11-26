@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 
 namespace NightCodeForge.Infrastructure.Git;
 
@@ -79,34 +80,36 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         _logger.LogInformation("Ensuring worktree for ForgeTask #{TaskId} at '{WorktreePath}' (branch: '{BranchName}', base: '{BaseBranch}')",
             taskId, worktreePath, branchName, baseBranch);
 
-        // Check if worktree is already registered
+        // Sanitize worktree metadata before querying Git worktrees
+        await SanitizeCanonicalWorktreesAsync(canonicalPath, workspace, cancellationToken);
+
+        // Check if worktree is already actively registered and present on disk
         try
         {
             var worktreeListResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "list", "--porcelain"], cancellationToken: cancellationToken);
-            var normWorktreePath = worktreePath.Replace('\\', '/').TrimEnd('/');
-            var isWorktreeRegistered = worktreeListResult.StandardOutput
-                .Split('\n')
-                .Any(line => line.StartsWith("worktree ", StringComparison.OrdinalIgnoreCase) &&
-                             line[9..].Trim().Replace('\\', '/').TrimEnd('/').Equals(normWorktreePath, StringComparison.OrdinalIgnoreCase));
+            var isWorktreeRegistered = IsWorktreeActivelyRegistered(worktreeListResult.StandardOutput, worktreePath);
 
-            if (isWorktreeRegistered)
+            if (isWorktreeRegistered && WorktreeDirectoryExists(worktreePath, workspace))
             {
                 _logger.LogInformation("Worktree for ForgeTask #{TaskId} is already registered at '{WorktreePath}'", taskId, worktreePath);
                 await EnsureWorktreeRelativePathsAsync(workspace, taskId, cancellationToken);
                 return worktreePath;
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed to list worktrees in '{CanonicalPath}'; proceeding with add", canonicalPath);
         }
 
-        // If directory exists on disk but is not registered in git, clean it up before worktree add
+        // If directory exists on disk but is not actively registered in git, clean it up before worktree add
         if (WorktreeDirectoryExists(worktreePath, workspace))
         {
-            _logger.LogWarning("Worktree directory '{WorktreePath}' exists on disk but is not registered in git; cleaning up", worktreePath);
+            _logger.LogWarning("Worktree directory '{WorktreePath}' exists on disk but is not actively registered in git; cleaning up", worktreePath);
             await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
         }
+
+        // Unlock stale metadata for this task (e.g. if directory was deleted externally) before pruning
+        GitWorktreeMetadataSanitizer.UnlockWorktreesForTask(canonicalPath, taskId, _pathResolver, _logger);
 
         // Prune stale worktrees
         try
@@ -118,14 +121,26 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             _logger.LogDebug(ex, "Best-effort worktree prune in '{CanonicalPath}' failed", canonicalPath);
         }
 
-        // Configure Git native worktree relative paths
+        // Configure Git native worktree relative paths and prevent automatic worktree pruning
         try
         {
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["config", "worktree.useRelativePaths", "true"], cancellationToken: cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogDebug(ex, "Setting worktree.useRelativePaths in '{CanonicalPath}' ignored", canonicalPath);
+        }
+
+        try
+        {
+            await _gitCliRunner.ExecuteAsync(
+                canonicalPath,
+                ["config", GitWorktreeMetadataSanitizer.WorktreePruneExpireConfigKey, GitWorktreeMetadataSanitizer.WorktreePruneExpireNeverValue],
+                cancellationToken: cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Setting {ConfigKey} in '{CanonicalPath}' ignored", GitWorktreeMetadataSanitizer.WorktreePruneExpireConfigKey, canonicalPath);
         }
 
         await EnsureWorktreeExcludedAsync(canonicalPath, cancellationToken);
@@ -136,15 +151,21 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Any(b => b.TrimStart('*', '+', ' ', '\t').Equals(branchName, StringComparison.OrdinalIgnoreCase));
 
-        // Create worktree
+        // Create locked worktree so accidental `git worktree prune` cannot delete NCF-managed metadata
         if (branchExists)
         {
-            await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "add", worktreePath, branchName], cancellationToken: cancellationToken);
+            await _gitCliRunner.ExecuteAsync(
+                canonicalPath,
+                ["worktree", "add", "--lock", "--reason", GitWorktreeMetadataSanitizer.ManagedWorktreeLockReason, worktreePath, branchName],
+                cancellationToken: cancellationToken);
         }
         else
         {
             var effectiveBaseBranch = await ResolveEffectiveBaseBranchCoreAsync(canonicalPath, workspace, taskId, baseBranch, cancellationToken);
-            await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "add", "-b", branchName, worktreePath, effectiveBaseBranch], cancellationToken: cancellationToken);
+            await _gitCliRunner.ExecuteAsync(
+                canonicalPath,
+                ["worktree", "add", "--lock", "--reason", GitWorktreeMetadataSanitizer.ManagedWorktreeLockReason, "-b", branchName, worktreePath, effectiveBaseBranch],
+                cancellationToken: cancellationToken);
         }
 
         // Ensure relativeworktrees extension is unset so Microsoft.Build.Tasks.Git in MSBuild does not fail
@@ -255,13 +276,10 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var hostCanonical = ResolveHostAccessiblePath(canonicalPath);
         var gitVersion = await GetInstalledGitVersionAsync(canonicalPath, cancellationToken).ConfigureAwait(false);
         var supportsRelativeWorktrees = gitVersion is not null && gitVersion >= GitRelativeWorktreeMinimumVersion;
-
         string expectedReverse;
         if (!supportsRelativeWorktrees)
         {
-            expectedReverse = IsPosixPath(normWorktree)
-                ? $"{normWorktree}/.git\n"
-                : $"{normWorktree.Replace('/', '\\')}\\.git\n";
+            expectedReverse = $"{normWorktree}/.git\n";
         }
         else
         {
@@ -289,6 +307,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                     _logger.LogInformation("Normalized reverse worktree pointer for task #{TaskId} in '{ReverseGitDirFile}' to: '{ExpectedReverse}'",
                         taskId, reverseGitDirFile, expectedReverse.Trim());
                 }
+
+                GitWorktreeMetadataSanitizer.EnsureWorktreeCommonDirAndLock(Path.GetDirectoryName(reverseGitDirFile)!, _logger);
             }
             catch (Exception ex)
             {
@@ -324,6 +344,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                                 await File.WriteAllTextAsync(candidate, expectedReverse, cancellationToken).ConfigureAwait(false);
                                 _logger.LogInformation("Normalized discovered reverse worktree pointer in '{Candidate}' to relative: '{ReverseGitDir}'",
                                     candidate, reverseGitDir);
+                                GitWorktreeMetadataSanitizer.EnsureWorktreeCommonDirAndLock(subDir, _logger);
                                 break;
                             }
                         }
@@ -345,20 +366,44 @@ public class GitWorkspaceManager : IGitWorkspaceManager
 
         _logger.LogInformation("Removing worktree for ForgeTask #{TaskId} at '{WorktreePath}'", taskId, worktreePath);
 
+        await SanitizeCanonicalWorktreesAsync(canonicalPath, workspace, cancellationToken);
+
         try
         {
-            await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "remove", worktreePath, "--force"], cancellationToken: cancellationToken);
+            await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "remove", "--force", "--force", worktreePath], cancellationToken: cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(ex, "Failed to remove worktree cleanly for ForgeTask #{TaskId}; attempting prune", taskId);
+            _logger.LogWarning(ex, "Failed to remove worktree cleanly for ForgeTask #{TaskId}; deleting directory and unlocking before prune", taskId);
+
+            // Delete directory before pruning so `git worktree prune` removes the administrative directory
+            try
+            {
+                if (WorktreeDirectoryExists(worktreePath, workspace))
+                {
+                    await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
+                }
+            }
+            catch (Exception dex) when (dex is not OperationCanceledException)
+            {
+                _logger.LogWarning(dex, "Failed to delete worktree directory '{WorktreePath}' before prune", worktreePath);
+            }
+
+            try
+            {
+                GitWorktreeMetadataSanitizer.UnlockWorktreesForTask(canonicalPath, taskId, _pathResolver, _logger);
+            }
+            catch (Exception lex) when (lex is not OperationCanceledException)
+            {
+                _logger.LogDebug(lex, "Failed to remove worktree lock file for ForgeTask #{TaskId} before prune", taskId);
+            }
         }
 
         try
         {
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "prune"], cancellationToken: cancellationToken);
         }
-        catch (Exception pex)
+        catch (Exception pex) when (pex is not OperationCanceledException)
         {
             _logger.LogWarning(pex, "Failed to prune worktrees for workspace #{WorkspaceId}", workspace.Id);
         }
@@ -370,7 +415,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
                 await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed to delete worktree directory '{WorktreePath}'", worktreePath);
         }
@@ -387,9 +432,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             var mirrorParent = Path.GetDirectoryName(mirrorTrimmed);
             var mirrorDirName = Path.GetFileName(mirrorTrimmed);
             if (!string.IsNullOrEmpty(mirrorParent) &&
-                (mirrorDirName.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
-                 mirrorDirName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
-                 mirrorDirName.Equals("mirror", StringComparison.OrdinalIgnoreCase)))
+                GitWorktreeMetadataSanitizer.IsSiblingCanonicalDirName(mirrorDirName))
             {
                 var wt = Path.Combine(mirrorParent, $"task-{taskId}");
                 return workspace.Ext4MirrorPath.Contains('/') && !workspace.Ext4MirrorPath.Contains('\\')
@@ -406,9 +449,7 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var parent = Path.GetDirectoryName(canonicalTrimmed);
         var dirName = Path.GetFileName(canonicalTrimmed);
         if (!string.IsNullOrEmpty(parent) &&
-            (dirName.Equals("clone", StringComparison.OrdinalIgnoreCase) ||
-             dirName.Equals("repo", StringComparison.OrdinalIgnoreCase) ||
-             dirName.Equals("mirror", StringComparison.OrdinalIgnoreCase)))
+            GitWorktreeMetadataSanitizer.IsSiblingCanonicalDirName(dirName))
         {
             var wt = Path.Combine(parent, $"task-{taskId}");
             return canonical.Contains('/') && !canonical.Contains('\\')
@@ -779,6 +820,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var canonicalPath = GetCanonicalWorkingPath(workspace);
         var branchName = $"feature/task-{taskId}";
         var safeMessage = SanitizeMessage(commitMessage);
+
+        await SanitizeCanonicalWorktreesAsync(canonicalPath, workspace, cancellationToken);
 
         _logger.LogInformation("Squashing and merging '{BranchName}' into '{BaseBranch}' in canonical repository '{CanonicalPath}'",
             branchName, baseBranch, canonicalPath);
@@ -1181,6 +1224,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             branchName, effectiveBaseBranch, taskId);
 
         // 1. Upstream Base Branch Synchronization
+        await SanitizeCanonicalWorktreesAsync(canonicalPath, workspace, cancellationToken);
+
         if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
         {
             await _gitMirrorSyncService.PullFromHostAsync(workspace.Ext4MirrorPath, effectiveBaseBranch, cancellationToken);
@@ -1205,13 +1250,9 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         try
         {
             var worktreeListResult = await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "list", "--porcelain"], cancellationToken: cancellationToken);
-            var normWorktreePath = worktreePath.Replace('\\', '/').TrimEnd('/');
-            isWorktreeRegistered = worktreeListResult.StandardOutput
-                .Split('\n')
-                .Any(line => line.StartsWith("worktree ", StringComparison.OrdinalIgnoreCase) &&
-                             line[9..].Trim().Replace('\\', '/').TrimEnd('/').Equals(normWorktreePath, StringComparison.OrdinalIgnoreCase));
+            isWorktreeRegistered = IsWorktreeActivelyRegistered(worktreeListResult.StandardOutput, worktreePath);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed to list worktrees in '{CanonicalPath}'", canonicalPath);
         }
@@ -1231,6 +1272,13 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         else
         {
             // Case B: Worktree Does Not Exist or Is Corrupted
+            if (worktreeExistsOnDisk)
+            {
+                await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
+            }
+
+            GitWorktreeMetadataSanitizer.UnlockWorktreesForTask(canonicalPath, taskId, _pathResolver, _logger);
+
             try
             {
                 await _gitCliRunner.ExecuteAsync(canonicalPath, ["worktree", "prune"], cancellationToken: cancellationToken);
@@ -1238,11 +1286,6 @@ public class GitWorkspaceManager : IGitWorkspaceManager
             catch (GitCommandException ex)
             {
                 _logger.LogDebug(ex, "Worktree prune failed in '{CanonicalPath}'", canonicalPath);
-            }
-
-            if (worktreeExistsOnDisk && !isWorktreeRegistered)
-            {
-                await DeleteDirectorySafeAsync(worktreePath, cancellationToken);
             }
 
             await _gitCliRunner.ExecuteAsync(canonicalPath, ["branch", "-f", branchName, targetResetRef], cancellationToken: cancellationToken);
@@ -1275,6 +1318,8 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         var canonicalPath = GetCanonicalWorkingPath(workspace);
         var branchName = $"feature/task-{taskId}";
         var baseBranch = string.IsNullOrWhiteSpace(workspace.DefaultBaseBranch) ? "main" : workspace.DefaultBaseBranch;
+
+        await SanitizeCanonicalWorktreesAsync(canonicalPath, workspace, cancellationToken);
 
         await DeleteBranchInRepoSafeAsync(canonicalPath, branchName, baseBranch, cancellationToken);
 
@@ -1436,6 +1481,75 @@ public class GitWorkspaceManager : IGitWorkspaceManager
         {
             _logger.LogDebug(ex, "Failed to update git info/exclude in '{CanonicalPath}'", canonicalPath);
         }
+    }
+
+    private async Task SanitizeCanonicalWorktreesAsync(string canonicalPath, Workspace workspace, CancellationToken cancellationToken)
+    {
+        var gitVersion = await GetInstalledGitVersionAsync(canonicalPath, cancellationToken).ConfigureAwait(false);
+        bool? supportsRelativeWorktrees = gitVersion is not null
+            ? gitVersion >= GitRelativeWorktreeMinimumVersion
+            : null;
+
+        string? worktreesRootPath = null;
+        if (!string.IsNullOrWhiteSpace(workspace.Ext4MirrorPath))
+        {
+            var mirrorDirName = Path.GetFileName(workspace.Ext4MirrorPath.TrimEnd('/', '\\'));
+            if (!GitWorktreeMetadataSanitizer.IsSiblingCanonicalDirName(mirrorDirName))
+            {
+                worktreesRootPath = _pathResolver.GetAgentWorkspaceRootPath(workspace.Id);
+            }
+        }
+
+        GitWorktreeMetadataSanitizer.Sanitize(
+            canonicalPath,
+            _pathResolver,
+            _logger,
+            supportsRelativeWorktrees,
+            worktreesRootPath);
+    }
+
+    private static bool IsWorktreeActivelyRegistered(string porcelainOutput, string worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(porcelainOutput))
+        {
+            return false;
+        }
+
+        var normTarget = worktreePath.Replace('\\', '/').TrimEnd('/');
+        string? currentPath = null;
+        bool currentIsPrunable = false;
+
+        foreach (var rawLine in porcelainOutput.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrEmpty(line))
+            {
+                if (currentPath != null &&
+                    !currentIsPrunable &&
+                    currentPath.Equals(normTarget, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                currentPath = null;
+                currentIsPrunable = false;
+                continue;
+            }
+
+            if (line.StartsWith("worktree ", StringComparison.OrdinalIgnoreCase))
+            {
+                currentPath = line[9..].Trim().Replace('\\', '/').TrimEnd('/');
+                currentIsPrunable = false;
+            }
+            else if (line.StartsWith("prunable", StringComparison.OrdinalIgnoreCase))
+            {
+                currentIsPrunable = true;
+            }
+        }
+
+        return currentPath != null &&
+               !currentIsPrunable &&
+               currentPath.Equals(normTarget, StringComparison.OrdinalIgnoreCase);
     }
 
     private string ResolveHostAccessiblePath(string path)
