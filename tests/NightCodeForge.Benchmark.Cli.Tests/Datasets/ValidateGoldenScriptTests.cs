@@ -329,6 +329,69 @@ public sealed class ValidateGoldenScriptTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ValidateGolden_ConcurrencyTwoNoVerify_ValidatesBatchAndRecordsConcurrencyInSummary()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoDir = Path.Combine(_tempDir, "local-repo-conc");
+        Directory.CreateDirectory(repoDir);
+        RunGit(repoDir, "init");
+        RunGit(repoDir, "config user.email test@example.com");
+        RunGit(repoDir, "config user.name Test");
+        await File.WriteAllTextAsync(Path.Combine(repoDir, "a.txt"), "hello\n");
+        await File.WriteAllTextAsync(Path.Combine(repoDir, "b.txt"), "foo\n");
+        RunGit(repoDir, "add -A");
+        RunGit(repoDir, "commit -m \"Initial\"");
+        var baseCommit = RunGit(repoDir, "rev-parse HEAD").Trim();
+
+        var repoRoot = FindRepoRoot();
+        var scriptPath = Path.Combine(repoRoot, "benchmarks", "validate-golden.ps1");
+        var datasetPath = Path.Combine(_tempDir, "conc.jsonl");
+        var outDir = Path.Combine(_tempDir, "conc-out");
+
+        var line1 = JsonSerializer.Serialize(new
+        {
+            instance_id = "conc-001",
+            category = "Implementation",
+            language = "csharp",
+            repo = repoDir,
+            base_commit = baseCommit,
+            problem_statement = "Fix a",
+            patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-hello\n+world\n"
+        });
+        var line2 = JsonSerializer.Serialize(new
+        {
+            instance_id = "conc-002",
+            category = "Implementation",
+            language = "csharp",
+            repo = repoDir,
+            base_commit = baseCommit,
+            problem_statement = "Fix b",
+            patch = "diff --git a/b.txt b/b.txt\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-foo\n+bar\n"
+        });
+        await File.WriteAllLinesAsync(datasetPath, [line1, line2]);
+
+        var (exitCode, stdout, stderr) = await RunPowerShellScriptAsync(
+            scriptPath,
+            ["-Dataset", datasetPath, "-Concurrency", "2", "-NoVerify", "-NoBuild", "-Configuration", GetBuildConfiguration(), "-OutDir", outDir]);
+
+        Assert.True(exitCode == 0, $"validate-golden.ps1 -Concurrency 2 failed (exit {exitCode}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}");
+
+        using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(outDir, "summary.json")));
+        var root = doc.RootElement;
+        Assert.Equal(2, root.GetProperty("concurrency").GetInt32());
+        Assert.Equal(2, root.GetProperty("total_selected").GetInt32());
+        Assert.Equal(2, root.GetProperty("passed").GetInt32());
+        Assert.Equal(0, root.GetProperty("failed").GetInt32());
+
+        var summaryMd = await File.ReadAllTextAsync(Path.Combine(outDir, "summary.md"));
+        Assert.Contains("- **Concurrency:** 2", summaryMd);
+    }
+
     private static string GetBuildConfiguration() =>
 #if DEBUG
         "Debug";

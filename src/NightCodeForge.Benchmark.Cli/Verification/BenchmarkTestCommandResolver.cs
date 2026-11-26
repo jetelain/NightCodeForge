@@ -74,6 +74,24 @@ internal static partial class BenchmarkTestCommandResolver
     [GeneratedRegex(@"^\s*dotnet\s+test(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex BareDotNetTestRegex();
 
+    [GeneratedRegex(@"(?:^|\s)--filter(?:\s|=|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ExplicitDotNetFilterFlagRegex();
+
+    [GeneratedRegex(@"^\s*cargo\s+test(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CargoTestCommandRegex();
+
+    [GeneratedRegex(@"^[A-Za-z0-9_:-]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex SafeRustTestTokenRegex();
+
+    [GeneratedRegex(@"^\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:""[^""]*""|'[^']*'|\S+)\s+)*pytest(?<rest>(?:\s+.*)?)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex PytestCommandRegex();
+
+    [GeneratedRegex(@"(?:^|\s)-k(?:\s|=|$)", RegexOptions.CultureInvariant)]
+    private static partial Regex ExplicitPytestKFlagRegex();
+
+    [GeneratedRegex(@"^[A-Za-z0-9_]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex SafePythonIdentifierRegex();
+
     [GeneratedRegex(@"\.(?:sln|slnx|csproj|fsproj|vbproj)(?:\s|$|[""'])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DotNetProjectOrSolutionRefRegex();
 
@@ -110,33 +128,46 @@ internal static partial class BenchmarkTestCommandResolver
     internal static string ResolveTestCommand(
         BenchmarkInstance instance,
         string workspacePath,
-        ExecutionMode executionMode = ExecutionMode.ContainerSandbox)
+        ExecutionMode executionMode = ExecutionMode.ContainerSandbox,
+        bool failToPassOnly = false)
     {
         var normalizedLanguage = BenchmarkLanguages.Normalize(instance.Language);
         var resultsDir = executionMode == ExecutionMode.ContainerSandbox
             ? BenchmarkPaths.ContainerResultsDir
             : BenchmarkPaths.BenchmarkResultDirRelative;
 
+        IReadOnlyList<string>? dotNetFilterTests = failToPassOnly && instance.FailToPass.Count > 0
+            ? instance.FailToPass
+            : null;
+
         if (!string.IsNullOrWhiteSpace(instance.CustomTestCommand))
         {
             var custom = instance.CustomTestCommand.Trim();
             if (string.Equals(normalizedLanguage, BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase))
             {
-                return ApplyDiscoveredDotNetTargetsToCustomCommand(custom, workspacePath, executionMode);
+                var csharpCmd = ApplyDiscoveredDotNetTargetsToCustomCommand(custom, workspacePath, executionMode, dotNetFilterTests);
+                return failToPassOnly
+                    ? ApplyFailToPassFilter(csharpCmd, instance, workspacePath, executionMode)
+                    : csharpCmd;
             }
 
             if (normalizedLanguage is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript)
             {
                 var withVitest = ApplyVitestConfigToCustomCommand(custom, workspacePath);
-                return ApplyMochaJUnitReporterToCustomCommand(withVitest, instance, resultsDir);
+                var nodeCmd = ApplyMochaJUnitReporterToCustomCommand(withVitest, instance, resultsDir);
+                return failToPassOnly
+                    ? ApplyFailToPassFilter(nodeCmd, instance, workspacePath, executionMode)
+                    : nodeCmd;
             }
 
-            return custom;
+            return failToPassOnly
+                ? ApplyFailToPassFilter(custom, instance, workspacePath, executionMode)
+                : custom;
         }
 
-        return normalizedLanguage switch
+        var resolved = normalizedLanguage switch
         {
-            BenchmarkLanguages.CSharp => ResolveCSharpTestCommand(workspacePath, resultsDir, executionMode),
+            BenchmarkLanguages.CSharp => ResolveCSharpTestCommand(workspacePath, resultsDir, executionMode, dotNetFilterTests),
             BenchmarkLanguages.Python => $"pytest --junitxml={resultsDir}/{BenchmarkPaths.JUnitFileName}",
             BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript => ResolveNodeTestCommand(workspacePath, resultsDir),
             BenchmarkLanguages.Rust => "cargo test --no-fail-fast",
@@ -144,6 +175,13 @@ internal static partial class BenchmarkTestCommandResolver
                 $"No default test command configured for language '{instance.Language}'. Provide custom_test_command.",
                 instance.InstanceId)
         };
+
+        if (!failToPassOnly || string.Equals(normalizedLanguage, BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase))
+        {
+            return resolved;
+        }
+
+        return ApplyFailToPassFilter(resolved, instance, workspacePath, executionMode);
     }
 
     internal static string ResolveAgentTestCommand(
@@ -302,18 +340,24 @@ internal static partial class BenchmarkTestCommandResolver
         return null;
     }
 
-    private static string ResolveCSharpTestCommand(string workspacePath, string resultsDir, ExecutionMode executionMode)
+    private static string ResolveCSharpTestCommand(
+        string workspacePath,
+        string resultsDir,
+        ExecutionMode executionMode,
+        IReadOnlyList<string>? failToPassTests = null)
     {
+        var filterArg = FormatDotNetFilterArgument(failToPassTests, executionMode);
+        var filterSuffix = string.IsNullOrEmpty(filterArg) ? string.Empty : $" {filterArg}";
         var targets = DiscoverDotNetTargets(workspacePath);
         if (targets.Count == 0)
         {
-            return $"dotnet build --nologo && dotnet test --no-build --logger trx --results-directory {resultsDir}";
+            return $"dotnet build --nologo && dotnet test --no-build --logger trx --results-directory {resultsDir}{filterSuffix}";
         }
 
         var commands = targets.Select(target =>
         {
             var quotedTarget = QuotePathArgument(target);
-            return $"dotnet build {quotedTarget} --nologo && dotnet test {quotedTarget} --no-build --logger trx --results-directory {resultsDir}";
+            return $"dotnet build {quotedTarget} --nologo && dotnet test {quotedTarget} --no-build --logger trx --results-directory {resultsDir}{filterSuffix}";
         }).ToList();
 
         return JoinMultiTargetCommands(commands, executionMode);
@@ -322,7 +366,8 @@ internal static partial class BenchmarkTestCommandResolver
     private static string ApplyDiscoveredDotNetTargetsToCustomCommand(
         string customCommand,
         string workspacePath,
-        ExecutionMode executionMode)
+        ExecutionMode executionMode,
+        IReadOnlyList<string>? failToPassTests = null)
     {
         var match = BareDotNetTestRegex().Match(customCommand);
         if (!match.Success || DotNetProjectOrSolutionRefRegex().IsMatch(customCommand))
@@ -342,11 +387,293 @@ internal static partial class BenchmarkTestCommandResolver
             return customCommand;
         }
 
+        var filterArg = !ExplicitDotNetFilterFlagRegex().IsMatch(rest) && !DoubleDashSeparatorRegex().IsMatch(rest)
+            ? FormatDotNetFilterArgument(failToPassTests, executionMode)
+            : string.Empty;
+        var filterSuffix = string.IsNullOrEmpty(filterArg) ? string.Empty : $" {filterArg}";
+
         var commands = targets
-            .Select(target => $"dotnet test {QuotePathArgument(target)}{rest}")
+            .Select(target => $"dotnet test {QuotePathArgument(target)}{rest}{filterSuffix}")
             .ToList();
 
         return JoinMultiTargetCommands(commands, executionMode);
+    }
+
+    internal static string ApplyFailToPassFilter(
+        string command,
+        BenchmarkInstance instance,
+        string workspacePath,
+        ExecutionMode executionMode)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+
+        if (string.IsNullOrWhiteSpace(command) || instance.FailToPass.Count == 0)
+        {
+            return command;
+        }
+
+        var normalizedLanguage = BenchmarkLanguages.Normalize(instance.Language);
+        return normalizedLanguage switch
+        {
+            BenchmarkLanguages.CSharp => ApplyDotNetFailToPassFilter(command, instance.FailToPass, executionMode),
+            BenchmarkLanguages.Rust => ApplyRustFailToPassFilter(command, instance.FailToPass),
+            BenchmarkLanguages.Python => ApplyPythonFailToPassFilter(command, instance.FailToPass, executionMode),
+            BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript => ApplyVitestFailToPassFilter(command, instance.FailToPass, workspacePath),
+            _ => command
+        };
+    }
+
+    internal static string? BuildDotNetFailToPassFilterExpression(IReadOnlyList<string>? failToPass)
+    {
+        if (failToPass == null || failToPass.Count == 0)
+        {
+            return null;
+        }
+
+        var terms = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rawTest in failToPass)
+        {
+            if (string.IsNullOrWhiteSpace(rawTest))
+            {
+                continue;
+            }
+
+            var trimmed = rawTest.Trim();
+            var parenIndex = trimmed.IndexOf('(');
+            if (parenIndex >= 0)
+            {
+                trimmed = trimmed[..parenIndex].TrimEnd();
+            }
+
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            var escaped = EscapeVsTestFilterValue(trimmed);
+            if (seen.Add(escaped))
+            {
+                terms.Add($"FullyQualifiedName~{escaped}");
+            }
+        }
+
+        return terms.Count > 0 ? string.Join("|", terms) : null;
+    }
+
+    private static string EscapeVsTestFilterValue(string value)
+    {
+        var sb = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (ch is '\\' or '(' or ')' or '&' or '|' or '=' or '!' or '~')
+            {
+                sb.Append('\\');
+            }
+            sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
+    private static string FormatDotNetFilterArgument(IReadOnlyList<string>? failToPass, ExecutionMode executionMode)
+    {
+        var expr = BuildDotNetFailToPassFilterExpression(failToPass);
+        if (string.IsNullOrWhiteSpace(expr))
+        {
+            return string.Empty;
+        }
+
+        return executionMode == ExecutionMode.BareHost
+            ? $"--filter \"{expr.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : $"--filter {QuoteSinglePosix(expr)}";
+    }
+
+    private static string ApplyDotNetFailToPassFilter(
+        string command,
+        IReadOnlyList<string> failToPass,
+        ExecutionMode executionMode)
+    {
+        var match = BareDotNetTestRegex().Match(command);
+        if (!match.Success)
+        {
+            return command;
+        }
+
+        var rest = match.Groups["rest"].Value;
+        if (ContainsUnquotedShellOperator(rest) ||
+            ExplicitDotNetFilterFlagRegex().IsMatch(rest) ||
+            DoubleDashSeparatorRegex().IsMatch(rest))
+        {
+            return command;
+        }
+
+        var filterArg = FormatDotNetFilterArgument(failToPass, executionMode);
+        return string.IsNullOrEmpty(filterArg) ? command : $"{command} {filterArg}";
+    }
+
+    private static string ApplyRustFailToPassFilter(string command, IReadOnlyList<string> failToPass)
+    {
+        var match = CargoTestCommandRegex().Match(command);
+        if (!match.Success)
+        {
+            return command;
+        }
+
+        var rest = match.Groups["rest"].Value;
+        if (ContainsUnquotedShellOperator(rest) || DoubleDashSeparatorRegex().IsMatch(rest))
+        {
+            return command;
+        }
+
+        var tokens = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rawTest in failToPass)
+        {
+            if (string.IsNullOrWhiteSpace(rawTest))
+            {
+                continue;
+            }
+
+            var token = rawTest.Trim();
+            if (!SafeRustTestTokenRegex().IsMatch(token))
+            {
+                return command;
+            }
+
+            if (seen.Add(token))
+            {
+                tokens.Add(token);
+            }
+        }
+
+        return tokens.Count > 0 ? $"{command} -- {string.Join(" ", tokens)}" : command;
+    }
+
+    private static string ApplyPythonFailToPassFilter(
+        string command,
+        IReadOnlyList<string> failToPass,
+        ExecutionMode executionMode)
+    {
+        var match = PytestCommandRegex().Match(command);
+        if (!match.Success)
+        {
+            return command;
+        }
+
+        var rest = match.Groups["rest"].Value;
+        if (ContainsUnquotedShellOperator(rest) ||
+            ExplicitPytestKFlagRegex().IsMatch(rest) ||
+            DoubleDashSeparatorRegex().IsMatch(rest))
+        {
+            return command;
+        }
+
+        var identifiers = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rawTest in failToPass)
+        {
+            if (string.IsNullOrWhiteSpace(rawTest))
+            {
+                continue;
+            }
+
+            var candidate = rawTest.Trim();
+            var doubleColonIndex = candidate.LastIndexOf("::", StringComparison.Ordinal);
+            if (doubleColonIndex >= 0)
+            {
+                candidate = candidate[(doubleColonIndex + 2)..];
+            }
+
+            var bracketIndex = candidate.IndexOf('[');
+            if (bracketIndex >= 0)
+            {
+                candidate = candidate[..bracketIndex];
+            }
+
+            candidate = candidate.Trim();
+            if (!SafePythonIdentifierRegex().IsMatch(candidate))
+            {
+                return command;
+            }
+
+            if (seen.Add(candidate))
+            {
+                identifiers.Add(candidate);
+            }
+        }
+
+        if (identifiers.Count == 0)
+        {
+            return command;
+        }
+
+        var expr = string.Join(" or ", identifiers);
+        return executionMode == ExecutionMode.BareHost
+            ? $"{command} -k \"{expr}\""
+            : $"{command} -k {QuoteSinglePosix(expr)}";
+    }
+
+    private static string ApplyVitestFailToPassFilter(
+        string command,
+        IReadOnlyList<string> failToPass,
+        string workspacePath)
+    {
+        if (string.IsNullOrWhiteSpace(workspacePath) ||
+            !VitestRunRegex().IsMatch(command) ||
+            ContainsUnquotedShellOperator(command) ||
+            DoubleDashSeparatorRegex().IsMatch(command))
+        {
+            return command;
+        }
+
+        var testFiles = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rawTest in failToPass)
+        {
+            if (string.IsNullOrWhiteSpace(rawTest))
+            {
+                continue;
+            }
+
+            var separatorIdx = rawTest.IndexOf(" > ", StringComparison.Ordinal);
+            if (separatorIdx <= 0)
+            {
+                return command;
+            }
+
+            var relPath = rawTest[..separatorIdx].Trim().Replace('\\', '/').TrimStart('/');
+            if (string.IsNullOrWhiteSpace(relPath) ||
+                Path.IsPathRooted(relPath) ||
+                relPath.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(seg => seg == ".."))
+            {
+                return command;
+            }
+
+            var fullPath = Path.Combine(workspacePath, relPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(fullPath))
+            {
+                return command;
+            }
+
+            if (seen.Add(relPath))
+            {
+                testFiles.Add(relPath);
+            }
+        }
+
+        if (testFiles.Count == 0)
+        {
+            return command;
+        }
+
+        var toAppend = testFiles
+            .Where(f => !command.Contains(f, StringComparison.OrdinalIgnoreCase))
+            .Select(QuotePathArgument)
+            .ToList();
+
+        return toAppend.Count > 0 ? $"{command} {string.Join(" ", toAppend)}" : command;
     }
 
     private static string JoinMultiTargetCommands(IReadOnlyList<string> commands, ExecutionMode executionMode)

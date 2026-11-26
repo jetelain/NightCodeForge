@@ -41,11 +41,31 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
         bool verifyWithTests,
         Action<string>? progressCallback,
         string? manifestPath = null,
+        int concurrency = 1,
         CancellationToken cancellationToken = default)
     {
         if (limit is <= 0)
         {
             throw new BenchmarkDatasetException("Validation limit must be greater than zero when specified.", datasetPath);
+        }
+
+        if (concurrency <= 0)
+        {
+            throw new BenchmarkDatasetException("Validation concurrency must be greater than zero.", datasetPath);
+        }
+
+        object progressLock = new();
+        void ReportProgress(string message)
+        {
+            if (progressCallback == null)
+            {
+                return;
+            }
+
+            lock (progressLock)
+            {
+                progressCallback(message);
+            }
         }
 
         var allInstances = await _datasetLoader.LoadAsync(
@@ -55,23 +75,34 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             msg =>
             {
                 _logger.LogInformation("{Diagnostic}", msg);
-                progressCallback?.Invoke(msg);
+                ReportProgress(msg);
             },
             cancellationToken).ConfigureAwait(false);
         var selected = FilterInstances(allInstances, datasetPath, instanceIdFilter, limit);
 
-        var results = new List<BenchmarkInstanceValidationResult>(selected.Count);
-        foreach (var instance in selected)
+        var results = new BenchmarkInstanceValidationResult[selected.Count];
+        using var gate = new SemaphoreSlim(concurrency, concurrency);
+        var tasks = selected.Select(async (instance, index) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var category = instance.ResolveEffectiveCategory(categoryOverride);
-            var result = await ValidateInstanceAsync(instance, category, verifyWithTests, cancellationToken).ConfigureAwait(false);
-            results.Add(result);
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var category = instance.ResolveEffectiveCategory(categoryOverride);
+                var result = await ValidateInstanceAsync(instance, category, verifyWithTests, cancellationToken).ConfigureAwait(false);
+                results[index] = result;
 
-            var statusTag = result.Passed ? BenchmarkDatasetConstants.StatusPass : BenchmarkDatasetConstants.StatusFail;
-            var detail = result.Passed ? result.Summary : result.ErrorMessage;
-            progressCallback?.Invoke($"[{statusTag}] {result.InstanceId} ({result.Category}, {result.Language}, {result.DurationMs} ms): {detail}");
-        }
+                var statusTag = result.Passed ? BenchmarkDatasetConstants.StatusPass : BenchmarkDatasetConstants.StatusFail;
+                var detail = result.Passed ? result.Summary : result.ErrorMessage;
+                ReportProgress($"[{statusTag}] {result.InstanceId} ({result.Category}, {result.Language}, {result.DurationMs} ms): {detail}");
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
 
         return new BenchmarkDatasetValidationReport
         {
@@ -254,6 +285,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             workspace,
             patchToApply: null,
             ExecutionMode.ContainerSandbox,
+            failToPassOnly: instance.FailToPass.Count > 0,
             cancellationToken).ConfigureAwait(false);
 
         if (instance.FailToPass.Count > 0)
@@ -281,6 +313,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             workspace,
             patchToApply: instance.GoldPatch,
             ExecutionMode.ContainerSandbox,
+            failToPassOnly: false,
             cancellationToken).ConfigureAwait(false);
 
         if (!goldResult.Passed)
@@ -358,6 +391,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
                 workspace,
                 patchToApply: instance.CandidatePatch,
                 ExecutionMode.ContainerSandbox,
+                failToPassOnly: false,
                 cancellationToken).ConfigureAwait(false);
 
             if (!candidateTestResult.Passed)
@@ -377,6 +411,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
                     workspace,
                     patchToApply: instance.GoldPatch,
                     ExecutionMode.ContainerSandbox,
+                    failToPassOnly: false,
                     cancellationToken).ConfigureAwait(false);
 
                 if (!goldTestResult.Passed)

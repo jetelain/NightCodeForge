@@ -41,6 +41,7 @@ public sealed class DatasetValidateCommand
             options.VerifyWithTests,
             writeLine,
             options.ManifestPath,
+            options.Concurrency,
             cancellationToken).ConfigureAwait(false);
 
         writeLine($"[{BenchmarkCliConstants.ToolName}] Validation complete: {report.PassedCount}/{report.TotalCount} passed, {report.FailedCount} failed.");

@@ -60,11 +60,23 @@ public static class BenchmarkCliServiceCollectionExtensions
             options.Endpoint = config.Endpoint;
         });
 
-        if (!string.IsNullOrWhiteSpace(config.BenchmarkRootDirectory))
+        if (!string.IsNullOrWhiteSpace(config.BenchmarkRootDirectory) ||
+            !string.IsNullOrWhiteSpace(config.WorkspacesDirectory) ||
+            config.UseWslExt4Workspaces)
         {
             services.Configure<BenchmarkWorkspaceOptions>(options =>
             {
-                options.RootDirectory = config.BenchmarkRootDirectory;
+                if (!string.IsNullOrWhiteSpace(config.BenchmarkRootDirectory))
+                {
+                    options.RootDirectory = config.BenchmarkRootDirectory;
+                }
+
+                if (!string.IsNullOrWhiteSpace(config.WorkspacesDirectory))
+                {
+                    options.WorkspacesDirectory = config.WorkspacesDirectory;
+                }
+
+                options.UseWslExt4Workspaces = config.UseWslExt4Workspaces;
             });
         }
 

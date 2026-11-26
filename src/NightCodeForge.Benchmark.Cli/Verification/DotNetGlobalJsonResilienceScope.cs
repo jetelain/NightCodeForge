@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Benchmark.Cli.Models;
+using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Benchmark.Cli.Verification;
 
@@ -18,6 +19,7 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
     private const string GlobalJsonFileName = "global.json";
     private const string GitDirectoryName = ".git";
     private const string GitExecutable = "git";
+    private const string WslExecutable = "wsl.exe";
     private const string GitUpdateIndexCommand = "update-index";
     private const string GitAssumeUnchangedFlag = "--assume-unchanged";
     private const string GitNoAssumeUnchangedFlag = "--no-assume-unchanged";
@@ -233,19 +235,47 @@ public sealed class DotNetGlobalJsonResilienceScope : IDisposable
         try
         {
             using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
+            if (OperatingSystem.IsWindows() &&
+                WslPathConverter.TryExtractWslUnc(workspacePath, out var distro, out var linuxDir))
             {
-                FileName = GitExecutable,
-                WorkingDirectory = workspacePath,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            process.StartInfo.ArgumentList.Add(GitUpdateIndexCommand);
-            process.StartInfo.ArgumentList.Add(flag);
-            process.StartInfo.ArgumentList.Add(GitPathspecSeparator);
-            process.StartInfo.ArgumentList.Add(relativePosixPath);
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = WslExecutable,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                if (!string.IsNullOrWhiteSpace(distro))
+                {
+                    process.StartInfo.ArgumentList.Add("-d");
+                    process.StartInfo.ArgumentList.Add(distro);
+                }
+                process.StartInfo.ArgumentList.Add("--exec");
+                process.StartInfo.ArgumentList.Add(GitExecutable);
+                process.StartInfo.ArgumentList.Add("-C");
+                process.StartInfo.ArgumentList.Add(linuxDir);
+                process.StartInfo.ArgumentList.Add(GitUpdateIndexCommand);
+                process.StartInfo.ArgumentList.Add(flag);
+                process.StartInfo.ArgumentList.Add(GitPathspecSeparator);
+                process.StartInfo.ArgumentList.Add(relativePosixPath);
+            }
+            else
+            {
+                process.StartInfo = new ProcessStartInfo
+                {
+                    FileName = GitExecutable,
+                    WorkingDirectory = workspacePath,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                process.StartInfo.ArgumentList.Add(GitUpdateIndexCommand);
+                process.StartInfo.ArgumentList.Add(flag);
+                process.StartInfo.ArgumentList.Add(GitPathspecSeparator);
+                process.StartInfo.ArgumentList.Add(relativePosixPath);
+            }
 
             if (!process.Start())
             {

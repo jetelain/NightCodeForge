@@ -81,6 +81,7 @@ public interface IBenchmarkVerifier
         BenchmarkWorkspaceHandle workspace,
         string? patchToApply,
         ExecutionMode executionMode,
+        bool failToPassOnly = false,
         CancellationToken cancellationToken = default);
 }
 

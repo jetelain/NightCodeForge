@@ -10,4 +10,6 @@ public sealed record BenchmarkCliHostConfig(
     string Endpoint,
     string? ApiKey,
     IReadOnlyList<string> AllowedOpenAiModels,
-    string? BenchmarkRootDirectory);
+    string? BenchmarkRootDirectory,
+    string? WorkspacesDirectory = null,
+    bool UseWslExt4Workspaces = false);

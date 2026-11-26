@@ -33,6 +33,8 @@ public sealed class RunCommandOptions
     public bool? EnableStackSkills { get; set; }
     public int? TimeoutSeconds { get; set; }
     public int Concurrency { get; set; } = 1;
+    public string? WorkspacesDirectory { get; set; }
+    public bool? UseWslExt4Workspaces { get; set; }
     public bool IncludeHints { get; set; }
     public string? ResumeFromDir { get; set; }
     public string? JudgeModel { get; set; }
@@ -72,5 +74,8 @@ public sealed class DatasetValidateCommandOptions
     public BenchmarkProblemCategory? Category { get; set; }
     public List<string> FilterInstanceIds { get; } = [];
     public int? Limit { get; set; }
+    public int Concurrency { get; set; } = 1;
     public bool VerifyWithTests { get; set; } = true;
+    public string? WorkspacesDirectory { get; set; }
+    public bool? UseWslExt4Workspaces { get; set; }
 }

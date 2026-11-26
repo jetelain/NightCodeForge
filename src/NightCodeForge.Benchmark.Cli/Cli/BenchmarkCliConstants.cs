@@ -59,6 +59,9 @@ public static class BenchmarkCliConstants
     public const string OptionSource = "--source";
     public const string OptionInput = "--input";
     public const string OptionManifest = "--manifest";
+    public const string OptionWorkspacesDir = "--workspaces-dir";
+    public const string OptionWslWorkspaces = "--wsl-workspaces";
+    public const string OptionNoWslWorkspaces = "--no-wsl-workspaces";
 
     public const string BenchmarkApiKeyEnvVar = "NCF_BENCHMARK_API_KEY";
     public const string OpenAiApiKeyEnvVar = ApiKeySecretConstants.OpenAiApiKeyEnvironmentVariable;

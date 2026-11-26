@@ -10,6 +10,7 @@ using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Infrastructure.Execution;
+using NightCodeForge.Infrastructure.Git;
 using Pmad.AI.Tools;
 
 namespace NightCodeForge.Benchmark.Cli.Engine;
@@ -799,8 +800,10 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         string? language,
         BenchmarkProblemCategory category = BenchmarkProblemCategory.Implementation)
     {
+        bool isWslUnc = WslPathConverter.TryExtractWslUnc(workspacePath, out var wslDistro, out var wslLinuxPath);
         var mountTable = SandboxMountTable.ForWorkspace(
             hostWorkingDirectory: workspacePath,
+            wslWorkingDirectory: isWslUnc ? wslLinuxPath : null,
             isReadOnly: false);
 
         bool disableNetwork = category == BenchmarkProblemCategory.TaskReview;
@@ -812,9 +815,12 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             mountTable: mountTable,
             workspaceId: null,
             taskId: null,
+            wslDistribution: isWslUnc && !string.IsNullOrWhiteSpace(wslDistro) ? wslDistro : null,
             containerImage: customContainerImage,
             containerName: containerName,
+            useWslForContainers: isWslUnc,
             repositoryPath: workspacePath,
+            ext4MirrorPath: isWslUnc ? wslLinuxPath : null,
             virtualRootPath: SandboxMountTable.WorkspaceVirtualRoot,
             defaultWorkingDirectory: SandboxMountTable.WorkspaceVirtualRoot,
             scopeCacheKey: $"bench-run:{containerName}",

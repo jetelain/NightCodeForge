@@ -4,7 +4,9 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NightCodeForge.Benchmark.Cli.Models;
+using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Infrastructure.Git;
 
 namespace NightCodeForge.Benchmark.Cli.Engine;
 
@@ -19,6 +21,10 @@ public sealed class BenchmarkWorkspaceOptions
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".nightcodeforge",
         BenchmarkPaths.DefaultRootSubdir);
+
+    public string? WorkspacesDirectory { get; set; }
+
+    public bool UseWslExt4Workspaces { get; set; }
 }
 
 /// <summary>
@@ -30,16 +36,26 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
     private const int AddIntentBatchSize = 50;
     private const int MaxWorkspaceIdPrefixLength = 48;
     private const int WorkspaceUniqueSuffixLength = 12;
+    private const int WslCleanupTimeoutSeconds = 60;
+    private const int MinimumSafeWslCleanupSegments = 4;
+    private const string WslExecutableName = "wsl.exe";
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly IGitCliRunner _gitCliRunner;
+    private readonly IWorkspacePathResolver _pathResolver;
+    private readonly IProcessRunner _processRunner;
     private readonly string _rootDirectory;
+    private readonly string? _configuredWorkspacesDirectory;
+    private readonly bool _useWslExt4Workspaces;
+    private readonly Lazy<string> _workspacesDirectory;
     private readonly ILogger<BenchmarkWorkspaceManager> _logger;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _repoCacheLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public BenchmarkWorkspaceManager(
         IGitCliRunner gitCliRunner,
         IOptions<BenchmarkWorkspaceOptions> options,
+        IWorkspacePathResolver pathResolver,
+        IProcessRunner processRunner,
         ILogger<BenchmarkWorkspaceManager> logger)
     {
         _gitCliRunner = gitCliRunner ?? throw new ArgumentNullException(nameof(gitCliRunner));
@@ -50,13 +66,53 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
             throw new BenchmarkWorkspaceException("BenchmarkWorkspaceOptions.RootDirectory cannot be empty.");
         }
 
+        _pathResolver = pathResolver ?? throw new ArgumentNullException(nameof(pathResolver));
+        _processRunner = processRunner ?? throw new ArgumentNullException(nameof(processRunner));
         _rootDirectory = Path.GetFullPath(opts.RootDirectory);
+        _configuredWorkspacesDirectory = opts.WorkspacesDirectory;
+        _useWslExt4Workspaces = opts.UseWslExt4Workspaces;
+        _workspacesDirectory = new Lazy<string>(ResolveWorkspacesDirectory);
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
     public string RootDirectory => _rootDirectory;
     public string ReposCacheDirectory => Path.Combine(_rootDirectory, BenchmarkPaths.ReposCacheSubdir);
-    public string WorkspacesDirectory => Path.Combine(_rootDirectory, BenchmarkPaths.WorkspacesSubdir);
+    public string WorkspacesDirectory => _workspacesDirectory.Value;
+
+    private string ResolveWorkspacesDirectory()
+    {
+        if (!string.IsNullOrWhiteSpace(_configuredWorkspacesDirectory))
+        {
+            var resolved = _pathResolver.ToHostPath(_configuredWorkspacesDirectory.Trim());
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                throw new BenchmarkWorkspaceException("BenchmarkWorkspaceOptions.WorkspacesDirectory resolved to an empty path.");
+            }
+
+            return WslPathConverter.IsWslUncPath(resolved) ? resolved : Path.GetFullPath(resolved);
+        }
+
+        if (_useWslExt4Workspaces && OperatingSystem.IsWindows())
+        {
+            var wslUser = _pathResolver.GetWslUserName();
+            if (string.IsNullOrWhiteSpace(wslUser))
+            {
+                throw new BenchmarkWorkspaceException("Failed to resolve WSL user name for WSL2 ext4 benchmark workspaces.");
+            }
+
+            var wslLinuxDir = $"/home/{wslUser.Trim()}/.nightcodeforge/{BenchmarkPaths.DefaultRootSubdir}/{BenchmarkPaths.WorkspacesSubdir}";
+            var hostPath = _pathResolver.ToHostPath(wslLinuxDir);
+            if (string.IsNullOrWhiteSpace(hostPath) || !WslPathConverter.IsWslUncPath(hostPath))
+            {
+                throw new BenchmarkWorkspaceException(
+                    $"Failed to resolve WSL2 UNC path for benchmark workspaces directory '{wslLinuxDir}' (got '{hostPath}').");
+            }
+
+            return hostPath;
+        }
+
+        return Path.Combine(_rootDirectory, BenchmarkPaths.WorkspacesSubdir);
+    }
 
     public async Task<string> EnsureRepositoryCachedAsync(
         string repo,
@@ -167,7 +223,7 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
         var cachedRepoPath = await EnsureRepositoryCachedAsync(instance.Repo, instance.BaseCommit, cancellationToken).ConfigureAwait(false);
 
         var workspacePath = !string.IsNullOrWhiteSpace(instanceWorkspacePath)
-            ? Path.GetFullPath(instanceWorkspacePath)
+            ? (WslPathConverter.IsWslUncPath(instanceWorkspacePath) ? instanceWorkspacePath : Path.GetFullPath(instanceWorkspacePath))
             : BuildUniqueWorkspacePath(instance.InstanceId);
 
         DeleteDirectoryRobustly(workspacePath);
@@ -188,7 +244,12 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "commit.gpgsign", "false"], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "user.email", BenchmarkPaths.GitEmail], cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["config", "user.name", BenchmarkPaths.GitUserName], cancellationToken: cancellationToken).ConfigureAwait(false);
-            await _gitCliRunner.ExecuteAsync(workspacePath, ["fetch", cachedRepoPath, resolvedBaseSha], timeoutSeconds: 180, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var isWslWorkspace = WslPathConverter.IsWslPath(workspacePath);
+            var fetchSource = isWslWorkspace ? WslPathConverter.ToWslPath(cachedRepoPath) : cachedRepoPath;
+            string[] fetchArgs = isWslWorkspace
+                ? ["-c", "safe.directory=*", "fetch", fetchSource, resolvedBaseSha]
+                : ["fetch", fetchSource, resolvedBaseSha];
+            await _gitCliRunner.ExecuteAsync(workspacePath, fetchArgs, timeoutSeconds: 180, cancellationToken: cancellationToken).ConfigureAwait(false);
             await _gitCliRunner.ExecuteAsync(workspacePath, ["checkout", "--detach", "FETCH_HEAD"], cancellationToken: cancellationToken).ConfigureAwait(false);
 
             var remotes = await _gitCliRunner.ExecuteAsync(workspacePath, ["remote"], cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -687,6 +748,9 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
         var primaryPatch = patchContent.EndsWith('\n') ? patchContent : patchContent + "\n";
 
         var tempPatchFile = Path.Combine(Path.GetTempPath(), $"ncf-bench-patch-{Guid.NewGuid():N}.diff");
+        var gitPatchPath = WslPathConverter.IsWslPath(workspacePath)
+            ? WslPathConverter.ToWslPath(tempPatchFile)
+            : tempPatchFile;
         try
         {
             await File.WriteAllTextAsync(tempPatchFile, primaryPatch, Utf8NoBom, cancellationToken).ConfigureAwait(false);
@@ -694,7 +758,7 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
             {
                 await _gitCliRunner.ExecuteAsync(
                     workspacePath,
-                    ["apply", "--whitespace=nowarn", tempPatchFile],
+                    ["apply", "--whitespace=nowarn", gitPatchPath],
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException && patchContent.Contains("\r\n", StringComparison.Ordinal))
@@ -704,7 +768,7 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
                 await File.WriteAllTextAsync(tempPatchFile, lfPatch, Utf8NoBom, cancellationToken).ConfigureAwait(false);
                 await _gitCliRunner.ExecuteAsync(
                     workspacePath,
-                    ["apply", "--whitespace=nowarn", tempPatchFile],
+                    ["apply", "--whitespace=nowarn", gitPatchPath],
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
         }
@@ -1003,11 +1067,94 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
         return norm.StartsWith("docs/transcripts/", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool IsSafeWslCleanupTarget(string? linuxPath) =>
+        IsSafeWslCleanupTarget(linuxPath, allowedWslRoot: null);
+
+    private static bool IsSafeWslCleanupTarget(string? linuxPath, string? allowedWslRoot)
+    {
+        if (string.IsNullOrWhiteSpace(linuxPath))
+        {
+            return false;
+        }
+
+        var normalized = linuxPath.Trim();
+        if (!normalized.StartsWith('/') || normalized.Contains('\0'))
+        {
+            return false;
+        }
+
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < MinimumSafeWslCleanupSegments ||
+            segments.Any(seg => seg == "." || seg == ".."))
+        {
+            return false;
+        }
+
+        if (normalized.Contains("/.nightcodeforge/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(allowedWslRoot))
+        {
+            var normAllowed = allowedWslRoot.Trim().TrimEnd('/');
+            if (normAllowed.StartsWith('/') &&
+                normalized.StartsWith(normAllowed + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private void DeleteDirectoryRobustly(string path)
     {
         if (!Directory.Exists(path))
         {
             return;
+        }
+
+        if (OperatingSystem.IsWindows() && WslPathConverter.TryExtractWslUnc(path, out var distro, out var linuxPath))
+        {
+            string? configuredWslPrefix = null;
+            if (!string.IsNullOrWhiteSpace(_configuredWorkspacesDirectory) &&
+                WslPathConverter.IsWslPath(_configuredWorkspacesDirectory))
+            {
+                configuredWslPrefix = WslPathConverter.ToWslPath(_pathResolver.ToHostPath(_configuredWorkspacesDirectory.Trim()));
+            }
+
+            if (IsSafeWslCleanupTarget(linuxPath, configuredWslPrefix))
+            {
+                try
+                {
+                    var wslArgs = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(distro))
+                    {
+                        wslArgs.AddRange(["-d", distro]);
+                    }
+                    wslArgs.AddRange(["--", "rm", "-rf", "--", linuxPath]);
+
+                    var result = _processRunner.Run(new ProcessStartSpec
+                    {
+                        FileName = WslExecutableName,
+                        ArgumentList = wslArgs,
+                        TimeoutSeconds = WslCleanupTimeoutSeconds
+                    });
+                    if (result.ExitCode == 0 && !Directory.Exists(path))
+                    {
+                        return;
+                    }
+
+                    _logger.LogDebug(
+                        "Native WSL rm -rf for '{Path}' exited with {ExitCode}: {StdErr}",
+                        path, result.ExitCode, result.StandardError);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogDebug(ex, "Native WSL rm -rf failed for '{Path}'; falling back to managed recursive delete.", path);
+                }
+            }
         }
 
         try

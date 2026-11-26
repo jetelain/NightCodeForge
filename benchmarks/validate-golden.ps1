@@ -12,10 +12,10 @@
     or partially failing runs (-Resume).
 
 .EXAMPLE
-    .\benchmarks\validate-golden.ps1 -CleanContainers
+    .\benchmarks\validate-golden.ps1 -Concurrency 4 -CleanContainers
 
 .EXAMPLE
-    .\benchmarks\validate-golden.ps1 -Suite v1-smoke -CleanContainers
+    .\benchmarks\validate-golden.ps1 -Suite v1-smoke -Concurrency 4 -CleanContainers
 
 .EXAMPLE
     .\benchmarks\validate-golden.ps1 -Language python,rust -CleanContainers
@@ -36,6 +36,9 @@ param(
     [string]$Filter = "",
     [int]$Limit = 0,
     [int]$BatchSize = 1,
+    [int]$Concurrency = 1,
+    [string]$WorkspacesDir = "",
+    [switch]$NoWslWorkspaces,
     [string]$OutDir = "",
     [string]$Resume = "",
     [ValidateSet("Release", "Debug")]
@@ -217,7 +220,8 @@ function Format-RerunCommand {
         [bool]$ManifestExplicit,
         [bool]$VerifyWithTests,
         [string]$FilterCsv = "",
-        [string]$ResumeDir = ""
+        [string]$ResumeDir = "",
+        [int]$Concurrency = 1
     )
 
     $parts = New-Object System.Collections.Generic.List[string]
@@ -241,6 +245,10 @@ function Format-RerunCommand {
         if (-not [string]::IsNullOrWhiteSpace($FilterCsv)) {
             $parts.Add("-Filter `"$FilterCsv`"")
         }
+    }
+
+    if ($Concurrency -gt 1) {
+        $parts.Add("-Concurrency $Concurrency")
     }
 
     if (-not $VerifyWithTests) {
@@ -267,7 +275,8 @@ function Write-ValidationSummaries {
         [string]$StartedUtc,
         [string]$OutDirectory,
         [object[]]$SelectedInstances,
-        [hashtable]$ResultsById
+        [hashtable]$ResultsById,
+        [int]$Concurrency = 1
     )
 
     $orderedResults = New-Object System.Collections.Generic.List[object]
@@ -331,6 +340,7 @@ function Write-ValidationSummaries {
         dataset           = $DatasetPath
         manifest          = $ManifestPath
         verify_with_tests = $VerifyWithTests
+        concurrency       = $Concurrency
         configuration     = $BuildConfiguration
         started_utc       = $StartedUtc
         updated_utc       = $updatedUtc
@@ -356,6 +366,7 @@ function Write-ValidationSummaries {
     }
     $modeLabel = if ($VerifyWithTests) { "Full containerized verification (--verify)" } else { "Patch & frontmatter only (--no-verify)" }
     [void]$md.AppendLine("- **Mode:** $modeLabel")
+    [void]$md.AppendLine("- **Concurrency:** $Concurrency")
     [void]$md.AppendLine("- **Started (UTC):** $StartedUtc")
     [void]$md.AppendLine("- **Updated (UTC):** $updatedUtc")
     [void]$md.AppendLine("- **Total Duration:** $(Format-DurationText -DurationMs $totalDurationMs)")
@@ -409,7 +420,8 @@ function Write-ValidationSummaries {
             -UseDatasetFlag $UseDatasetFlag `
             -ManifestExplicit $ManifestExplicit `
             -VerifyWithTests $VerifyWithTests `
-            -FilterCsv $failedIds
+            -FilterCsv $failedIds `
+            -Concurrency $Concurrency
         $resumeCmd = Format-RerunCommand `
             -SuiteName $SuiteName `
             -DatasetPath $DatasetPath `
@@ -417,7 +429,8 @@ function Write-ValidationSummaries {
             -UseDatasetFlag $UseDatasetFlag `
             -ManifestExplicit $ManifestExplicit `
             -VerifyWithTests $VerifyWithTests `
-            -ResumeDir $OutDirectory
+            -ResumeDir $OutDirectory `
+            -Concurrency $Concurrency
 
         [void]$md.AppendLine("Rerun only failed instances:")
         [void]$md.AppendLine("")
@@ -516,6 +529,15 @@ if ($Limit -lt 0) {
 if ($BatchSize -lt 1) {
     Write-Error "-BatchSize must be at least 1 ($BatchSize)."
     exit 1
+}
+
+if ($Concurrency -lt 1) {
+    Write-Error "-Concurrency must be at least 1 ($Concurrency)."
+    exit 1
+}
+
+if ($Concurrency -gt 1 -and -not $PSBoundParameters.ContainsKey('BatchSize')) {
+    $BatchSize = $Concurrency
 }
 
 $categorySpec = Normalize-CategoryName -RawCategory $Category
@@ -871,7 +893,7 @@ $headerLines = @(
     "[ncf-validate] Dataset:     $Dataset",
     ("[ncf-validate] Manifest:    " + $(if ([string]::IsNullOrWhiteSpace($Manifest)) { "(none)" } else { $Manifest })),
     ("[ncf-validate] Mode:        " + $(if ($verifyWithTests) { "verify (containerized tests)" } else { "no-verify (patch & frontmatter only)" })),
-    "[ncf-validate] Selected:    $($selectedInstances.Count) | Resumed/Skipped: $($resumedSkipList.Count) | To Run: $($pendingInstances.Count) | BatchSize: $BatchSize",
+    "[ncf-validate] Selected:    $($selectedInstances.Count) | Resumed/Skipped: $($resumedSkipList.Count) | To Run: $($pendingInstances.Count) | BatchSize: $BatchSize | Concurrency: $Concurrency",
     "========================================================================"
 )
 foreach ($hl in $headerLines) {
@@ -896,7 +918,8 @@ $latestStats = Write-ValidationSummaries `
     -StartedUtc $startedUtc `
     -OutDirectory $OutDir `
     -SelectedInstances $selectedInstances `
-    -ResultsById $resultsById
+    -ResultsById $resultsById `
+    -Concurrency $Concurrency
 
 $resultLinePattern = '^\[(PASS|FAIL)\]\s+(\S+)\s+\(([^,]+),\s*([^,]+),\s*(\d+)\s*ms\):\s*(.*)$'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -934,11 +957,20 @@ for ($offset = 0; $offset -lt $totalPending; $offset += $BatchSize) {
     }
     $cliArgs.Add("--filter")
     $cliArgs.Add($batchIdCsv)
+    $cliArgs.Add("--concurrency")
+    $cliArgs.Add($Concurrency.ToString())
     if (-not $verifyWithTests) {
         $cliArgs.Add("--no-verify")
     }
     else {
         $cliArgs.Add("--verify")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkspacesDir)) {
+        $cliArgs.Add("--workspaces-dir")
+        $cliArgs.Add($WorkspacesDir)
+    }
+    if ($NoWslWorkspaces.IsPresent) {
+        $cliArgs.Add("--no-wsl-workspaces")
     }
 
     $batchWatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1017,7 +1049,8 @@ for ($offset = 0; $offset -lt $totalPending; $offset += $BatchSize) {
         -StartedUtc $startedUtc `
         -OutDirectory $OutDir `
         -SelectedInstances $selectedInstances `
-        -ResultsById $resultsById
+        -ResultsById $resultsById `
+        -Concurrency $Concurrency
 
     if ($StopOnFailure -and $batchHasFailure) {
         $stopMsg = "[ncf-validate] Stopping early (-StopOnFailure) after batch failure at [$firstNum..$lastNum/$totalPending]."
@@ -1056,7 +1089,8 @@ if ($latestStats.Failed -gt 0) {
         -UseDatasetFlag $useDatasetFlag `
         -ManifestExplicit $emitManifestFlag `
         -VerifyWithTests $verifyWithTests `
-        -FilterCsv $failedFilterCsv
+        -FilterCsv $failedFilterCsv `
+        -Concurrency $Concurrency
     $resumeCmd = Format-RerunCommand `
         -SuiteName $Suite `
         -DatasetPath $Dataset `
@@ -1064,7 +1098,8 @@ if ($latestStats.Failed -gt 0) {
         -UseDatasetFlag $useDatasetFlag `
         -ManifestExplicit $emitManifestFlag `
         -VerifyWithTests $verifyWithTests `
-        -ResumeDir $OutDir
+        -ResumeDir $OutDir `
+        -Concurrency $Concurrency
     Write-Host ""
     Write-Host "  Rerun failed only:" -ForegroundColor Yellow
     Write-Host "    $rerunFailedCmd"

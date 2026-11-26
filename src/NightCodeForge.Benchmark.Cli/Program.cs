@@ -131,12 +131,17 @@ public static class Program
         var endpoint = RunBenchmarkCommand.ResolveEndpoint(options.Provider, options.Endpoint);
         var apiKey = RunBenchmarkCommand.ResolveApiKeyFromEnvironment();
 
+        bool useWslWorkspaces = options.UseWslExt4Workspaces ??
+            (OperatingSystem.IsWindows() && string.IsNullOrWhiteSpace(options.WorkspacesDirectory));
+
         var hostConfig = new BenchmarkCliHostConfig(
             ProviderType: options.Provider,
             Endpoint: endpoint,
             ApiKey: apiKey,
             AllowedOpenAiModels: candidates.Select(c => c.ModelName).ToList(),
-            BenchmarkRootDirectory: null);
+            BenchmarkRootDirectory: null,
+            WorkspacesDirectory: options.WorkspacesDirectory,
+            UseWslExt4Workspaces: useWslWorkspaces);
 
         var services = new ServiceCollection();
         services.AddNightCodeForgeBenchmarkCliServices(hostConfig);
@@ -213,12 +218,17 @@ public static class Program
                 return PrintUsageError(stdout, stderr, parseError!);
             }
 
+            bool useWslWorkspaces = options.UseWslExt4Workspaces ??
+                (OperatingSystem.IsWindows() && options.VerifyWithTests && string.IsNullOrWhiteSpace(options.WorkspacesDirectory));
+
             var hostConfig = new BenchmarkCliHostConfig(
                 ProviderType: LlmProviderType.Ollama,
                 Endpoint: BenchmarkCliConstants.DefaultOllamaEndpoint,
                 ApiKey: null,
                 AllowedOpenAiModels: Array.Empty<string>(),
-                BenchmarkRootDirectory: null);
+                BenchmarkRootDirectory: null,
+                WorkspacesDirectory: options.WorkspacesDirectory,
+                UseWslExt4Workspaces: useWslWorkspaces);
 
             var services = new ServiceCollection();
             services.AddNightCodeForgeBenchmarkCliServices(hostConfig);
@@ -269,7 +279,7 @@ USAGE:
   ncf-bench run --dataset <path.jsonl|json> (--models <m1,m2> | --config <candidates.json>) [--manifest <manifest.json>] [options]
   ncf-bench report <resultsDir1> [<resultsDir2> ...] [--baseline <resultsDir>] [--format markdown|ascii|json]
   ncf-bench dataset import --source <swe-sharp-bench|swebench-multilingual|multi-swe-bench|swebench-verified> --input <path> --manifest <manifest.json> --out <path.jsonl>
-  ncf-bench dataset validate --dataset <path.jsonl> [--manifest <manifest.json>] [--category <implementation|code-review|task-review>] [--filter <id1,id2>] [--limit <N>] [--verify|--no-verify]
+  ncf-bench dataset validate --dataset <path.jsonl> [--manifest <manifest.json>] [--category <implementation|code-review|task-review>] [--filter <id1,id2>] [--limit <N>] [--concurrency <N>] [--verify|--no-verify] [--workspaces-dir <dir>] [--wsl-workspaces|--no-wsl-workspaces]
   ncf-bench --version
   ncf-bench --help
 
@@ -289,6 +299,9 @@ RUN OPTIONS:
   --hints / --no-hints          Include dataset hints_text in prompt (default: --no-hints)
   --timeout <seconds>           Override per-instance timeout in seconds
   --concurrency <N>             Parallel evaluation workers (default: 1)
+  --workspaces-dir <dir>        Override ephemeral workspaces root directory
+  --wsl-workspaces / --no-wsl-workspaces
+                                Store ephemeral workspaces on WSL2 native ext4 on Windows (default: --wsl-workspaces)
   --resume <resultsDir>         Skip (candidate, instance) pairs already completed in results.json
   --judge-model <model>         Optional LLM-as-judge model for review categories
   --judge-provider <type>       Judge provider override (ollama | ollama-router | openai)
@@ -312,6 +325,10 @@ DATASET OPTIONS:
     --category <name>           Optional category override (implementation | code-review | task-review)
     --filter <id1,id2>          Comma-separated instance IDs to validate
     --limit <N>                 Maximum number of dataset instances to validate
-    --verify / --no-verify      Run containerized test verification vs patch/frontmatter-only check (default: --verify)");
+    --concurrency <N>           Parallel validation workers (default: 1)
+    --verify / --no-verify      Run containerized test verification vs patch/frontmatter-only check (default: --verify)
+    --workspaces-dir <dir>      Override ephemeral workspaces root directory
+    --wsl-workspaces / --no-wsl-workspaces
+                                Store ephemeral workspaces on WSL2 native ext4 on Windows (default: enabled for --verify)");
     }
 }

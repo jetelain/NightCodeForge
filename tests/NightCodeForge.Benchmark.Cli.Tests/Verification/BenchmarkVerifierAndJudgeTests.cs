@@ -2555,6 +2555,109 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Single(testMissing);
     }
 
+    [Fact]
+    public void ResolveTestCommand_FailToPassOnly_FiltersCSharpPythonRustAndVitest_WhileKeepingAgentUnfiltered()
+    {
+        var csDir = Path.Combine(_tempDir, "cs-filter");
+        Directory.CreateDirectory(csDir);
+
+        var csCustomInstance = new BenchmarkInstance
+        {
+            InstanceId = "serilog-test",
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "serilog/serilog",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+            FailToPass =
+            [
+                "Serilog.Tests.Unit.Cli.CommandAppTests+Help.Should_Output_Root_Correctly_QuestionMark",
+                "Serilog.Tests.TheoryTests.Works(arg: 1)"
+            ]
+        };
+
+        var csFiltered = BenchmarkTestCommandResolver.ResolveTestCommand(csCustomInstance, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
+        Assert.Contains("--filter 'FullyQualifiedName~Serilog.Tests.Unit.Cli.CommandAppTests+Help.Should_Output_Root_Correctly_QuestionMark|FullyQualifiedName~Serilog.Tests.TheoryTests.Works'", csFiltered);
+
+        var csDefaultInstance = csCustomInstance with { CustomTestCommand = null };
+        var csDefaultFiltered = BenchmarkTestCommandResolver.ResolveTestCommand(csDefaultInstance, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
+        Assert.Contains("--filter 'FullyQualifiedName~Serilog.Tests.Unit.Cli.CommandAppTests+Help.Should_Output_Root_Correctly_QuestionMark|FullyQualifiedName~Serilog.Tests.TheoryTests.Works'", csDefaultFiltered);
+
+        var agentCmd = BenchmarkTestCommandResolver.ResolveAgentTestCommand(csCustomInstance, csDir, ExecutionMode.ContainerSandbox);
+        Assert.DoesNotContain("--filter", agentCmd);
+
+        var csAlreadyFiltered = csCustomInstance with
+        {
+            CustomTestCommand = "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --filter FullyQualifiedName~Existing"
+        };
+        Assert.Equal(
+            "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --filter FullyQualifiedName~Existing",
+            BenchmarkTestCommandResolver.ResolveTestCommand(csAlreadyFiltered, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true));
+
+        var pyInstance = new BenchmarkInstance
+        {
+            InstanceId = "py-filter",
+            Language = BenchmarkLanguages.Python,
+            Repo = "psf/requests",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "pytest tests/test_requests.py --junitxml=/workspace/.ncf-bench-results/junit.xml",
+            FailToPass =
+            [
+                "tests/test_requests.py::TestRequests::test_invalid_url[InvalidURL-http://.example.com]",
+                "tests/test_requests.py::test_other"
+            ]
+        };
+        var pyFiltered = BenchmarkTestCommandResolver.ResolveTestCommand(pyInstance, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
+        Assert.Equal(
+            "pytest tests/test_requests.py --junitxml=/workspace/.ncf-bench-results/junit.xml -k 'test_invalid_url or test_other'",
+            pyFiltered);
+
+        var rustInstance = new BenchmarkInstance
+        {
+            InstanceId = "rust-filter",
+            Language = BenchmarkLanguages.Rust,
+            Repo = "tokio-rs/tokio",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "cargo test -p tokio-util --test time_delay_queue --no-fail-fast",
+            FailToPass = ["wake_after_remove_last"]
+        };
+        var rustFiltered = BenchmarkTestCommandResolver.ResolveTestCommand(rustInstance, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
+        Assert.Equal(
+            "cargo test -p tokio-util --test time_delay_queue --no-fail-fast -- wake_after_remove_last",
+            rustFiltered);
+
+        var vitestDir = Path.Combine(_tempDir, "vitest-filter");
+        var specRel = Path.Combine("packages", "compiler-core", "__tests__", "parse.spec.ts");
+        Directory.CreateDirectory(Path.Combine(vitestDir, "packages", "compiler-core", "__tests__"));
+        File.WriteAllText(Path.Combine(vitestDir, specRel), "// spec");
+        var vitestInstance = new BenchmarkInstance
+        {
+            InstanceId = "ts-filter",
+            Language = BenchmarkLanguages.TypeScript,
+            Repo = "vuejs/core",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            CustomTestCommand = "npx vitest run -c vitest.unit.config.ts --reporter=junit --outputFile=/workspace/.ncf-bench-results/junit.xml",
+            FailToPass = ["packages/compiler-core/__tests__/parse.spec.ts > compiler: parse > Element > v-pre"]
+        };
+        var vitestFiltered = BenchmarkTestCommandResolver.ResolveTestCommand(vitestInstance, vitestDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
+        Assert.EndsWith("packages/compiler-core/__tests__/parse.spec.ts", vitestFiltered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateVerificationScope_WithWslUncWorkspace_EnablesWslContainersAndLinuxMountPath()
+    {
+        const string uncWorkspace = @"\\wsl.localhost\Ubuntu\home\gruearbre\.nightcodeforge\benchmarks\workspaces\serilog-123";
+        var scope = BenchmarkVerifier.CreateVerificationScope(uncWorkspace, customContainerImage: null, ExecutionMode.ContainerSandbox, "ncf-bench-verify-test");
+
+        Assert.True(scope.UseWslForContainers);
+        Assert.Equal("Ubuntu", scope.WslDistribution);
+        Assert.Equal("/home/gruearbre/.nightcodeforge/benchmarks/workspaces/serilog-123", scope.Ext4MirrorPath);
+        Assert.Equal("/home/gruearbre/.nightcodeforge/benchmarks/workspaces/serilog-123", scope.MountTable.Entries.First(e => e.VirtualMountPath == "/workspace").WslTargetDirectoryPath);
+    }
+
     private static string RunGit(string workingDir, params string[] args)
     {
         using var process = new System.Diagnostics.Process();

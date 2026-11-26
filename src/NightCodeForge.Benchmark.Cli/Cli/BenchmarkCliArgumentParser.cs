@@ -44,6 +44,12 @@ public static class BenchmarkCliArgumentParser
                 continue;
             }
 
+            if (TryMatchBooleanFlag(rawArg, BenchmarkCliConstants.OptionWslWorkspaces, BenchmarkCliConstants.OptionNoWslWorkspaces, out var wslWksVal))
+            {
+                options.UseWslExt4Workspaces = wslWksVal;
+                continue;
+            }
+
             if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionDataset, out var datasetVal, out error))
             {
                 if (error != null) return null;
@@ -150,6 +156,13 @@ public static class BenchmarkCliArgumentParser
                     return null;
                 }
                 options.Concurrency = concurrency;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionWorkspacesDir, out var workspacesDirVal, out error))
+            {
+                if (error != null) return null;
+                options.WorkspacesDirectory = workspacesDirVal;
                 continue;
             }
 
@@ -400,6 +413,12 @@ public static class BenchmarkCliArgumentParser
                 continue;
             }
 
+            if (TryMatchBooleanFlag(rawArg, BenchmarkCliConstants.OptionWslWorkspaces, BenchmarkCliConstants.OptionNoWslWorkspaces, out var wslWksVal))
+            {
+                options.UseWslExt4Workspaces = wslWksVal;
+                continue;
+            }
+
             if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionDataset, out var datasetVal, out error))
             {
                 if (error != null) return null;
@@ -444,6 +463,24 @@ public static class BenchmarkCliArgumentParser
                     return null;
                 }
                 options.Limit = limit;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionConcurrency, out var concurrencyVal, out error))
+            {
+                if (error != null) return null;
+                if (!TryParsePositiveInt(concurrencyVal!, BenchmarkCliConstants.OptionConcurrency, out var concurrency, out error))
+                {
+                    return null;
+                }
+                options.Concurrency = concurrency;
+                continue;
+            }
+
+            if (TryReadOptionValue(args, ref i, BenchmarkCliConstants.OptionWorkspacesDir, out var workspacesDirVal, out error))
+            {
+                if (error != null) return null;
+                options.WorkspacesDirectory = workspacesDirVal;
                 continue;
             }
 

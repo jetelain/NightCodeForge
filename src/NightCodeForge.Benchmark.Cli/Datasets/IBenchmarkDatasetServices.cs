@@ -38,5 +38,6 @@ public interface IBenchmarkDatasetValidator
         bool verifyWithTests,
         Action<string>? progressCallback,
         string? manifestPath = null,
+        int concurrency = 1,
         CancellationToken cancellationToken = default);
 }

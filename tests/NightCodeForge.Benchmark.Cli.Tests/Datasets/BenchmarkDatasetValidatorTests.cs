@@ -53,7 +53,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
 
         var verifier = new Mock<IBenchmarkVerifier>();
         verifier
-            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
                 Passed = false,
@@ -64,7 +64,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 FailedTests = ["TestA"]
             });
         verifier
-            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
                 Passed = true,
@@ -126,6 +126,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<BenchmarkWorkspaceHandle>(),
                 null,
                 ExecutionMode.ContainerSandbox,
+                true,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
@@ -140,6 +141,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<BenchmarkWorkspaceHandle>(),
                 null,
                 ExecutionMode.ContainerSandbox,
+                true,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
@@ -154,6 +156,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<BenchmarkWorkspaceHandle>(),
                 "diff2",
                 ExecutionMode.ContainerSandbox,
+                false,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
@@ -310,6 +313,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<bool>(),
                 It.IsAny<Action<string>?>(),
                 It.IsAny<string?>(),
+                It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkDatasetValidationReport
             {
@@ -427,6 +431,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<BenchmarkWorkspaceHandle>(),
                 "diff cand",
                 ExecutionMode.ContainerSandbox,
+                false,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
@@ -440,6 +445,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<BenchmarkWorkspaceHandle>(),
                 "diff gold",
                 ExecutionMode.ContainerSandbox,
+                false,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
@@ -622,9 +628,10 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<bool>(),
                 It.IsAny<Action<string>?>(),
                 It.IsAny<string?>(),
+                It.IsAny<int>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<string, BenchmarkProblemCategory?, IReadOnlyList<string>?, int?, bool, Action<string>?, string?, CancellationToken>(
-                (_, _, _, _, _, _, m, _) => capturedManifest = m)
+            .Callback<string, BenchmarkProblemCategory?, IReadOnlyList<string>?, int?, bool, Action<string>?, string?, int, CancellationToken>(
+                (_, _, _, _, _, _, m, _, _) => capturedManifest = m)
             .ReturnsAsync(new BenchmarkDatasetValidationReport
             {
                 DatasetPath = "ds.jsonl",
@@ -692,7 +699,7 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
 
         var verifier = new Mock<IBenchmarkVerifier>();
         verifier
-            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, It.IsAny<CancellationToken>()))
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
                 Passed = false,
@@ -717,5 +724,140 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
         Assert.Contains("Passing test(s): Test.AlreadyPasses", error);
         Assert.DoesNotContain("Test.RealFailA", error);
         Assert.DoesNotContain("Test.RealFailB", error);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WithConcurrencyGreaterThanOne_RunsInParallelPreservesOrderAndRejectsNonPositiveConcurrency()
+    {
+        var datasetPath = Path.Combine(_tempDir, "parallel.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"p-1","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc","problem_statement":"Bug 1","patch":"diff1","fail_to_pass":["T1"]}""",
+            """{"instance_id":"p-2","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc","problem_statement":"Bug 2","patch":"diff2","fail_to_pass":["T2"]}""",
+            """{"instance_id":"p-3","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc","problem_statement":"Bug 3","patch":"diff3","fail_to_pass":["T3"]}""",
+            """{"instance_id":"p-4","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc","problem_statement":"Bug 4","patch":"diff4","fail_to_pass":["T4"]}"""
+        ]));
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((BenchmarkInstance inst, BenchmarkProblemCategory cat, string? _, CancellationToken _) => new BenchmarkWorkspaceHandle
+            {
+                InstanceId = inst.InstanceId,
+                Category = cat,
+                WorkspacePath = Path.Combine(_tempDir, inst.InstanceId),
+                BaseCommit = "abc"
+            });
+
+        int active = 0;
+        int peakActive = 0;
+        var barrier = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.IsAny<BenchmarkInstance>(),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                It.IsAny<string?>(),
+                ExecutionMode.ContainerSandbox,
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(async (BenchmarkInstance inst, BenchmarkWorkspaceHandle _, string? patch, ExecutionMode _, bool _, CancellationToken ct) =>
+            {
+                if (patch == null)
+                {
+                    int current = Interlocked.Increment(ref active);
+                    while (true)
+                    {
+                        int snapshot = Volatile.Read(ref peakActive);
+                        if (current <= snapshot || Interlocked.CompareExchange(ref peakActive, current, snapshot) == snapshot)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (current >= 2)
+                    {
+                        barrier.TrySetResult(true);
+                    }
+
+                    await barrier.Task.WaitAsync(TimeSpan.FromSeconds(5), ct);
+                    await Task.Delay(25, ct);
+                    Interlocked.Decrement(ref active);
+
+                    return new BenchmarkVerificationResult { Passed = false, FailToPassPassed = 0, FailToPassTotal = 1, FailedTests = inst.FailToPass };
+                }
+
+                return new BenchmarkVerificationResult { Passed = true, FailToPassPassed = 1, FailToPassTotal = 1 };
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        await Assert.ThrowsAsync<BenchmarkDatasetException>(() =>
+            validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null, concurrency: 0));
+
+        var progress = new List<string>();
+        var report = await validator.ValidateAsync(
+            datasetPath,
+            categoryOverride: null,
+            instanceIdFilter: null,
+            limit: null,
+            verifyWithTests: true,
+            progressCallback: progress.Add,
+            concurrency: 3);
+
+        Assert.True(report.AllPassed);
+        Assert.Equal(4, report.PassedCount);
+        Assert.True(peakActive >= 2, $"Expected parallel execution with peakActive >= 2, got {peakActive}.");
+        Assert.Equal(["p-1", "p-2", "p-3", "p-4"], report.Results.Select(r => r.InstanceId).ToArray());
+        Assert.Equal(4, progress.Count(p => p.StartsWith("[PASS]", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ImplementationWithEmptyFailToPass_DoesNotFilterBaseRun()
+    {
+        var datasetPath = Path.Combine(_tempDir, "impl-empty-f2p.jsonl");
+        await File.WriteAllTextAsync(datasetPath, """
+        {"instance_id":"impl-nof2p","category":"Implementation","language":"csharp","repo":"owner/repo","base_commit":"abc","problem_statement":"Bug","patch":"diff gold"}
+        """);
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "impl-nof2p",
+            Category = BenchmarkProblemCategory.Implementation,
+            WorkspacePath = Path.Combine(_tempDir, "wks-nof2p"),
+            BaseCommit = "abc"
+        };
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(handle);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = false });
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.True(report.AllPassed);
+        verifier.Verify(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()), Times.Once);
+        verifier.Verify(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()), Times.Once);
     }
 }

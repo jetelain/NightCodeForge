@@ -799,9 +799,149 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         var manager = new BenchmarkWorkspaceManager(
             gitRunner,
             Options.Create(new BenchmarkWorkspaceOptions { RootDirectory = _benchRootDir }),
+            pathResolver,
+            processRunner,
             NullLogger<BenchmarkWorkspaceManager>.Instance);
 
         return (gitRunner, manager);
+    }
+
+    [Fact]
+    public void WorkspacesDirectory_ResolvesWslUncWhenEnabledAndRespectsExplicitOverride()
+    {
+        var wslMetadata = new Mock<IWslMetadataService>();
+        wslMetadata.Setup(m => m.GetDefaultDistributionName()).Returns("Ubuntu");
+        wslMetadata.Setup(m => m.GetDefaultUserName()).Returns("gruearbre");
+
+        var windowsResolver = new WorkspacePathResolver(
+            wslMetadata.Object,
+            Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride: true);
+
+        var processRunner = new Mock<IProcessRunner>().Object;
+        var gitRunner = new Mock<IGitCliRunner>().Object;
+
+        var defaultManager = new BenchmarkWorkspaceManager(
+            gitRunner,
+            Options.Create(new BenchmarkWorkspaceOptions { RootDirectory = _benchRootDir, UseWslExt4Workspaces = false }),
+            windowsResolver,
+            processRunner,
+            NullLogger<BenchmarkWorkspaceManager>.Instance);
+        Assert.Equal(Path.Combine(Path.GetFullPath(_benchRootDir), BenchmarkPaths.WorkspacesSubdir), defaultManager.WorkspacesDirectory);
+
+        var wslManager = new BenchmarkWorkspaceManager(
+            gitRunner,
+            Options.Create(new BenchmarkWorkspaceOptions { RootDirectory = _benchRootDir, UseWslExt4Workspaces = true }),
+            windowsResolver,
+            processRunner,
+            NullLogger<BenchmarkWorkspaceManager>.Instance);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal(@"\\wsl.localhost\Ubuntu\home\gruearbre\.nightcodeforge\benchmarks\workspaces", wslManager.WorkspacesDirectory);
+        }
+
+        var overrideManager = new BenchmarkWorkspaceManager(
+            gitRunner,
+            Options.Create(new BenchmarkWorkspaceOptions { RootDirectory = _benchRootDir, WorkspacesDirectory = "~/custom/bench-wks" }),
+            windowsResolver,
+            processRunner,
+            NullLogger<BenchmarkWorkspaceManager>.Instance);
+        Assert.Equal(@"\\wsl.localhost\Ubuntu\home\gruearbre\custom\bench-wks", overrideManager.WorkspacesDirectory);
+    }
+
+    [Fact]
+    public void IsSafeWslCleanupTarget_AcceptsOnlyDeepNightCodeForgeSubdirectories()
+    {
+        Assert.True(BenchmarkWorkspaceManager.IsSafeWslCleanupTarget("/home/gruearbre/.nightcodeforge/benchmarks/workspaces/serilog-123"));
+        Assert.False(BenchmarkWorkspaceManager.IsSafeWslCleanupTarget("/"));
+        Assert.False(BenchmarkWorkspaceManager.IsSafeWslCleanupTarget("/home/gruearbre"));
+        Assert.False(BenchmarkWorkspaceManager.IsSafeWslCleanupTarget("/home/gruearbre/.nightcodeforge"));
+        Assert.False(BenchmarkWorkspaceManager.IsSafeWslCleanupTarget("/home/gruearbre/.nightcodeforge/benchmarks/workspaces/../../etc"));
+        Assert.False(BenchmarkWorkspaceManager.IsSafeWslCleanupTarget("relative/path"));
+    }
+
+    [Fact]
+    public async Task ProvisionAsync_And_ApplyPatchAsync_WithWslUncWorkspace_TranslatesRepoAndPatchPathsToWsl()
+    {
+        var wslMetadata = new Mock<IWslMetadataService>();
+        wslMetadata.Setup(m => m.GetDefaultDistributionName()).Returns("Ubuntu");
+        wslMetadata.Setup(m => m.GetDefaultUserName()).Returns("gruearbre");
+        var pathResolver = new WorkspacePathResolver(
+            wslMetadata.Object,
+            Options.Create(new ExecutionEnvironmentProviderOptions()),
+            isWindowsOverride: true);
+
+        var cacheRepoDir = Path.Combine(_benchRootDir, BenchmarkPaths.ReposCacheSubdir, "owner__repo");
+        Directory.CreateDirectory(Path.Combine(cacheRepoDir, "objects"));
+        await File.WriteAllTextAsync(Path.Combine(cacheRepoDir, "HEAD"), "ref: refs/heads/main\n");
+
+        var wslWorkspace = Path.Combine(_tempDir, "fake-wsl-wks");
+        Directory.CreateDirectory(wslWorkspace);
+        var recordedCalls = new List<(string WorkingDir, string[] Args)>();
+
+        var gitRunner = new Mock<IGitCliRunner>();
+        gitRunner
+            .Setup(g => g.ExecuteAsync(It.IsAny<string>(), It.IsAny<IEnumerable<string>>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string wd, IEnumerable<string> args, int? _, CancellationToken _) =>
+            {
+                var arr = args.ToArray();
+                recordedCalls.Add((wd, arr));
+                if (arr.Length >= 2 && arr[0] == "rev-parse")
+                {
+                    return new GitCommandResult(0, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n", string.Empty, TimeSpan.Zero);
+                }
+                return new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero);
+            });
+
+        var manager = new BenchmarkWorkspaceManager(
+            gitRunner.Object,
+            Options.Create(new BenchmarkWorkspaceOptions { RootDirectory = _benchRootDir }),
+            pathResolver,
+            new Mock<IProcessRunner>().Object,
+            NullLogger<BenchmarkWorkspaceManager>.Instance);
+
+        await manager.ApplyPatchAsync(wslWorkspace, "diff --git a/a.cs b/a.cs\n");
+        Assert.Contains(recordedCalls, c => c.Args.Length == 3 && c.Args[0] == "apply" && !c.Args[2].StartsWith("/mnt/", StringComparison.Ordinal));
+
+        if (OperatingSystem.IsWindows() && Directory.Exists(@"\\wsl.localhost\Ubuntu\tmp"))
+        {
+            var uncWorkspace = $@"\\wsl.localhost\Ubuntu\tmp\ncf-test-{Guid.NewGuid():N}";
+            try
+            {
+                recordedCalls.Clear();
+                var handle = await manager.ProvisionAsync(
+                    new BenchmarkInstance
+                    {
+                        InstanceId = "wsl-unc-test",
+                        Repo = "owner/repo",
+                        BaseCommit = "deadbeef",
+                        ProblemStatement = "Test"
+                    },
+                    BenchmarkProblemCategory.Implementation,
+                    instanceWorkspacePath: uncWorkspace);
+
+                var expectedWslCachePath = WslPathConverter.ToWslPath(cacheRepoDir);
+                Assert.Contains(recordedCalls, c =>
+                    c.WorkingDir == uncWorkspace &&
+                    c.Args.SequenceEqual(["-c", "safe.directory=*", "fetch", expectedWslCachePath, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"]));
+
+                recordedCalls.Clear();
+                await manager.ApplyPatchAsync(handle.WorkspacePath, "diff --git a/a.cs b/a.cs\n");
+                Assert.Contains(recordedCalls, c =>
+                    c.WorkingDir == uncWorkspace &&
+                    c.Args.Length == 3 &&
+                    c.Args[0] == "apply" &&
+                    c.Args[2].StartsWith("/mnt/", StringComparison.Ordinal));
+            }
+            finally
+            {
+                if (Directory.Exists(uncWorkspace))
+                {
+                    Directory.Delete(uncWorkspace, recursive: true);
+                }
+            }
+        }
     }
 
     /// <summary>

@@ -10,7 +10,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "serilog__serilog-2103",
@@ -19,7 +19,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "spectreconsole__spectre-console-1338",
@@ -28,7 +28,7 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "spectreconsole__spectre-console-1458",
@@ -37,7 +37,7 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "polly-1852",
@@ -46,7 +46,7 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "restsharp__restsharp-1676",
@@ -55,7 +55,7 @@
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "messagepack-csharp__messagepack-csharp-2045",
@@ -64,7 +64,7 @@
       "language": "csharp",
       "repo": "MessagePack-CSharp/MessagePack-CSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/MessagePack.Tests/MessagePack.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "autofac__autofac-1424",
@@ -73,7 +73,7 @@
       "language": "csharp",
       "repo": "autofac/Autofac",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Autofac.Test/Autofac.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "vuejs__core-11915",
@@ -141,7 +141,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "serilog__serilog-2116",
@@ -150,7 +150,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "serilog__serilog-1903",
@@ -159,7 +159,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
       "fail_to_pass": [
         "Serilog.Tests.Debugging.SelfLogTests.SelfLogReportsErrorWhenPositionalParameterCountIsMismatched",
         "Serilog.Tests.Debugging.SelfLogTests.SelfLogDoesNotReportErrorWhenPositionalParameterIsRepeated"
@@ -176,7 +176,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "spectreconsole__spectre-console-1552",
@@ -185,7 +185,7 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Cli.Tests/Spectre.Console.Cli.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "spectreconsole__spectre-console-1513",
@@ -194,7 +194,7 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "spectreconsole__spectre-console-1308",
@@ -203,7 +203,7 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "spectreconsole__spectre-console-1503",
@@ -212,7 +212,7 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Cli.Tests/Spectre.Console.Cli.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "polly-1898",
@@ -221,7 +221,7 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "polly-2164",
@@ -230,7 +230,7 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "polly-1316",
@@ -239,7 +239,7 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "polly-1579",
@@ -248,7 +248,7 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "restsharp__restsharp-2021",
@@ -257,7 +257,7 @@
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "restsharp__restsharp-2020",
@@ -266,7 +266,7 @@
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "messagepack-csharp__messagepack-csharp-2022",
@@ -275,7 +275,7 @@
       "language": "csharp",
       "repo": "MessagePack-CSharp/MessagePack-CSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/MessagePack.SourceGenerator.Tests/MessagePack.SourceGenerator.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "serilog__serilog-1955",
@@ -284,7 +284,7 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "polly-2068",
@@ -293,7 +293,7 @@
       "language": "csharp",
       "repo": "App-vNext/Polly",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Polly.Core.Tests/Polly.Core.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "autofac__autofac-1428",
@@ -302,7 +302,7 @@
       "language": "csharp",
       "repo": "autofac/Autofac",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Autofac.Specification.Test/Autofac.Specification.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "autofac__autofac-1451",
@@ -311,7 +311,7 @@
       "language": "csharp",
       "repo": "autofac/Autofac",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Autofac.Specification.Test/Autofac.Specification.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "devlooped__moq-1076",
@@ -320,7 +320,7 @@
       "language": "csharp",
       "repo": "devlooped/moq",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/Moq.Tests/Moq.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "devlooped__moq-1081",
@@ -329,7 +329,7 @@
       "language": "csharp",
       "repo": "devlooped/moq",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/Moq.Tests/Moq.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "ardalis__cleanarchitecture-546",
@@ -338,7 +338,7 @@
       "language": "csharp",
       "repo": "ardalis/CleanArchitecture",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/Clean.Architecture.FunctionalTests/Clean.Architecture.FunctionalTests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
     },
     {
       "instance_id": "vuejs__core-11870",

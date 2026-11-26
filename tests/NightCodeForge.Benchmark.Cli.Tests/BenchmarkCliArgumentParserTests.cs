@@ -27,6 +27,8 @@ public sealed class BenchmarkCliArgumentParserTests
             "--hints",
             "--timeout=900",
             "--concurrency", "2",
+            "--workspaces-dir", "/tmp/wks",
+            "--no-wsl-workspaces",
             "--resume", "prev-run",
             "--judge-model", "gpt-4o-mini",
             "--judge-provider", "openai",
@@ -53,6 +55,8 @@ public sealed class BenchmarkCliArgumentParserTests
         Assert.True(options.IncludeHints);
         Assert.Equal(900, options.TimeoutSeconds);
         Assert.Equal(2, options.Concurrency);
+        Assert.Equal("/tmp/wks", options.WorkspacesDirectory);
+        Assert.False(options.UseWslExt4Workspaces);
         Assert.Equal("prev-run", options.ResumeFromDir);
         Assert.Equal("gpt-4o-mini", options.JudgeModel);
         Assert.Equal(LlmProviderType.OpenAiCompatible, options.JudgeProvider);
@@ -204,6 +208,9 @@ public sealed class BenchmarkCliArgumentParserTests
             "--category=code-review",
             "--filter", "ncf-cr-csharp-001,ncf-cr-ts-001",
             "--limit", "2",
+            "--concurrency=4",
+            "--workspaces-dir", "~/bench-wks",
+            "--wsl-workspaces",
             "--no-verify"
         };
 
@@ -216,6 +223,9 @@ public sealed class BenchmarkCliArgumentParserTests
         Assert.Equal(BenchmarkProblemCategory.CodeReview, options.Category);
         Assert.Equal(["ncf-cr-csharp-001", "ncf-cr-ts-001"], options.FilterInstanceIds);
         Assert.Equal(2, options.Limit);
+        Assert.Equal(4, options.Concurrency);
+        Assert.Equal("~/bench-wks", options.WorkspacesDirectory);
+        Assert.True(options.UseWslExt4Workspaces);
         Assert.False(options.VerifyWithTests);
     }
 
@@ -223,6 +233,9 @@ public sealed class BenchmarkCliArgumentParserTests
     [InlineData(new string[0], "--dataset")]
     [InlineData(new[] { "--dataset", "ds.jsonl", "--category", "invalid" }, "--category")]
     [InlineData(new[] { "--dataset", "ds.jsonl", "--limit", "0" }, "--limit")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--concurrency", "0" }, "--concurrency")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--concurrency", "-1" }, "--concurrency")]
+    [InlineData(new[] { "--dataset", "ds.jsonl", "--concurrency", "abc" }, "--concurrency")]
     [InlineData(new[] { "--dataset", "ds.jsonl", "--filter", " , " }, "--filter")]
     [InlineData(new[] { "--dataset", "ds.jsonl", "--bogus" }, "Unrecognized option")]
     public void ParseDatasetValidateOptions_InvalidInputs_ReturnExpectedError(string[] args, string expectedSubstring)

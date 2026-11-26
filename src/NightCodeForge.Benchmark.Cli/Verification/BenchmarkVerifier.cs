@@ -9,6 +9,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Interfaces;
 using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure.Execution;
+using NightCodeForge.Infrastructure.Git;
 using YamlDotNet.Core;
 
 namespace NightCodeForge.Benchmark.Cli.Verification;
@@ -134,6 +135,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             workspace,
             outcome.ModelPatch,
             executionMode,
+            failToPassOnly: false,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -142,6 +144,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         BenchmarkWorkspaceHandle workspace,
         string? patchToApply,
         ExecutionMode executionMode,
+        bool failToPassOnly = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(instance);
@@ -187,7 +190,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             };
         }
 
-        return await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, cancellationToken).ConfigureAwait(false);
+        return await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, failToPassOnly, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string?> ResetAndApplyTestPatchAsync(
@@ -222,6 +225,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         BenchmarkInstance instance,
         string workspacePath,
         ExecutionMode executionMode,
+        bool failToPassOnly,
         CancellationToken cancellationToken)
     {
         var resultsHostDir = Path.Combine(workspacePath, BenchmarkPaths.BenchmarkResultDirRelative);
@@ -233,7 +237,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
 
         var containerName = $"ncf-bench-verify-{Guid.NewGuid():N}"[..32];
         var scope = CreateVerificationScope(workspacePath, instance.CustomContainerImage, executionMode, containerName);
-        var testCommand = ResolveTestCommand(instance, workspacePath, executionMode);
+        var testCommand = ResolveTestCommand(instance, workspacePath, executionMode, failToPassOnly);
         var effectiveCommand = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(testCommand, instance.Language, executionMode, instance.PipConstraints);
         var format = instance.ResolveEffectiveTestResultFormat();
         var testRunStartedUtc = DateTime.UtcNow;
@@ -465,7 +469,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 }
                 else
                 {
-                    var testRes = await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, cancellationToken).ConfigureAwait(false);
+                    var testRes = await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, failToPassOnly: false, cancellationToken).ConfigureAwait(false);
                     minorFixTestsPassed = testRes.Passed;
                     f2pPassed = testRes.FailToPassPassed;
                     f2pTotal = testRes.FailToPassTotal;
@@ -1410,8 +1414,9 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
     internal static string ResolveTestCommand(
         BenchmarkInstance instance,
         string workspacePath,
-        ExecutionMode executionMode = ExecutionMode.ContainerSandbox) =>
-        BenchmarkTestCommandResolver.ResolveTestCommand(instance, workspacePath, executionMode);
+        ExecutionMode executionMode = ExecutionMode.ContainerSandbox,
+        bool failToPassOnly = false) =>
+        BenchmarkTestCommandResolver.ResolveTestCommand(instance, workspacePath, executionMode, failToPassOnly);
 
     private IReadOnlyList<ParsedTestOutcome> ParseStructuredOutcomes(
         TestResultFormat format,
@@ -1564,8 +1569,10 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         ExecutionMode executionMode,
         string containerName)
     {
+        bool isWslUnc = WslPathConverter.TryExtractWslUnc(workspacePath, out var wslDistro, out var wslLinuxPath);
         var mountTable = SandboxMountTable.ForWorkspace(
             hostWorkingDirectory: workspacePath,
+            wslWorkingDirectory: isWslUnc ? wslLinuxPath : null,
             isReadOnly: false);
 
         return new SandboxScopeDescriptor(
@@ -1575,9 +1582,12 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             mountTable: mountTable,
             workspaceId: null,
             taskId: null,
+            wslDistribution: isWslUnc && !string.IsNullOrWhiteSpace(wslDistro) ? wslDistro : null,
             containerImage: customContainerImage,
             containerName: containerName,
+            useWslForContainers: isWslUnc,
             repositoryPath: workspacePath,
+            ext4MirrorPath: isWslUnc ? wslLinuxPath : null,
             virtualRootPath: SandboxMountTable.WorkspaceVirtualRoot,
             defaultWorkingDirectory: SandboxMountTable.WorkspaceVirtualRoot,
             scopeCacheKey: $"bench-verify:{containerName}",
