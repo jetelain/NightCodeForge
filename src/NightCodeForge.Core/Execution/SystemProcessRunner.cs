@@ -152,6 +152,107 @@ public class SystemProcessRunner : IProcessRunner
         }
     }
 
+    public async Task<ProcessRawExecutionResult> RunRawAsync(
+        ProcessStartSpec spec,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var psi = CreateStartInfo(spec);
+
+        try
+        {
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+
+            if (!string.IsNullOrEmpty(spec.StandardInput))
+            {
+                await process.StandardInput.WriteAsync(spec.StandardInput.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            process.StandardInput.Close();
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Max(1, spec.TimeoutSeconds)));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+            using var stdoutMs = new MemoryStream();
+            var stdoutTask = process.StandardOutput.BaseStream.CopyToAsync(stdoutMs, linkedCts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(linkedCts.Token);
+
+            try
+            {
+                await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                TryKillProcessTree(process, spec.FileName, "timed-out raw process");
+                await DrainTasksSafelyAsync(stdoutTask, stderrTask).ConfigureAwait(false);
+
+                return new ProcessRawExecutionResult(
+                    WorkflowDefaults.ProcessTimeoutExitCode,
+                    [],
+                    $"Process timed out after {spec.TimeoutSeconds}s.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                TryKillProcessTree(process, spec.FileName, "cancelled raw process");
+                await DrainTasksSafelyAsync(stdoutTask, stderrTask).ConfigureAwait(false);
+                throw;
+            }
+
+            await DrainTasksSafelyAsync(stdoutTask, stderrTask).ConfigureAwait(false);
+
+            var stderr = Sanitize(stderrTask.IsCompletedSuccessfully ? await stderrTask : string.Empty);
+
+            return new ProcessRawExecutionResult(process.ExitCode, stdoutMs.ToArray(), stderr);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to execute raw async process '{FileName}'", spec.FileName);
+            return new ProcessRawExecutionResult(-1, [], ex.Message);
+        }
+    }
+
+    private void TryKillProcessTree(Process process, string fileName, string reason)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to kill {Reason} '{FileName}'", reason, fileName);
+        }
+    }
+
+    private static async Task DrainTasksSafelyAsync(params Task[] tasks)
+    {
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when process times out or is cancelled; stream copies are aborted cleanly.
+        }
+        catch (IOException)
+        {
+            // Expected when a killed process closes its pipes mid-read.
+        }
+        catch (ObjectDisposedException)
+        {
+            // Expected if process stream handles are disposed during teardown.
+        }
+    }
+
 
     public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(
         ProcessStartSpec spec,

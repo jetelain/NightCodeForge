@@ -67,6 +67,7 @@ public static class ServiceCollectionExtensions
 
         // 4. Git Infrastructure
         services.AddGitInfrastructure();
+        services.TryAddScoped<IGitRepositoryBrowserService, GitRepositoryBrowserService>();
         services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Domain.LocalDiscoveryOptions>(
             NightCodeForge.Core.Domain.LocalDiscoveryOptions.SectionName);
         services.TryAddSingleton<ILocalRepositoryDiscoveryService, Git.LocalRepositoryDiscoveryService>();

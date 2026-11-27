@@ -16,6 +16,19 @@ public record GitCommandResult(
     TimeSpan Duration);
 
 /// <summary>
+/// Execution result of a native Git CLI command with unmodified raw standard output bytes.
+/// </summary>
+/// <param name="ExitCode">Process exit code (0 for success).</param>
+/// <param name="StandardOutputBytes">Unmodified raw standard output bytes.</param>
+/// <param name="StandardError">Captured standard error stream.</param>
+/// <param name="Duration">Execution duration.</param>
+public record GitRawCommandResult(
+    int ExitCode,
+    byte[] StandardOutputBytes,
+    string StandardError,
+    TimeSpan Duration);
+
+/// <summary>
 /// Exception thrown when a Git CLI command exits with a non-zero exit code.
 /// </summary>
 public class GitCommandException : Exception
@@ -92,4 +105,30 @@ public interface IGitCliRunner
         IReadOnlyDictionary<string, string>? environmentVariables,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(workingDirectory, argumentsList, timeoutSeconds, cancellationToken);
+
+    /// <summary>
+    /// Executes a native Git CLI command asynchronously and returns unmodified raw standard output bytes.
+    /// </summary>
+    /// <param name="workingDirectory">Repository working directory.</param>
+    /// <param name="argumentsList">Git CLI arguments list (without leading 'git').</param>
+    /// <param name="timeoutSeconds">Optional command timeout in seconds.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Execution result containing exit code, raw stdout bytes, stderr, and duration.</returns>
+    /// <exception cref="GitCommandException">Thrown if Git exits with a non-zero exit code.</exception>
+    Task<GitRawCommandResult> ExecuteRawAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a native Git CLI command asynchronously with optional environment variables and returns unmodified raw standard output bytes.
+    /// </summary>
+    Task<GitRawCommandResult> ExecuteRawAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds,
+        IReadOnlyDictionary<string, string>? environmentVariables,
+        CancellationToken cancellationToken = default) =>
+        ExecuteRawAsync(workingDirectory, argumentsList, timeoutSeconds, cancellationToken);
 }

@@ -295,4 +295,47 @@ public class TelemetryProcessRunnerTests
         Assert.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder, completed.OutputPreview);
         Assert.Contains(NightCodeForge.Core.Security.GitCredentialRedactor.RedactedPlaceholder, completed.ErrorPreview);
     }
+
+    [Fact]
+    public async Task RunRawAsync_BinaryStdout_ForwardsRawBytesAndRecordsSafeTelemetryPlaceholder()
+    {
+        var spec = new ProcessStartSpec { FileName = "git", Arguments = "show HEAD:bin.dat", WorkingDirectory = "/repo" };
+        var rawBytes = new byte[] { 0x7F, (byte)'E', (byte)'L', (byte)'F', 0x00, 0x01 };
+
+        ShellCommandRecord? completed = null;
+        _telemetryService.Setup(t => t.RecordShellCommandCompleted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => completed = r);
+        _innerRunner.Setup(r => r.RunRawAsync(spec, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessRawExecutionResult(0, rawBytes, string.Empty));
+
+        var result = await _runner.RunRawAsync(spec);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(rawBytes, result.StandardOutputBytes);
+        Assert.NotNull(completed);
+        Assert.Contains("[binary output: 6 bytes]", completed!.OutputPreview);
+    }
+
+    [Fact]
+    public async Task RunRawAsync_Utf16BomTextStdout_DecodesReadablePreviewWithoutGarbling()
+    {
+        var spec = new ProcessStartSpec { FileName = "git", Arguments = "show HEAD:utf16.txt", WorkingDirectory = "/repo" };
+        var bodyBytes = System.Text.Encoding.Unicode.GetBytes("Hello UTF-16!");
+        var rawBytes = new byte[2 + bodyBytes.Length];
+        rawBytes[0] = 0xFF;
+        rawBytes[1] = 0xFE;
+        bodyBytes.CopyTo(rawBytes, 2);
+
+        ShellCommandRecord? completed = null;
+        _telemetryService.Setup(t => t.RecordShellCommandCompleted(It.IsAny<ShellCommandRecord>()))
+            .Callback<ShellCommandRecord>(r => completed = r);
+        _innerRunner.Setup(r => r.RunRawAsync(spec, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessRawExecutionResult(0, rawBytes, string.Empty));
+
+        var result = await _runner.RunRawAsync(spec);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.NotNull(completed);
+        Assert.Equal("Hello UTF-16!", completed!.OutputPreview);
+    }
 }

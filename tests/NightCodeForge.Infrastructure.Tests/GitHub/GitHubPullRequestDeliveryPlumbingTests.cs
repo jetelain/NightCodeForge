@@ -1074,6 +1074,12 @@ public class GitHubPullRequestDeliveryPlumbingTests : IDisposable
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         }
 
+        public async Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(_delay, cancellationToken);
+            return new ProcessRawExecutionResult(0, [], string.Empty);
+        }
+
         public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
 

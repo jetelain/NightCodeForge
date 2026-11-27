@@ -33,6 +33,17 @@ public record ProcessExecutionResult(
     string StandardError);
 
 /// <summary>
+/// Result of executing a system process with unmodified raw-byte standard output capture.
+/// </summary>
+/// <param name="ExitCode">Process exit code.</param>
+/// <param name="StandardOutputBytes">Unmodified raw standard output bytes.</param>
+/// <param name="StandardError">Standard error string.</param>
+public record ProcessRawExecutionResult(
+    int ExitCode,
+    byte[] StandardOutputBytes,
+    string StandardError);
+
+/// <summary>
 /// Specification for starting a system process with either arguments string or argument list,
 /// optional streaming callbacks, environment variables, working directory, and timeout.
 /// </summary>
@@ -135,6 +146,13 @@ public interface IProcessRunner
     /// Executes a system process asynchronously using a structured specification, supporting streaming callbacks.
     /// </summary>
     Task<ProcessExecutionResult> RunAsync(
+        ProcessStartSpec spec,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Executes a system process asynchronously and captures unmodified raw standard output bytes.
+    /// </summary>
+    Task<ProcessRawExecutionResult> RunRawAsync(
         ProcessStartSpec spec,
         CancellationToken cancellationToken = default);
 

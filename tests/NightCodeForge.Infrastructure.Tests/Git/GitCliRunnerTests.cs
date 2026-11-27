@@ -204,6 +204,33 @@ public class GitCliRunnerTests : IDisposable
         Assert.Equal(expectedTimeout, actual);
     }
 
+    [Fact]
+    public async Task ExecuteRawAsync_PreservesNullBytesInLsTreeAndBinaryBlobs()
+    {
+        _repo.CreateFile("src/hello.txt", "world\n");
+        var binaryBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02 };
+        await File.WriteAllBytesAsync(Path.Combine(_repo.RepositoryPath, "logo.png"), binaryBytes);
+        _repo.CommitAll("add raw files");
+
+        var lsTreeResult = await _runner.ExecuteRawAsync(_repo.RepositoryPath, ["ls-tree", "-l", "-z", "HEAD"]);
+        Assert.Equal(0, lsTreeResult.ExitCode);
+        Assert.Contains((byte)0, lsTreeResult.StandardOutputBytes);
+
+        var showResult = await _runner.ExecuteRawAsync(_repo.RepositoryPath, ["show", "HEAD:logo.png"]);
+        Assert.Equal(0, showResult.ExitCode);
+        Assert.Equal(binaryBytes, showResult.StandardOutputBytes);
+    }
+
+    [Fact]
+    public async Task ExecuteRawAsync_NonZeroExit_ThrowsGitCommandExceptionWithRedactedStdErr()
+    {
+        var ex = await Assert.ThrowsAsync<GitCommandException>(() =>
+            _runner.ExecuteRawAsync(_repo.RepositoryPath, ["show", "HEAD:missing.bin"]));
+
+        Assert.NotEqual(0, ex.ExitCode);
+        Assert.False(string.IsNullOrWhiteSpace(ex.StandardError));
+    }
+
     public void Dispose()
     {
         _repo.Dispose();
@@ -220,6 +247,11 @@ public class GitCliRunnerTests : IDisposable
 
         public ProcessExecutionResult Run(ProcessStartSpec spec) => _handler(spec);
         public Task<ProcessExecutionResult> RunAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default) => Task.FromResult(_handler(spec));
+        public Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+        {
+            var res = _handler(spec);
+            return Task.FromResult(new ProcessRawExecutionResult(res.ExitCode, System.Text.Encoding.UTF8.GetBytes(res.StandardOutput), res.StandardError));
+        }
         public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public IProcessStreamSession StartSession(ProcessStartSpec spec) => throw new NotImplementedException();
     }

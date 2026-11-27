@@ -1,0 +1,803 @@
+@page "/files"
+@page "/w/{WorkspaceId:int}/files"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Core.Exceptions
+@using NightCodeForge.Core.Interfaces
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+@inject IGitRepositoryBrowserService GitBrowser
+@inject ISyntaxHighlightingService SyntaxHighlighter
+@inject NavigationManager Navigation
+@inject ToastService ToastService
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>Repository Files - NightCodeForge</PageTitle>
+
+<div class="files-page-container" id="files-page">
+    @if (WorkspaceState.ActiveWorkspace == null)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+    else
+    {
+        var activeWorkspace = WorkspaceState.ActiveWorkspace;
+        var currentRefDisplay = _resolvedRef?.ResolvedRef
+            ?? FileViewerPresentationHelper.ResolveEffectiveRef(RefQuery, activeWorkspace.DefaultBaseBranch);
+        var currentPathDisplay = _inspection?.Path ?? FileViewerPresentationHelper.NormalizeDisplayPath(PathQuery);
+        var isDetachedRef = _resolvedRef != null &&
+                            !string.IsNullOrWhiteSpace(_resolvedRef.ResolvedRef) &&
+                            !_branches.Any(b => string.Equals(b, _resolvedRef.ResolvedRef, StringComparison.Ordinal));
+        var isUnavailableRef = _resolvedRef == null &&
+                               !string.IsNullOrWhiteSpace(currentRefDisplay) &&
+                               !_branches.Any(b => string.Equals(b, currentRefDisplay, StringComparison.Ordinal));
+        var breadcrumbs = FileViewerPresentationHelper.BuildBreadcrumbs(currentPathDisplay, activeWorkspace.Name);
+        var treeNodes = FileViewerPresentationHelper.BuildVisibleTreeNodes(_loadedDirs, _expandedDirs, currentPathDisplay);
+
+        <div class="files-toolbar" id="files-toolbar">
+            <div class="files-toolbar-row">
+                <div class="files-ref-controls">
+                    <label class="files-ref-label" for="files-ref-select">Ref:</label>
+                    <select id="files-ref-select"
+                            class="forge-select files-ref-select"
+                            value="@currentRefDisplay"
+                            @onchange="OnRefSelected">
+                        @if (isDetachedRef)
+                        {
+                            <option value="@currentRefDisplay">@FileViewerPresentationHelper.ShortSha(currentRefDisplay) (detached)</option>
+                        }
+                        else if (isUnavailableRef)
+                        {
+                            <option value="@currentRefDisplay" disabled>@currentRefDisplay (unavailable)</option>
+                        }
+                        @foreach (var branch in _branches)
+                        {
+                            <option value="@branch">@branch</option>
+                        }
+                    </select>
+
+                    @if (isDetachedRef)
+                    {
+                        <span class="files-ref-pill" id="files-detached-ref-pill" title="@currentRefDisplay">
+                            Commit @FileViewerPresentationHelper.ShortSha(currentRefDisplay)
+                        </span>
+                    }
+                </div>
+
+                <div class="files-toolbar-actions">
+                    @if (_inspection != null)
+                    {
+                        @if (_inspection.SizeBytes.HasValue)
+                        {
+                            <span class="badge-tag" id="files-size-badge">@FileViewerPresentationHelper.FormatByteSize(_inspection.SizeBytes)</span>
+                        }
+                        @if (_inspection.ContentKind == GitFileContentKind.Text && _inspection.LineCount.HasValue)
+                        {
+                            <span class="badge-tag" id="files-lines-badge">@FileViewerPresentationHelper.FormatLineCountLabel(_inspection.LineCount.Value)</span>
+                            <span class="badge-tag" id="files-lang-badge">@FileViewerPresentationHelper.DetectLanguageLabel(_inspection.Path)</span>
+                        }
+                        @if (!string.IsNullOrEmpty(_inspection.Path))
+                        {
+                            <button type="button"
+                                    id="files-copy-path-btn"
+                                    class="forge-btn forge-btn-secondary forge-btn-sm"
+                                    @onclick="CopyPathAsync">
+                                📋 Copy Path
+                            </button>
+                        }
+                        @if (_inspection.ContentKind == GitFileContentKind.Text && FileViewerPresentationHelper.IsMarkdownFile(_inspection.Path))
+                        {
+                            <button type="button"
+                                    id="files-toggle-raw-btn"
+                                    class="forge-btn forge-btn-secondary forge-btn-sm"
+                                    @onclick="ToggleMarkdownRaw">
+                                @(_showRawMarkdown ? "Rendered" : "Raw")
+                            </button>
+                        }
+                    }
+                </div>
+            </div>
+
+            <nav class="files-breadcrumbs" id="files-breadcrumbs" aria-label="Repository path breadcrumbs">
+                @for (var i = 0; i < breadcrumbs.Count; i++)
+                {
+                    var crumb = breadcrumbs[i];
+                    if (i > 0)
+                    {
+                        <span class="files-breadcrumb-sep">/</span>
+                    }
+
+                    if (crumb.IsCurrent)
+                    {
+                        <span class="files-breadcrumb-current" data-testid="files-breadcrumb-current">@crumb.Label</span>
+                    }
+                    else
+                    {
+                        var crumbHref = FileViewerPresentationHelper.BuildFileViewerUrl(
+                            activeWorkspace.Id,
+                            currentRefDisplay,
+                            crumb.Path,
+                            TaskIdQuery);
+                        <a class="files-breadcrumb-link" href="@crumbHref" data-testid="files-breadcrumb-link">@crumb.Label</a>
+                    }
+                }
+            </nav>
+        </div>
+
+        @if (_resolvedRef?.Fallback is { } fallback)
+        {
+            var taskUrl = WorkspaceUrlHelper.BuildPath(activeWorkspace.Id, $"tasks/{fallback.TaskId}");
+            <div class="files-fallback-banner" id="files-fallback-banner" role="status">
+                <span>ℹ️ @FileViewerPresentationHelper.FormatFallbackMessage(fallback)</span>
+                <a class="files-fallback-task-link" id="files-fallback-task-link" href="@taskUrl">View Task #@fallback.TaskId →</a>
+            </div>
+        }
+
+        @if (!string.IsNullOrEmpty(_error))
+        {
+            <div class="alert alert-warning" id="files-error" role="alert">@_error</div>
+        }
+
+        <div class="files-explorer-grid">
+            <aside class="files-tree-pane" id="files-tree-pane" aria-label="Repository directory tree">
+                <div class="files-tree-header">
+                    <span>Repository Tree</span>
+                    @if (_isLoading)
+                    {
+                        <span class="small text-muted">Loading…</span>
+                    }
+                </div>
+
+                @if (treeNodes.Count == 0 && !_isLoading)
+                {
+                    <div class="text-muted small px-2" id="files-tree-empty">No files available at this ref.</div>
+                }
+                else
+                {
+                    <div class="files-tree-list" role="tree">
+                        @foreach (var node in treeNodes)
+                        {
+                            var isDir = node.Entry.Kind == GitTreeEntryKind.Directory;
+                            var rowHref = FileViewerPresentationHelper.BuildFileViewerUrl(
+                                activeWorkspace.Id,
+                                currentRefDisplay,
+                                node.Entry.Path,
+                                TaskIdQuery);
+                            var rowClass = $"files-tree-row {(node.IsActive ? "active" : "")} {(node.IsAncestorOfActive ? "ancestor" : "")}";
+
+                            <div class="@rowClass"
+                                 role="treeitem"
+                                 aria-selected="@(node.IsActive ? "true" : "false")"
+                                 style="@FileViewerPresentationHelper.FormatTreeRowIndentStyle(node.Depth)"
+                                 data-testid="files-tree-node"
+                                 data-entry-path="@node.Entry.Path">
+                                @if (isDir)
+                                {
+                                    <button type="button"
+                                            class="files-tree-toggle"
+                                            aria-label="@(node.IsExpanded ? $"Collapse {node.Entry.Name}" : $"Expand {node.Entry.Name}")"
+                                            aria-expanded="@(node.IsExpanded ? "true" : "false")"
+                                            data-testid="files-tree-toggle"
+                                            @onclick="() => ToggleDirectoryAsync(node.Entry.Path)">
+                                        @(node.IsExpanded ? "▾" : "▸")
+                                    </button>
+                                }
+                                else
+                                {
+                                    <span class="files-tree-spacer"></span>
+                                }
+
+                                <a class="files-tree-link" href="@rowHref" title="@node.Entry.Path">
+                                    <span>@FileViewerPresentationHelper.GetEntryIcon(node.Entry.Kind, node.IsExpanded)</span>
+                                    <span>@node.Entry.Name</span>
+                                </a>
+                            </div>
+                        }
+                    </div>
+                }
+            </aside>
+
+            <main class="files-main-pane" id="@FilesUiConstants.MainPaneElementId">
+                @if (_inspection == null)
+                {
+                    @if (_isLoading)
+                    {
+                        <div class="files-notice-card" id="files-loading-notice">Loading repository object…</div>
+                    }
+                    else if (string.IsNullOrEmpty(_error))
+                    {
+                        <div class="files-notice-card" id="files-empty-notice">Select a file or directory from the tree to inspect it.</div>
+                    }
+                }
+                else
+                {
+                    @switch (_inspection.ContentKind)
+                    {
+                        case GitFileContentKind.Directory:
+                            <div class="files-meta-bar">
+                                <strong class="font-mono">@(string.IsNullOrEmpty(_inspection.Path) ? "/" : _inspection.Path)</strong>
+                                <span class="badge-tag">@(_inspection.DirectoryEntries?.Count ?? 0) entries</span>
+                            </div>
+                            <table class="files-dir-table" id="files-directory-table">
+                                <thead>
+                                    <tr>
+                                        <th>Name</th>
+                                        <th>Kind</th>
+                                        <th>Size</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @if (_inspection.DirectoryEntries != null)
+                                    {
+                                        @foreach (var entry in _inspection.DirectoryEntries)
+                                        {
+                                            var entryHref = FileViewerPresentationHelper.BuildFileViewerUrl(
+                                                activeWorkspace.Id,
+                                                currentRefDisplay,
+                                                entry.Path,
+                                                TaskIdQuery);
+                                            <tr data-testid="files-dir-row">
+                                                <td>
+                                                    <a class="files-dir-entry-link" href="@entryHref">
+                                                        <span>@FileViewerPresentationHelper.GetEntryIcon(entry.Kind)</span>
+                                                        <span>@entry.Name</span>
+                                                    </a>
+                                                </td>
+                                                <td class="text-muted">@entry.Kind</td>
+                                                <td class="font-mono text-muted">@FileViewerPresentationHelper.FormatByteSize(entry.SizeBytes)</td>
+                                            </tr>
+                                        }
+                                    }
+                                </tbody>
+                            </table>
+                            break;
+
+                        case GitFileContentKind.Binary:
+                            <div class="files-notice-card" id="files-binary-notice">
+                                <h4>Binary file preview omitted</h4>
+                                <p class="mb-1">
+                                    <code>@_inspection.Path</code> is a binary file (@FileViewerPresentationHelper.FormatByteSize(_inspection.SizeBytes), detected signal: <code>@_inspection.BinaryReason</code>) and cannot be rendered as text.
+                                </p>
+                            </div>
+                            break;
+
+                        case GitFileContentKind.Oversized:
+                            <div class="files-notice-card" id="files-oversized-notice">
+                                <h4>File exceeds preview size limit</h4>
+                                <p class="mb-1">
+                                    <code>@_inspection.Path</code> is @FileViewerPresentationHelper.FormatByteSize(_inspection.SizeBytes), which exceeds the @FileViewerPresentationHelper.FormatByteSize(_inspection.MaxPreviewBytes) inline preview limit.
+                                </p>
+                            </div>
+                            break;
+
+                        case GitFileContentKind.Symlink:
+                            <div class="files-notice-card" id="files-symlink-notice">
+                                <h4>Symbolic link</h4>
+                                <p class="mb-1">
+                                    <code>@_inspection.Path</code> points to:
+                                </p>
+                                <pre class="memory-raw-pre font-mono mb-0" id="files-symlink-target">@_inspection.SymlinkTarget</pre>
+                            </div>
+                            break;
+
+                        case GitFileContentKind.Submodule:
+                            <div class="files-notice-card" id="files-submodule-notice">
+                                <h4>Git submodule (gitlink)</h4>
+                                <p class="mb-1">
+                                    <code>@_inspection.Path</code> is pinned to commit <code id="files-submodule-sha">@_inspection.SubmoduleCommitSha</code>.
+                                </p>
+                            </div>
+                            break;
+
+                        case GitFileContentKind.Text:
+                            @if (_lines.Count == 0)
+                            {
+                                <div class="files-notice-card" id="files-empty-file-notice">Empty file (0 bytes).</div>
+                            }
+                            else if (FileViewerPresentationHelper.IsMarkdownFile(_inspection.Path) && !_showRawMarkdown)
+                            {
+                                <div class="files-markdown-wrap" id="files-markdown-rendered">
+                                    <MarkdownRenderer Content="@_inspection.TextContent" Class="forge-markdown" />
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="files-code-wrapper" id="files-code-viewer">
+                                    <table class="files-code-table">
+                                        <tbody>
+                                            @for (var idx = 0; idx < _lines.Count; idx++)
+                                            {
+                                                var lineNumber = idx + 1;
+                                                var isHighlighted = _activeLineRange != null &&
+                                                                    lineNumber >= _activeLineRange.StartLine &&
+                                                                    lineNumber <= _activeLineRange.EndLine;
+                                                var lineId = FilesUiConstants.LineElementIdPrefix + lineNumber.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                                                var highlightedHtml = _highlightedLines[idx];
+                                                var capturedLine = lineNumber;
+
+                                                <tr id="@lineId"
+                                                    class="file-code-line @(isHighlighted ? "highlighted" : "")"
+                                                    data-line-number="@capturedLine">
+                                                    <td class="file-line-num">
+                                                        <button type="button"
+                                                                class="file-line-num-btn"
+                                                                aria-label="@($"Select line {capturedLine}")"
+                                                                @onclick="(e) => OnLineNumberClicked(capturedLine, e)">
+                                                            @capturedLine
+                                                        </button>
+                                                    </td>
+                                                    <td class="file-line-code">@((MarkupString)highlightedHtml)</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                            break;
+                    }
+                }
+            </main>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    [SupplyParameterFromQuery(Name = FilesUiConstants.RefQueryParameter)]
+    public string? RefQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = FilesUiConstants.PathQueryParameter)]
+    public string? PathQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = FilesUiConstants.TaskIdQueryParameter)]
+    public int? TaskIdQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = FilesUiConstants.LinesQueryParameter)]
+    public string? LinesQuery { get; set; }
+
+    private IReadOnlyList<string> _branches = [];
+    private readonly Dictionary<string, IReadOnlyList<GitTreeEntry>> _loadedDirs = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _expandedDirs = new(StringComparer.Ordinal);
+    private GitResolvedRef? _resolvedRef;
+    private GitPathInspectionResult? _inspection;
+    private IReadOnlyList<string> _lines = [];
+    private IReadOnlyList<string> _highlightedLines = [];
+    private FileLineRange? _activeLineRange;
+    private bool _showRawMarkdown;
+    private bool _isLoading;
+    private string? _error;
+    private int? _loadedWorkspaceId;
+    private string? _lastQueryKey;
+    private string? _lastNonFragmentUri;
+    private string? _lastTreeCommitSha;
+    private int _loadVersion;
+    private int? _pendingScrollLine;
+    private bool _disposed;
+
+    private int? ActiveWorkspaceId => WorkspaceState.ActiveWorkspaceId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Navigation.LocationChanged += HandleLocationChanged;
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        await LoadWorkspaceAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        var activeId = ActiveWorkspaceId;
+        var queryKey = FileViewerPresentationHelper.BuildTargetQueryKey(activeId, RefQuery, PathQuery, TaskIdQuery);
+
+        if (_loadedWorkspaceId != activeId)
+        {
+            await LoadWorkspaceAsync();
+            return;
+        }
+
+        if (!string.Equals(_lastQueryKey, queryKey, StringComparison.Ordinal))
+        {
+            await LoadTargetAsync(reloadBranches: false);
+            return;
+        }
+
+        _lastNonFragmentUri = FileViewerPresentationHelper.StripFragment(Navigation.Uri);
+        SyncLineSelectionFromLocation(scrollIfChanged: true);
+    }
+
+    private async Task LoadWorkspaceAsync()
+    {
+        var activeId = ActiveWorkspaceId;
+        _loadedWorkspaceId = activeId;
+        ResetViewerState(clearBranches: true);
+
+        if (!activeId.HasValue)
+        {
+            _lastQueryKey = FileViewerPresentationHelper.BuildTargetQueryKey(null, RefQuery, PathQuery, TaskIdQuery);
+            _lastNonFragmentUri = FileViewerPresentationHelper.StripFragment(Navigation.Uri);
+            return;
+        }
+
+        await LoadTargetAsync(reloadBranches: true);
+    }
+
+    private async Task LoadTargetAsync(bool reloadBranches)
+    {
+        var activeId = ActiveWorkspaceId;
+        _lastQueryKey = FileViewerPresentationHelper.BuildTargetQueryKey(activeId, RefQuery, PathQuery, TaskIdQuery);
+        _lastNonFragmentUri = FileViewerPresentationHelper.StripFragment(Navigation.Uri);
+
+        if (!activeId.HasValue)
+        {
+            return;
+        }
+
+        var workspaceId = activeId.Value;
+        var version = ++_loadVersion;
+        _isLoading = true;
+        _error = null;
+        _resolvedRef = null;
+
+        try
+        {
+            if (reloadBranches || _branches.Count == 0)
+            {
+                _branches = await GitBrowser.ListBranchesAsync(workspaceId);
+                if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+                {
+                    return;
+                }
+            }
+
+            var resolvedRef = await GitBrowser.ResolveRefAsync(workspaceId, RefQuery, TaskIdQuery);
+            if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+            {
+                return;
+            }
+
+            _resolvedRef = resolvedRef;
+
+            var normalizedPath = FileViewerPresentationHelper.NormalizeDisplayPath(PathQuery);
+            await EnsureTreeLoadedAsync(workspaceId, resolvedRef.CommitSha, normalizedPath, version);
+            if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+            {
+                return;
+            }
+
+            var inspection = await GitBrowser.InspectPathAsync(workspaceId, resolvedRef.CommitSha, normalizedPath, TaskIdQuery);
+            if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+            {
+                return;
+            }
+
+            // Preserve original fallback metadata resolved for the requested ref.
+            _inspection = inspection with { ResolvedRef = resolvedRef };
+            _lines = _inspection.ContentKind == GitFileContentKind.Text
+                ? FileViewerPresentationHelper.SplitLines(_inspection.TextContent)
+                : [];
+            _highlightedLines = _inspection.ContentKind == GitFileContentKind.Text && _lines.Count > 0
+                ? _lines.Select(line => SyntaxHighlighter.HighlightLine(line, _inspection.Path)).ToArray()
+                : [];
+
+            var hasLineTarget = FileLineRangeHelper.HasLineTarget(Navigation.Uri, LinesQuery);
+            _showRawMarkdown = FileViewerPresentationHelper.IsMarkdownFile(_inspection.Path) && hasLineTarget;
+
+            if (_inspection.ContentKind == GitFileContentKind.Directory && !string.IsNullOrEmpty(_inspection.Path))
+            {
+                _expandedDirs.Add(_inspection.Path);
+                if (_inspection.DirectoryEntries != null)
+                {
+                    _loadedDirs[_inspection.Path] = _inspection.DirectoryEntries;
+                }
+            }
+
+            SyncLineSelectionFromLocation(scrollIfChanged: true, forceScroll: true);
+        }
+        catch (Exception ex) when (ex is GitRepositoryBrowserException or GitCommandException)
+        {
+            if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+            {
+                return;
+            }
+
+            _inspection = null;
+            _lines = [];
+            _highlightedLines = [];
+            _activeLineRange = null;
+            _error = ex.Message;
+        }
+        finally
+        {
+            if (!_disposed && _loadVersion == version)
+            {
+                _isLoading = false;
+            }
+        }
+    }
+
+    private async Task EnsureTreeLoadedAsync(int workspaceId, string commitSha, string normalizedPath, int version)
+    {
+        if (!string.Equals(_lastTreeCommitSha, commitSha, StringComparison.Ordinal))
+        {
+            _loadedDirs.Clear();
+            _expandedDirs.Clear();
+            _lastTreeCommitSha = commitSha;
+        }
+
+        try
+        {
+            var ancestorDirs = await GitBrowser.ListAncestorDirectoriesAsync(workspaceId, commitSha, normalizedPath);
+            if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+            {
+                return;
+            }
+
+            foreach (var kvp in ancestorDirs)
+            {
+                _loadedDirs[kvp.Key] = kvp.Value;
+                if (!string.IsNullOrEmpty(kvp.Key))
+                {
+                    _expandedDirs.Add(kvp.Key);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is GitBrowserPathNotFoundException or GitBrowserInvalidInputException)
+        {
+            // Keep the root directory loaded so the sidebar tree remains navigable when a deep-linked path is missing or invalid.
+            if (!_loadedDirs.ContainsKey(string.Empty))
+            {
+                var rootListing = await GitBrowser.ListDirectoryAsync(workspaceId, commitSha, string.Empty);
+                if (!_disposed && ActiveWorkspaceId == workspaceId && _loadVersion == version)
+                {
+                    _loadedDirs[string.Empty] = rootListing.Entries;
+                }
+            }
+        }
+    }
+
+    private async Task ToggleDirectoryAsync(string directoryPath)
+    {
+        if (!ActiveWorkspaceId.HasValue || _resolvedRef == null)
+        {
+            return;
+        }
+
+        if (!_expandedDirs.Add(directoryPath))
+        {
+            _expandedDirs.Remove(directoryPath);
+            return;
+        }
+
+        if (_loadedDirs.ContainsKey(directoryPath))
+        {
+            return;
+        }
+
+        var workspaceId = ActiveWorkspaceId.Value;
+        var commitSha = _resolvedRef.CommitSha;
+        var version = _loadVersion;
+
+        try
+        {
+            var listing = await GitBrowser.ListDirectoryAsync(workspaceId, commitSha, directoryPath);
+            if (_disposed ||
+                ActiveWorkspaceId != workspaceId ||
+                _loadVersion != version ||
+                !string.Equals(_lastTreeCommitSha, commitSha, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _loadedDirs[directoryPath] = listing.Entries;
+        }
+        catch (Exception ex) when (ex is GitRepositoryBrowserException or GitCommandException)
+        {
+            if (_disposed || ActiveWorkspaceId != workspaceId || _loadVersion != version)
+            {
+                return;
+            }
+
+            _expandedDirs.Remove(directoryPath);
+            _error = ex.Message;
+        }
+    }
+
+    private void OnRefSelected(ChangeEventArgs e)
+    {
+        var selectedRef = e.Value?.ToString();
+        if (!ActiveWorkspaceId.HasValue || string.IsNullOrWhiteSpace(selectedRef))
+        {
+            return;
+        }
+
+        var url = FileViewerPresentationHelper.BuildFileViewerUrl(
+            ActiveWorkspaceId.Value,
+            selectedRef,
+            PathQuery);
+
+        Navigation.NavigateTo(url);
+    }
+
+    private void OnLineNumberClicked(int lineNumber, MouseEventArgs args)
+    {
+        if (!ActiveWorkspaceId.HasValue || _inspection == null)
+        {
+            return;
+        }
+
+        var nextRange = FileLineRangeHelper.ComputeClickedRange(_activeLineRange, lineNumber, args.ShiftKey);
+        _activeLineRange = nextRange;
+
+        var activeRef = _resolvedRef?.ResolvedRef
+            ?? FileViewerPresentationHelper.ResolveEffectiveRef(RefQuery, WorkspaceState.ActiveWorkspace?.DefaultBaseBranch);
+        var url = FileViewerPresentationHelper.BuildFileViewerUrl(
+            ActiveWorkspaceId.Value,
+            activeRef,
+            _inspection.Path,
+            TaskIdQuery,
+            nextRange);
+
+        Navigation.NavigateTo(url, replace: true);
+    }
+
+    private async Task CopyPathAsync()
+    {
+        var pathToCopy = _inspection?.Path ?? FileViewerPresentationHelper.NormalizeDisplayPath(PathQuery);
+        if (string.IsNullOrEmpty(pathToCopy))
+        {
+            return;
+        }
+
+        try
+        {
+            var copied = await JS.InvokeAsync<bool>(FilesUiConstants.CopyTextToClipboardJsFunction, pathToCopy);
+            if (copied)
+            {
+                ToastService.Show("Path copied", pathToCopy, ToastLevel.Success);
+            }
+            else
+            {
+                ToastService.Show("Clipboard unavailable", "Could not copy path to clipboard.", ToastLevel.Warning);
+            }
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+        {
+            // Blazor circuit disconnected before clipboard write completed.
+        }
+    }
+
+    private void ToggleMarkdownRaw()
+    {
+        _showRawMarkdown = !_showRawMarkdown;
+        if (_showRawMarkdown && _activeLineRange != null)
+        {
+            _pendingScrollLine = _activeLineRange.StartLine;
+        }
+    }
+
+    private void SyncLineSelectionFromLocation(bool scrollIfChanged, bool forceScroll = false)
+    {
+        var previous = _activeLineRange;
+        var next = _inspection?.ContentKind == GitFileContentKind.Text
+            ? FileLineRangeHelper.ResolveEffectiveRange(Navigation.Uri, LinesQuery, _lines.Count)
+            : null;
+
+        _activeLineRange = next;
+        var lineSelectionChanged = !Equals(previous, next);
+
+        if (_inspection != null &&
+            FileViewerPresentationHelper.IsMarkdownFile(_inspection.Path) &&
+            FileLineRangeHelper.HasLineTarget(Navigation.Uri, LinesQuery) &&
+            (forceScroll || lineSelectionChanged))
+        {
+            _showRawMarkdown = true;
+        }
+
+        var shouldScroll = next != null &&
+                           (forceScroll || (scrollIfChanged && lineSelectionChanged)) &&
+                           (_inspection == null || !FileViewerPresentationHelper.IsMarkdownFile(_inspection.Path) || _showRawMarkdown);
+
+        if (shouldScroll && next != null)
+        {
+            _pendingScrollLine = next.StartLine;
+        }
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var nextNonFragment = FileViewerPresentationHelper.StripFragment(e.Location);
+        if (string.Equals(_lastNonFragmentUri, nextNonFragment, StringComparison.Ordinal))
+        {
+            _ = InvokeAsync(() =>
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                SyncLineSelectionFromLocation(scrollIfChanged: true);
+                StateHasChanged();
+            });
+        }
+    }
+
+    private void HandleWorkspaceChanged()
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (_loadedWorkspaceId != ActiveWorkspaceId)
+            {
+                await LoadWorkspaceAsync();
+                StateHasChanged();
+            }
+        });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pendingScrollLine.HasValue && !_disposed)
+        {
+            var targetLine = _pendingScrollLine.Value;
+            _pendingScrollLine = null;
+            var elementId = FilesUiConstants.LineElementIdPrefix + targetLine.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            try
+            {
+                await JS.InvokeVoidAsync(FilesUiConstants.ScrollToLineJsFunction, elementId);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+            {
+                // Blazor circuit disconnected or navigation canceled before JS scroll completed.
+            }
+        }
+    }
+
+    private void ResetViewerState(bool clearBranches)
+    {
+        _loadVersion++;
+        if (clearBranches)
+        {
+            _branches = [];
+        }
+        _loadedDirs.Clear();
+        _expandedDirs.Clear();
+        _resolvedRef = null;
+        _inspection = null;
+        _lines = [];
+        _highlightedLines = [];
+        _activeLineRange = null;
+        _showRawMarkdown = false;
+        _isLoading = false;
+        _error = null;
+        _lastTreeCommitSha = null;
+        _pendingScrollLine = null;
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        Navigation.LocationChanged -= HandleLocationChanged;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+}

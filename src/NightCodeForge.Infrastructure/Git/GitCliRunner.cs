@@ -43,15 +43,58 @@ public class GitCliRunner : IGitCliRunner
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(workingDirectory, argumentsList, timeoutSeconds, null, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<GitRawCommandResult> ExecuteRawAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds = null,
+        CancellationToken cancellationToken = default) =>
+        ExecuteRawAsync(workingDirectory, argumentsList, timeoutSeconds, null, cancellationToken);
+
     internal bool SkipDirectoryValidation { get; set; }
 
     /// <inheritdoc />
-    public async Task<GitCommandResult> ExecuteAsync(
+    public Task<GitCommandResult> ExecuteAsync(
         string workingDirectory,
         IEnumerable<string> argumentsList,
         int? timeoutSeconds,
         IReadOnlyDictionary<string, string>? environmentVariables,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(
+            workingDirectory,
+            argumentsList,
+            timeoutSeconds,
+            environmentVariables,
+            (spec, ct) => _processRunner.RunAsync(spec, ct),
+            (result, elapsed) => (result.ExitCode, result.StandardOutput, result.StandardError,
+                new GitCommandResult(result.ExitCode, result.StandardOutput, result.StandardError, elapsed)),
+            cancellationToken);
+
+    /// <inheritdoc />
+    public Task<GitRawCommandResult> ExecuteRawAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds,
+        IReadOnlyDictionary<string, string>? environmentVariables,
+        CancellationToken cancellationToken = default) =>
+        ExecuteCoreAsync(
+            workingDirectory,
+            argumentsList,
+            timeoutSeconds,
+            environmentVariables,
+            (spec, ct) => _processRunner.RunRawAsync(spec, ct),
+            (result, elapsed) => (result.ExitCode, string.Empty, result.StandardError,
+                new GitRawCommandResult(result.ExitCode, result.StandardOutputBytes, result.StandardError, elapsed)),
+            cancellationToken);
+
+    private async Task<TResult> ExecuteCoreAsync<TProcessResult, TResult>(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds,
+        IReadOnlyDictionary<string, string>? environmentVariables,
+        Func<ProcessStartSpec, CancellationToken, Task<TProcessResult>> runProcess,
+        Func<TProcessResult, TimeSpan, (int ExitCode, string SafeStdOut, string StdErr, TResult Result)> mapResult,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentNullException.ThrowIfNull(argumentsList);
@@ -69,12 +112,9 @@ public class GitCliRunner : IGitCliRunner
             {
                 ValidateWslDirectoryExists(workingDirectory, distro, linuxDir);
             }
-            else
+            else if (!Directory.Exists(workingDirectory))
             {
-                if (!Directory.Exists(workingDirectory))
-                {
-                    throw new DirectoryNotFoundException($"Working directory '{workingDirectory}' does not exist.");
-                }
+                throw new DirectoryNotFoundException($"Working directory '{workingDirectory}' does not exist.");
             }
         }
 
@@ -91,77 +131,18 @@ public class GitCliRunner : IGitCliRunner
 
         try
         {
-            ProcessStartSpec spec;
-            if (isWslTarget)
-            {
-                var wslEnv = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["PAGER"] = "cat",
-                    ["GIT_PAGER"] = "cat",
-                    ["GIT_TERMINAL_PROMPT"] = "0"
-                };
-                if (environmentVariables != null)
-                {
-                    foreach (var kvp in environmentVariables)
-                    {
-                        wslEnv[kvp.Key] = kvp.Value;
-                    }
-                }
-
-                var wslArgs = new List<string> { "-d", distro, "--exec", "env" };
-                foreach (var kvp in wslEnv)
-                {
-                    wslArgs.Add($"{kvp.Key}={kvp.Value}");
-                }
-                wslArgs.AddRange(["git", "-c", "core.pager=cat", "-C", linuxDir]);
-                wslArgs.AddRange(argsArray);
-
-                spec = new ProcessStartSpec
-                {
-                    FileName = "wsl.exe",
-                    ArgumentList = wslArgs,
-                    TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
-                    EnvironmentVariables = wslEnv
-                };
-            }
-            else
-            {
-                var env = new Dictionary<string, string>
-                {
-                    ["PAGER"] = "cat",
-                    ["GIT_PAGER"] = "cat",
-                    ["GIT_TERMINAL_PROMPT"] = "0"
-                };
-                if (environmentVariables != null)
-                {
-                    foreach (var kvp in environmentVariables)
-                    {
-                        env[kvp.Key] = kvp.Value;
-                    }
-                }
-
-                spec = new ProcessStartSpec
-                {
-                    FileName = "git",
-                    ArgumentList = argsArray,
-                    WorkingDirectory = workingDirectory,
-                    TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
-                    EnvironmentVariables = env
-                };
-            }
-
-            var result = await _processRunner.RunAsync(spec, linkedCts.Token).ConfigureAwait(false);
+            var spec = BuildProcessStartSpec(workingDirectory, argsArray, isWslTarget, distro, linuxDir, timeoutDuration, environmentVariables);
+            var processResult = await runProcess(spec, linkedCts.Token).ConfigureAwait(false);
             stopwatch.Stop();
 
-            var stdout = result.StandardOutput;
-            var stderr = result.StandardError;
+            var (exitCode, safeStdOut, stderr, finalResult) = mapResult(processResult, stopwatch.Elapsed);
 
-            if (result.ExitCode == WorkflowDefaults.ProcessTimeoutExitCode && stderr.Contains("Process timed out"))
+            if (exitCode == WorkflowDefaults.ProcessTimeoutExitCode && stderr.Contains("Process timed out"))
             {
                 throw new TimeoutException($"Git command 'git {displayArgs}' timed out after {timeoutDuration.TotalSeconds:F0}s in '{workingDirectory}'.");
             }
 
-            if (result.ExitCode != 0)
+            if (exitCode != 0)
             {
                 var redactedStdErr = GitCredentialRedactor.Redact(stderr);
                 if (isWslTarget && stderr.Contains("cannot change to") && stderr.Contains("No such file or directory"))
@@ -170,12 +151,12 @@ public class GitCliRunner : IGitCliRunner
                 }
 
                 _logger.LogWarning("Git command 'git {Arguments}' failed with exit code {ExitCode}: {StdErr}",
-                    displayArgs, result.ExitCode, redactedStdErr);
+                    displayArgs, exitCode, redactedStdErr);
 
-                throw new GitCommandException(workingDirectory, redactedArgs, result.ExitCode, GitCredentialRedactor.Redact(stdout), redactedStdErr);
+                throw new GitCommandException(workingDirectory, redactedArgs, exitCode, GitCredentialRedactor.Redact(safeStdOut), redactedStdErr);
             }
 
-            return new GitCommandResult(result.ExitCode, stdout, stderr, stopwatch.Elapsed);
+            return finalResult;
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -185,6 +166,58 @@ public class GitCliRunner : IGitCliRunner
 
             throw new TimeoutException($"Git command 'git {displayArgs}' timed out after {timeoutDuration.TotalSeconds:F0}s in '{workingDirectory}'.");
         }
+    }
+
+    private static ProcessStartSpec BuildProcessStartSpec(
+        string workingDirectory,
+        string[] argsArray,
+        bool isWslTarget,
+        string distro,
+        string linuxDir,
+        TimeSpan timeoutDuration,
+        IReadOnlyDictionary<string, string>? environmentVariables)
+    {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["PAGER"] = "cat",
+            ["GIT_PAGER"] = "cat",
+            ["GIT_TERMINAL_PROMPT"] = "0"
+        };
+        if (environmentVariables != null)
+        {
+            foreach (var kvp in environmentVariables)
+            {
+                env[kvp.Key] = kvp.Value;
+            }
+        }
+
+        if (isWslTarget)
+        {
+            var wslArgs = new List<string> { "-d", distro, "--exec", "env" };
+            foreach (var kvp in env)
+            {
+                wslArgs.Add($"{kvp.Key}={kvp.Value}");
+            }
+            wslArgs.AddRange(["git", "-c", "core.pager=cat", "-C", linuxDir]);
+            wslArgs.AddRange(argsArray);
+
+            return new ProcessStartSpec
+            {
+                FileName = "wsl.exe",
+                ArgumentList = wslArgs,
+                TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
+                EnvironmentVariables = env
+            };
+        }
+
+        return new ProcessStartSpec
+        {
+            FileName = "git",
+            ArgumentList = argsArray,
+            WorkingDirectory = workingDirectory,
+            TimeoutSeconds = (int)Math.Max(1, timeoutDuration.TotalSeconds),
+            EnvironmentVariables = env
+        };
     }
 
     private bool TryResolveWslTarget(string workingDirectory, out string distro, out string linuxDir)

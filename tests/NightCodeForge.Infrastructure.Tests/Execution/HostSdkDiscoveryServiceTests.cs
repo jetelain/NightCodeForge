@@ -55,6 +55,12 @@ public class HostSdkDiscoveryServiceTests
             return Task.FromResult(Run(spec));
         }
 
+        public Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+        {
+            var res = Run(spec);
+            return Task.FromResult(new ProcessRawExecutionResult(res.ExitCode, System.Text.Encoding.UTF8.GetBytes(res.StandardOutput), res.StandardError));
+        }
+
         public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             var res = Run(spec);

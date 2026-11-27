@@ -1089,6 +1089,12 @@ public class ExecutionEnvironmentTests
         public Task<ProcessExecutionResult> RunAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
             => Task.FromResult(Run(spec));
 
+        public Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+        {
+            var res = Run(spec);
+            return Task.FromResult(new ProcessRawExecutionResult(res.ExitCode, System.Text.Encoding.UTF8.GetBytes(res.StandardOutput), res.StandardError));
+        }
+
         public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
 

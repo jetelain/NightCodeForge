@@ -254,6 +254,20 @@ public class FakeGitCliRunner : IGitCliRunner
 
         return Task.FromResult(new GitCommandResult(0, string.Empty, string.Empty, TimeSpan.FromMilliseconds(5)));
     }
+
+    public async Task<GitRawCommandResult> ExecuteRawAsync(
+        string workingDirectory,
+        IEnumerable<string> argumentsList,
+        int? timeoutSeconds = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await ExecuteAsync(workingDirectory, argumentsList, timeoutSeconds, cancellationToken);
+        return new GitRawCommandResult(
+            result.ExitCode,
+            System.Text.Encoding.UTF8.GetBytes(result.StandardOutput),
+            result.StandardError,
+            result.Duration);
+    }
 }
 
 public record FakeGitExecutedCommand(string WorkingDirectory, IReadOnlyList<string> ArgumentsList)
