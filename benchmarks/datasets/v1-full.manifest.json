@@ -318,7 +318,15 @@
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/RestSharp.Tests.Integrated/RestSharp.Tests.Integrated.csproj -f net7.0 --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "fail_to_pass": [
+        "RestSharp.Tests.Integrated.PostTests.Should_post_both_default_and_request_parameters"
+      ],
+      "pass_to_pass": [
+        "RestSharp.Tests.Integrated.HttpHeadersTests.Should_use_both_default_and_request_headers",
+        "RestSharp.Tests.Integrated.HttpHeadersTests.Ensure_headers_correctly_set_in_the_hook",
+        "RestSharp.Tests.Integrated.PostTests.Should_post_large_form_data"
+      ]
     },
     {
       "instance_id": "restsharp__restsharp-1962",

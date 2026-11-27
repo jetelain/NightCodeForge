@@ -131,6 +131,19 @@ public sealed partial class CuratedDatasetsValidationTests
         var restSharp1962 = Assert.Single(full.Entries, e => e.InstanceId == "restsharp__restsharp-1962");
         Assert.Equal("restsharp/RestSharp", restSharp1962.Repo);
 
+        var restSharp2021 = Assert.Single(full.Entries, e => e.InstanceId == "restsharp__restsharp-2021");
+        Assert.Contains("-f net7.0", restSharp2021.CustomTestCommand);
+        Assert.Equal(
+            ["RestSharp.Tests.Integrated.PostTests.Should_post_both_default_and_request_parameters"],
+            restSharp2021.FailToPass ?? []);
+        Assert.Equal(
+            [
+                "RestSharp.Tests.Integrated.HttpHeadersTests.Should_use_both_default_and_request_headers",
+                "RestSharp.Tests.Integrated.HttpHeadersTests.Ensure_headers_correctly_set_in_the_hook",
+                "RestSharp.Tests.Integrated.PostTests.Should_post_large_form_data"
+            ],
+            restSharp2021.PassToPass ?? []);
+
         var polly2164 = Assert.Single(full.Entries, e => e.InstanceId == "polly-2164");
         Assert.Equal(3, polly2164.FailToPass?.Count);
         Assert.Equal(["Polly.Core.Tests.Retry.RetryHelperTests.ExponentialWithJitter_Ok"], polly2164.PassToPass ?? []);
