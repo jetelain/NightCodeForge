@@ -32,7 +32,7 @@ public class AirGappedSubresourcesTests
     [Fact]
     public void WebApp_ShouldNotReferenceExternalHttpResources_InTemplatesOrStylesheets()
     {
-        var webRoot = FindWebProjectRoot();
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
         var files = Directory.GetFiles(webRoot, "*.*", SearchOption.AllDirectories)
             .Where(f =>
             {
@@ -106,7 +106,7 @@ public class AirGappedSubresourcesTests
     [Fact]
     public void BundledFonts_ShouldExistInWwwrootFontsDirectory()
     {
-        var webRoot = FindWebProjectRoot();
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
         var fontsDir = Path.Combine(webRoot, "wwwroot", "fonts");
 
         Assert.True(Directory.Exists(fontsDir), $"Fonts directory does not exist: {fontsDir}");
@@ -125,7 +125,7 @@ public class AirGappedSubresourcesTests
     [Fact]
     public void FontsCss_ShouldDeclareLocalFontFaceDefinitions_WithFontDisplaySwap()
     {
-        var webRoot = FindWebProjectRoot();
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
         var fontsCssPath = Path.Combine(webRoot, "wwwroot", "css", "fonts.css");
 
         Assert.True(File.Exists(fontsCssPath), $"Missing fonts.css at {fontsCssPath}");
@@ -142,7 +142,7 @@ public class AirGappedSubresourcesTests
     [Fact]
     public void ThemeCss_ShouldDefineRobustNativeSystemFallbacks()
     {
-        var webRoot = FindWebProjectRoot();
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
         var themeCssPath = Path.Combine(webRoot, "wwwroot", "css", "theme.css");
 
         Assert.True(File.Exists(themeCssPath), $"Missing theme.css at {themeCssPath}");
@@ -157,7 +157,7 @@ public class AirGappedSubresourcesTests
     [Fact]
     public void AppRazor_ShouldNotReferenceGoogleFonts_AndShouldIncludeFontsCss()
     {
-        var webRoot = FindWebProjectRoot();
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
         var appRazorPath = Path.Combine(webRoot, "Components", "App.razor");
 
         Assert.True(File.Exists(appRazorPath), $"Missing App.razor at {appRazorPath}");
@@ -180,29 +180,6 @@ public class AirGappedSubresourcesTests
     {
         var match = HtmlSubresourcePattern.IsMatch(htmlSnippet);
         Assert.Equal(shouldFlag, match);
-    }
-
-    private static string FindWebProjectRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current != null)
-        {
-            var directWebProj = Path.Combine(current.FullName, "NightCodeForge.Web.csproj");
-            if (File.Exists(directWebProj))
-            {
-                return current.FullName;
-            }
-
-            var srcWebProj = Path.Combine(current.FullName, "src", "NightCodeForge.Web", "NightCodeForge.Web.csproj");
-            if (File.Exists(srcWebProj))
-            {
-                return Path.Combine(current.FullName, "src", "NightCodeForge.Web");
-            }
-
-            current = current.Parent;
-        }
-
-        throw new InvalidOperationException("Could not locate NightCodeForge.Web project directory from " + AppContext.BaseDirectory);
     }
 
     private static string StripRazorCodeBlock(string content)

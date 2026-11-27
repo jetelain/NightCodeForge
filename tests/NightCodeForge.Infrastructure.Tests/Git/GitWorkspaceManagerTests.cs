@@ -4,6 +4,7 @@ using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Exceptions;
 using NightCodeForge.Core.Execution;
 using NightCodeForge.Core.Interfaces;
+using NightCodeForge.Core.Services;
 using NightCodeForge.Infrastructure.Execution;
 using NightCodeForge.Infrastructure.Git;
 
@@ -798,6 +799,155 @@ public class GitWorkspaceManagerTests : IDisposable
         Assert.Equal(upstreamHead, wtHead);
         Assert.True(File.Exists(Path.Combine(wtPath, "new_feature.txt")));
         Assert.False(File.Exists(Path.Combine(wtPath, "wip.txt")));
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeAsync_LocksManagedWorktree_SurvivesWorktreePruneAndRemovesCleanly()
+    {
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 210, "main");
+        var adminDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-210");
+        var lockedFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.LockedFileName);
+        var gitDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.GitDirFileName);
+
+        Assert.True(File.Exists(lockedFile));
+        Assert.Equal(GitWorktreeMetadataSanitizer.ManagedWorktreeLockReason, (await File.ReadAllTextAsync(lockedFile)).Trim());
+
+        await File.WriteAllTextAsync(gitDirFile, Path.Combine(_repo.RepositoryPath, "nonexistent-task-210", ".git") + "\n");
+
+        await _runner.ExecuteAsync(_repo.RepositoryPath, ["worktree", "prune"]);
+        Assert.True(Directory.Exists(adminDir));
+
+        await _manager.EnsureWorktreeRelativePathsAsync(_workspace, 210);
+        await _manager.RemoveWorktreeAsync(_workspace, 210);
+
+        Assert.False(Directory.Exists(wtPath));
+        Assert.False(Directory.Exists(adminDir));
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeRelativePathsAsync_RepairsPoisonedCommonDirAndBackfillsLock()
+    {
+        await _manager.EnsureWorktreeAsync(_workspace, 211, "main");
+        var adminDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-211");
+        var commonDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.CommonDirFileName);
+        var lockedFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.LockedFileName);
+
+        if (File.Exists(lockedFile))
+        {
+            File.Delete(lockedFile);
+        }
+        await File.WriteAllTextAsync(commonDirFile, "/workspace/clone/.git\n");
+
+        await _manager.EnsureWorktreeRelativePathsAsync(_workspace, 211);
+
+        Assert.Equal("../..", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+        Assert.True(File.Exists(lockedFile));
+        Assert.Equal(GitWorktreeMetadataSanitizer.ManagedWorktreeLockReason, (await File.ReadAllTextAsync(lockedFile)).Trim());
+    }
+
+    [Fact]
+    public async Task EnsureWorktreeAsync_WhenLockedWorktreeDirectoryDeletedFromDisk_UnlocksPrunesAndRecreatesWorktree()
+    {
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 212, "main");
+        Assert.True(Directory.Exists(wtPath));
+
+        TestGitRepository.DeleteDirectorySafe(wtPath);
+        Assert.False(Directory.Exists(wtPath));
+
+        var recreatedPath = await _manager.EnsureWorktreeAsync(_workspace, 212, "main");
+
+        Assert.Equal(wtPath, recreatedPath);
+        Assert.True(Directory.Exists(recreatedPath));
+        var wtBranch = await _runner.ExecuteAsync(recreatedPath, ["branch", "--show-current"]);
+        Assert.Equal("feature/task-212", wtBranch.StandardOutput.Trim());
+        Assert.True(File.Exists(Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-212", GitWorktreeMetadataSanitizer.LockedFileName)));
+    }
+
+    [Fact]
+    public async Task ResetTaskBranchToBaseAsync_WhenLockedWorktreeDirectoryDeletedFromDisk_UnlocksPrunesResetsAndRecreatesWorktree()
+    {
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 213, "main");
+        _repo.CreateFile("stale_wip.txt", "wip content", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 213, "Stage1", "WIP before delete");
+
+        TestGitRepository.DeleteDirectorySafe(wtPath);
+        Assert.False(Directory.Exists(wtPath));
+
+        await _manager.ResetTaskBranchToBaseAsync(_workspace, 213, "main");
+
+        Assert.True(Directory.Exists(wtPath));
+        Assert.False(File.Exists(Path.Combine(wtPath, "stale_wip.txt")));
+        var mainHead = (await _runner.ExecuteAsync(_repo.RepositoryPath, ["rev-parse", "main"])).StandardOutput.Trim();
+        var wtHead = (await _runner.ExecuteAsync(wtPath, ["rev-parse", "HEAD"])).StandardOutput.Trim();
+        Assert.Equal(mainHead, wtHead);
+    }
+
+    [Fact]
+    public async Task RemoveWorktreeAsync_WhenWorktreeGitPointerCorruptedAndRemoveFails_DeletesDirectoryUnlocksAndPrunesMetadata()
+    {
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 214, "main");
+        var adminDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-214");
+
+        // Corrupt the forward .git file so `git worktree remove` fails while the directory still exists
+        var forwardGitFile = Path.Combine(wtPath, ".git");
+        File.SetAttributes(forwardGitFile, FileAttributes.Normal);
+        await File.WriteAllTextAsync(forwardGitFile, "gitdir: /nonexistent/broken/worktree\n");
+
+        await _manager.RemoveWorktreeAsync(_workspace, 214);
+
+        Assert.False(Directory.Exists(wtPath));
+        Assert.False(Directory.Exists(adminDir));
+    }
+
+    [Fact]
+    public async Task RemoveWorktreeAsync_WhenLockedWorktreeDirectoryAlreadyMissing_UnlocksAndPrunesMetadata()
+    {
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 215, "main");
+        var adminDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-215");
+
+        TestGitRepository.DeleteDirectorySafe(wtPath);
+        Assert.False(Directory.Exists(wtPath));
+        Assert.True(Directory.Exists(adminDir));
+
+        await _manager.RemoveWorktreeAsync(_workspace, 215);
+
+        Assert.False(Directory.Exists(adminDir));
+    }
+
+    [Fact]
+    public async Task SquashAndMergeAsync_AndDeleteTaskBranchAsync_RepairPoisonedWorktreeMetadataBeforeGitCommands()
+    {
+        var wtPath = await _manager.EnsureWorktreeAsync(_workspace, 216, "main");
+        _repo.CreateFile("feature_216.txt", "content 216", wtPath);
+        await _manager.CreateWipCheckpointAsync(_workspace, 216, "Stage1", "Task 216 WIP");
+
+        var adminDir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-216");
+        var gitDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.GitDirFileName);
+        var commonDirFile = Path.Combine(adminDir, GitWorktreeMetadataSanitizer.CommonDirFileName);
+
+        await File.WriteAllTextAsync(gitDirFile, "/workspace/task-216/.git\n");
+        await File.WriteAllTextAsync(commonDirFile, "/workspace/clone/.git\n");
+
+        var squashSha = await _manager.SquashAndMergeAsync(_workspace, 216, "main", "feat: task 216");
+        Assert.False(string.IsNullOrWhiteSpace(squashSha));
+        Assert.Equal("../..", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+        Assert.False(GitWorktreeMetadataSanitizer.IsContainerVirtualPath(await File.ReadAllTextAsync(gitDirFile)));
+
+        await _manager.RemoveWorktreeAsync(_workspace, 216);
+
+        // Create a second worktree (task 217), poison it, and verify DeleteTaskBranchAsync also sanitizes
+        var wt217Path = await _manager.EnsureWorktreeAsync(_workspace, 217, "main");
+        var admin217Dir = Path.Combine(_repo.RepositoryPath, ".git", "worktrees", "task-217");
+        var gitDir217File = Path.Combine(admin217Dir, GitWorktreeMetadataSanitizer.GitDirFileName);
+        var commonDir217File = Path.Combine(admin217Dir, GitWorktreeMetadataSanitizer.CommonDirFileName);
+
+        await File.WriteAllTextAsync(gitDir217File, "/workspace/task-217/.git\n");
+        await File.WriteAllTextAsync(commonDir217File, "/workspace/clone/.git\n");
+
+        await _manager.DeleteTaskBranchAsync(_workspace, 216);
+        Assert.Equal("../..", (await File.ReadAllTextAsync(commonDir217File)).Trim());
+        Assert.False(GitWorktreeMetadataSanitizer.IsContainerVirtualPath(await File.ReadAllTextAsync(gitDir217File)));
+        Assert.True(Directory.Exists(wt217Path));
     }
 
     public void Dispose()

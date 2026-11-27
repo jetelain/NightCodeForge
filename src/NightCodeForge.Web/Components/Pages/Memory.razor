@@ -10,6 +10,7 @@
 @inject MemoryUpdateTracker UpdateTracker
 @inject ToastService ToastService
 @inject NavigationManager Navigation
+@inject IJSRuntime JS
 @implements IDisposable
 
 <PageTitle>Agent Memory - NightCodeForge</PageTitle>
@@ -140,7 +141,7 @@
                                         class="memory-file-item forge-btn-ghost d-block text-start w-100 @(isSelected ? "active" : "")"
                                         data-testid="memory-file-item"
                                         data-memory-scope="local"
-                                        @onclick="() => SelectFileAsync(AgentMemoryScope.LocalWorkspace, file.RelativePath)">
+                                        @onclick="() => SelectFileAsync(AgentMemoryScope.LocalWorkspace, file.RelativePath, scrollViewerIntoView: true)">
                                     <div class="font-mono">@file.RelativePath</div>
                                     @if (!string.IsNullOrEmpty(file.Summary))
                                     {
@@ -176,7 +177,7 @@
                                         class="memory-file-item forge-btn-ghost d-block text-start w-100 @(isSelected ? "active" : "")"
                                         data-testid="memory-file-item"
                                         data-memory-scope="shared"
-                                        @onclick="() => SelectFileAsync(AgentMemoryScope.SharedRepository, file.RelativePath)">
+                                        @onclick="() => SelectFileAsync(AgentMemoryScope.SharedRepository, file.RelativePath, scrollViewerIntoView: true)">
                                     <div class="font-mono">@file.RelativePath</div>
                                     @if (!string.IsNullOrEmpty(file.Summary))
                                     {
@@ -190,7 +191,7 @@
                 </section>
             </aside>
 
-            <main class="memory-main-pane">
+            <main class="memory-main-pane" id="@MemoryUiConstants.MainPaneElementId">
                 @if (_selectedPath == null)
                 {
                     <div class="memory-empty-selection text-muted" id="memory-empty-selection">
@@ -282,6 +283,7 @@
     private string? _lastDeepLinkKey;
     private MemoryBudget? _selectedBudget;
     private int _selectionVersion;
+    private bool _pendingScrollViewerToTop;
 
     private int? ActiveWorkspaceId => WorkspaceState.ActiveWorkspaceId;
 
@@ -414,7 +416,7 @@
         });
     }
 
-    private async Task SelectFileAsync(AgentMemoryScope scope, string relativePath)
+    private async Task SelectFileAsync(AgentMemoryScope scope, string relativePath, bool scrollViewerIntoView = false)
     {
         if (!ActiveWorkspaceId.HasValue)
         {
@@ -422,9 +424,8 @@
         }
 
         var workspaceId = ActiveWorkspaceId.Value;
-        ResetSelection();
-        var version = _selectionVersion;
-        await RunAsync(async () =>
+        var version = ++_selectionVersion;
+        try
         {
             var file = await MemoryService.ReadAsync(workspaceId, scope, relativePath);
             if (_disposed || ActiveWorkspaceId != workspaceId || _selectionVersion != version)
@@ -435,8 +436,27 @@
             _selectedScope = scope;
             _selectedPath = file.Entry.RelativePath;
             _content = file.Content;
+            _editorContent = string.Empty;
+            _isEditing = false;
+            _confirmDelete = false;
+            _isNewFile = false;
+            _error = null;
             _selectedBudget = MemoryPresentationHelper.ComputeBudget(file.Content);
-        });
+            if (scrollViewerIntoView)
+            {
+                _pendingScrollViewerToTop = true;
+            }
+        }
+        catch (Exception ex) when (ex is MemoryValidationException or MemoryFileNotFoundException or MemoryWorkspaceNotFoundException)
+        {
+            if (_disposed || ActiveWorkspaceId != workspaceId || _selectionVersion != version)
+            {
+                return;
+            }
+
+            ResetSelection();
+            _error = ex.Message;
+        }
     }
 
     private void ResetSelection()
@@ -451,6 +471,7 @@
         _isNewFile = false;
         _selectedBudget = null;
         _error = null;
+        _pendingScrollViewerToTop = false;
     }
 
     private void ToggleRaw() => _showRaw = !_showRaw;
@@ -462,6 +483,7 @@
             return;
         }
 
+        _selectionVersion++;
         _confirmDelete = false;
         _editorContent = _content;
         _isEditing = true;
@@ -501,6 +523,7 @@
             _editorContent = string.Empty;
             _isEditing = true;
             _newFileName = string.Empty;
+            _pendingScrollViewerToTop = true;
             return Task.CompletedTask;
         });
     }
@@ -515,6 +538,7 @@
         var workspaceId = ActiveWorkspaceId.Value;
         var pathToSave = _selectedPath;
         var contentToSave = _editorContent;
+        var version = ++_selectionVersion;
         _isSaving = true;
         try
         {
@@ -527,10 +551,14 @@
                 }
 
                 ToastService.Show("Memory saved", $"{kind} {pathToSave}", ToastLevel.Success);
-                _content = contentToSave;
-                _selectedBudget = MemoryPresentationHelper.ComputeBudget(_content);
-                _isEditing = false;
-                _isNewFile = false;
+                if (_selectionVersion == version)
+                {
+                    _content = contentToSave;
+                    _selectedBudget = MemoryPresentationHelper.ComputeBudget(_content);
+                    _isEditing = false;
+                    _isNewFile = false;
+                }
+
                 var localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
                 if (!_disposed && ActiveWorkspaceId == workspaceId)
                 {
@@ -553,12 +581,26 @@
 
         var workspaceId = ActiveWorkspaceId.Value;
         var path = _selectedPath;
+        var version = ++_selectionVersion;
         await RunAsync(async () =>
         {
             await MemoryService.DeleteLocalAsync(workspaceId, path);
+            if (_disposed || ActiveWorkspaceId != workspaceId)
+            {
+                return;
+            }
+
             ToastService.Show("Memory deleted", path, ToastLevel.Success);
-            ResetSelection();
-            _localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
+            if (_selectionVersion == version)
+            {
+                ResetSelection();
+            }
+
+            var localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
+            if (!_disposed && ActiveWorkspaceId == workspaceId)
+            {
+                _localFiles = localFiles;
+            }
         });
     }
 
@@ -644,6 +686,22 @@
 
             StateHasChanged();
         });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pendingScrollViewerToTop && !_disposed)
+        {
+            _pendingScrollViewerToTop = false;
+            try
+            {
+                await JS.InvokeVoidAsync(MemoryUiConstants.ScrollViewerTopIntoViewJsFunction, MemoryUiConstants.MainPaneElementId);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or TaskCanceledException)
+            {
+                // Blazor circuit disconnected or navigation canceled before JS scroll completed.
+            }
+        }
     }
 
     public void Dispose()

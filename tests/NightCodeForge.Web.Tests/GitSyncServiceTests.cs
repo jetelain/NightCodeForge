@@ -14,6 +14,7 @@ public class GitSyncServiceTests
     private readonly MockGitWorkspaceManager _gitWorkspaceManager;
     private readonly MockGitMirrorSyncService _mirrorSyncService;
     private readonly InMemoryTaskRepository _taskRepository;
+    private readonly NightCodeForge.Core.Concurrency.WorkspaceLockProvider _lockProvider;
     private readonly GitSyncService _service;
 
     public GitSyncServiceTests()
@@ -22,6 +23,7 @@ public class GitSyncServiceTests
         _gitWorkspaceManager = new MockGitWorkspaceManager();
         _mirrorSyncService = new MockGitMirrorSyncService();
         _taskRepository = new InMemoryTaskRepository();
+        _lockProvider = new NightCodeForge.Core.Concurrency.WorkspaceLockProvider();
 
         _service = new GitSyncService(
             _gitCliRunner,
@@ -31,6 +33,7 @@ public class GitSyncServiceTests
             new Mock<IWorkspacePathResolver>().Object,
             new Mock<IWslMetadataService>().Object,
             new NightCodeForge.Core.Execution.SingleExecutionEnvironmentProvider(new Mock<IExecutionEnvironment>().Object),
+            _lockProvider,
             NullLogger<GitSyncService>.Instance);
     }
 
@@ -202,6 +205,99 @@ public class GitSyncServiceTests
         finally
         {
             try { Directory.Delete(tempHost, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task GetWorktreesAsync_WhenWorkspaceLockHeld_SkipsSanitizeWithoutBlocking_AndSanitizesOnceUnlocked()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_test_sync_lock_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var wtDir = Path.Combine(tempRoot, "task-303");
+        var adminDir = Path.Combine(cloneDir, ".git", "worktrees", "task-303");
+        Directory.CreateDirectory(adminDir);
+        Directory.CreateDirectory(wtDir);
+
+        var commonDirFile = Path.Combine(adminDir, NightCodeForge.Core.Services.GitWorktreeMetadataSanitizer.CommonDirFileName);
+        var gitDirFile = Path.Combine(adminDir, NightCodeForge.Core.Services.GitWorktreeMetadataSanitizer.GitDirFileName);
+        await File.WriteAllTextAsync(commonDirFile, "/workspace/clone/.git\n");
+        await File.WriteAllTextAsync(gitDirFile, "/workspace/task-303/.git\n");
+
+        try
+        {
+            var ws = new Workspace
+            {
+                Id = 15,
+                Name = "Locked Sanitize WS",
+                RepositoryPath = cloneDir,
+                Ext4MirrorPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+
+            _gitCliRunner.Outputs[("worktree", "list")] = $"worktree {cloneDir}\nHEAD abcdef\n\nworktree {wtDir}\nbranch refs/heads/feature/task-303\n\n";
+
+            using (await _lockProvider.AcquireLockAsync(ws.Id))
+            {
+                var whileLocked = await _service.GetWorktreesAsync(ws);
+                Assert.Single(whileLocked);
+                Assert.Equal("/workspace/clone/.git", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+            }
+
+            var afterUnlock = await _service.GetWorktreesAsync(ws);
+            Assert.Single(afterUnlock);
+            Assert.Equal("../..", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+        }
+        finally
+        {
+            try { Directory.Delete(tempRoot, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task PruneWorktreesAsync_AcquiresLockAndSanitizesWithoutDeadlock()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "ncf_test_prune_lock_" + Guid.NewGuid().ToString("N"));
+        var cloneDir = Path.Combine(tempRoot, "clone");
+        var wtDir = Path.Combine(tempRoot, "task-304");
+        var adminDir = Path.Combine(cloneDir, ".git", "worktrees", "task-304");
+        Directory.CreateDirectory(adminDir);
+        Directory.CreateDirectory(wtDir);
+
+        var commonDirFile = Path.Combine(adminDir, NightCodeForge.Core.Services.GitWorktreeMetadataSanitizer.CommonDirFileName);
+        var gitDirFile = Path.Combine(adminDir, NightCodeForge.Core.Services.GitWorktreeMetadataSanitizer.GitDirFileName);
+        await File.WriteAllTextAsync(commonDirFile, "/workspace/clone/.git\n");
+        await File.WriteAllTextAsync(gitDirFile, "/workspace/task-304/.git\n");
+
+        try
+        {
+            var ws = new Workspace
+            {
+                Id = 16,
+                Name = "Prune Lock WS",
+                RepositoryPath = cloneDir,
+                Ext4MirrorPath = cloneDir,
+                DefaultBaseBranch = "main"
+            };
+
+            await _taskRepository.CreateAsync(new ForgeTask
+            {
+                Id = 304,
+                WorkspaceId = ws.Id,
+                Title = "Closed Task 304",
+                Status = TaskOverallStatus.Closed
+            });
+
+            _gitCliRunner.Outputs[("worktree", "list")] = $"worktree {cloneDir}\nHEAD abcdef\n\nworktree {wtDir}\nbranch refs/heads/feature/task-304\n\n";
+
+            await _service.PruneWorktreesAsync(ws);
+
+            Assert.Equal("../..", (await File.ReadAllTextAsync(commonDirFile)).Trim());
+            Assert.False(NightCodeForge.Core.Services.GitWorktreeMetadataSanitizer.IsContainerVirtualPath(await File.ReadAllTextAsync(gitDirFile)));
+            Assert.Contains(_gitCliRunner.ExecutedCommands, cmd => cmd.Args.SequenceEqual(new[] { "worktree", "prune" }));
+        }
+        finally
+        {
+            try { Directory.Delete(tempRoot, true); } catch { }
         }
     }
 

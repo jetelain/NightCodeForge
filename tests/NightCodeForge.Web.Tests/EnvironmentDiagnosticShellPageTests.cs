@@ -658,6 +658,34 @@ public class EnvironmentDiagnosticShellPageTests : BunitContext
         });
     }
 
+    [Fact]
+    public void DiagnosticShellStyles_AreDefinedInAppCss_AndDoNotUseUnlinkedScopedCss()
+    {
+        var webRoot = WebProjectTestHelper.FindWebProjectRoot();
+        var appCssPath = Path.Combine(webRoot, "wwwroot", "css", "app.css");
+        var scopedCssPath = Path.Combine(webRoot, "Components", "Pages", "EnvironmentDiagnosticShell.razor.css");
+
+        Assert.True(File.Exists(appCssPath), $"Missing app.css at {appCssPath}");
+        Assert.False(File.Exists(scopedCssPath), $"Unlinked scoped CSS file must not exist because App.razor does not load *.styles.css: {scopedCssPath}");
+
+        var appCss = File.ReadAllText(appCssPath);
+        string[] requiredSelectors =
+        [
+            ".diag-shell-page",
+            ".diag-target-grid",
+            ".diag-preset-btn",
+            ".diag-command-bar",
+            ".forge-btn-danger"
+        ];
+
+        foreach (var selector in requiredSelectors)
+        {
+            Assert.True(
+                WebProjectTestHelper.ContainsCssSelector(appCss, selector),
+                $"Expected CSS selector '{selector}' to be defined in app.css");
+        }
+    }
+
     private void RegisterPageServices(
         IEnvironmentDiagnosticShellService diagService,
         IWorkspaceRepository workspaceRepo,

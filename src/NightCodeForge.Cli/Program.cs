@@ -108,6 +108,30 @@ public static class Program
                 return await transcriptCommand.ExecuteAsync(options, Console.WriteLine, cts.Token);
             }
 
+            if (firstArg.Equals("skills", StringComparison.OrdinalIgnoreCase) ||
+                firstArg.Equals("skill", StringComparison.OrdinalIgnoreCase))
+            {
+                var remainingArgs = args.Skip(1).ToArray();
+                if (remainingArgs.Any(a => a.Equals("--help", StringComparison.OrdinalIgnoreCase) ||
+                                           a.Equals("-h", StringComparison.OrdinalIgnoreCase)) ||
+                    (remainingArgs.Length == 1 && remainingArgs[0].Equals("help", StringComparison.OrdinalIgnoreCase)))
+                {
+                    PrintUsage();
+                    return 0;
+                }
+
+                var options = ParseSkillsOptions(remainingArgs, out var error);
+                if (options == null)
+                {
+                    Console.Error.WriteLine($"[ncf] Error: {error}\n");
+                    PrintUsage();
+                    return 2;
+                }
+
+                var skillsCommand = new SkillsCommand();
+                return await skillsCommand.ExecuteAsync(options, Console.WriteLine, cts.Token);
+            }
+
             Console.Error.WriteLine($"[ncf] Unknown command: '{firstArg}'\n");
             PrintUsage();
             return 2;
@@ -263,6 +287,145 @@ public static class Program
         return options;
     }
 
+    public static SkillsOptions? ParseSkillsOptions(string[] args, out string? error)
+    {
+        error = null;
+        var options = new SkillsOptions();
+
+        int index = 0;
+        if (args.Length > 0)
+        {
+            var subcommand = args[0].Trim();
+            if (subcommand.Equals("install", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Action = SkillsAction.Install;
+                index = 1;
+            }
+            else if (subcommand.Equals("list", StringComparison.OrdinalIgnoreCase) ||
+                     subcommand.Equals("ls", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Action = SkillsAction.List;
+                if (args.Length > 1)
+                {
+                    error = $"Unexpected argument '{args[1].Trim()}' for 'skills list'.";
+                    return null;
+                }
+                return options;
+            }
+            else if (subcommand.Equals("show", StringComparison.OrdinalIgnoreCase) ||
+                     subcommand.Equals("cat", StringComparison.OrdinalIgnoreCase) ||
+                     subcommand.Equals("view", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Action = SkillsAction.Show;
+                for (int i = 1; i < args.Length; i++)
+                {
+                    var arg = args[i].Trim();
+                    if (string.IsNullOrWhiteSpace(arg))
+                    {
+                        error = "Skill name cannot be empty.";
+                        return null;
+                    }
+                    if (arg.StartsWith("-"))
+                    {
+                        error = $"Unrecognized option '{arg}'.";
+                        return null;
+                    }
+                    if (!string.IsNullOrEmpty(options.SkillName))
+                    {
+                        error = $"Unexpected extra argument '{arg}'.";
+                        return null;
+                    }
+                    options.SkillName = arg;
+                }
+                return options;
+            }
+        }
+
+        bool pathSet = false;
+        for (int i = index; i < args.Length; i++)
+        {
+            var arg = args[i].Trim();
+            if (string.IsNullOrWhiteSpace(arg))
+            {
+                error = "Argument cannot be empty.";
+                return null;
+            }
+            if (arg.Equals("--global", StringComparison.OrdinalIgnoreCase) || arg.Equals("-g", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Global = true;
+            }
+            else if (arg.Equals("--dry-run", StringComparison.OrdinalIgnoreCase))
+            {
+                options.DryRun = true;
+            }
+            else if (arg.Equals("--dir", StringComparison.OrdinalIgnoreCase) || arg.Equals("-d", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(options.CustomDirectory))
+                {
+                    error = "Option '--dir' cannot be specified multiple times.";
+                    return null;
+                }
+                if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].Trim().StartsWith('-'))
+                {
+                    error = $"Missing value for '{arg}' option.";
+                    return null;
+                }
+                options.CustomDirectory = args[++i].Trim();
+            }
+            else if (arg.StartsWith("--dir=", StringComparison.OrdinalIgnoreCase) || arg.StartsWith("-d=", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(options.CustomDirectory))
+                {
+                    error = "Option '--dir' cannot be specified multiple times.";
+                    return null;
+                }
+                var eqIndex = arg.IndexOf('=');
+                var val = arg[(eqIndex + 1)..].Trim();
+                if (string.IsNullOrWhiteSpace(val))
+                {
+                    error = $"Missing value for '{arg[..eqIndex]}' option.";
+                    return null;
+                }
+                options.CustomDirectory = val;
+            }
+            else if (arg.StartsWith("-"))
+            {
+                error = $"Unrecognized option '{arg}'.";
+                return null;
+            }
+            else
+            {
+                if (pathSet)
+                {
+                    error = $"Unexpected extra argument '{arg}'.";
+                    return null;
+                }
+                options.TargetPath = arg;
+                pathSet = true;
+            }
+        }
+
+        if (options.Global && !string.IsNullOrWhiteSpace(options.CustomDirectory))
+        {
+            error = "Cannot combine '--global' with '--dir'.";
+            return null;
+        }
+
+        if (pathSet && options.Global)
+        {
+            error = "Cannot combine a target path with '--global'.";
+            return null;
+        }
+
+        if (pathSet && !string.IsNullOrWhiteSpace(options.CustomDirectory))
+        {
+            error = "Cannot combine a target path with '--dir'.";
+            return null;
+        }
+
+        return options;
+    }
+
     private static void PrintUsage()
     {
         Console.WriteLine(@"NightCodeForge CLI (ncf) — Deterministic repository preparation & readiness audit
@@ -270,6 +433,9 @@ public static class Program
 USAGE:
   ncf init [path] [options]        Prepare repository: gitignore, editorconfig, stack detection, format, skills
   ncf audit [path]                 Audit repository readiness across the 5 pillars (green/yellow/red scorecard)
+  ncf skills [install] [path] [options]  Install NightCodeForge agent skills (workspace or global scope)
+  ncf skills list                  List embedded NightCodeForge agent skills
+  ncf skills show [name]           Display embedded SKILL.md content to standard output
   ncf transcript [path] [options]  Standard analysis of execution transcript(s) for friction, metrics & recommendations
   ncf --version                    Display version information
   ncf --help                       Display this help message
@@ -279,6 +445,12 @@ INIT OPTIONS:
   --dry-run                        Preview changes without writing to disk or formatting
   --skip-format                    Skip the initial format pass
   --stack <name>                   Explicit technology stack override (dotnet, node, python, rust, go)
+
+SKILLS OPTIONS:
+  [path]                           Repository root for workspace install into .agents/skills/ (default: current directory)
+  --global, -g                     Install globally into ~/.gemini/config/skills/ and ~/.agents/skills/
+  --dir, -d <path>                 Install into a custom destination directory
+  --dry-run                        Preview skill writes without modifying disk
 
 TRANSCRIPT OPTIONS:
   [path]                           Path to transcript markdown file or directory (default: current directory)

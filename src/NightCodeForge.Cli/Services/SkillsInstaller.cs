@@ -6,15 +6,78 @@ using NightCodeForge.Cli.Common;
 
 public class SkillsInstaller
 {
+    public const string WorkspaceAgentsFolder = ".agents";
+    public const string SkillsFolder = "skills";
+    public const string GeminiFolder = ".gemini";
+    public const string ConfigFolder = "config";
+
+    private const string SkillsResourcePrefix = "skills/";
+    private const string SkillFileName = "SKILL.md";
+
     private static readonly Assembly Assembly = typeof(SkillsInstaller).Assembly;
     public static readonly string[] RequiredSkills = ["ncf-backlog", "ncf-backlog-migrator", "ncf-project-readiness"];
 
     public static IReadOnlyList<string> GetRequiredSkillNames() => RequiredSkills;
 
+    public static IReadOnlyList<string> GetEmbeddedSkillNames()
+    {
+        var skillNames = Assembly.GetManifestResourceNames()
+            .Select(n => n.Replace('\\', '/'))
+            .Where(n => n.StartsWith(SkillsResourcePrefix, StringComparison.OrdinalIgnoreCase))
+            .Select(n => n.Substring(SkillsResourcePrefix.Length))
+            .Where(IsTopLevelSkillFile)
+            .Select(relative => relative.Substring(0, relative.IndexOf('/')))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (skillNames.Count == 0)
+        {
+            throw new InvalidOperationException("No embedded skills found in NightCodeForge.Cli assembly.");
+        }
+
+        return skillNames;
+    }
+
+    public static string? GetEmbeddedSkillContent(string skillName)
+    {
+        if (string.IsNullOrWhiteSpace(skillName))
+        {
+            return null;
+        }
+
+        var trimmed = skillName.Trim();
+        if (trimmed.Contains('/') || trimmed.Contains('\\'))
+        {
+            return null;
+        }
+
+        return ReadEmbeddedResource($"{SkillsResourcePrefix}{trimmed}/{SkillFileName}");
+    }
+
+    public static IReadOnlyList<string> GetGlobalSkillDirectories()
+    {
+        return GetGlobalSkillDirectories(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+    }
+
+    public static IReadOnlyList<string> GetGlobalSkillDirectories(string userProfilePath)
+    {
+        if (string.IsNullOrWhiteSpace(userProfilePath))
+        {
+            throw new InvalidOperationException("Could not resolve user profile directory for global skill installation.");
+        }
+
+        var trimmedProfile = userProfilePath.Trim();
+        return
+        [
+            Path.Combine(trimmedProfile, GeminiFolder, ConfigFolder, SkillsFolder),
+            Path.Combine(trimmedProfile, WorkspaceAgentsFolder, SkillsFolder)
+        ];
+    }
+
     public static int GetEmbeddedSkillVersion(string skillName)
     {
-        var resourceName = $"skills/{skillName}/SKILL.md";
-        var content = ReadEmbeddedResource(resourceName);
+        var content = GetEmbeddedSkillContent(skillName);
         if (content == null) return 1;
 
         var match = Regex.Match(content, @"^version:\s*(\d+)", RegexOptions.Multiline);
@@ -28,12 +91,7 @@ public class SkillsInstaller
 
     public static string? ReadEmbeddedResource(string logicalName)
     {
-        var normalizedTarget = logicalName.Replace('\\', '/');
-        var names = Assembly.GetManifestResourceNames();
-        var match = names.FirstOrDefault(n => string.Equals(n.Replace('\\', '/'), normalizedTarget, StringComparison.OrdinalIgnoreCase));
-        if (match == null) return null;
-
-        using var stream = Assembly.GetManifestResourceStream(match);
+        using var stream = OpenEmbeddedResourceStream(logicalName);
         if (stream == null) return null;
 
         using var reader = new StreamReader(stream);
@@ -42,12 +100,7 @@ public class SkillsInstaller
 
     public static byte[]? ReadEmbeddedResourceBytes(string logicalName)
     {
-        var normalizedTarget = logicalName.Replace('\\', '/');
-        var names = Assembly.GetManifestResourceNames();
-        var match = names.FirstOrDefault(n => string.Equals(n.Replace('\\', '/'), normalizedTarget, StringComparison.OrdinalIgnoreCase));
-        if (match == null) return null;
-
-        using var stream = Assembly.GetManifestResourceStream(match);
+        using var stream = OpenEmbeddedResourceStream(logicalName);
         if (stream == null) return null;
 
         using var ms = new MemoryStream();
@@ -55,11 +108,52 @@ public class SkillsInstaller
         return ms.ToArray();
     }
 
+    private static Stream? OpenEmbeddedResourceStream(string logicalName)
+    {
+        var normalizedTarget = logicalName.Replace('\\', '/');
+        var names = Assembly.GetManifestResourceNames();
+        var match = names.FirstOrDefault(n => string.Equals(n.Replace('\\', '/'), normalizedTarget, StringComparison.OrdinalIgnoreCase));
+        return match == null ? null : Assembly.GetManifestResourceStream(match);
+    }
+
+    private static bool IsTopLevelSkillFile(string relativePath)
+    {
+        var slashIndex = relativePath.IndexOf('/');
+        return slashIndex > 0 &&
+               relativePath.IndexOf('/', slashIndex + 1) < 0 &&
+               relativePath.AsSpan(slashIndex + 1).Equals(SkillFileName, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static void InstallSkills(string workspaceRoot, bool dryRun = false, Action<string>? log = null)
     {
-        var targetBaseDir = Path.Combine(workspaceRoot, ".agents", "skills");
+        ArgumentException.ThrowIfNullOrWhiteSpace(workspaceRoot);
+        var targetBaseDir = Path.Combine(workspaceRoot, WorkspaceAgentsFolder, SkillsFolder);
+        InstallSkillsToDirectory(targetBaseDir, dryRun, log);
+    }
+
+    public static IReadOnlyList<string> InstallGlobalSkills(bool dryRun = false, Action<string>? log = null)
+    {
+        return InstallGlobalSkills(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), dryRun, log);
+    }
+
+    public static IReadOnlyList<string> InstallGlobalSkills(string userProfilePath, bool dryRun = false, Action<string>? log = null)
+    {
+        var targetDirs = GetGlobalSkillDirectories(userProfilePath);
+        foreach (var dir in targetDirs)
+        {
+            InstallSkillsToDirectory(dir, dryRun, log);
+        }
+
+        return targetDirs;
+    }
+
+    public static void InstallSkillsToDirectory(string targetBaseDir, bool dryRun = false, Action<string>? log = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetBaseDir);
+
         var allResourceNames = Assembly.GetManifestResourceNames()
-            .Where(n => n.Replace('\\', '/').StartsWith("skills/", StringComparison.OrdinalIgnoreCase))
+            .Where(n => n.Replace('\\', '/').StartsWith(SkillsResourcePrefix, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (allResourceNames.Count == 0)
@@ -70,14 +164,14 @@ public class SkillsInstaller
         foreach (var rawResourceName in allResourceNames)
         {
             var normalizedResourceName = rawResourceName.Replace('\\', '/');
-            var relativePath = normalizedResourceName.Substring("skills/".Length);
+            var relativePath = normalizedResourceName.Substring(SkillsResourcePrefix.Length);
             var targetFilePath = Path.Combine(targetBaseDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
             var targetDir = Path.GetDirectoryName(targetFilePath);
 
-            if (relativePath.EndsWith("SKILL.md", StringComparison.OrdinalIgnoreCase))
+            if (IsTopLevelSkillFile(relativePath))
             {
-                var embeddedContent = ReadEmbeddedResource(rawResourceName);
-                if (embeddedContent == null) continue;
+                var embeddedContent = ReadEmbeddedResource(rawResourceName)
+                    ?? throw new InvalidOperationException($"Failed to read embedded resource '{rawResourceName}'.");
 
                 var transformed = PrepareSkillContent(embeddedContent, targetFilePath);
 
@@ -93,14 +187,14 @@ public class SkillsInstaller
                     }
 
                     File.WriteAllText(targetFilePath, transformed);
-                    log?.Invoke($"[ncf] Installed skill: {relativePath}");
+                    log?.Invoke($"[ncf] Installed skill: {targetFilePath}");
                 }
             }
             else
             {
                 // Non-SKILL.md assets (e.g. TASK_TEMPLATE.md)
-                var bytes = ReadEmbeddedResourceBytes(rawResourceName);
-                if (bytes == null) continue;
+                var bytes = ReadEmbeddedResourceBytes(rawResourceName)
+                    ?? throw new InvalidOperationException($"Failed to read embedded resource '{rawResourceName}'.");
 
                 if (dryRun)
                 {
@@ -114,7 +208,7 @@ public class SkillsInstaller
                     }
 
                     File.WriteAllBytes(targetFilePath, bytes);
-                    log?.Invoke($"[ncf] Installed skill asset: {relativePath}");
+                    log?.Invoke($"[ncf] Installed skill asset: {targetFilePath}");
                 }
             }
         }

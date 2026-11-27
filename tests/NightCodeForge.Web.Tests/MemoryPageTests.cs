@@ -1,5 +1,6 @@
 using Bunit;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using NightCodeForge.Core.Domain;
@@ -468,6 +469,213 @@ public class MemoryPageTests : BunitContext
 
         Assert.Equal("fast.md", cut.Find("#memory-selected-path").TextContent);
         Assert.Contains("Fast content", cut.Find("#memory-rendered").InnerHtml);
+    }
+
+    [Fact]
+    public void MemoryPage_ClickingLocalOrSharedFile_ScrollsMainPaneTopIntoView()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "local.md"));
+        SetupShared(Entry(AgentMemoryScope.SharedRepository, "AGENTS.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "local.md", "# Local");
+        SetupRead(AgentMemoryScope.SharedRepository, "AGENTS.md", "# Shared");
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        Assert.NotEmpty(cut.FindAll($"#{MemoryUiConstants.MainPaneElementId}"));
+        Assert.DoesNotContain(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        cut.Find("[data-memory-scope='local']").Click();
+        cut.Find("[data-memory-scope='shared']").Click();
+
+        var scrollInvocations = JSInterop.Invocations
+            .Where(i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction)
+            .ToList();
+        Assert.Equal(2, scrollInvocations.Count);
+        Assert.All(scrollInvocations, invocation =>
+            Assert.Equal(MemoryUiConstants.MainPaneElementId, invocation.Arguments.Single()));
+    }
+
+    [Fact]
+    public void MemoryPage_CreatingNewFile_ScrollsMainPaneTopIntoView()
+    {
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        cut.Find("#memory-new-file-name").Change("new-note.md");
+        cut.Find("#memory-create-btn").Click();
+
+        var invocation = Assert.Single(
+            JSInterop.Invocations,
+            i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+        Assert.Equal(MemoryUiConstants.MainPaneElementId, invocation.Arguments.Single());
+    }
+
+    [Fact]
+    public void MemoryPage_DeepLinkAndBackgroundUpdate_DoNotScrollMainPane()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "a.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "initial");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{WorkspaceId}/memory?scope=local&path=a.md");
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        Assert.DoesNotContain(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "updated externally");
+        _hub.TriggerMemoryUpdated(WorkspaceId, null, "", AgentMemoryConstants.ScopeLocalMetadataValue, "/workspace/memory/a.md", "Updated", "x");
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Contains("updated externally", cut.Find("#memory-rendered").InnerHtml);
+        });
+
+        Assert.DoesNotContain(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+    }
+
+    [Fact]
+    public async Task MemoryPage_AsyncFileSwitch_KeepsPreviousSelectionWhileLoading_AndScrollsWhenLoaded()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "a.md"), Entry(AgentMemoryScope.LocalWorkspace, "slow.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "# A content");
+        var slowGate = new TaskCompletionSource<MemoryFileContent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _service.Setup(s => s.ReadAsync(WorkspaceId, AgentMemoryScope.LocalWorkspace, "slow.md", It.IsAny<CancellationToken>()))
+            .Returns(slowGate.Task);
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        cut.FindAll("[data-testid=memory-file-item]")[0].Click();
+        Assert.Equal("a.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        var slowClickTask = cut.FindAll("[data-testid=memory-file-item]")[1].ClickAsync(new MouseEventArgs());
+
+        Assert.Empty(cut.FindAll("#memory-empty-selection"));
+        Assert.Equal("a.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        slowGate.SetResult(new MemoryFileContent(Entry(AgentMemoryScope.LocalWorkspace, "slow.md"), "# Slow content"));
+        await slowClickTask;
+
+        Assert.Equal("slow.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Contains("Slow content", cut.Find("#memory-rendered").InnerHtml);
+        Assert.Equal(2, JSInterop.Invocations.Count(i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction));
+    }
+
+    [Fact]
+    public async Task MemoryPage_StaleAsyncSelectionFailure_DoesNotOverwriteNewerSelectionOrScroll()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "slow-missing.md"), Entry(AgentMemoryScope.LocalWorkspace, "fast.md"));
+        var slowGate = new TaskCompletionSource<MemoryFileContent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _service.Setup(s => s.ReadAsync(WorkspaceId, AgentMemoryScope.LocalWorkspace, "slow-missing.md", It.IsAny<CancellationToken>()))
+            .Returns(slowGate.Task);
+        SetupRead(AgentMemoryScope.LocalWorkspace, "fast.md", "Fast content");
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        var slowClickTask = cut.FindAll("[data-testid=memory-file-item]")[0].ClickAsync(new MouseEventArgs());
+        await cut.FindAll("[data-testid=memory-file-item]")[1].ClickAsync(new MouseEventArgs());
+
+        Assert.Equal("fast.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        slowGate.SetException(new MemoryFileNotFoundException("slow-missing.md"));
+        await slowClickTask;
+
+        Assert.Equal("fast.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Contains("Fast content", cut.Find("#memory-rendered").InnerHtml);
+        Assert.Empty(cut.FindAll("#memory-error"));
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+    }
+
+    [Fact]
+    public void MemoryPage_FailedFileClickAndInvalidNewFile_DoNotScrollMainPane()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "a.md"), Entry(AgentMemoryScope.LocalWorkspace, "missing.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "initial");
+        _service.Setup(s => s.ReadAsync(WorkspaceId, AgentMemoryScope.LocalWorkspace, "missing.md", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new MemoryFileNotFoundException("missing.md"));
+        _service.Setup(s => s.ValidateLocalFileName("bad.txt"))
+            .Throws(new MemoryValidationException("Memory files must be markdown (.md)."));
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{WorkspaceId}/memory?scope=local&path=a.md");
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+        Assert.Equal("a.md", cut.Find("#memory-selected-path").TextContent);
+
+        cut.FindAll("[data-testid=memory-file-item]")[1].Click();
+        Assert.Contains("missing.md", cut.Find("#memory-error").TextContent);
+        Assert.Empty(cut.FindAll("#memory-selected-path"));
+        Assert.DoesNotContain(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        cut.Find("#memory-new-file-name").Change("bad.txt");
+        cut.Find("#memory-create-btn").Click();
+        Assert.Contains("markdown", cut.Find("#memory-error").TextContent);
+        Assert.DoesNotContain(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        cut.Find("#memory-new-file-name").Change("a.md");
+        cut.Find("#memory-create-btn").Click();
+        Assert.Contains("already exists", cut.Find("#memory-error").TextContent);
+        Assert.DoesNotContain(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+    }
+
+    [Fact]
+    public async Task MemoryPage_StartEditWhileAsyncSelectionPending_CancelsStaleSelectionAndDoesNotScroll()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "a.md"), Entry(AgentMemoryScope.LocalWorkspace, "slow.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "initial a");
+        var slowGate = new TaskCompletionSource<MemoryFileContent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _service.Setup(s => s.ReadAsync(WorkspaceId, AgentMemoryScope.LocalWorkspace, "slow.md", It.IsAny<CancellationToken>()))
+            .Returns(slowGate.Task);
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        cut.FindAll("[data-testid=memory-file-item]")[0].Click();
+        Assert.Equal("a.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        var slowClickTask = cut.FindAll("[data-testid=memory-file-item]")[1].ClickAsync(new MouseEventArgs());
+
+        cut.Find("#memory-edit-btn").Click();
+        cut.Find("#memory-editor").Input("user draft");
+
+        slowGate.SetResult(new MemoryFileContent(Entry(AgentMemoryScope.LocalWorkspace, "slow.md"), "slow content"));
+        await slowClickTask;
+
+        Assert.Equal("a.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.NotEmpty(cut.FindAll("#memory-editor"));
+        Assert.Equal("user draft", cut.Find("#memory-editor").GetAttribute("value"));
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+    }
+
+    [Fact]
+    public async Task MemoryPage_DeleteWhileAsyncSelectionPending_CancelsStaleSelectionAndDoesNotScroll()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "a.md"), Entry(AgentMemoryScope.LocalWorkspace, "slow.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "initial a");
+        var slowGate = new TaskCompletionSource<MemoryFileContent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _service.Setup(s => s.ReadAsync(WorkspaceId, AgentMemoryScope.LocalWorkspace, "slow.md", It.IsAny<CancellationToken>()))
+            .Returns(slowGate.Task);
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        cut.FindAll("[data-testid=memory-file-item]")[0].Click();
+        Assert.Equal("a.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
+
+        var slowClickTask = cut.FindAll("[data-testid=memory-file-item]")[1].ClickAsync(new MouseEventArgs());
+
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "slow.md"));
+        cut.Find("#memory-delete-btn").Click();
+        cut.Find("#memory-delete-confirm-btn").Click();
+
+        slowGate.SetResult(new MemoryFileContent(Entry(AgentMemoryScope.LocalWorkspace, "slow.md"), "slow content"));
+        await slowClickTask;
+
+        _service.Verify(s => s.DeleteLocalAsync(WorkspaceId, "a.md", It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Empty(cut.FindAll("#memory-selected-path"));
+        Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
     }
 }
 

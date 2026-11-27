@@ -4,7 +4,7 @@
 @if (FailedJobs != null && FailedJobs.Count > 0)
 {
     <div class="card-surface p-4 mt-4" style="background: var(--bg-surface); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm);" id="failed-jobs-card">
-        <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h4 class="m-0" style="font-weight: 700; color: #f87171; font-size: 1.15rem;">⚠️ Failed Background Jobs</h4>
             <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #f87171; font-family: var(--font-mono); font-size: 0.85rem;">
                 @FailedJobs.Count Failed

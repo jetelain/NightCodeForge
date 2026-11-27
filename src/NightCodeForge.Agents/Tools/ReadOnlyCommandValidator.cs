@@ -22,7 +22,7 @@ public static class ReadOnlyCommandValidator
 
     public static readonly string[] CsNavAllowedSubcommands =
     [
-        "references", "refs", "find-refs",
+        "references", "reference", "refs", "ref", "find-refs",
         "definition", "definitions", "def", "find-def", "goto-def",
         "implementations", "implementation", "impl", "find-impl", "goto-impl",
         "search", "api", "find", "api-search", "apis",

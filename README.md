@@ -76,8 +76,14 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 # Or build and install CLI tool locally:
 .\install-cli.ps1
 
+# Or build, install CLI tool, and install NightCodeForge skills globally (~/.gemini/config/skills/ and ~/.agents/skills/):
+.\install-cli.ps1 -InstallSkills
+
 # Or publish and install Web application locally:
 .\publish.ps1
+
+# Install skills globally on demand:
+ncf skills install --global
 
 # In your target repository:
 ncf init        # Deterministic preparation (idempotent)
