@@ -1055,6 +1055,7 @@ public sealed class BenchmarkWorkspaceManager : IBenchmarkWorkspaceManager
                 string.Equals(part, "obj", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, "TestResults", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, "node_modules", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(part, "dist", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, ".venv", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, "__pycache__", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(part, ".pytest_cache", StringComparison.OrdinalIgnoreCase) ||

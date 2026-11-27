@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using NightCodeForge.Agents.Memory;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Memory;
@@ -9,8 +10,13 @@ namespace NightCodeForge.Agents.Context;
 /// Service to discover and ingest repository rules from AGENTS.md / CLAUDE.md / GEMINI.md
 /// and format execution limits and timeout policies for agent prompts.
 /// </summary>
-public class AgentsMdService
+public partial class AgentsMdService
 {
+    [GeneratedRegex(@"(?:^|\s)--no-incremental(?=\s|$|[;&|])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NoIncrementalFlagRegex();
+
+    [GeneratedRegex(@"\s{2,}", RegexOptions.CultureInvariant)]
+    private static partial Regex MultipleSpacesRegex();
     private static readonly string[] RuleCandidatePaths =
     [
         "AGENTS.md",
@@ -298,23 +304,57 @@ public class AgentsMdService
         return sb.ToString().TrimEnd();
     }
 
+    /// <summary>
+    /// Strips standalone <c>--no-incremental</c> tokens from an agent-facing build command while
+    /// preserving deterministic-stage constants intact.
+    /// </summary>
+    public static string StripNoIncrementalFlag(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return string.Empty;
+        }
+
+        var stripped = NoIncrementalFlagRegex().Replace(command, " ");
+        return MultipleSpacesRegex().Replace(stripped, " ").Trim();
+    }
+
     public string FormatExecutionGuidelines(WorkspaceProjectConfig? projectConfig, Workspace? workspace = null)
     {
-        var buildCmd = projectConfig?.BuildCommand ?? "dotnet build";
-        var testCmd = projectConfig?.TestCommand ?? "dotnet test --no-build";
+        string? buildCmd = projectConfig == null
+            ? "dotnet build"
+            : (string.IsNullOrWhiteSpace(projectConfig.BuildCommand)
+                ? null
+                : StripNoIncrementalFlag(projectConfig.BuildCommand));
+        if (string.IsNullOrWhiteSpace(buildCmd))
+        {
+            buildCmd = null;
+        }
+
+        var testCmd = string.IsNullOrWhiteSpace(projectConfig?.TestCommand)
+            ? "dotnet test --no-build"
+            : projectConfig!.TestCommand!.Trim();
         var buildTimeout = workspace?.BuildTimeoutSeconds ?? projectConfig?.BuildTimeoutSeconds ?? 120;
         var testTimeout = workspace?.TestTimeoutSeconds ?? projectConfig?.TestTimeoutSeconds ?? 120;
         var noBuildWarning = testCmd.Contains("--no-build", StringComparison.OrdinalIgnoreCase)
             ? " Never run test commands with `--no-build` after source modifications without building first."
             : string.Empty;
 
-        return $@"<execution_guidelines>
-Active repository execution commands and timeout limits:
-- Build Command: `{buildCmd}` (Timeout: {buildTimeout}s)
-- Test Command: `{testCmd}` (Timeout: {testTimeout}s)
-- Incremental Compilation Invariant: Whenever source code or test files are edited or added, execute Build Command (`{buildCmd}`) before running Test Command (`{testCmd}`).{noBuildWarning}
-- Automated Quality Gate Enforcement: Build and test runners will terminate and fail if execution exceeds these timeouts.
-- CRITICAL RESOURCE PROTECTION: Never write or leave hanging tests, infinite loops, deadlocks, or unmocked blocking network calls. All tests and builds must run quickly and finish strictly within their timeout limits.
-</execution_guidelines>";
+        var sb = new StringBuilder();
+        sb.AppendLine("<execution_guidelines>");
+        sb.AppendLine("Active repository execution commands and timeout limits:");
+        if (buildCmd != null)
+        {
+            sb.AppendLine($"- Build Command: `{buildCmd}` (Timeout: {buildTimeout}s)");
+        }
+        sb.AppendLine($"- Test Command: `{testCmd}` (Timeout: {testTimeout}s)");
+        if (buildCmd != null)
+        {
+            sb.AppendLine($"- Incremental Compilation Invariant: Whenever source code or test files are edited or added, execute Build Command (`{buildCmd}`) before running Test Command (`{testCmd}`).{noBuildWarning}");
+        }
+        sb.AppendLine("- Automated Quality Gate Enforcement: Build and test runners will terminate and fail if execution exceeds these timeouts.");
+        sb.AppendLine("- CRITICAL RESOURCE PROTECTION: Never write or leave hanging tests, infinite loops, deadlocks, or unmocked blocking network calls. All tests and builds must run quickly and finish strictly within their timeout limits.");
+        sb.Append("</execution_guidelines>");
+        return sb.ToString();
     }
 }

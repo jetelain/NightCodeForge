@@ -111,6 +111,11 @@ public static class BenchmarkDefaults
     public const string DotNetRollForwardEnvVar = "DOTNET_ROLL_FORWARD";
     public const string DotNetRollForwardLatestMajor = "LatestMajor";
     public const string DotNetSdkRollForwardLatestMajor = "latestMajor";
+    public const string DotNetCliDoNotUseMsBuildServerEnvVar = "DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER";
+    public const string MsBuildDisableNodeReuseEnvVar = "MSBUILDDISABLENODEREUSE";
+    public const string EnvFlagEnabled = "1";
+    public const string MsBuildNodeCrashErrorCode = "MSB4166";
+    public const string MsBuildNodeCommunicationErrorCode = "MSB5021";
 
     public static readonly IReadOnlyList<string> BlockedAntiCheatHosts =
     [
@@ -162,6 +167,7 @@ public static class BenchmarkDefaults
         ":(exclude)docs/transcripts",
         ":(exclude).ncf-bench-results",
         ":(exclude)node_modules",
+        ":(exclude)dist",
         ":(exclude).venv",
         ":(exclude)__pycache__",
         ":(exclude).pytest_cache",
@@ -170,6 +176,7 @@ public static class BenchmarkDefaults
         ":(glob,exclude)**/TestResults/**",
         ":(glob,exclude)**/*.trx",
         ":(glob,exclude)**/node_modules/**",
+        ":(glob,exclude)**/dist/**",
         ":(glob,exclude)**/.venv/**",
         ":(glob,exclude)**/__pycache__/**",
         ":(glob,exclude)**/.pytest_cache/**"

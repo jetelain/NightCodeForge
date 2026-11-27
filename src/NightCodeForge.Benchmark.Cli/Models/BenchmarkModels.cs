@@ -174,6 +174,7 @@ public sealed record BenchmarkJudgeResult(double Score, string Rationale);
 public sealed record BenchmarkVerificationResult
 {
     public bool Passed { get; init; }
+    public bool IsInfrastructureError { get; init; }
     public string? ActualVerdict { get; init; }
     public double DeterministicScore { get; init; }
     public int FailToPassPassed { get; init; }

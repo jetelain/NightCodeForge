@@ -82,7 +82,10 @@ public static class StageSummaryExtractor
             {
                 reviewerFeedback = feedback;
             }
-            targetRouting = StandardStageIds.Implementation;
+            if (string.IsNullOrWhiteSpace(targetRouting))
+            {
+                targetRouting = StandardStageIds.Implementation;
+            }
             text = RequestChangesRegex.Replace(text, string.Empty);
         }
 

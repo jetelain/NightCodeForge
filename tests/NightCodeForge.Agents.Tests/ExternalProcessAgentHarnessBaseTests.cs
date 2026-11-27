@@ -77,4 +77,33 @@ public class ExternalProcessAgentHarnessBaseTests
         Assert.Contains("[Stage Directive]: do it", prompt);
         Assert.Contains("<environment>", prompt);
     }
+
+    [Fact]
+    public void BuildEnrichedPrompt_RendersStandardCodeReviewDirectiveIntoXmlFallbackBranch()
+    {
+        var wf = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
+        var reviewStage = wf.Stages.Single(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+        using var doc = System.Text.Json.JsonDocument.Parse(reviewStage.ConfigurationJson);
+        var templateDirective = doc.RootElement.GetProperty("StageDirective").GetString()!;
+
+        var ctx = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 7, Title = "CR", Description = "Review diff" },
+            Profile = new AgentProfile
+            {
+                Name = "acp",
+                Mode = AgentMode.Review,
+                PermittedTools = [CanonicalToolNames.RequestChanges]
+            },
+            StageId = StandardStageIds.CodeReviewAndFix,
+            RequiredMode = AgentMode.Review,
+            StageDirective = templateDirective
+        };
+
+        var prompt = new ProbeHarness().Prompt(ctx, Path.GetTempPath());
+
+        Assert.Contains("<request_changes>", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke the 'request_changes(feedback, reason)' tool", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("tools.has_request_changes", prompt, StringComparison.Ordinal);
+    }
 }

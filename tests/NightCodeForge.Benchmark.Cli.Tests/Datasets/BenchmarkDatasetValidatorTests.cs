@@ -860,4 +860,55 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
         verifier.Verify(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()), Times.Once);
         verifier.Verify(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task ValidateAsync_Implementation_FailsWhenBaseVerificationHitsInfrastructureError()
+    {
+        var datasetPath = Path.Combine(_tempDir, "impl-infra-err.jsonl");
+        await File.WriteAllTextAsync(datasetPath, """
+        {"instance_id":"polly-1852","category":"Implementation","language":"csharp","repo":"App-vNext/Polly","base_commit":"abc","problem_statement":"Bug","patch":"diff gold","fail_to_pass":["TestA"]}
+        """);
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "polly-1852",
+            Category = BenchmarkProblemCategory.Implementation,
+            WorkspacePath = Path.Combine(_tempDir, "wks-infra"),
+            BaseCommit = "abc"
+        };
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(handle);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, null, ExecutionMode.ContainerSandbox, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                IsInfrastructureError = true,
+                FailToPassPassed = 0,
+                FailToPassTotal = 1,
+                ErrorMessage = "Verification infrastructure error: MSBuild child-node crash persisted after single-node (-m:1) retry (exit code 1)."
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.False(report.AllPassed);
+        var result = Assert.Single(report.Results);
+        Assert.False(result.Passed);
+        Assert.Contains("infrastructure error", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        verifier.Verify(
+            v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

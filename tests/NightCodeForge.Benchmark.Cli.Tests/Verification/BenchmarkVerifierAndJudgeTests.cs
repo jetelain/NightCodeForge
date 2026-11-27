@@ -2331,7 +2331,7 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             ProblemStatement = "Fix",
             CustomTestCommand = "dotnet test --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
         };
-        Assert.Equal("dotnet test src/App.sln --nologo", BenchmarkTestCommandResolver.ResolveAgentTestCommand(csInstance, csSubDir));
+        Assert.Equal("dotnet test src/App.sln --nologo --no-build", BenchmarkTestCommandResolver.ResolveAgentTestCommand(csInstance, csSubDir));
         Assert.Contains("--logger trx", BenchmarkTestCommandResolver.ResolveTestCommand(csInstance, csSubDir));
         Assert.Contains("--results-directory /workspace/.ncf-bench-results", BenchmarkTestCommandResolver.ResolveTestCommand(csInstance, csSubDir));
 
@@ -2339,7 +2339,7 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         {
             CustomTestCommand = "dotnet test -r linux-x64 --logger:trx --results-directory:/workspace/.ncf-bench-results -l console"
         };
-        Assert.Equal("dotnet test src/App.sln -r linux-x64", BenchmarkTestCommandResolver.ResolveAgentTestCommand(csColonInstance, csSubDir));
+        Assert.Equal("dotnet test src/App.sln -r linux-x64 --no-build", BenchmarkTestCommandResolver.ResolveAgentTestCommand(csColonInstance, csSubDir));
 
         var jestInstance = new BenchmarkInstance
         {
@@ -2714,6 +2714,234 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("Segmentation fault", result.ErrorMessage);
         Assert.DoesNotContain("\n", result.ErrorMessage);
         Assert.DoesNotContain("\r", result.ErrorMessage);
+    }
+
+    [Fact]
+    public void Step1164_ApplyMsBuildSingleNodeFlag_And_EnsureDotNetTestNoBuildFlag_HandleChainedAndSeparatedCommands()
+    {
+        Assert.Equal(
+            "dotnet build --nologo -m:1 && dotnet test --no-build --logger trx -m:1",
+            BenchmarkTestCommandResolver.ApplyMsBuildSingleNodeFlag("dotnet build --nologo && dotnet test --no-build --logger trx"));
+
+        Assert.Equal(
+            "dotnet test App.sln --no-build -m:1 -- --filter Foo",
+            BenchmarkTestCommandResolver.ApplyMsBuildSingleNodeFlag("dotnet test App.sln --no-build -- --filter Foo"));
+
+        Assert.Equal(
+            "dotnet build -m:1 && dotnet test --no-build -m:1",
+            BenchmarkTestCommandResolver.ApplyMsBuildSingleNodeFlag("dotnet build -m:1 && dotnet test --no-build"));
+
+        Assert.Equal(
+            "dotnet test App.sln --no-build -- --filter Foo",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("dotnet test App.sln -- --filter Foo"));
+
+        Assert.Equal(
+            "dotnet test App.sln --no-build",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("dotnet test App.sln --no-build"));
+
+        Assert.Equal(
+            "pytest -q",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("pytest -q"));
+
+        Assert.Equal(
+            "( dotnet build -m:1 && dotnet test -m:1 )",
+            BenchmarkTestCommandResolver.ApplyMsBuildSingleNodeFlag("(dotnet build && dotnet test)"));
+
+        Assert.Equal(
+            "( ncf_rc=0 ; { dotnet build A.csproj --nologo -m:1 && dotnet test A.csproj --no-build -m:1 ; } || ncf_rc=$? ; { dotnet build B.csproj --nologo -m:1 && dotnet test B.csproj --no-build -m:1 ; } || ncf_rc=$? ; exit $ncf_rc )",
+            BenchmarkTestCommandResolver.ApplyMsBuildSingleNodeFlag(
+                "( ncf_rc=0; { dotnet build A.csproj --nologo && dotnet test A.csproj --no-build; } || ncf_rc=$?; { dotnet build B.csproj --nologo && dotnet test B.csproj --no-build; } || ncf_rc=$?; exit $ncf_rc )"));
+
+        Assert.Equal(
+            "dotnet test App.sln --no-build 2>&1",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("dotnet test App.sln 2>&1"));
+
+        Assert.Equal(
+            "dotnet test App.sln --no-build > out.log",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("dotnet test App.sln > out.log"));
+
+        Assert.Equal(
+            "FOO=$(echo bar) dotnet test App.sln --no-build",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("FOO=$(echo bar) dotnet test App.sln"));
+
+        Assert.Equal(
+            "( dotnet test --filter \"A(1)\" --no-build )",
+            BenchmarkTestCommandResolver.EnsureDotNetTestNoBuildFlag("(dotnet test --filter \"A(1)\")"));
+    }
+
+    [Fact]
+    public async Task Step1164_VerifyAsync_RetriesMsBuildChildNodeCrashWithSingleNode_AndRecoversOnRetry()
+    {
+        var workspaceDir = Path.Combine(_tempDir, "wks-msb4166-recover");
+        Directory.CreateDirectory(workspaceDir);
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var judge = new Mock<IBenchmarkLlmJudge>();
+
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        var capturedCommands = new List<string>();
+        var capturedEnvs = new List<IReadOnlyDictionary<string, string>?>();
+        int attempt = 0;
+
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string?, int?, IReadOnlyDictionary<string, string>?, CancellationToken>((cmd, _, _, env, _) =>
+            {
+                attempt++;
+                capturedCommands.Add(cmd);
+                capturedEnvs.Add(env);
+                var resultsDir = Path.Combine(workspaceDir, BenchmarkPaths.BenchmarkResultDirRelative);
+                if (attempt == 1)
+                {
+                    File.WriteAllText(Path.Combine(resultsDir, "stale-attempt1.trx"), "<TestRun><broken");
+                }
+                else
+                {
+                    Assert.False(File.Exists(Path.Combine(resultsDir, "stale-attempt1.trx")));
+                    File.WriteAllText(Path.Combine(resultsDir, "ok.trx"), """
+                        <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                          <Results><UnitTestResult testId="1" testName="BreakDurationTest" outcome="Passed" /></Results>
+                        </TestRun>
+                        """);
+                }
+            })
+            .ReturnsAsync(() => attempt == 1
+                ? new CommandResult(1, "MSBUILD : error MSB4166: Child node \"2\" exited prematurely. Shutting down.", string.Empty, TimeSpan.FromSeconds(1))
+                : new CommandResult(0, "Passed!", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            containerFactory.Object,
+            envProvider.Object,
+            judge.Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "polly-1852",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "App-vNext/Polly",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            FailToPass = ["BreakDurationTest"]
+        };
+
+        var result = await verifier.VerifyAsync(
+            instance,
+            new BenchmarkWorkspaceHandle { InstanceId = "polly-1852", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.True(result.Passed);
+        Assert.False(result.IsInfrastructureError);
+        Assert.Equal(2, capturedCommands.Count);
+        Assert.DoesNotContain("-m:1", capturedCommands[0]);
+        Assert.Contains("-m:1", capturedCommands[1]);
+        Assert.Equal("1", capturedEnvs[1]![BenchmarkDefaults.DotNetCliDoNotUseMsBuildServerEnvVar]);
+        Assert.Equal("1", capturedEnvs[1]![BenchmarkDefaults.MsBuildDisableNodeReuseEnvVar]);
+        Assert.Equal(BenchmarkDefaults.DotNetRollForwardLatestMajor, capturedEnvs[1]![BenchmarkDefaults.DotNetRollForwardEnvVar]);
+        Assert.Contains("Attempt 1 - MSBuild node crash detected", result.VerificationLog);
+        Assert.Contains("Attempt 2 - Single-node retry", result.VerificationLog);
+    }
+
+    [Fact]
+    public async Task Step1164_VerifyAsync_MarksPersistentMsBuildCrashAsInfrastructureError_WhileCompilerErrorsDoNotRetry()
+    {
+        var workspaceDir = Path.Combine(_tempDir, "wks-msb5021-persist");
+        Directory.CreateDirectory(workspaceDir);
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var judge = new Mock<IBenchmarkLlmJudge>();
+
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommandResult(1, "MSBUILD : error MSB5021: Termination of node failed.", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            containerFactory.Object,
+            envProvider.Object,
+            judge.Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "polly-1852",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "App-vNext/Polly",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix",
+            FailToPass = ["BreakDurationTest"]
+        };
+
+        var persistentCrash = await verifier.VerifyAsync(
+            instance,
+            new BenchmarkWorkspaceHandle { InstanceId = "polly-1852", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.False(persistentCrash.Passed);
+        Assert.True(persistentCrash.IsInfrastructureError);
+        Assert.NotNull(persistentCrash.VerificationLog);
+        Assert.Contains("MSB5021", persistentCrash.VerificationLog);
+        Assert.Contains("infrastructure error", persistentCrash.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        execEnv.Verify(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+
+        // CodeReview MinorFix propagates IsInfrastructureError, forces zero DeterministicScore, and skips LLM judge
+        var crInstance = instance with
+        {
+            Category = BenchmarkProblemCategory.CodeReview,
+            CandidatePatch = "diff",
+            ExpectedVerdict = "MinorFix"
+        };
+        var judgeConfig = new BenchmarkJudgeConfig { ModelName = "judge-model" };
+        var crCrash = await verifier.VerifyAsync(
+            crInstance,
+            new BenchmarkWorkspaceHandle { InstanceId = "polly-1852", Category = BenchmarkProblemCategory.CodeReview, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: judgeConfig);
+        Assert.False(crCrash.Passed);
+        Assert.True(crCrash.IsInfrastructureError);
+        Assert.Equal(0.0, crCrash.DeterministicScore);
+        Assert.Null(crCrash.JudgeScore);
+        Assert.Contains("MSB5021", crCrash.VerificationLog);
+        judge.Verify(
+            j => j.EvaluateCodeReviewAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkAgentOutcome>(), It.IsAny<BenchmarkJudgeConfig>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        // Compiler error must NOT retry and must NOT be marked IsInfrastructureError
+        execEnv.Invocations.Clear();
+        execEnv.Setup(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CommandResult(1, "Program.cs(1,1): error CS1002: ; expected", string.Empty, TimeSpan.FromSeconds(1)));
+
+        var compileFail = await verifier.VerifyAsync(
+            instance,
+            new BenchmarkWorkspaceHandle { InstanceId = "polly-1852", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = workspaceDir, BaseCommit = "abc" },
+            new BenchmarkAgentOutcome { RunStatus = AgentRunStatus.Completed, ModelPatch = "diff" },
+            ExecutionMode.BareHost,
+            verifyWithTests: true,
+            judgeConfig: null);
+
+        Assert.False(compileFail.Passed);
+        Assert.False(compileFail.IsInfrastructureError);
+        execEnv.Verify(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private static string RunGit(string workingDir, params string[] args)

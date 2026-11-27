@@ -188,6 +188,10 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "TestResults", "results.trx"), "<trx/>");
         Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "node_modules", "pkg"));
         await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "node_modules", "pkg", "index.js"), "module.exports = 1;");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "dist"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "dist", "bundle.js"), "console.log('root dist');");
+        Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "packages", "core", "dist"));
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "packages", "core", "dist", "index.mjs"), "export default 1;");
         Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, ".venv", "bin"));
         await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, ".venv", "bin", "pytest"), "#!/bin/sh");
         Directory.CreateDirectory(Path.Combine(handle.WorkspacePath, "__pycache__"));
@@ -204,6 +208,8 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         Assert.DoesNotContain("obj/cache.txt", patch);
         Assert.DoesNotContain("results.trx", patch);
         Assert.DoesNotContain("node_modules/pkg/index.js", patch);
+        Assert.DoesNotContain("dist/bundle.js", patch);
+        Assert.DoesNotContain("packages/core/dist/index.mjs", patch);
         Assert.DoesNotContain(".venv/bin/pytest", patch);
         Assert.DoesNotContain("__pycache__/mod.cpython-312.pyc", patch);
         Assert.DoesNotContain(".pytest_cache/v/cache/lastfailed", patch);
@@ -778,6 +784,50 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
 
         await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
         Assert.False(Directory.Exists(handle.WorkspacePath));
+    }
+
+    [Fact]
+    public async Task Step1164_ExtractPatchAsync_ExcludesTrackedDistBundles_KeepingApproveReviewClean()
+    {
+        Directory.CreateDirectory(Path.Combine(_sourceRepoDir, "dist"));
+        Directory.CreateDirectory(Path.Combine(_sourceRepoDir, "lib"));
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "dist", "axios.min.js"), "// old bundle\n");
+        await File.WriteAllTextAsync(Path.Combine(_sourceRepoDir, "lib", "axios.js"), "export default {};\n");
+        RunGit(_sourceRepoDir, "add -A");
+        RunGit(_sourceRepoDir, "commit -m \"Base with tracked dist\"");
+        var baseCommit = RunGit(_sourceRepoDir, "rev-parse HEAD").Trim();
+
+        const string candidatePatch = """
+            diff --git a/lib/axios.js b/lib/axios.js
+            --- a/lib/axios.js
+            +++ b/lib/axios.js
+            @@ -1 +1 @@
+            -export default {};
+            +export default { ok: true };
+            """;
+
+        var handle = await _manager.ProvisionAsync(
+            new BenchmarkInstance
+            {
+                InstanceId = "ncf-cr-js-001",
+                Category = BenchmarkProblemCategory.CodeReview,
+                Language = BenchmarkLanguages.JavaScript,
+                Repo = _sourceRepoDir,
+                BaseCommit = baseCommit,
+                ProblemStatement = "Review",
+                CandidatePatch = candidatePatch,
+                ExpectedVerdict = "Approve"
+            },
+            BenchmarkProblemCategory.CodeReview);
+
+        // Simulate reviewer running `npm run build` which regenerates tracked dist/ without touching lib/
+        await File.WriteAllTextAsync(Path.Combine(handle.WorkspacePath, "dist", "axios.min.js"), "// regenerated bundle\n");
+        Assert.True(BenchmarkWorkspaceManager.IsExcludedArtifactPath("dist/axios.min.js"));
+        Assert.True(BenchmarkWorkspaceManager.IsExcludedArtifactPath("packages/app/dist/index.js"));
+        Assert.False(BenchmarkWorkspaceManager.IsExcludedArtifactPath("lib/distHelper.js"));
+
+        var patch = await _manager.ExtractPatchAsync(handle.WorkspacePath, handle.CandidateCommit!);
+        Assert.True(string.IsNullOrWhiteSpace(patch), $"Expected empty patch when only tracked dist/ changed, got:\n{patch}");
     }
 
     private (GitCliRunner GitRunner, BenchmarkWorkspaceManager Manager) CreateGitRunnerAndManager(IProcessRunner processRunner)

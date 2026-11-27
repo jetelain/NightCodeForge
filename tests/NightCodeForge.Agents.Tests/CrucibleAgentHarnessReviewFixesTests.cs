@@ -561,6 +561,48 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         Assert.Equal(CrucibleAgentHarness.DefaultWaitingForHumanSummary, result.Summary);
     }
 
+    [Fact]
+    public async Task Step1164_CodeReviewDirective_OmitsRequestChangesXmlFallbackWhenToolIsActive_AndPreservesWhenAbsent()
+    {
+        var workflowDirective = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow()
+            .Stages.Single(s => s.StageId == StandardStageIds.CodeReviewAndFix)
+            .ConfigurationJson;
+        using var doc = System.Text.Json.JsonDocument.Parse(workflowDirective);
+        var rawDirective = doc.RootElement.GetProperty("StageDirective").GetString()!;
+
+        string? capturedWithToolSystem = null;
+        var withToolClient = new ScriptedChatClient((messages, options, _) =>
+        {
+            capturedWithToolSystem ??= options?.Instructions ?? messages.FirstOrDefault(m => m.Role == ChatRole.System)?.Text;
+            return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>([new ChatResponseUpdate { Contents = [new TextContent("Approved.")] }]);
+        });
+        var withToolHarness = CreateHarness(withToolClient);
+        await withToolHarness.RunStageAsync(new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 91, Title = "CR with tool", Description = "Review" },
+            Workspace = new Workspace { Id = 1, RepositoryPath = _tempDir },
+            Profile = new AgentProfile { Id = "rev-tool", Mode = AgentMode.Full, PermittedTools = [CanonicalToolNames.Read, CanonicalToolNames.RequestChanges] },
+            StageId = StandardStageIds.CodeReviewAndFix,
+            StageDirective = rawDirective,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = _tempDir,
+            BootstrapPrompt = string.Empty
+        });
+
+        Assert.NotNull(capturedWithToolSystem);
+        Assert.Contains("request_changes(feedback, reason)", capturedWithToolSystem, StringComparison.Ordinal);
+        Assert.DoesNotContain("<request_changes>", capturedWithToolSystem, StringComparison.OrdinalIgnoreCase);
+
+        var withoutToolAdapted = StageDirectiveRenderer.Render(
+            rawDirective,
+            [CanonicalToolNames.Read]);
+        Assert.Contains("<request_changes>", withoutToolAdapted, StringComparison.OrdinalIgnoreCase);
+        var fallbackDirective = CrucibleAgentHarness.BuildReviewDirective(hasRequestChangesTool: false);
+        Assert.Contains("<request_changes>", fallbackDirective, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("invoke 'request_changes'", fallbackDirective, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<request_changes>", CrucibleAgentHarness.BuildReviewDirective(hasRequestChangesTool: true), StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---------- Helpers ----------
 
     private AgentSessionContext NewContext(AgentProfile? profile = null, string? state = null, string? bootstrap = null)

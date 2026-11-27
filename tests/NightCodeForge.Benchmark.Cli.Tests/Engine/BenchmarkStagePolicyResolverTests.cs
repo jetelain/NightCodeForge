@@ -216,23 +216,25 @@ public sealed class BenchmarkStagePolicyResolverTests
                 tsDir,
                 ExecutionMode.ContainerSandbox);
             Assert.Equal(CodeStack.Node, tsConfig.CodeStack);
-            Assert.Equal(CodeStackPresets.Node.BuildCommand, tsConfig.BuildCommand);
+            Assert.Null(tsConfig.BuildCommand);
             Assert.Equal("npx vitest run -c vitest.unit.config.ts", tsConfig.TestCommand);
             Assert.DoesNotContain("--reporter=junit", tsConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(".ncf-bench-results", tsConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
             var tsGuidelines = agentsMdService.FormatExecutionGuidelines(tsConfig, new Workspace());
             Assert.DoesNotContain("dotnet build", tsGuidelines, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("dotnet test", tsGuidelines, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Build Command:", tsGuidelines, StringComparison.Ordinal);
+            Assert.DoesNotContain("Incremental Compilation Invariant", tsGuidelines, StringComparison.Ordinal);
 
             var jsConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
                 new BenchmarkInstance { InstanceId = "js-1", Language = BenchmarkLanguages.JavaScript, Repo = "axios/axios", BaseCommit = "abc", ProblemStatement = "Fix" },
                 jsDir,
                 ExecutionMode.ContainerSandbox);
             Assert.Equal(CodeStack.Node, jsConfig.CodeStack);
+            Assert.Null(jsConfig.BuildCommand);
             Assert.Equal("npm run test:mocha", jsConfig.TestCommand);
             Assert.DoesNotContain("mocha-junit-reporter", jsConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(".ncf-bench-results", jsConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("dotnet", jsConfig.BuildCommand, StringComparison.OrdinalIgnoreCase);
 
             var rsConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
                 new BenchmarkInstance { InstanceId = "rs-1", Language = BenchmarkLanguages.Rust, Repo = "burntsushi/ripgrep", BaseCommit = "abc", ProblemStatement = "Fix" },
@@ -249,7 +251,7 @@ public sealed class BenchmarkStagePolicyResolverTests
                 csRootDir,
                 ExecutionMode.ContainerSandbox);
             Assert.Equal(CodeStack.DotNet, csRootConfig.CodeStack);
-            Assert.Equal(CodeStackPresets.DotNet.BuildCommand, csRootConfig.BuildCommand);
+            Assert.Equal("dotnet build", csRootConfig.BuildCommand);
             Assert.Equal("dotnet test --no-build", csRootConfig.TestCommand);
             Assert.DoesNotContain("--logger trx", csRootConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(".ncf-bench-results", csRootConfig.TestCommand, StringComparison.OrdinalIgnoreCase);
@@ -350,6 +352,9 @@ public sealed class BenchmarkStagePolicyResolverTests
 
         var crPolicy = BenchmarkStagePolicyResolver.Resolve(BenchmarkProblemCategory.CodeReview, enableStackSkills: false);
         Assert.DoesNotContain("docs/tasks/", crPolicy.StageDirective, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<request_changes>", crPolicy.StageDirective, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("</request_changes>", crPolicy.StageDirective, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("request_changes(feedback, reason)", crPolicy.StageDirective, StringComparison.Ordinal);
         Assert.Contains("Do NOT make unsolicited cosmetic, formatting, or line-wrapping edits", crPolicy.StageDirective, StringComparison.Ordinal);
         Assert.Contains("Required unit or integration tests specified in the task are missing", crPolicy.StageDirective, StringComparison.Ordinal);
 
@@ -459,13 +464,13 @@ public sealed class BenchmarkStagePolicyResolverTests
                 new BenchmarkInstance { InstanceId = "bad-1", Language = BenchmarkLanguages.TypeScript, Repo = "owner/bad", BaseCommit = "abc", ProblemStatement = "Fix" },
                 malformedDir,
                 ExecutionMode.ContainerSandbox);
-            Assert.Equal(CodeStackPresets.Node.BuildCommand, malformedConfig.BuildCommand);
+            Assert.Null(malformedConfig.BuildCommand);
 
             var missingConfig = BenchmarkStagePolicyResolver.BuildProjectConfig(
                 new BenchmarkInstance { InstanceId = "miss-1", Language = BenchmarkLanguages.TypeScript, Repo = "owner/miss", BaseCommit = "abc", ProblemStatement = "Fix" },
                 missingDir,
                 ExecutionMode.ContainerSandbox);
-            Assert.Equal(CodeStackPresets.Node.BuildCommand, missingConfig.BuildCommand);
+            Assert.Null(missingConfig.BuildCommand);
         }
         finally
         {

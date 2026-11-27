@@ -608,7 +608,9 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 agentStopwatch.ElapsedMilliseconds);
 
             var telemetry = BuildTelemetryBreakdown(capture.TurnSink.Turns, dispatchTelemetry.CreateSnapshot());
-            var finalOutcome = verification.Passed ? BenchmarkInstanceOutcome.Passed : BenchmarkInstanceOutcome.Failed;
+            var finalOutcome = verification.IsInfrastructureError
+                ? BenchmarkInstanceOutcome.Error
+                : (verification.Passed ? BenchmarkInstanceOutcome.Passed : BenchmarkInstanceOutcome.Failed);
             int turns = ResolveTurnCount(capture);
             var errorMessage = ResolveFinalErrorMessage(runResult, verification, turns, candidate.MaxTurns);
 
@@ -929,7 +931,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         int turns,
         int maxTurns)
     {
-        if (verification.Passed)
+        if (verification.Passed || verification.IsInfrastructureError)
         {
             return verification.ErrorMessage;
         }

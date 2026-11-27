@@ -1,7 +1,10 @@
 namespace NightCodeForge.Core.Tests;
 
+using System.Text.Json;
 using NightCodeForge.Core.Domain;
 using NightCodeForge.Core.Workflow;
+using NightCodeForge.Core.Workflow.Configuration;
+using NightCodeForge.Core.Workflow.Stages;
 using Xunit;
 
 public class StandardWorkflowDefinitionsTests
@@ -62,5 +65,137 @@ public class StandardWorkflowDefinitionsTests
         Assert.Contains("expert", taskReviewStage.ConfigurationJson);
         Assert.Contains("YAML frontmatter", taskReviewStage.ConfigurationJson);
         Assert.Contains("'ask'", taskReviewStage.ConfigurationJson);
+    }
+
+    [Fact]
+    public void CodeReviewStageDirective_RendersDistinctToolEnabledAndXmlFallbackBranches()
+    {
+        var wf = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
+        var reviewStage = wf.Stages.Single(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+        using var doc = JsonDocument.Parse(reviewStage.ConfigurationJson);
+        var templateDirective = doc.RootElement.GetProperty("StageDirective").GetString()!;
+
+        Assert.Contains("tools.has_request_changes", templateDirective, StringComparison.Ordinal);
+
+        // 1. Crucible with request_changes tool active: tool-only wording, no XML fallback
+        var crucibleReviewTools = StageDirectiveRenderer.ResolveEffectivePermittedTools(
+            StandardHarnessIds.Crucible,
+            new AgentProfile { Id = "rev", Mode = AgentMode.Review },
+            AgentMode.Review);
+        Assert.Contains(CanonicalToolNames.RequestChanges, crucibleReviewTools);
+
+        var toolDirective = StageDirectiveRenderer.Render(templateDirective, crucibleReviewTools);
+        Assert.Contains("Invoke the 'request_changes(feedback, reason)' tool immediately to reject.", toolDirective, StringComparison.Ordinal);
+        Assert.Contains("\n   - Invoke the 'request_changes(feedback, reason)' tool immediately to reject.\n   MANDATORY BUG REGRESSION POLICY:", toolDirective, StringComparison.Ordinal);
+        Assert.DoesNotContain("<request_changes>", toolDirective, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("If 'request_changes' tool is available", toolDirective, StringComparison.OrdinalIgnoreCase);
+
+        // 2. Crucible without request_changes tool (or external harness like ACP): XML fallback wording, no tool instruction
+        var acpTools = StageDirectiveRenderer.ResolveEffectivePermittedTools(
+            StandardHarnessIds.Acp,
+            new AgentProfile { Id = "acp-rev", Mode = AgentMode.Review, PermittedTools = [CanonicalToolNames.RequestChanges] },
+            AgentMode.Review);
+        Assert.Empty(acpTools);
+
+        var xmlDirective = StageDirectiveRenderer.Render(templateDirective, acpTools);
+        Assert.Contains("<request_changes>", xmlDirective, StringComparison.Ordinal);
+        Assert.Contains("</request_changes>", xmlDirective, StringComparison.Ordinal);
+        Assert.Contains(
+            "\n   - Conclude your final response with:\n     <request_changes>\n     [Detailed explanation of missing features, broken requirements, and instructions for rework]\n     </request_changes>\n   MANDATORY BUG REGRESSION POLICY:",
+            xmlDirective,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke the 'request_changes(feedback, reason)' tool", xmlDirective, StringComparison.Ordinal);
+        Assert.DoesNotContain("If 'request_changes' tool is available", xmlDirective, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StageDirectiveRenderer_PreservesLiteralBraces_AndThrowsOnMalformedToolsTemplate()
+    {
+        const string literalDirective = "Check Vue template {{ item.name }} and C# raw literal {{ unclosed before editing.";
+        Assert.False(StageDirectiveRenderer.ContainsTemplateExpression(literalDirective));
+        Assert.Equal(literalDirective, StageDirectiveRenderer.Render(literalDirective, [CanonicalToolNames.RequestChanges]));
+
+        const string malformedToolsDirective = "{{ if tools.has_request_changes }}Invoke request_changes";
+        Assert.True(StageDirectiveRenderer.ContainsTemplateExpression(malformedToolsDirective));
+        Assert.Throws<InvalidOperationException>(() =>
+            StageDirectiveRenderer.Render(malformedToolsDirective, [CanonicalToolNames.RequestChanges]));
+    }
+
+    [Fact]
+    public void StageDirectiveRenderer_And_DefaultBootstrapPromptBuilder_ResolveToolsAcrossHarnessConfigReadOnlyAndTriage()
+    {
+        var allowedProfile = new AgentProfile
+        {
+            Id = "crucible-json",
+            HarnessId = StandardHarnessIds.Crucible,
+            Mode = AgentMode.Full,
+            PermittedTools = [CanonicalToolNames.Read, CanonicalToolNames.RequestChanges],
+            HarnessConfigurationJson = """{"AllowedTools":["read","edit"]}"""
+        };
+        var resolvedOverride = StageDirectiveRenderer.ResolveEffectivePermittedTools(
+            StandardHarnessIds.Crucible,
+            allowedProfile,
+            AgentMode.Review);
+        Assert.Equal(["read", "edit"], resolvedOverride);
+
+        var readOnlyIntersected = StageDirectiveRenderer.ResolveEffectivePermittedTools(
+            StandardHarnessIds.Crucible,
+            new AgentProfile
+            {
+                Id = "ro",
+                HarnessId = StandardHarnessIds.Crucible,
+                Mode = AgentMode.ReadOnly,
+                PermittedTools = [CanonicalToolNames.Read, CanonicalToolNames.Bash, CanonicalToolNames.Edit],
+                HarnessConfigurationJson = """{"AllowedTools":["read","edit"]}"""
+            },
+            AgentMode.Full);
+        Assert.Equal(["read", "edit"], readOnlyIntersected);
+
+        var triageTools = StageDirectiveRenderer.ResolveEffectivePermittedTools(
+            StandardHarnessIds.Crucible,
+            new AgentProfile
+            {
+                Id = "triage",
+                HarnessId = StandardHarnessIds.Crucible,
+                Mode = AgentMode.Full,
+                PermittedTools = [CanonicalToolNames.Read, CanonicalToolNames.Edit, CanonicalToolNames.ProposeTasks]
+            },
+            AgentMode.ReadOnly,
+            isTriageSession: true);
+        Assert.Contains(CanonicalToolNames.ProposeTasks, triageTools);
+        Assert.DoesNotContain(CanonicalToolNames.Edit, triageTools);
+
+        var wf = StandardWorkflowDefinitions.CreateStandard3AgentWorkflow();
+        var reviewStageDef = wf.Stages.Single(s => s.StageId == StandardStageIds.CodeReviewAndFix);
+        var reviewStage = new GenericAgenticStage(
+            reviewStageDef.StageId,
+            reviewStageDef.DisplayName,
+            JsonSerializer.Deserialize<AgenticStageConfig>(reviewStageDef.ConfigurationJson)!,
+            new ScribanPromptTemplateRenderer(),
+            TimeProvider.System);
+        var task = new ForgeTask { Id = 12, Title = "Review", Description = "Desc" };
+        var workspace = new Workspace { Id = 1, Name = "TestWorkspace" };
+
+        var crucibleCtx = new PipelineContext(task, workspace, new PipelineDataBag())
+        {
+            CurrentProfile = new AgentProfile { Id = "rev-crucible", HarnessId = StandardHarnessIds.Crucible, Mode = AgentMode.Review }
+        };
+        var cruciblePrompt = DefaultBootstrapPromptBuilder.Build(reviewStage, task, crucibleCtx, currentDate: "2026-11-27");
+        Assert.Contains("Invoke the 'request_changes(feedback, reason)' tool immediately to reject.", cruciblePrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("<request_changes>", cruciblePrompt, StringComparison.OrdinalIgnoreCase);
+
+        var acpCtx = new PipelineContext(task, workspace, new PipelineDataBag())
+        {
+            CurrentProfile = new AgentProfile
+            {
+                Id = "rev-acp",
+                HarnessId = StandardHarnessIds.Acp,
+                Mode = AgentMode.Review,
+                PermittedTools = [CanonicalToolNames.RequestChanges]
+            }
+        };
+        var acpPrompt = DefaultBootstrapPromptBuilder.Build(reviewStage, task, acpCtx, currentDate: "2026-11-27");
+        Assert.Contains("<request_changes>", acpPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Invoke the 'request_changes(feedback, reason)' tool", acpPrompt, StringComparison.Ordinal);
     }
 }

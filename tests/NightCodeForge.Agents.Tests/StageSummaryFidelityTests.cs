@@ -342,4 +342,28 @@ public class StageSummaryFidelityTests
         Assert.Equal(AgentRunStatus.Completed, result.Status);
         Assert.Equal("Completed all items.", result.Summary);
     }
+
+    [Fact]
+    public void Step1164_Extractor_PreservesExplicitTargetRouting_AndKeepsStrictStructuredTagRouting()
+    {
+        // Structured pseudo-XML tags route to Implementation by default when no explicitTargetRouting is provided
+        var structuredRejection = StageSummaryExtractor.Extract(
+            "Review findings:\n<request_changes>\nMissing unit tests for edge case.\n</request_changes>");
+        Assert.Equal(StandardStageIds.Implementation, structuredRejection.TargetRouting);
+        Assert.Equal("Missing unit tests for edge case.", structuredRejection.ReviewerFeedback);
+        Assert.Equal("Review findings:", structuredRejection.Summary);
+
+        // Non-empty explicitTargetRouting must be preserved rather than overwritten by XML tags
+        var explicitRes = StageSummaryExtractor.Extract(
+            "Done.\n<request-changes>Some feedback</request-changes>",
+            explicitTargetRouting: "custom-stage");
+        Assert.Equal("custom-stage", explicitRes.TargetRouting);
+        Assert.Equal("Some feedback", explicitRes.ReviewerFeedback);
+
+        // Self-closing <request-changes /> and <request_changes /> remain strict routing triggers
+        var selfClosing1 = StageSummaryExtractor.Extract("Needs rework.\n<request-changes />");
+        Assert.Equal(StandardStageIds.Implementation, selfClosing1.TargetRouting);
+        var selfClosing2 = StageSummaryExtractor.Extract("Needs rework.\n<request_changes />");
+        Assert.Equal(StandardStageIds.Implementation, selfClosing2.TargetRouting);
+    }
 }

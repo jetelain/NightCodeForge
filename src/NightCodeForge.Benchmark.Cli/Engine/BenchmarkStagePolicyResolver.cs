@@ -1,4 +1,5 @@
 using System.Text.Json;
+using NightCodeForge.Agents.Context;
 using NightCodeForge.Benchmark.Cli.Models;
 using NightCodeForge.Benchmark.Cli.Verification;
 using NightCodeForge.Core.Domain;
@@ -58,7 +59,8 @@ public static class BenchmarkStagePolicyResolver
         }
 
         var rawDirective = ExtractStageDirective(workflow, stageId);
-        var directive = AdaptDirectiveForBenchmark(rawDirective, category);
+        var renderedDirective = StageDirectiveRenderer.Render(rawDirective, permittedTools);
+        var directive = AdaptDirectiveForBenchmark(renderedDirective, category);
         return new BenchmarkStagePolicy(stageId, AgentMode.Full, permittedTools, directive);
     }
 
@@ -142,7 +144,7 @@ public static class BenchmarkStagePolicyResolver
         return null;
     }
 
-    private static string ResolveBuildCommand(string stack, CodeStackPreset preset, string workspacePath)
+    private static string? ResolveBuildCommand(string stack, CodeStackPreset preset, string workspacePath)
     {
         if (string.Equals(stack, CodeStack.Node, StringComparison.OrdinalIgnoreCase))
         {
@@ -156,21 +158,21 @@ public static class BenchmarkStagePolicyResolver
 
         var targets = BenchmarkTestCommandResolver.DiscoverDotNetTargets(workspacePath);
         return targets.Count == 0
-            ? CodeStackPresets.DotNet.BuildCommand
+            ? AgentsMdService.StripNoIncrementalFlag(CodeStackPresets.DotNet.BuildCommand)
             : string.Join(" && ", targets.Select(t => $"dotnet build {BenchmarkTestCommandResolver.QuotePathArgument(t)}"));
     }
 
-    private static string ResolveNodeBuildCommand(string workspacePath)
+    private static string? ResolveNodeBuildCommand(string workspacePath)
     {
         if (string.IsNullOrWhiteSpace(workspacePath))
         {
-            return CodeStackPresets.Node.BuildCommand;
+            return null;
         }
 
         var pkgJsonPath = Path.Combine(workspacePath, PackageJsonFileName);
         if (!File.Exists(pkgJsonPath))
         {
-            return CodeStackPresets.Node.BuildCommand;
+            return null;
         }
 
         try
@@ -181,7 +183,7 @@ public static class BenchmarkStagePolicyResolver
                 !doc.RootElement.TryGetProperty(ScriptsPropertyName, out var scripts) ||
                 scripts.ValueKind != JsonValueKind.Object)
             {
-                return CodeStackPresets.Node.BuildCommand;
+                return null;
             }
 
             string? packageBuildScript = null;
@@ -198,7 +200,7 @@ public static class BenchmarkStagePolicyResolver
 
             if (packageBuildScript == null)
             {
-                return CodeStackPresets.Node.BuildCommand;
+                return null;
             }
 
             if (File.Exists(Path.Combine(workspacePath, PnpmLockFileName)))
@@ -215,7 +217,7 @@ public static class BenchmarkStagePolicyResolver
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            return CodeStackPresets.Node.BuildCommand;
+            return null;
         }
     }
 

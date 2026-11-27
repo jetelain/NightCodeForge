@@ -643,6 +643,9 @@ public class TaskOrchestrator : ITaskOrchestrator
                                     : stage.StageDirective;
 
                                 var stageDirective = WorkspacePromptResolver.ResolveStageDirective(taskWorkingPath, stage.StageId, defaultDirective);
+                                var isTriageStage = string.Equals(stage.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase);
+                                var effectiveTools = StageDirectiveRenderer.ResolveEffectivePermittedTools(harnessId, profile, stage.RequiredMode, isTriageStage);
+                                stageDirective = StageDirectiveRenderer.Render(stageDirective, effectiveTools);
 
                                 bool isModeMismatch = profile.Mode == AgentMode.ReadOnly &&
                                     (stage.RequiredMode == AgentMode.Full || stage.RequiredMode == AgentMode.Review);

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using NightCodeForge.Core.Execution;
@@ -21,6 +22,7 @@ public sealed partial class PersistentContainerShellSession : IDisposable
     private static partial Regex StaleSentinelLineRegex();
 
     public const int SigIntExitCode = 130;
+    private const int MaxInlineCommandBytes = 65_536;
     private const string FallbackHomePathExpression = "/tmp/ncf-home-$(id -u)";
 
     private readonly ContainerExecutorOptions _options;
@@ -161,6 +163,12 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         }
 
         await _stdin.WriteLineAsync("export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0");
+        if (environmentVariables == null ||
+            !environmentVariables.ContainsKey(ContainerExecutorOptions.DotNetRollForwardEnvVar))
+        {
+            await _stdin.WriteLineAsync(
+                $"export {ContainerExecutorOptions.DotNetRollForwardEnvVar}={ContainerExecutorOptions.DotNetRollForwardLatestMajor}");
+        }
         var hasCustomLang = environmentVariables != null && environmentVariables.ContainsKey("LANG");
         var hasCustomLcAll = environmentVariables != null && environmentVariables.ContainsKey("LC_ALL");
         if (!hasCustomLang || !hasCustomLcAll)
@@ -225,7 +233,22 @@ public sealed partial class PersistentContainerShellSession : IDisposable
                     continue;
                 }
 
-                await _stdin.WriteLineAsync($"export {name}=\"{value}\"");
+                string? fallbackPath = name switch
+                {
+                    ContainerExecutorOptions.NpmCacheEnvVarName => ContainerExecutorOptions.FallbackNpmCachePath,
+                    ContainerExecutorOptions.PnpmStoreEnvVarName => ContainerExecutorOptions.FallbackPnpmStorePath,
+                    _ => null
+                };
+
+                if (fallbackPath != null)
+                {
+                    await _stdin.WriteLineAsync(
+                        $"if [ -d \"{value}\" ] && [ -w \"{value}\" ]; then export {name}=\"{value}\"; else mkdir -p \"{fallbackPath}\" 2>/dev/null || true; export {name}=\"{fallbackPath}\"; fi");
+                }
+                else
+                {
+                    await _stdin.WriteLineAsync($"export {name}=\"{value}\"");
+                }
             }
         }
 
@@ -254,6 +277,28 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         }
     }
 
+    internal static string BuildFramedCommand(string workDir, string cleanCommand)
+    {
+        var quotedWorkDir = ShellQuoting.QuotePosix(workDir);
+        if (Encoding.UTF8.GetByteCount(cleanCommand) <= MaxInlineCommandBytes)
+        {
+            var quotedCommand = ShellQuoting.QuotePosix(cleanCommand);
+            if (Encoding.UTF8.GetByteCount(quotedCommand) <= MaxInlineCommandBytes)
+            {
+                return $"( cd {quotedWorkDir} && bash --noprofile --norc -c -- {quotedCommand} ) < /dev/null 2>&1";
+            }
+        }
+
+        string delimiter;
+        do
+        {
+            delimiter = $"__NCF_CMD_{Guid.NewGuid():N}__";
+        }
+        while (cleanCommand.Contains(delimiter, StringComparison.Ordinal));
+
+        return $"( cd {quotedWorkDir} && bash --noprofile --norc /dev/fd/3 ) < /dev/null 2>&1 3<<'{delimiter}'\n{cleanCommand}\n{delimiter}";
+    }
+
     public async Task<int> ExecuteFramedCommandAsync(
         string workDir,
         string cleanCommand,
@@ -272,7 +317,7 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         WasDrainedOnLastCancel = false;
         LastCancelledCommandResult = null;
 
-        await _stdin.WriteLineAsync($"cd \"{workDir}\"; ( {cleanCommand}\n) < /dev/null 2>&1");
+        await _stdin.WriteLineAsync(BuildFramedCommand(workDir, cleanCommand));
         await _stdin.WriteLineAsync($"echo \"{sentinel} $?\"");
         await _stdin.FlushAsync();
 

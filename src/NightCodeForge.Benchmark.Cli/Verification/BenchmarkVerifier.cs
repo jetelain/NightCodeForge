@@ -226,6 +226,15 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         }
     }
 
+    private static void PrepareResultsDirectory(string resultsHostDir)
+    {
+        if (Directory.Exists(resultsHostDir))
+        {
+            Directory.Delete(resultsHostDir, recursive: true);
+        }
+        Directory.CreateDirectory(resultsHostDir);
+    }
+
     private async Task<BenchmarkVerificationResult> ExecuteTestSuiteAsync(
         BenchmarkInstance instance,
         string workspacePath,
@@ -234,20 +243,20 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         CancellationToken cancellationToken)
     {
         var resultsHostDir = Path.Combine(workspacePath, BenchmarkPaths.BenchmarkResultDirRelative);
-        if (Directory.Exists(resultsHostDir))
-        {
-            Directory.Delete(resultsHostDir, recursive: true);
-        }
-        Directory.CreateDirectory(resultsHostDir);
+        PrepareResultsDirectory(resultsHostDir);
 
         var containerName = $"ncf-bench-verify-{Guid.NewGuid():N}"[..32];
         var scope = CreateVerificationScope(workspacePath, instance.CustomContainerImage, executionMode, containerName);
         var testCommand = ResolveTestCommand(instance, workspacePath, executionMode, failToPassOnly);
         var effectiveCommand = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(testCommand, instance.Language, executionMode, instance.PipConstraints);
         var format = instance.ResolveEffectiveTestResultFormat();
+        var isCSharp = string.Equals(BenchmarkLanguages.Normalize(instance.Language), BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase);
         var testRunStartedUtc = DateTime.UtcNow;
 
         CommandResult cmdResult;
+        string combinedOutput;
+        string finalAttemptOutput;
+        IReadOnlyList<ParsedTestOutcome> parsedOutcomes;
         try
         {
             using var globalJsonScope = DotNetGlobalJsonResilienceScope.Apply(workspacePath, instance.Language, _logger);
@@ -273,16 +282,54 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             try
             {
                 testRunStartedUtc = DateTime.UtcNow;
-                IReadOnlyDictionary<string, string>? environmentVariables =
-                    string.Equals(BenchmarkLanguages.Normalize(instance.Language), BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase)
-                        ? new Dictionary<string, string> { [BenchmarkDefaults.DotNetRollForwardEnvVar] = BenchmarkDefaults.DotNetRollForwardLatestMajor }
-                        : null;
+                IReadOnlyDictionary<string, string>? environmentVariables = isCSharp
+                    ? new Dictionary<string, string> { [BenchmarkDefaults.DotNetRollForwardEnvVar] = BenchmarkDefaults.DotNetRollForwardLatestMajor }
+                    : null;
                 cmdResult = await env.ExecuteAsync(
                     effectiveCommand,
                     workingDirectory: executionMode == ExecutionMode.ContainerSandbox ? null : workspacePath,
                     timeoutSeconds: BenchmarkDefaults.DefaultVerificationTimeoutSeconds,
                     environmentVariables: environmentVariables,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                var attempt1Output = BuildCombinedCommandOutput(cmdResult);
+                combinedOutput = attempt1Output;
+                finalAttemptOutput = attempt1Output;
+                parsedOutcomes = ParseStructuredOutcomes(format, resultsHostDir, workspacePath, attempt1Output, testRunStartedUtc, instance.InstanceId);
+
+                if (isCSharp &&
+                    cmdResult.ExitCode != 0 &&
+                    parsedOutcomes.Count == 0 &&
+                    BenchmarkTestCommandResolver.HasMsBuildNodeCrashSignature(attempt1Output))
+                {
+                    _logger.LogWarning(
+                        "MSBuild child-node crash detected during verification of '{InstanceId}'; retrying once with single-node (-m:1) concurrency and node reuse disabled.",
+                        instance.InstanceId);
+
+                    PrepareResultsDirectory(resultsHostDir);
+                    var retryCommand = BenchmarkTestCommandResolver.ApplyMsBuildSingleNodeFlag(effectiveCommand);
+                    var retryEnvVars = new Dictionary<string, string>
+                    {
+                        [BenchmarkDefaults.DotNetRollForwardEnvVar] = BenchmarkDefaults.DotNetRollForwardLatestMajor,
+                        [BenchmarkDefaults.DotNetCliDoNotUseMsBuildServerEnvVar] = BenchmarkDefaults.EnvFlagEnabled,
+                        [BenchmarkDefaults.MsBuildDisableNodeReuseEnvVar] = BenchmarkDefaults.EnvFlagEnabled
+                    };
+
+                    testRunStartedUtc = DateTime.UtcNow;
+                    cmdResult = await env.ExecuteAsync(
+                        retryCommand,
+                        workingDirectory: executionMode == ExecutionMode.ContainerSandbox ? null : workspacePath,
+                        timeoutSeconds: BenchmarkDefaults.DefaultVerificationTimeoutSeconds,
+                        environmentVariables: retryEnvVars,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+
+                    var attempt2Output = BuildCombinedCommandOutput(cmdResult);
+                    finalAttemptOutput = attempt2Output;
+                    combinedOutput =
+                        $"[Attempt 1 - MSBuild node crash detected, retrying with -m:1]\n{attempt1Output}\n\n" +
+                        $"[Attempt 2 - Single-node retry (-m:1)]\n{attempt2Output}";
+                    parsedOutcomes = ParseStructuredOutcomes(format, resultsHostDir, workspacePath, attempt2Output, testRunStartedUtc, instance.InstanceId);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -331,8 +378,27 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             }
         }
 
-        var combinedOutput = BuildCombinedCommandOutput(cmdResult);
-        var parsedOutcomes = ParseStructuredOutcomes(format, resultsHostDir, workspacePath, combinedOutput, testRunStartedUtc, instance.InstanceId);
+        if (isCSharp &&
+            cmdResult.ExitCode != 0 &&
+            parsedOutcomes.Count == 0 &&
+            BenchmarkTestCommandResolver.HasMsBuildNodeCrashSignature(finalAttemptOutput))
+        {
+            var tail = FormatCommandOutputTailForError(finalAttemptOutput);
+            var infraErrorMessage = string.IsNullOrEmpty(tail)
+                ? $"Verification infrastructure error: MSBuild child-node crash persisted after single-node (-m:1) retry (exit code {cmdResult.ExitCode})."
+                : $"Verification infrastructure error: MSBuild child-node crash persisted after single-node (-m:1) retry (exit code {cmdResult.ExitCode}). Output tail: {tail}";
+            return new BenchmarkVerificationResult
+            {
+                Passed = false,
+                IsInfrastructureError = true,
+                DeterministicScore = 0.0,
+                FailToPassTotal = instance.FailToPass.Count,
+                PassToPassTotal = instance.PassToPass.Count,
+                FailedTests = instance.FailToPass.Concat(instance.PassToPass).ToList(),
+                VerificationLog = combinedOutput,
+                ErrorMessage = infraErrorMessage
+            };
+        }
 
         if (instance.FailToPass.Count == 0 && instance.PassToPass.Count == 0)
         {
@@ -465,6 +531,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         var (anchorScore, missingAnchors) = EvaluateExpectedFindings(instance.ExpectedFindings, combinedCorpus);
 
         bool minorFixTestsPassed = true;
+        bool isInfrastructureError = false;
         int f2pPassed = 0, f2pTotal = 0;
         int p2pPassed = 0, p2pTotal = 0;
         IReadOnlyList<string> failedTests = Array.Empty<string>();
@@ -516,6 +583,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 {
                     var testRes = await ExecuteTestSuiteAsync(instance, workspace.WorkspacePath, executionMode, failToPassOnly: false, cancellationToken).ConfigureAwait(false);
                     minorFixTestsPassed = testRes.Passed;
+                    isInfrastructureError = testRes.IsInfrastructureError;
                     f2pPassed = testRes.FailToPassPassed;
                     f2pTotal = testRes.FailToPassTotal;
                     p2pPassed = testRes.PassToPassPassed;
@@ -528,20 +596,23 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         }
 
         double verdictComponent = verdictMatched ? 1.0 : 0.0;
-        double deterministicScore = instance.ExpectedFindings.Count > 0
-            ? (ReviewVerdictWeightWithFindings * verdictComponent) + (ReviewFindingsWeight * anchorScore)
-            : verdictComponent;
-        if (!minorFixTestsPassed)
+        double deterministicScore = isInfrastructureError
+            ? 0.0
+            : (instance.ExpectedFindings.Count > 0
+                ? (ReviewVerdictWeightWithFindings * verdictComponent) + (ReviewFindingsWeight * anchorScore)
+                : verdictComponent);
+        if (!isInfrastructureError && !minorFixTestsPassed)
         {
             deterministicScore *= 0.5;
         }
 
-        bool passed = verdictMatched &&
+        bool passed = !isInfrastructureError &&
+                      verdictMatched &&
                       (instance.ExpectedFindings.Count == 0 || anchorScore >= MinimumAnchorCoverageForPass) &&
                       minorFixTestsPassed;
 
         BenchmarkJudgeResult? judgeResult = null;
-        if (judgeConfig != null)
+        if (!isInfrastructureError && judgeConfig != null)
         {
             judgeResult = await _llmJudge.EvaluateCodeReviewAsync(instance, outcome, judgeConfig, cancellationToken).ConfigureAwait(false);
         }
@@ -557,6 +628,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         return new BenchmarkVerificationResult
         {
             Passed = passed,
+            IsInfrastructureError = isInfrastructureError,
             ActualVerdict = actualVerdict.ToString(),
             DeterministicScore = deterministicScore,
             FailToPassPassed = f2pPassed,

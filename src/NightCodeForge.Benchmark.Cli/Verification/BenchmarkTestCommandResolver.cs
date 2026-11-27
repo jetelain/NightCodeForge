@@ -125,6 +125,20 @@ internal static partial class BenchmarkTestCommandResolver
     [GeneratedRegex(@"(?:^|[\s;&|()])pnpm(?:\s|$|[;&|)])", RegexOptions.CultureInvariant)]
     private static partial Regex PnpmCommandTokenRegex();
 
+    [GeneratedRegex(@"^[A-Za-z_][A-Za-z0-9_]*=", RegexOptions.CultureInvariant)]
+    private static partial Regex ShellEnvAssignmentPrefixRegex();
+
+    [GeneratedRegex(@"^(?:\d*>>?&?|\d*<&?|\d*>&\d*|&>>?)", RegexOptions.CultureInvariant)]
+    private static partial Regex ShellRedirectionTokenRegex();
+
+    private static readonly HashSet<string> MsBuildSingleNodeFlags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "-m:1",
+        "/m:1",
+        "-maxcpucount:1",
+        "/maxcpucount:1"
+    };
+
     internal static string ResolveTestCommand(
         BenchmarkInstance instance,
         string workspacePath,
@@ -196,7 +210,8 @@ internal static partial class BenchmarkTestCommandResolver
             var custom = StripVerifierReportingFlags(instance.CustomTestCommand.Trim(), normalizedLanguage);
             if (string.Equals(normalizedLanguage, BenchmarkLanguages.CSharp, StringComparison.OrdinalIgnoreCase))
             {
-                return ApplyDiscoveredDotNetTargetsToCustomCommand(custom, workspacePath, executionMode);
+                var withTargets = ApplyDiscoveredDotNetTargetsToCustomCommand(custom, workspacePath, executionMode);
+                return EnsureDotNetTestNoBuildFlag(withTargets);
             }
 
             if (normalizedLanguage is BenchmarkLanguages.TypeScript or BenchmarkLanguages.JavaScript)
@@ -1475,6 +1490,222 @@ internal static partial class BenchmarkTestCommandResolver
         FlushCurrent();
         return tokens;
     }
+
+    internal static bool HasMsBuildNodeCrashSignature(string? output) =>
+        !string.IsNullOrWhiteSpace(output) &&
+        (output.Contains(BenchmarkDefaults.MsBuildNodeCrashErrorCode, StringComparison.OrdinalIgnoreCase) ||
+         output.Contains(BenchmarkDefaults.MsBuildNodeCommunicationErrorCode, StringComparison.OrdinalIgnoreCase));
+
+    internal static string ApplyMsBuildSingleNodeFlag(string command) =>
+        InjectFlagIntoDotNetSubcommands(
+            command,
+            sub => string.Equals(sub, "build", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(sub, "test", StringComparison.OrdinalIgnoreCase),
+            prefixTokens => prefixTokens.Any(MsBuildSingleNodeFlags.Contains),
+            "-m:1");
+
+    internal static string EnsureDotNetTestNoBuildFlag(string command) =>
+        InjectFlagIntoDotNetSubcommands(
+            command,
+            sub => string.Equals(sub, "test", StringComparison.OrdinalIgnoreCase),
+            prefixTokens => prefixTokens.Any(t => string.Equals(t, "--no-build", StringComparison.OrdinalIgnoreCase)),
+            "--no-build");
+
+    private static string InjectFlagIntoDotNetSubcommands(
+        string command,
+        Func<string, bool> matchesSubcommand,
+        Func<IReadOnlyList<string>, bool> segmentAlreadyHasFlag,
+        string flagToInsert)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return command;
+        }
+
+        var tokens = ExpandSubshellBoundaryTokens(TokenizeShellCommand(command));
+        if (tokens.Count == 0)
+        {
+            return command;
+        }
+
+        var output = new List<string>(tokens.Count + 4);
+        var segment = new List<string>();
+        bool modified = false;
+
+        void FlushSegment()
+        {
+            if (segment.Count == 0)
+            {
+                return;
+            }
+
+            int cmdIdx = 0;
+            int envParenDepth = 0;
+            while (cmdIdx < segment.Count &&
+                   (envParenDepth > 0 || ShellEnvAssignmentPrefixRegex().IsMatch(segment[cmdIdx])))
+            {
+                var (delta, _) = ScanUnquotedParens(segment[cmdIdx]);
+                envParenDepth = Math.Max(0, envParenDepth + delta);
+                cmdIdx++;
+            }
+
+            if (cmdIdx + 1 < segment.Count &&
+                string.Equals(segment[cmdIdx], "dotnet", StringComparison.OrdinalIgnoreCase) &&
+                matchesSubcommand(segment[cmdIdx + 1]))
+            {
+                int insertIdx = segment.Count;
+                for (int j = cmdIdx + 2; j < segment.Count; j++)
+                {
+                    if (string.Equals(segment[j], "--", StringComparison.Ordinal) ||
+                        IsShellRedirectionToken(segment[j]))
+                    {
+                        insertIdx = j;
+                        break;
+                    }
+                }
+
+                var prefix = segment.GetRange(0, insertIdx);
+                if (!segmentAlreadyHasFlag(prefix))
+                {
+                    segment.Insert(insertIdx, flagToInsert);
+                    modified = true;
+                }
+            }
+
+            output.AddRange(segment);
+            segment.Clear();
+        }
+
+        foreach (var token in tokens)
+        {
+            if (IsSegmentBoundaryToken(token))
+            {
+                FlushSegment();
+                output.Add(token);
+            }
+            else
+            {
+                segment.Add(token);
+            }
+        }
+
+        FlushSegment();
+        return modified ? string.Join(" ", output) : command;
+    }
+
+    private static List<string> ExpandSubshellBoundaryTokens(IReadOnlyList<string> tokens)
+    {
+        var expanded = new List<string>(tokens.Count);
+        int embeddedParenDepth = 0;
+
+        foreach (var token in tokens)
+        {
+            if (token.Length == 0)
+            {
+                continue;
+            }
+
+            var remaining = token;
+            while (embeddedParenDepth == 0 && remaining.Length > 0 && remaining[0] == '(')
+            {
+                expanded.Add("(");
+                remaining = remaining[1..];
+            }
+
+            var trailingParens = 0;
+            while (remaining.Length > 0)
+            {
+                var (netDelta, endsWithUnquotedCloseParen) = ScanUnquotedParens(remaining);
+                if (!endsWithUnquotedCloseParen || embeddedParenDepth + netDelta >= 0)
+                {
+                    break;
+                }
+
+                trailingParens++;
+                remaining = remaining[..^1];
+            }
+
+            if (remaining.Length > 0)
+            {
+                var (finalDelta, _) = ScanUnquotedParens(remaining);
+                embeddedParenDepth = Math.Max(0, embeddedParenDepth + finalDelta);
+                expanded.Add(remaining);
+            }
+
+            for (int i = 0; i < trailingParens; i++)
+            {
+                expanded.Add(")");
+            }
+        }
+
+        return expanded;
+    }
+
+    private static (int NetDelta, bool EndsWithUnquotedCloseParen) ScanUnquotedParens(string token)
+    {
+        bool inSingleQuote = false;
+        bool inDoubleQuote = false;
+        bool escaped = false;
+        int depth = 0;
+        bool lastWasUnquotedCloseParen = false;
+
+        foreach (char ch in token)
+        {
+            lastWasUnquotedCloseParen = false;
+
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (inSingleQuote)
+            {
+                if (ch == '\'') inSingleQuote = false;
+                continue;
+            }
+
+            if (ch == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (inDoubleQuote)
+            {
+                if (ch == '"') inDoubleQuote = false;
+                continue;
+            }
+
+            if (ch == '\'')
+            {
+                inSingleQuote = true;
+            }
+            else if (ch == '"')
+            {
+                inDoubleQuote = true;
+            }
+            else if (ch == '(')
+            {
+                depth++;
+            }
+            else if (ch == ')')
+            {
+                depth--;
+                lastWasUnquotedCloseParen = true;
+            }
+        }
+
+        return (depth, lastWasUnquotedCloseParen);
+    }
+
+    private static bool IsShellRedirectionToken(string token) =>
+        token.Length > 0 &&
+        token[0] is not '\'' and not '"' &&
+        ShellRedirectionTokenRegex().IsMatch(token);
+
+    private static bool IsSegmentBoundaryToken(string token) =>
+        token is "&&" or "||" or ";" or "|" or "(" or ")" or "{" or "}";
 
     internal static string QuotePathArgument(string value)
     {

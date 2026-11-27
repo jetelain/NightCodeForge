@@ -476,10 +476,11 @@ public abstract class ExternalProcessAgentHarnessBase : IAgentHarness
         var projectConfig = context.ProjectConfig ?? CodeStackPresets.ResolveConfig(localWorkspaceRoot, null);
         var guidelines = _agentsMdService.FormatExecutionGuidelines(projectConfig, context.Workspace);
 
+        var renderedStageDirective = StageDirectiveRenderer.Render(context.StageDirective, Array.Empty<string>());
         var basePromptText = !string.IsNullOrEmpty(context.BootstrapPrompt)
             ? context.BootstrapPrompt
-            : (!string.IsNullOrWhiteSpace(context.StageDirective)
-                ? $"[Stage Directive]: {context.StageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
+            : (!string.IsNullOrWhiteSpace(renderedStageDirective)
+                ? $"[Stage Directive]: {renderedStageDirective}\n\n{context.ForgeTask.Title}\n{context.ForgeTask.Description}"
                 : context.ForgeTask.Description);
 
         if (ConversationHistorySerializer.IsSerializedHistory(context.SerializedStateJson))

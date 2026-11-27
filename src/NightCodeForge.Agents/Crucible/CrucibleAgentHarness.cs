@@ -43,6 +43,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
     private const string UnresolvedImageRefPropertyKey = "vision.unresolved_image_ref";
 
+    private const string ReviewDirectiveFallbackClause =
+        "conclude with <request_changes>[feedback]</request_changes>";
+
+    private const string ReviewDirectiveToolOnlyClause =
+        "invoke the 'request_changes(feedback, reason)' tool immediately to reject";
+
     private readonly ICanonicalToolsetFactory _toolsetFactory;
     private readonly IAgentWorkspaceContextService _workspaceContext;
     private readonly IHarnessAgentFactory _agentFactory;
@@ -288,9 +294,12 @@ public partial class CrucibleAgentHarness : IAgentHarness
 
         // 5. Build 4-Layer Stabilized Prompt Prefix
         var prefixStabilizer = new PromptPrefixStabilizer();
+        bool hasRequestChangesTool = permittedTools.Any(t =>
+            string.Equals(t, CanonicalToolNames.RequestChanges, StringComparison.OrdinalIgnoreCase));
         var stageDirective = !string.IsNullOrWhiteSpace(context.StageDirective)
             ? context.StageDirective
-            : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId));
+            : WorkspacePromptResolver.ResolveStageDirective(workspacePath, context.StageId, GetStageDirective(harnessConfig, context.StageId, hasRequestChangesTool));
+        stageDirective = StageDirectiveRenderer.Render(stageDirective, permittedTools);
         var taskDocPath = context.TaskMarkdownPath ?? context.PipelineContext?.DataBag.Get<string>(PipelineDataBagKeys.TaskMarkdownPath);
         var taskDate = _timeProvider.GetUtcNow().ToString("yyyy-MM-dd");
         var taskScope = BuildTaskScope(context.ForgeTask, taskDocPath, taskDate, context.StageId);
@@ -1840,57 +1849,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
         CrucibleHarnessConfig config,
         AgentProfile profile,
         AgentMode requiredMode,
-        bool isTriageSession = false)
-    {
-        if (isTriageSession || requiredMode == AgentMode.ReadOnly || profile.Mode == AgentMode.ReadOnly)
-        {
-            var defaultBaseline = isTriageSession ? DefaultAgentTools.Triage : DefaultAgentTools.ReadOnly;
-            var baselineAllowed = (profile.PermittedTools != null && profile.PermittedTools.Count > 0)
-                ? profile.PermittedTools
-                : defaultBaseline;
+        bool isTriageSession = false) =>
+        StageDirectiveRenderer.ResolveEffectivePermittedTools(
+            StandardHarnessIds.Crucible,
+            profile,
+            requiredMode,
+            config.AllowedTools,
+            isTriageSession);
 
-            if (isTriageSession || (requiredMode == AgentMode.ReadOnly && profile.Mode != AgentMode.ReadOnly))
-            {
-                var allowedSet = new HashSet<string>(defaultBaseline, StringComparer.OrdinalIgnoreCase);
-                var filtered = baselineAllowed
-                    .Where(t => !string.IsNullOrWhiteSpace(t) && allowedSet.Contains(t.Trim()))
-                    .Select(t => t.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                baselineAllowed = filtered.Count > 0 ? filtered : defaultBaseline;
-            }
-
-            if (config.AllowedTools != null && config.AllowedTools.Count > 0)
-            {
-                var baselineSet = new HashSet<string>(baselineAllowed, StringComparer.OrdinalIgnoreCase);
-                var intersected = config.AllowedTools
-                    .Where(t => !string.IsNullOrWhiteSpace(t) && baselineSet.Contains(t.Trim()))
-                    .Select(t => t.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                return intersected.Count > 0 ? intersected : baselineAllowed;
-            }
-
-            return baselineAllowed;
-        }
-
-        // 1. Config override from database HarnessConfigurationJson
-        if (config.AllowedTools != null && config.AllowedTools.Count > 0)
-        {
-            return config.AllowedTools;
-        }
-
-        // 2. Profile whitelist
-        if (profile.PermittedTools != null && profile.PermittedTools.Count > 0)
-        {
-            return profile.PermittedTools;
-        }
-
-        // 3. Modes: ReadOnly, Review, Full
-        return DefaultAgentTools.GetTools(requiredMode);
-    }
-
-    private static string GetStageDirective(CrucibleHarnessConfig config, string stageId)
+    private static string GetStageDirective(CrucibleHarnessConfig config, string stageId, bool hasRequestChangesTool = false)
     {
         if (config.StageDirectives.TryGetValue(stageId, out var customDirective) && !string.IsNullOrWhiteSpace(customDirective))
         {
@@ -1906,7 +1873,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
             StandardStageIds.Implementation or "stage-2" =>
                 BuildImplementationDirective(),
             StandardStageIds.CodeReviewAndFix or "stage-3" =>
-                BuildReviewDirective(),
+                BuildReviewDirective(hasRequestChangesTool),
             _ => "Execute assigned engineering tasks diligently using canonical tools."
         };
     }
@@ -1915,7 +1882,15 @@ public partial class CrucibleAgentHarness : IAgentHarness
         "You are a Staff Software Architect & Requirements Investigator. 1. Thoroughly investigate the task requirements and inspect the codebase using 'read' and 'bash'. 2. BACKLOG DEPENDENCY AUDIT: Inspect the <existing_workspace_tasks> list (top active tasks by priority). Determine whether this task depends on any unmerged tasks (e.g. shared database migrations, missing models, interface definitions). If a prerequisite is found, record it in the YAML frontmatter under 'depends_on: [ ... ]' (using prerequisite task ID or title) and document the architectural rationale under '## Dependencies' in the markdown body. 3. CIRCULAR DEPENDENCY PREVENTION: Never introduce a circular dependency (e.g. A depends on B when B already depends on A). Cycles are rejected immediately by the edit tool. If an edit fails with a circular dependency error, re-check your assumptions and resolve the link. 4. WORKFLOW SUSPENSION AWARENESS: If you declare a dependency on a task that is not yet merged/closed, this task will be suspended and reset to 'Open' until the prerequisite is completed, after which the full workflow will rerun from Stage 1 with the updated code. 5. MANDATORY FILE EDIT: Edit the task specification document on disk in docs/tasks/ using 'edit' or 'write' with updated frontmatter (including 'depends_on'), approved architecture, affected files, technical plan, dependencies, and acceptance criteria. Your disk changes will be read back upon stage completion to update the task specification. 6. Gather all questions and ambiguities into a single 'ask' call using the question list, expecting all answers at once; follow-up asks are permitted only for newly discovered blockers. CRITICAL: Never output questions as conversational plain text. If you require answers from the maintainer, you MUST invoke the 'ask' tool. Plain text questions cannot be processed and will trigger a stage failure. Do not guess. 7. Do not write production code.";
 
     public static string BuildReviewDirective() =>
-        "You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/tasks/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major tasks or missing features: invoke 'request_changes' or conclude with <request_changes>[feedback]</request_changes>. For every defect you find, instruct the implementation agent to author a corresponding automated test verifying the fix.";
+        BuildReviewDirective(hasRequestChangesTool: false);
+
+    public static string BuildReviewDirective(bool hasRequestChangesTool)
+    {
+        var rejectionInstruction = hasRequestChangesTool
+            ? ReviewDirectiveToolOnlyClause
+            : ReviewDirectiveFallbackClause;
+        return $"You are a Principal Code Reviewer and Quality Gatekeeper. Review the git diff against the base branch. Compare against the specification in docs/tasks/ and the implementation claims. Apply precision polish directly using 'edit'. Rejection is strictly reserved for major tasks or missing features: {rejectionInstruction}. For every defect you find, instruct the implementation agent to author a corresponding automated test verifying the fix.";
+    }
 
     public static string BuildImplementationDirective() =>
         "You are a Senior Software Engineer & TDD Practitioner. Implement clean, robust code according to the task specification in docs/tasks/ and the approved plan. Keep blast radius minimal. Run builds and tests incrementally with bash. Fix all compiler errors and test failures. If breaking blockers arise, call 'ask'. If editing docs/tasks/, preserve the YAML frontmatter intact without modifying the id or status fields. CRITICAL: You are an autonomous coding agent operating in a multi-step pipeline. Do NOT write monologues about what you plan to do next and stop; execute your planned actions immediately via tools until your task is 100% implemented and verified.";

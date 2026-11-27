@@ -1,5 +1,6 @@
 using NightCodeForge.Agents.Context;
 using NightCodeForge.Core.Domain;
+using NightCodeForge.Core.Workflow;
 
 namespace NightCodeForge.Agents.Tests;
 
@@ -108,6 +109,48 @@ public class AgentsMdServiceTests
         finally
         {
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void Step1164_FormatExecutionGuidelines_StripsNoIncremental_AndOmitsBuildCommandWhenNullOrEmpty()
+    {
+        // Deterministic stage defaults MUST keep --no-incremental intact.
+        Assert.Equal("dotnet build --no-incremental", DeterministicStageConstants.DefaultBuildCommand);
+        Assert.Equal("dotnet build --no-incremental", CodeStackPresets.DotNet.BuildCommand);
+
+        Assert.Equal("dotnet build", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental"));
+        Assert.Equal("dotnet build src/App.sln", AgentsMdService.StripNoIncrementalFlag("dotnet build src/App.sln --no-incremental"));
+        Assert.Equal("dotnet build && dotnet test", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental&& dotnet test"));
+        Assert.Equal("dotnet build ; dotnet test", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental; dotnet test"));
+        Assert.Equal("dotnet build --no-incremental-custom", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental-custom"));
+
+        var service = new AgentsMdService();
+
+        var dotnetGuidelines = service.FormatExecutionGuidelines(
+            new WorkspaceProjectConfig
+            {
+                CodeStack = CodeStack.DotNet,
+                BuildCommand = "dotnet build src/App.sln --no-incremental",
+                TestCommand = "dotnet test src/App.sln --no-build"
+            },
+            new Workspace());
+        Assert.Contains("Build Command: `dotnet build src/App.sln`", dotnetGuidelines, StringComparison.Ordinal);
+        Assert.DoesNotContain("--no-incremental", dotnetGuidelines, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var emptyBuild in new string?[] { null, "", "   ", "--no-incremental" })
+        {
+            var nodeGuidelines = service.FormatExecutionGuidelines(
+                new WorkspaceProjectConfig
+                {
+                    CodeStack = CodeStack.Node,
+                    BuildCommand = emptyBuild,
+                    TestCommand = "npx vitest run -c vitest.unit.config.ts"
+                },
+                new Workspace());
+            Assert.DoesNotContain("Build Command:", nodeGuidelines, StringComparison.Ordinal);
+            Assert.DoesNotContain("Incremental Compilation Invariant", nodeGuidelines, StringComparison.Ordinal);
+            Assert.Contains("Test Command: `npx vitest run -c vitest.unit.config.ts`", nodeGuidelines, StringComparison.Ordinal);
         }
     }
 }

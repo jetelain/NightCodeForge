@@ -1581,7 +1581,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
 
         Assert.True(capturedConfigs.TryGetValue(wksCs, out var csCfg) && csCfg != null);
         Assert.Equal(CodeStack.DotNet, csCfg.CodeStack);
-        Assert.Equal(CodeStackPresets.DotNet.BuildCommand, csCfg.BuildCommand);
+        Assert.Equal("dotnet build", csCfg.BuildCommand);
         Assert.Equal("dotnet test --no-build", csCfg.TestCommand);
         Assert.DoesNotContain("--logger trx", csCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(".ncf-bench-results", csCfg.TestCommand, StringComparison.OrdinalIgnoreCase);
@@ -1734,5 +1734,71 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.NotNull(capturedPrompt);
         Assert.Contains("Werkzeug<3.0", capturedPrompt);
         Assert.Contains("PIP_CONSTRAINT=/tmp/ncf-pip-constraints.txt", capturedPrompt);
+    }
+
+    [Fact]
+    public async Task Step1164_RunAsync_ClassifiesVerificationInfrastructureErrorAsErrorAndPersistsLog()
+    {
+        var datasetPath = Path.Combine(_tempDir, "infra-err.jsonl");
+        await File.WriteAllTextAsync(datasetPath,
+            """{"instance_id":"polly-1852","category":"Implementation","language":"csharp","repo":"App-vNext/Polly","base_commit":"c1","problem_statement":"Fix","fail_to_pass":["T1"]}""");
+
+        var outDir = Path.Combine(_tempDir, "out-infra-err");
+        var wks = Path.Combine(_tempDir, "wks-infra-err");
+        Directory.CreateDirectory(wks);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.Implementation, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle { InstanceId = "polly-1852", Category = BenchmarkProblemCategory.Implementation, WorkspacePath = wks, BaseCommit = "c1" });
+        workspaceMgr.Setup(m => m.ExtractPatchAsync(wks, "c1", It.IsAny<CancellationToken>())).ReturnsAsync("diff --git a/A.cs b/A.cs\n+fix");
+
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AgentRunResult.Completed(new AgentRunMetrics(50, 10, 10, 20), summary: "Ok"));
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        const string infraLog = "MSBUILD : error MSB4166: Child node \"2\" exited prematurely.";
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                IsInfrastructureError = true,
+                DeterministicScore = 0.0,
+                VerificationLog = infraLog,
+                ErrorMessage = "Verification infrastructure error: MSBuild child-node crash persisted after single-node (-m:1) retry (exit code 1)."
+            });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "infra-err",
+            DatasetPath = datasetPath,
+            OutputDirectory = outDir,
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand-1", ModelName = "m1", MaxTurns = 1 }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Error, result.Outcome);
+        Assert.NotNull(result.VerificationLogPath);
+        Assert.True(File.Exists(result.VerificationLogPath));
+        Assert.Equal(infraLog, await File.ReadAllTextAsync(result.VerificationLogPath!));
+        Assert.StartsWith("Verification infrastructure error:", result.ErrorMessage);
     }
 }

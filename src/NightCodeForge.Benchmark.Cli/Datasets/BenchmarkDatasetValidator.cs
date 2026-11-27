@@ -288,6 +288,11 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             failToPassOnly: instance.FailToPass.Count > 0,
             cancellationToken).ConfigureAwait(false);
 
+        if (baseResult.IsInfrastructureError)
+        {
+            return (false, null, $"Pre-flight BaseCommit verification hit an infrastructure error: {baseResult.ErrorMessage ?? "MSBuild child-node crash"}");
+        }
+
         if (instance.FailToPass.Count > 0)
         {
             if (baseResult.FailToPassPassed > 0)

@@ -28,6 +28,16 @@ public static class DefaultBootstrapPromptBuilder
         var effectiveDirective = !string.IsNullOrWhiteSpace(stageDirective)
             ? stageDirective
             : stage.StageDirective;
+        if (StageDirectiveRenderer.ContainsTemplateExpression(effectiveDirective))
+        {
+            var isTriageStage = string.Equals(stage.StageId, StandardStageIds.Triage, StringComparison.OrdinalIgnoreCase);
+            var effectiveTools = StageDirectiveRenderer.ResolveEffectivePermittedTools(
+                context.CurrentProfile?.HarnessId,
+                context.CurrentProfile,
+                stage.RequiredMode,
+                isTriageStage);
+            effectiveDirective = StageDirectiveRenderer.Render(effectiveDirective, effectiveTools, renderer);
+        }
 
         var provider = timeProvider ?? TimeProvider.System;
         var effectiveDate = !string.IsNullOrWhiteSpace(currentDate)

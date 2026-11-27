@@ -45,6 +45,14 @@ public class ContainerExecutorOptions
     public const string CargoHomeEnvVarName = "CARGO_HOME";
     public const string ContainerCargoCachePath = "/cache/cargo";
     public const string DefaultCargoCachePath = "~/.cache/ncf-cargo";
+    public const string DotNetRollForwardEnvVar = "DOTNET_ROLL_FORWARD";
+    public const string DotNetRollForwardLatestMajor = "LatestMajor";
+    public const string NpmCacheEnvVarName = "npm_config_cache";
+    public const string PnpmStoreEnvVarName = "npm_config_store_dir";
+    public const string ContainerNpmCachePath = "/cache/npm";
+    public const string ContainerPnpmStorePath = "/cache/pnpm";
+    public const string FallbackNpmCachePath = "/tmp/ncf-npm-cache";
+    public const string FallbackPnpmStorePath = "/tmp/ncf-pnpm-store";
     public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
     public const string HostAgyContainerDirectory = "/opt/ncf-acp";
     public const string HostAgyContainerBinaryPath = "/opt/ncf-acp/agy";
@@ -190,8 +198,8 @@ ENV CARGO_HOME=/cache/cargo
     public static readonly IReadOnlyList<KeyValuePair<string, string>> PackageCacheEnvironment =
     [
         new("NUGET_PACKAGES", "/cache/nuget"),
-        new("npm_config_cache", "/cache/npm"),
-        new("npm_config_store_dir", "/cache/pnpm"),
+        new(NpmCacheEnvVarName, ContainerNpmCachePath),
+        new(PnpmStoreEnvVarName, ContainerPnpmStorePath),
         new("UV_CACHE_DIR", "/cache/uv"),
         new("MAVEN_OPTS", "-Dmaven.repo.local=/cache/m2"),
         new("PLAYWRIGHT_BROWSERS_PATH", "/cache/ms-playwright"),
