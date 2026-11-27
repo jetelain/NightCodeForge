@@ -496,6 +496,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         AgentRunMetrics CurrentMetrics()
         {
             var (effPrompt, effCompletion) = GetEffectiveTokenTotals();
+            long inferenceDurationMs = CrucibleConversationCoordinator.ComputeTotalInferenceDurationMs(tracingClient, harnessOptions);
             var delta = conversationState.LastUsageDelta;
             if (delta != null)
             {
@@ -511,10 +512,16 @@ public partial class CrucibleAgentHarness : IAgentHarness
                     ActualCloudCost: delta.ActualCloudCost,
                     ElectricityCost: delta.ElectricityCost,
                     CloudSavings: delta.CloudSavings,
-                    Currency: delta.Currency);
+                    Currency: delta.Currency,
+                    InferenceDurationMs: inferenceDurationMs);
             }
 
-            return new(stopwatch.ElapsedMilliseconds, effPrompt, effCompletion, effPrompt + effCompletion);
+            return new(
+                stopwatch.ElapsedMilliseconds,
+                effPrompt,
+                effCompletion,
+                effPrompt + effCompletion,
+                InferenceDurationMs: inferenceDurationMs);
         }
 
         async Task<string?> SaveAsync(AgentRunStatus status, string? summary, CancellationToken ct)

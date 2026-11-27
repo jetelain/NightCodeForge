@@ -22,6 +22,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
 {
     private const double ReviewVerdictWeightWithFindings = 0.6;
     private const double ReviewFindingsWeight = 0.4;
+    private const double WrongVerdictAnchorWeight = 0.5;
     private const double MinimumAnchorCoverageForPass = 0.5;
     private const double AdjacentEscalatedDifficultyCredit = 0.75;
     private const int MinimumFileStemCorroborationLength = 5;
@@ -168,6 +169,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
                 return new BenchmarkVerificationResult
                 {
                     Passed = false,
+                    IsPatchApplicationError = true,
                     DeterministicScore = 0.0,
                     FailToPassTotal = instance.FailToPass.Count,
                     PassToPassTotal = instance.PassToPass.Count,
@@ -187,6 +189,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             return new BenchmarkVerificationResult
             {
                 Passed = false,
+                IsPatchApplicationError = true,
                 DeterministicScore = 0.0,
                 FailToPassTotal = instance.FailToPass.Count,
                 PassToPassTotal = instance.PassToPass.Count,
@@ -439,10 +442,12 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         }
 
         var eval = TestAssertionEvaluator.Evaluate(instance.FailToPass, instance.PassToPass, parsedOutcomes);
-        int totalAssertions = eval.FailToPassTotal + eval.PassToPassTotal;
-        double score = totalAssertions > 0
-            ? (double)(eval.FailToPassPassed + eval.PassToPassPassed) / totalAssertions
-            : (cmdResult.ExitCode == 0 ? 1.0 : 0.0);
+        double score = ComputeImplementationDeterministicScore(
+            eval.FailToPassPassed,
+            eval.FailToPassTotal,
+            eval.PassToPassPassed,
+            eval.PassToPassTotal,
+            cmdResult.ExitCode);
 
         return new BenchmarkVerificationResult
         {
@@ -761,11 +766,17 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
         {
             deterministicScore = 0.0;
         }
+        else if (!verdictMatched)
+        {
+            deterministicScore = instance.ExpectedFindings.Count > 0
+                ? anchorScore * WrongVerdictAnchorWeight
+                : 0.0;
+        }
         else
         {
             var checks = new List<double>
             {
-                verdictMatched ? 1.0 : 0.0
+                1.0
             };
 
             if (actualVerdict == TaskReviewVerdict.Ready)
@@ -802,6 +813,31 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             JudgeRationale = judgeResult?.Rationale,
             ErrorMessage = passed ? null : string.Join(" ", failureReasons)
         };
+    }
+
+    internal static double ComputeImplementationDeterministicScore(
+        int failToPassPassed,
+        int failToPassTotal,
+        int passToPassPassed,
+        int passToPassTotal,
+        int exitCode)
+    {
+        if (failToPassTotal > 0 && passToPassTotal > 0)
+        {
+            return ((double)failToPassPassed / failToPassTotal) * ((double)passToPassPassed / passToPassTotal);
+        }
+
+        if (failToPassTotal > 0)
+        {
+            return (double)failToPassPassed / failToPassTotal;
+        }
+
+        if (passToPassTotal > 0)
+        {
+            return (double)passToPassPassed / passToPassTotal;
+        }
+
+        return exitCode == 0 ? 1.0 : 0.0;
     }
 
     internal static CodeReviewVerdict ClassifyCodeReviewVerdict(BenchmarkAgentOutcome outcome)

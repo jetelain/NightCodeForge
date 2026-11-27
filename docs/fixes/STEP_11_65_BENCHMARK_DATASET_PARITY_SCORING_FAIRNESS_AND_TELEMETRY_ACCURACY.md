@@ -2,7 +2,7 @@
 
 > **Parent Plan:** [docs/fixes/README.md](README.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Agents`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Core.Tests`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Benchmark.Cli.Tests`, `benchmarks/datasets/`  
 > **Dependencies:** [Step 11.61](STEP_11_61_BENCHMARK_SOLUTION_DISCOVERY_NODE_PROVISIONING_AND_REVIEW_GRADING.md), [Step 11.62](STEP_11_62_BENCHMARK_CUSTOM_IMAGE_ABI_RUSTUP_MOCHA_AND_REVIEW_GRADING.md), [Step 11.63](STEP_11_63_BENCHMARK_DATASET_CURATION_DEPENDENCY_PINNING_AND_HYGIENE.md), [Step 11.64](STEP_11_64_CONTAINER_SHELL_FRAMING_ENV_PARITY_MSBUILD_RESILIENCE_AND_AGENT_HYGIENE.md), `BenchmarkVerifier`, `BenchmarkDatasetValidator`, `BenchmarkSummaryAggregator`, `BenchmarkReportFormatter`, `CrucibleBenchmarkRunner`, `IBenchmarkProvenanceProvider`, `BenchmarkProvenanceProvider`, `ThinkingAndActivityTracingChatClient`, `InMemoryCrucibleConversationCoordinator`, `CrucibleAgentHarness`, `AgentRunMetrics`, `StandardWorkflowDefinitions`, `CuratedDatasetsValidationTests`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
@@ -73,9 +73,9 @@ Analysis of the post-Step-11.63 `v1-smoke` benchmark runs (`v1-smoke-Qwen3.8-27B
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Rebase `ncf-tr-py-001` onto a Python 3.11-compatible `psf/requests` commit and pin `"custom_container_image": "python:3.11-bookworm"` on all Python `TaskReview` entries in `v1-task-review.jsonl`, `v1-smoke.manifest.json`, and `v1-full.manifest.json`, with dataset parity unit tests across all categories.
-- [ ] Add disjoint, bug-triggering `test_patch` + partitioned `fail_to_pass` / `pass_to_pass` assertions to every `MinorFix` entry in `v1-code-review.jsonl`, enforce pre-fix failure on `CandidatePatch + TestPatch` alongside post-fix pass on `GoldPatch + TestPatch` in `BenchmarkDatasetValidator.ValidateCodeReviewAsync`, and assert diff integrity and path disjointness in `CuratedDatasetsValidationTests`, with unit tests.
-- [ ] Update `BenchmarkVerifier` `DeterministicScore` calculations for `Implementation` (`f2pRate * p2pRate` when both totals > 0) and symmetric `TaskReview` verdict scoring (`<= 0.50` on mismatched verdicts), with unit tests.
-- [ ] Reclassify `ncf-tr-csharp-003` to `standard` and refine `StandardWorkflowDefinitions` `TaskReview` rubric wording so `standard` vs `difficult` tier boundaries are unambiguous, with unit tests.
-- [ ] Add `pass_to_pass` regression coverage to the `v1-smoke` and `v1-full` C# `Implementation` manifest entries where applicable, track pure-LLM `InferenceDurationMs` in `ThinkingAndActivityTracingChatClient` -> `AgentRunMetrics` for `TokensPerSecond`, distinguish host vs container/WSL `.NET` SDK versions in `BenchmarkProvenanceProvider`, re-materialize datasets, and pass live `ncf-bench dataset validate`.
-- [ ] Verify CI-scoped tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`), Acceptance tests (`dotnet test --filter "Category=Acceptance"`), and full test suite (`dotnet test`) pass.
+- [x] Rebase `ncf-tr-py-001` onto a Python 3.11-compatible `psf/requests` commit and pin `"custom_container_image": "python:3.11-bookworm"` on all Python `TaskReview` entries in `v1-task-review.jsonl`, `v1-smoke.manifest.json`, and `v1-full.manifest.json`, with dataset parity unit tests across all categories.
+- [x] Add disjoint, bug-triggering `test_patch` + partitioned `fail_to_pass` / `pass_to_pass` assertions to every `MinorFix` entry in `v1-code-review.jsonl`, enforce pre-fix failure on `CandidatePatch + TestPatch` alongside post-fix pass on `GoldPatch + TestPatch` in `BenchmarkDatasetValidator.ValidateCodeReviewAsync`, and assert diff integrity and path disjointness in `CuratedDatasetsValidationTests`, with unit tests.
+- [x] Update `BenchmarkVerifier` `DeterministicScore` calculations for `Implementation` (`f2pRate * p2pRate` when both totals > 0) and symmetric `TaskReview` verdict scoring (`<= 0.50` on mismatched verdicts), with unit tests.
+- [x] Reclassify `ncf-tr-csharp-003` to `standard` and refine `StandardWorkflowDefinitions` `TaskReview` rubric wording so `standard` vs `difficult` tier boundaries are unambiguous, with unit tests.
+- [x] Add `pass_to_pass` regression coverage to the `v1-smoke` and `v1-full` C# `Implementation` manifest entries where applicable, track pure-LLM `InferenceDurationMs` in `ThinkingAndActivityTracingChatClient` -> `AgentRunMetrics` for `TokensPerSecond`, distinguish host vs container/WSL `.NET` SDK versions in `BenchmarkProvenanceProvider`, re-materialize datasets, and pass live `ncf-bench dataset validate`.
+- [x] Verify CI-scoped tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`), Acceptance tests (`dotnet test --filter "Category=Acceptance"`), and full test suite (`dotnet test`) pass.

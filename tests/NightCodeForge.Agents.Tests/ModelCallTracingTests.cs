@@ -1,5 +1,11 @@
 using System.ComponentModel;
+using System.Diagnostics;
+using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
+using NightCodeForge.Agents.Compaction;
+using NightCodeForge.Agents.Crucible;
 using NightCodeForge.Agents.Ideation;
 using NightCodeForge.Agents.Inference;
 using NightCodeForge.Agents.Transcripts;
@@ -238,6 +244,248 @@ public class ModelCallTracingTests
             if (Directory.Exists(repo))
             {
                 try { Directory.Delete(repo, true); } catch { }
+            }
+        }
+    }
+
+    private sealed class DelayedInferenceClient(int nonStreamDelayMs, int chunkDelayMs, bool throwOnSecondChunk = false) : IChatClient
+    {
+        public async Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(nonStreamDelayMs, cancellationToken);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "done"));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> chatMessages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(chunkDelayMs, cancellationToken);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "part1");
+            await Task.Delay(chunkDelayMs, cancellationToken);
+            if (throwOnSecondChunk)
+            {
+                throw new OperationCanceledException("Simulated timeout");
+            }
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "part2");
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task Tracer_TracksPureInferenceDurationAcrossTurns_ExcludingToolExecutionAndRecordingAborts()
+    {
+        var tracer = new ThinkingAndActivityTracingChatClient(new DelayedInferenceClient(nonStreamDelayMs: 60, chunkDelayMs: 40));
+        var totalSw = Stopwatch.StartNew();
+
+        await tracer.GetResponseAsync([new ChatMessage(ChatRole.User, "turn1")], Options());
+        // Simulate slow tool execution between turns; must NOT count toward TotalInferenceDurationMs.
+        await Task.Delay(150);
+
+        await foreach (var _ in tracer.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "turn2")], Options()))
+        {
+            // Simulate slow consumer/tool work between stream yields; must NOT count toward inference duration.
+            await Task.Delay(120);
+        }
+
+        totalSw.Stop();
+        long wallClockMs = totalSw.ElapsedMilliseconds;
+        long normalInferenceMs = tracer.TotalInferenceDurationMs;
+        Assert.True(normalInferenceMs >= 90, $"Expected pure inference >= 90ms, got {normalInferenceMs}ms.");
+        Assert.True(normalInferenceMs <= wallClockMs - 200,
+            $"Expected pure inference ({normalInferenceMs}ms) to exclude ~390ms of non-inference delays (wall clock {wallClockMs}ms).");
+
+        var failingTracer = new ThinkingAndActivityTracingChatClient(new DelayedInferenceClient(nonStreamDelayMs: 10, chunkDelayMs: 45, throwOnSecondChunk: true));
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in failingTracer.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "abort")], Options()))
+            {
+            }
+        });
+        Assert.True(failingTracer.TotalInferenceDurationMs >= 50,
+            $"Expected partial streaming inference duration >= 50ms before abort, got {failingTracer.TotalInferenceDurationMs}ms.");
+    }
+
+    [Fact]
+    public async Task Tracer_ExcludesFlushStreamLatency_WhenStreamingThrows()
+    {
+        var sw = Stopwatch.StartNew();
+        var tracer = new ThinkingAndActivityTracingChatClient(
+            new DelayedInferenceClient(nonStreamDelayMs: 10, chunkDelayMs: 25, throwOnSecondChunk: true),
+            onEntry: _ => Thread.Sleep(150),
+            activityStreamer: null,
+            sessionId: "s1",
+            taskId: 1,
+            stageId: StandardStageIds.Implementation);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in tracer.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "abort")], Options()))
+            {
+            }
+        });
+        sw.Stop();
+
+        Assert.True(tracer.TotalInferenceDurationMs >= 30);
+        Assert.True(tracer.TotalInferenceDurationMs <= sw.ElapsedMilliseconds - 100,
+            $"Expected FlushStream callback delay (150ms) to be excluded from TotalInferenceDurationMs ({tracer.TotalInferenceDurationMs}ms vs wall {sw.ElapsedMilliseconds}ms).");
+    }
+
+    [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_PropagatesInferenceDurationMsIntoCapturedMetrics()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ncf-inmem-inf-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var coordinator = new InMemoryCrucibleConversationCoordinator(
+                new SessionTranscriptService(dir),
+                NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+            var capture = new InMemoryConversationCapture(Path.Combine(dir, "transcript.md"));
+            using var scope = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+
+            var tracer = new ThinkingAndActivityTracingChatClient(new DelayedInferenceClient(nonStreamDelayMs: 55, chunkDelayMs: 20));
+            await tracer.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], Options());
+
+            var context = new AgentSessionContext
+            {
+                ForgeTask = new ForgeTask { Id = 1, Title = "T", Description = "D" },
+                Workspace = new Workspace { Id = 1, Name = "W", RepositoryPath = dir },
+                Profile = new AgentProfile { Id = "p", Name = "p", ModelName = "m" },
+                StageId = StandardStageIds.Implementation,
+                StageDirective = string.Empty,
+                RequiredMode = AgentMode.Full,
+                BootstrapPrompt = "hi",
+                WorkspacePath = dir
+            };
+
+            var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+            await coordinator.SaveTranscriptAsync(
+                state,
+                new CrucibleTranscriptRequest(
+                    context,
+                    dir,
+                    [],
+                    ElapsedMs: 500,
+                    PromptTokens: 100,
+                    CompletionTokens: 50,
+                    Status: AgentRunStatus.Completed,
+                    Summary: "ok",
+                    TracingClient: tracer,
+                    HarnessOptions: null,
+                    ActiveSkills: null),
+                CancellationToken.None);
+
+            Assert.NotNull(capture.CapturedMetrics);
+            Assert.Equal(500, capture.CapturedMetrics!.DurationMs);
+            Assert.Equal(tracer.TotalInferenceDurationMs, capture.CapturedMetrics.InferenceDurationMs);
+            Assert.True(capture.CapturedMetrics.InferenceDurationMs >= 35);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                try
+                {
+                    Directory.Delete(dir, true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Best-effort temp directory cleanup in test teardown.
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_IncludesCompactionSummarizerInferenceDurationMs()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ncf-inmem-comp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var summarizerClient = new DelayedInferenceClient(nonStreamDelayMs: 65, chunkDelayMs: 10);
+            var compactionOptions = new CrucibleCompactionOptions
+            {
+                ContextWindowTokens = 4000,
+                ReserveTokens = 1000,
+                KeepRecentTokens = 500
+            };
+            var strategy = new PiStyleCrucibleCompactionStrategy(compactionOptions, summarizerClient, NullLogger.Instance);
+            var index = PiStyleCrucibleCompactionStrategy.CreateIndex(new List<ChatMessage>
+            {
+                new(ChatRole.User, new string('a', 1500)),
+                new(ChatRole.Assistant, new string('b', 6000)),
+                new(ChatRole.User, new string('c', 6000)),
+                new(ChatRole.Assistant, "recent")
+            });
+
+            bool compacted = await strategy.CompactAsync(index, NullLogger.Instance, CancellationToken.None);
+            Assert.True(compacted);
+            Assert.True(strategy.TotalSummarizerInferenceDurationMs >= 45,
+                $"Expected summarizer inference duration >= 45ms, got {strategy.TotalSummarizerInferenceDurationMs}ms.");
+
+            var tracer = new ThinkingAndActivityTracingChatClient(new DelayedInferenceClient(nonStreamDelayMs: 50, chunkDelayMs: 10));
+            await tracer.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")], Options());
+
+            var coordinator = new InMemoryCrucibleConversationCoordinator(
+                new SessionTranscriptService(dir),
+                NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+            var capture = new InMemoryConversationCapture(Path.Combine(dir, "transcript.md"));
+            using var scope = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+
+            var context = new AgentSessionContext
+            {
+                ForgeTask = new ForgeTask { Id = 2, Title = "T", Description = "D" },
+                Workspace = new Workspace { Id = 1, Name = "W", RepositoryPath = dir },
+                Profile = new AgentProfile { Id = "p", Name = "p", ModelName = "m" },
+                StageId = StandardStageIds.Implementation,
+                StageDirective = string.Empty,
+                RequiredMode = AgentMode.Full,
+                BootstrapPrompt = "hi",
+                WorkspacePath = dir
+            };
+
+            var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+            await coordinator.SaveTranscriptAsync(
+                state,
+                new CrucibleTranscriptRequest(
+                    context,
+                    dir,
+                    [],
+                    ElapsedMs: 1000,
+                    PromptTokens: 100,
+                    CompletionTokens: 50,
+                    Status: AgentRunStatus.Completed,
+                    Summary: "ok",
+                    TracingClient: tracer,
+                    HarnessOptions: new HarnessAgentOptions { CompactionStrategy = strategy },
+                    ActiveSkills: null),
+                CancellationToken.None);
+
+            Assert.NotNull(capture.CapturedMetrics);
+            Assert.Equal(
+                tracer.TotalInferenceDurationMs + strategy.TotalSummarizerInferenceDurationMs,
+                capture.CapturedMetrics!.InferenceDurationMs);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                try
+                {
+                    Directory.Delete(dir, true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Best-effort temp directory cleanup in test teardown.
+                }
             }
         }
     }

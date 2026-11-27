@@ -63,6 +63,9 @@ public class StandardWorkflowDefinitionsTests
         Assert.Contains("standard", taskReviewStage.ConfigurationJson);
         Assert.Contains("difficult", taskReviewStage.ConfigurationJson);
         Assert.Contains("expert", taskReviewStage.ConfigurationJson);
+        Assert.Contains("localized single-method/single-file changes", taskReviewStage.ConfigurationJson);
+        Assert.Contains("bounds/overflow clamps", taskReviewStage.ConfigurationJson);
+        Assert.Contains("complex encoding/parsing/boundary mechanics", taskReviewStage.ConfigurationJson);
         Assert.Contains("YAML frontmatter", taskReviewStage.ConfigurationJson);
         Assert.Contains("'ask'", taskReviewStage.ConfigurationJson);
     }

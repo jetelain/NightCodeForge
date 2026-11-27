@@ -443,6 +443,21 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
             .Setup(v => v.RunImplementationTestsAsync(
                 It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-gold"),
                 It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                FailToPassPassed = 0,
+                FailToPassTotal = 1,
+                FailedTests = ["T2"]
+            });
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-gold"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
                 "diff gold",
                 ExecutionMode.ContainerSandbox,
                 false,
@@ -452,6 +467,19 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 Passed = true,
                 FailToPassPassed = 1,
                 FailToPassTotal = 1
+            });
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-nogold"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand",
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                ErrorMessage = "Failed"
             });
 
         var validator = new BenchmarkDatasetValidator(
@@ -909,6 +937,205 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
         Assert.Contains("infrastructure error", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         verifier.Verify(
             v => v.RunImplementationTestsAsync(It.IsAny<BenchmarkInstance>(), handle, "diff gold", ExecutionMode.ContainerSandbox, false, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_CodeReviewMinorFix_FailsWhenCandidateAlreadyPassesOrHitsInfraError_AndPassesWhenCandidateFailsAndGoldPasses()
+    {
+        var datasetPath = Path.Combine(_tempDir, "cr-minor-preflight.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"cr-minor-cand-passes","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand1","patch":"diff gold1","test_patch":"diff test1","expected_verdict":"MinorFix","fail_to_pass":["BugTest1"]}""",
+            """{"instance_id":"cr-minor-no-f2p-passes","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand2","patch":"diff gold2","test_patch":"diff test2","expected_verdict":"MinorFix"}""",
+            """{"instance_id":"cr-minor-cand-infra","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand3","patch":"diff gold3","test_patch":"diff test3","expected_verdict":"MinorFix","fail_to_pass":["BugTest3"]}""",
+            """{"instance_id":"cr-minor-valid","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand4","patch":"diff gold4","test_patch":"diff test4","expected_verdict":"MinorFix","fail_to_pass":["BugTest4"],"pass_to_pass":["RegTest4"]}"""
+        ]));
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.CodeReview, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((BenchmarkInstance inst, BenchmarkProblemCategory cat, string? _, CancellationToken _) => new BenchmarkWorkspaceHandle
+            {
+                InstanceId = inst.InstanceId,
+                Category = cat,
+                WorkspacePath = Path.Combine(_tempDir, inst.InstanceId),
+                BaseCommit = "abc",
+                ReviewDiff = "diff --git a/A.cs b/A.cs\n+x"
+            });
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-cand-passes"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand1",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = true,
+                FailToPassPassed = 1,
+                FailToPassTotal = 1
+            });
+
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-no-f2p-passes"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand2",
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true });
+
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-cand-infra"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand3",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                IsInfrastructureError = true,
+                ErrorMessage = "MSBuild child-node crash"
+            });
+
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-valid"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand4",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                FailToPassPassed = 0,
+                FailToPassTotal = 1,
+                FailedTests = ["BugTest4"]
+            });
+
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-minor-valid"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff gold4",
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = true,
+                FailToPassPassed = 1,
+                FailToPassTotal = 1,
+                PassToPassPassed = 1,
+                PassToPassTotal = 1
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.False(report.AllPassed);
+        Assert.False(report.Results[0].Passed);
+        Assert.Contains("already pass on CandidatePatch without GoldPatch", report.Results[0].ErrorMessage);
+        Assert.Contains("Passing test(s): BugTest1", report.Results[0].ErrorMessage);
+
+        Assert.False(report.Results[1].Passed);
+        Assert.Contains("already passed on CandidatePatch without GoldPatch", report.Results[1].ErrorMessage);
+
+        Assert.False(report.Results[2].Passed);
+        Assert.Contains("infrastructure error", report.Results[2].ErrorMessage, StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(report.Results[3].Passed);
+        Assert.Contains("CandidatePatch failed FailToPass", report.Results[3].Summary);
+
+        verifier.Verify(
+            v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId != "cr-minor-valid"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                It.Is<string?>(p => p != null && p.StartsWith("diff gold", StringComparison.Ordinal)),
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_PreFixPatchApplicationError_FailsInsteadOfTreatingAsExpectedPreFixFailure()
+    {
+        var datasetPath = Path.Combine(_tempDir, "patch-apply-error.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"cr-minor-with-gold-apply-err","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand1","patch":"diff gold1","test_patch":"diff test1","expected_verdict":"MinorFix","fail_to_pass":["BugTest1"]}""",
+            """{"instance_id":"cr-minor-no-gold-apply-err","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand2","test_patch":"diff test2","expected_verdict":"MinorFix","fail_to_pass":["BugTest2"]}""",
+            """{"instance_id":"impl-base-apply-err","category":"Implementation","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Fix","patch":"diff gold3","test_patch":"diff test3","fail_to_pass":["BugTest3"]}"""
+        ]));
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkProblemCategory>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((BenchmarkInstance inst, BenchmarkProblemCategory cat, string? _, CancellationToken _) => new BenchmarkWorkspaceHandle
+            {
+                InstanceId = inst.InstanceId,
+                Category = cat,
+                WorkspacePath = Path.Combine(_tempDir, inst.InstanceId),
+                BaseCommit = "abc",
+                ReviewDiff = cat == BenchmarkProblemCategory.CodeReview ? "diff --git a/A.cs b/A.cs\n+x" : null
+            });
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.IsAny<BenchmarkInstance>(),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                It.Is<string?>(p => p == null || p.StartsWith("diff cand", StringComparison.Ordinal)),
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                IsPatchApplicationError = true,
+                ErrorMessage = "Evaluation TestPatch failed to apply cleanly: corrupt patch"
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.False(report.AllPassed);
+        Assert.Equal(3, report.Results.Count);
+        Assert.All(report.Results, r =>
+        {
+            Assert.False(r.Passed);
+            Assert.Contains("patch application failed", r.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        });
+
+        verifier.Verify(
+            v => v.RunImplementationTestsAsync(
+                It.IsAny<BenchmarkInstance>(),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                It.Is<string?>(p => p != null && p.StartsWith("diff gold", StringComparison.Ordinal)),
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()),
             Times.Never);
     }
 }

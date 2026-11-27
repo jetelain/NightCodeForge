@@ -107,7 +107,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = false, DeterministicScore = 0.0, FailToPassPassed = 0, FailToPassTotal = 1 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(LlmProviderType.Ollama, "http://localhost:11434", true, It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(LlmProviderType.Ollama, "http://localhost:11434", true, It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "deadbeef", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var envProvider = new Mock<IExecutionEnvironmentProvider>();
@@ -230,7 +230,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var envProvider = new Mock<IExecutionEnvironmentProvider>();
@@ -307,7 +307,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -514,7 +514,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -589,7 +589,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -674,7 +674,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -757,7 +757,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ThrowsAsync(new InvalidOperationException("Simulated verifier crash"));
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -857,7 +857,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -933,7 +933,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1016,7 +1016,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1143,7 +1143,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1247,7 +1247,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1337,7 +1337,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1482,7 +1482,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1557,7 +1557,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1626,7 +1626,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0 });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var preflight = new Mock<IBenchmarkToolchainPreflightValidator>();
@@ -1702,7 +1702,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             .ReturnsAsync(new BenchmarkVerificationResult { Passed = false, ErrorMessage = "Model did not invoke approve or request_changes." });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1772,7 +1772,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             });
 
         var provenance = new Mock<IBenchmarkProvenanceProvider>();
-        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<CancellationToken>()))
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
 
         var runner = new CrucibleBenchmarkRunner(
@@ -1800,5 +1800,42 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.True(File.Exists(result.VerificationLogPath));
         Assert.Equal(infraLog, await File.ReadAllTextAsync(result.VerificationLogPath!));
         Assert.StartsWith("Verification infrastructure error:", result.ErrorMessage);
+    }
+
+    [Fact]
+    public void ResolveEffectiveMetrics_PrefersInferenceDurationMsForTokensPerSecond_AndFallsBackWhenZero()
+    {
+        var withInference = new AgentRunMetrics(
+            DurationMs: 20_000,
+            PromptTokens: 1_000,
+            CompletionTokens: 200,
+            TotalTokens: 1_200,
+            InferenceDurationMs: 2_000);
+
+        var resolved = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(withInference, capturedMetrics: null, fallbackAgentDurationMs: 30_000);
+        Assert.Equal(100.0, resolved.TokensPerSecond, 2);
+
+        // Falls back to wall-clock DurationMs when InferenceDurationMs <= 0
+        var withoutInference = withInference with { InferenceDurationMs = 0 };
+        var fallbackResolved = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(withoutInference, capturedMetrics: null, fallbackAgentDurationMs: 30_000);
+        Assert.Equal(10.0, fallbackResolved.TokensPerSecond, 2);
+
+        // Timeout/abort path: primary has zero tokens, captured has tokens + InferenceDurationMs
+        var primaryZeroTokens = new AgentRunMetrics(DurationMs: 60_000, PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0);
+        var capturedWithInference = new AgentRunMetrics(DurationMs: 50_000, PromptTokens: 800, CompletionTokens: 150, TotalTokens: 950, InferenceDurationMs: 1_500);
+        var capturedResolved = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(primaryZeroTokens, capturedWithInference, fallbackAgentDurationMs: 60_000);
+        Assert.Equal(100.0, capturedResolved.TokensPerSecond, 2);
+
+        // Cross-fallback: primary has tokens with InferenceDurationMs == 0 while captured has InferenceDurationMs > 0
+        var primaryTokensNoInference = new AgentRunMetrics(DurationMs: 20_000, PromptTokens: 1_000, CompletionTokens: 200, TotalTokens: 1_200, InferenceDurationMs: 0);
+        var capturedInferenceOnly = new AgentRunMetrics(DurationMs: 20_000, PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, InferenceDurationMs: 2_000);
+        var crossFromCaptured = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(primaryTokensNoInference, capturedInferenceOnly, fallbackAgentDurationMs: 30_000);
+        Assert.Equal(100.0, crossFromCaptured.TokensPerSecond, 2);
+
+        // Cross-fallback: captured has tokens with InferenceDurationMs == 0 while primary has InferenceDurationMs > 0
+        var primaryInferenceOnly = new AgentRunMetrics(DurationMs: 60_000, PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0, InferenceDurationMs: 1_500);
+        var capturedTokensNoInference = new AgentRunMetrics(DurationMs: 50_000, PromptTokens: 800, CompletionTokens: 150, TotalTokens: 950, InferenceDurationMs: 0);
+        var crossFromPrimary = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(primaryInferenceOnly, capturedTokensNoInference, fallbackAgentDurationMs: 60_000);
+        Assert.Equal(100.0, crossFromPrimary.TokensPerSecond, 2);
     }
 }

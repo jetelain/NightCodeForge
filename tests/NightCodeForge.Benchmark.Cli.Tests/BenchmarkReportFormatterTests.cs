@@ -325,6 +325,40 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
         Assert.Contains("exp1/results", disambiguated[0].DisplayTag);
     }
 
+    [Theory]
+    [InlineData(ReportOutputFormat.Markdown)]
+    [InlineData(ReportOutputFormat.Ascii)]
+    [InlineData(ReportOutputFormat.Json)]
+    public void FormatSingleRun_RendersDetectedToolVersionsIncludingHostAndContainerDotNet(ReportOutputFormat format)
+    {
+        var baseReport = BuildSampleReport("main", "1234567", "0.1.0", [BuildSummary("qwen", "Qwen", 1.0, 1, 1, 1.0, 0.9, 1000, 1, 100, 10, 0, 0, 0, 0)]);
+        var report = baseReport with
+        {
+            Provenance = baseReport.Provenance with
+            {
+                DetectedToolVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dotnet_host"] = "11.0.100",
+                    ["dotnet_container"] = "10.0.115",
+                    ["csnav"] = "1.2.3"
+                }
+            }
+        };
+
+        var formatted = BenchmarkReportFormatter.FormatSingleRun(report, format);
+
+        Assert.Contains("dotnet_host", formatted);
+        Assert.Contains("11.0.100", formatted);
+        Assert.Contains("dotnet_container", formatted);
+        Assert.Contains("10.0.115", formatted);
+        Assert.Contains("csnav", formatted);
+        Assert.Contains("1.2.3", formatted);
+        if (format != ReportOutputFormat.Json)
+        {
+            Assert.Contains("Toolchains", formatted);
+        }
+    }
+
     private string WriteReportDir(string folderName, BenchmarkRunReport report)
     {
         var dir = Path.Combine(_tempDir, folderName);

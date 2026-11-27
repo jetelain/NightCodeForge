@@ -151,6 +151,14 @@ public static class BenchmarkReportFormatter
             sb.AppendLine($"- **Provenance:** `{provenanceTag}`");
             sb.AppendLine($"- **Provider:** `{report.Provenance.ProviderType}` (`{report.Provenance.Endpoint}`)");
             sb.AppendLine($"- **Stack Skills:** {(report.Provenance.EnableStackSkills ? "Enabled" : "Disabled")}");
+            if (report.Provenance.DetectedToolVersions is { Count: > 0 })
+            {
+                var toolSummary = string.Join(", ",
+                    report.Provenance.DetectedToolVersions
+                        .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                        .Select(kv => $"`{kv.Key}={kv.Value}`"));
+                sb.AppendLine($"- **Toolchains:** {toolSummary}");
+            }
             sb.AppendLine($"- **Timestamp (UTC):** {timestamp}");
             sb.AppendLine();
             sb.AppendLine("## Overall Model Leaderboard");
@@ -163,6 +171,14 @@ public static class BenchmarkReportFormatter
             sb.AppendLine($"Provenance  : {provenanceTag}");
             sb.AppendLine($"Provider    : {report.Provenance.ProviderType} ({report.Provenance.Endpoint})");
             sb.AppendLine($"Stack Skills: {(report.Provenance.EnableStackSkills ? "Enabled" : "Disabled")}");
+            if (report.Provenance.DetectedToolVersions is { Count: > 0 })
+            {
+                var toolSummary = string.Join(", ",
+                    report.Provenance.DetectedToolVersions
+                        .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                        .Select(kv => $"{kv.Key}={kv.Value}"));
+                sb.AppendLine($"Toolchains  : {toolSummary}");
+            }
             sb.AppendLine($"Timestamp   : {timestamp} UTC");
             sb.AppendLine();
             sb.AppendLine("Overall Model Leaderboard");

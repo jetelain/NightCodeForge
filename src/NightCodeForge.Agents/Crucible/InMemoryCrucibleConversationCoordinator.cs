@@ -164,7 +164,8 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
             DurationMs: request.ElapsedMs,
             PromptTokens: request.PromptTokens,
             CompletionTokens: request.CompletionTokens,
-            TotalTokens: request.PromptTokens + request.CompletionTokens);
+            TotalTokens: request.PromptTokens + request.CompletionTokens,
+            InferenceDurationMs: CrucibleConversationCoordinator.ComputeTotalInferenceDurationMs(tracingClient, harnessOptions));
 
         if (capture != null)
         {

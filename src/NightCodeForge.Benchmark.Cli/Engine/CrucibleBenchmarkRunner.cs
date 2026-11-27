@@ -189,6 +189,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             request.Endpoint,
             primaryCandidate.EnableStackSkills,
             primaryCandidate.OptimizationFlags,
+            request.ExecutionMode,
             cancellationToken).ConfigureAwait(false);
 
         var crucibleHarness = _harnessRegistry.GetHarness(StandardHarnessIds.Crucible);
@@ -1004,35 +1005,41 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         long promptTokens;
         long completionTokens;
         long totalTokens;
-        long agentDurationMs;
+        long tpsDurationMs;
 
         if (HasTokens(primaryMetrics))
         {
             promptTokens = primaryMetrics!.PromptTokens;
             completionTokens = primaryMetrics.CompletionTokens;
             totalTokens = primaryMetrics.TotalTokens > 0 ? primaryMetrics.TotalTokens : (promptTokens + completionTokens);
-            agentDurationMs = primaryMetrics.DurationMs > 0
+            long agentDurationMs = primaryMetrics.DurationMs > 0
                 ? primaryMetrics.DurationMs
                 : (capturedMetrics is { DurationMs: > 0 } ? capturedMetrics.DurationMs : Math.Max(1, fallbackAgentDurationMs));
+            tpsDurationMs = primaryMetrics.InferenceDurationMs > 0
+                ? primaryMetrics.InferenceDurationMs
+                : (capturedMetrics is { InferenceDurationMs: > 0 } ? capturedMetrics.InferenceDurationMs : agentDurationMs);
         }
         else if (HasTokens(capturedMetrics))
         {
             promptTokens = capturedMetrics!.PromptTokens;
             completionTokens = capturedMetrics.CompletionTokens;
             totalTokens = capturedMetrics.TotalTokens > 0 ? capturedMetrics.TotalTokens : (promptTokens + completionTokens);
-            agentDurationMs = capturedMetrics.DurationMs > 0
+            long agentDurationMs = capturedMetrics.DurationMs > 0
                 ? capturedMetrics.DurationMs
                 : (primaryMetrics is { DurationMs: > 0 } ? primaryMetrics.DurationMs : Math.Max(1, fallbackAgentDurationMs));
+            tpsDurationMs = capturedMetrics.InferenceDurationMs > 0
+                ? capturedMetrics.InferenceDurationMs
+                : (primaryMetrics is { InferenceDurationMs: > 0 } ? primaryMetrics.InferenceDurationMs : agentDurationMs);
         }
         else
         {
             promptTokens = 0;
             completionTokens = 0;
             totalTokens = 0;
-            agentDurationMs = Math.Max(1, fallbackAgentDurationMs);
+            tpsDurationMs = Math.Max(1, fallbackAgentDurationMs);
         }
 
-        double tokensPerSecond = completionTokens > 0 ? completionTokens / (agentDurationMs / 1000.0) : 0.0;
+        double tokensPerSecond = completionTokens > 0 ? completionTokens / (tpsDurationMs / 1000.0) : 0.0;
         return (promptTokens, completionTokens, totalTokens, tokensPerSecond);
     }
 

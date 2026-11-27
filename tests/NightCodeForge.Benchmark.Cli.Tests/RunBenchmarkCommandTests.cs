@@ -310,6 +310,7 @@ public sealed class RunBenchmarkCommandTests : IDisposable
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
                 It.IsAny<LocalOptimizationFlags?>(),
+                It.IsAny<ExecutionMode>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(priorReport.Provenance);
 

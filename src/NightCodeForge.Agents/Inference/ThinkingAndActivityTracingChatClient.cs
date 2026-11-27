@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -42,6 +43,7 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
     private MeasuredCallTokenUsage? _lastMeasuredUsage;
     private long _totalMeasuredInputTokens;
     private long _totalMeasuredOutputTokens;
+    private long _totalInferenceDurationTicks;
 
     public string? LastCapturedSystemPrompt { get; private set; }
     public IReadOnlyList<string> LastCapturedTools { get; private set; } = Array.Empty<string>();
@@ -67,6 +69,18 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
             lock (_lock)
             {
                 return _totalMeasuredOutputTokens;
+            }
+        }
+    }
+
+    /// <summary>Cumulative pure LLM inference duration in milliseconds across all model calls on this client, excluding tool execution.</summary>
+    public long TotalInferenceDurationMs
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return (long)Stopwatch.GetElapsedTime(0, _totalInferenceDurationTicks).TotalMilliseconds;
             }
         }
     }
@@ -175,7 +189,17 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         var messages = chatMessages.ToList();
         InspectIncomingRequest(messages, options);
 
-        var response = await base.GetResponseAsync(messages, options, cancellationToken);
+        ChatResponse response;
+        long inferenceStartTicks = Stopwatch.GetTimestamp();
+        try
+        {
+            response = await base.GetResponseAsync(messages, options, cancellationToken);
+        }
+        finally
+        {
+            AddInferenceDurationTicks(Stopwatch.GetTimestamp() - inferenceStartTicks);
+        }
+
         ProcessResponseMessages(response.Messages);
 
         var usageDetails = response.Usage
@@ -211,80 +235,101 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         int? measuredOutputTokens = null;
         bool sawUsageContent = false;
 
-        await using var enumerator = base.GetStreamingResponseAsync(messages, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
-        while (true)
+        IAsyncEnumerator<ChatResponseUpdate> enumerator;
+        long openStartTicks = Stopwatch.GetTimestamp();
+        try
         {
-            ChatResponseUpdate? update = null;
-            bool hasMore = false;
-            try
-            {
-                hasMore = await enumerator.MoveNextAsync();
-                if (hasMore)
-                {
-                    update = enumerator.Current;
-                }
-            }
-            catch (Exception)
-            {
-                FlushStream(reasoningBuilder, textBuilder, functionCalls);
-                throw;
-            }
+            enumerator = base.GetStreamingResponseAsync(messages, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        }
+        finally
+        {
+            AddInferenceDurationTicks(Stopwatch.GetTimestamp() - openStartTicks);
+        }
 
-            if (!hasMore || update == null)
+        await using (enumerator)
+        {
+            while (true)
             {
-                break;
-            }
-
-            if (update.Contents != null)
-            {
-                foreach (var content in update.Contents)
+                ChatResponseUpdate? update = null;
+                bool hasMore = false;
+                try
                 {
-                    if (content is FunctionCallContent fc)
+                    long chunkStartTicks = Stopwatch.GetTimestamp();
+                    try
                     {
-                        functionCalls.Add(fc);
-                    }
-                    else if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
-                    {
-                        reasoningBuilder.Append(reasoning.Text);
-                        BroadcastStreamDelta(AgentActivityKind.ThinkingDelta, reasoning.Text, cancellationToken);
-                    }
-                    else if (content is UsageContent uc && uc.Details != null)
-                    {
-                        sawUsageContent = true;
-                        var (ucInput, ucOutput) = ExtractUsageTokens(uc.Details);
-                        if (ucInput > 0)
+                        hasMore = await enumerator.MoveNextAsync();
+                        if (hasMore)
                         {
-                            measuredInputTokens = ucInput;
-                        }
-                        if (ucOutput >= 0 && (uc.Details.OutputTokenCount.HasValue || ucOutput > 0))
-                        {
-                            measuredOutputTokens = ucOutput;
+                            update = enumerator.Current;
                         }
                     }
+                    finally
+                    {
+                        AddInferenceDurationTicks(Stopwatch.GetTimestamp() - chunkStartTicks);
+                    }
                 }
-            }
-
-            if (!sawUsageContent && update.AdditionalProperties != null
-                && update.AdditionalProperties.TryGetValue("usage", out var rawUsage)
-                && rawUsage is JsonElement je && je.ValueKind == JsonValueKind.Object)
-            {
-                if (je.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptVal) && ptVal > 0)
+                catch (Exception)
                 {
-                    measuredInputTokens = ptVal;
+                    FlushStream(reasoningBuilder, textBuilder, functionCalls);
+                    throw;
                 }
-                if (je.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt32(out var ctVal) && ctVal >= 0)
+
+                if (!hasMore || update == null)
                 {
-                    measuredOutputTokens = ctVal;
+                    break;
                 }
-            }
 
-            if (!string.IsNullOrEmpty(update.Text))
-            {
-                textBuilder.Append(update.Text);
-                BroadcastStreamDelta(AgentActivityKind.MessageDelta, update.Text, cancellationToken);
-            }
+                if (update.Contents != null)
+                {
+                    foreach (var content in update.Contents)
+                    {
+                        if (content is FunctionCallContent fc)
+                        {
+                            functionCalls.Add(fc);
+                        }
+                        else if (content is TextReasoningContent reasoning && !string.IsNullOrEmpty(reasoning.Text))
+                        {
+                            reasoningBuilder.Append(reasoning.Text);
+                            BroadcastStreamDelta(AgentActivityKind.ThinkingDelta, reasoning.Text, cancellationToken);
+                        }
+                        else if (content is UsageContent uc && uc.Details != null)
+                        {
+                            sawUsageContent = true;
+                            var (ucInput, ucOutput) = ExtractUsageTokens(uc.Details);
+                            if (ucInput > 0)
+                            {
+                                measuredInputTokens = ucInput;
+                            }
+                            if (ucOutput >= 0 && (uc.Details.OutputTokenCount.HasValue || ucOutput > 0))
+                            {
+                                measuredOutputTokens = ucOutput;
+                            }
+                        }
+                    }
+                }
 
-            yield return update;
+                if (!sawUsageContent && update.AdditionalProperties != null
+                    && update.AdditionalProperties.TryGetValue("usage", out var rawUsage)
+                    && rawUsage is JsonElement je && je.ValueKind == JsonValueKind.Object)
+                {
+                    if (je.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptVal) && ptVal > 0)
+                    {
+                        measuredInputTokens = ptVal;
+                    }
+                    if (je.TryGetProperty("completion_tokens", out var ct) && ct.TryGetInt32(out var ctVal) && ctVal >= 0)
+                    {
+                        measuredOutputTokens = ctVal;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    textBuilder.Append(update.Text);
+                    BroadcastStreamDelta(AgentActivityKind.MessageDelta, update.Text, cancellationToken);
+                }
+
+                yield return update;
+            }
         }
 
         FlushStream(reasoningBuilder, textBuilder, functionCalls);
@@ -343,6 +388,19 @@ public class ThinkingAndActivityTracingChatClient : DelegatingChatClient
         }
 
         callback?.Invoke(usage);
+    }
+
+    private void AddInferenceDurationTicks(long elapsedTicks)
+    {
+        if (elapsedTicks <= 0)
+        {
+            return;
+        }
+
+        lock (_lock)
+        {
+            _totalInferenceDurationTicks += elapsedTicks;
+        }
     }
 
     private void InspectIncomingRequest(IReadOnlyList<ChatMessage> messages, ChatOptions? options)

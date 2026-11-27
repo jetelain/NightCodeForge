@@ -25,7 +25,8 @@ public record AgentRunMetrics(
     double? ActualCloudCost = null,
     double? ElectricityCost = null,
     double? CloudSavings = null,
-    string? Currency = null);
+    string? Currency = null,
+    long InferenceDurationMs = 0);
 
 /// <summary>
 /// The result of an agent stage execution.

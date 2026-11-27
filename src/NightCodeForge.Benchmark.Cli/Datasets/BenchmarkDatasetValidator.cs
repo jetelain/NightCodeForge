@@ -288,29 +288,10 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             failToPassOnly: instance.FailToPass.Count > 0,
             cancellationToken).ConfigureAwait(false);
 
-        if (baseResult.IsInfrastructureError)
+        var preFixError = ValidatePreFixFailure(instance, baseResult, "Pre-flight", "BaseCommit");
+        if (preFixError != null)
         {
-            return (false, null, $"Pre-flight BaseCommit verification hit an infrastructure error: {baseResult.ErrorMessage ?? "MSBuild child-node crash"}");
-        }
-
-        if (instance.FailToPass.Count > 0)
-        {
-            if (baseResult.FailToPassPassed > 0)
-            {
-                var failedSet = baseResult.FailedTests.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var passedOnBase = instance.FailToPass
-                    .Where(t => !failedSet.Contains(t))
-                    .ToList();
-                var passedDetail = passedOnBase.Count > 0
-                    ? $" Passing test(s): {string.Join(", ", passedOnBase)}"
-                    : string.Empty;
-                return (false, null,
-                    $"Pre-flight FailToPass invariant violated: {baseResult.FailToPassPassed}/{baseResult.FailToPassTotal} FailToPass test(s) already pass on BaseCommit without GoldPatch.{passedDetail}");
-            }
-        }
-        else if (baseResult.Passed)
-        {
-            return (false, null, "Pre-flight invariant violated: test suite already passed on BaseCommit without GoldPatch.");
+            return (false, null, preFixError);
         }
 
         var goldResult = await _verifier.RunImplementationTestsAsync(
@@ -409,6 +390,20 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
 
         if (expectedVerdict == CodeReviewVerdict.MinorFix)
         {
+            var candidateTestResult = await _verifier.RunImplementationTestsAsync(
+                instance,
+                workspace,
+                patchToApply: instance.CandidatePatch,
+                ExecutionMode.ContainerSandbox,
+                failToPassOnly: instance.FailToPass.Count > 0,
+                cancellationToken).ConfigureAwait(false);
+
+            var preFixError = ValidatePreFixFailure(instance, candidateTestResult, "Pre-flight MinorFix", "CandidatePatch");
+            if (preFixError != null)
+            {
+                return (false, null, preFixError);
+            }
+
             if (!string.IsNullOrWhiteSpace(instance.GoldPatch))
             {
                 var goldTestResult = await _verifier.RunImplementationTestsAsync(
@@ -424,24 +419,13 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
                     return (false, null, $"CodeReview MinorFix reference GoldPatch tests failed: {FormatFailedTestReason(goldTestResult)}");
                 }
 
-                return (true, "CandidatePatch applied cleanly and MinorFix reference GoldPatch tests passed.", null);
+                return (
+                    true,
+                    $"CandidatePatch failed FailToPass; MinorFix reference GoldPatch passed {goldTestResult.FailToPassPassed}/{goldTestResult.FailToPassTotal} FailToPass and {goldTestResult.PassToPassPassed}/{goldTestResult.PassToPassTotal} PassToPass.",
+                    null);
             }
 
-            if (hasTestPatch)
-            {
-                var candidateTestPatchCheck = await TryApplyPatchSequenceAsync(
-                    workspace.WorkspacePath,
-                    workspace.BaseCommit,
-                    [instance.CandidatePatch, instance.TestPatch],
-                    $"CodeReview TestPatch failed to apply cleanly on CandidatePatch for '{instance.InstanceId}'",
-                    cancellationToken).ConfigureAwait(false);
-                if (!candidateTestPatchCheck.Passed)
-                {
-                    return (false, null, candidateTestPatchCheck.Error);
-                }
-
-                return (true, "CandidatePatch and TestPatch applied cleanly to BaseCommit.", null);
-            }
+            return (true, "CandidatePatch failed MinorFix test assertions as expected.", null);
         }
 
         return (true, "CandidatePatch applied cleanly to BaseCommit with valid diff.", null);
@@ -471,6 +455,44 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
         {
             return (false, $"{failureContext}: {ex.Message}");
         }
+    }
+
+    private static string? ValidatePreFixFailure(
+        BenchmarkInstance instance,
+        BenchmarkVerificationResult preFixResult,
+        string prefix,
+        string targetLabel)
+    {
+        if (preFixResult.IsInfrastructureError)
+        {
+            return $"{prefix} {targetLabel} verification hit an infrastructure error: {preFixResult.ErrorMessage ?? "MSBuild child-node crash"}";
+        }
+
+        if (preFixResult.IsPatchApplicationError)
+        {
+            return $"{prefix} {targetLabel} patch application failed: {preFixResult.ErrorMessage ?? "Patch failed to apply cleanly."}";
+        }
+
+        if (instance.FailToPass.Count > 0)
+        {
+            if (preFixResult.FailToPassPassed > 0 || preFixResult.Passed)
+            {
+                var failedSet = preFixResult.FailedTests.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var passedBeforeFix = instance.FailToPass
+                    .Where(t => !failedSet.Contains(t))
+                    .ToList();
+                var passedDetail = passedBeforeFix.Count > 0
+                    ? $" Passing test(s): {string.Join(", ", passedBeforeFix)}"
+                    : string.Empty;
+                return $"{prefix} FailToPass invariant violated: {preFixResult.FailToPassPassed}/{preFixResult.FailToPassTotal} FailToPass test(s) already pass on {targetLabel} without GoldPatch.{passedDetail}";
+            }
+
+            return null;
+        }
+
+        return preFixResult.Passed
+            ? $"{prefix} invariant violated: test suite already passed on {targetLabel} without GoldPatch."
+            : null;
     }
 
     private static string FormatFailedTestReason(BenchmarkVerificationResult result) =>

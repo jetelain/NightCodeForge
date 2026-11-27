@@ -113,6 +113,7 @@ public interface IBenchmarkProvenanceProvider
         string endpoint,
         bool enableStackSkills,
         LocalOptimizationFlags? optimizationFlags,
+        ExecutionMode executionMode,
         CancellationToken cancellationToken = default);
 }
 

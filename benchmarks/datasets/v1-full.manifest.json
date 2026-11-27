@@ -19,7 +19,17 @@
       "language": "csharp",
       "repo": "serilog/serilog",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Serilog.Tests/Serilog.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.UnderDestructuringAByteArrayIsAScalarValue",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.UnderDestructuringABooleanIsAScalarValue",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.UnderDestructuringAnIntegerArrayIsASequenceValue",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.ByDefaultADestructuredNullNullableIsAScalarNull",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.ByDefaultADestructuredNonNullNullableIsItsValue",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.ByDefaultAScalarDictionaryIsADictionaryValue",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.ByDefaultANonScalarDictionaryIsASequenceValue",
+        "Serilog.Tests.Capturing.PropertyValueConverterTests.DelegatesAreConvertedToScalarStringsWhenDestructuring"
+      ]
     },
     {
       "instance_id": "spectreconsole__spectre-console-1338",
@@ -28,7 +38,13 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "Spectre.Console.Tests.Unit.RowsTests.Should_Render_Rows",
+        "Spectre.Console.Tests.Unit.RowsTests.Should_Render_Rows_Correctly_Inside_Other_Widget",
+        "Spectre.Console.Tests.Unit.RowsTests.Should_Not_Throw_Exception_On_Empty_Rows",
+        "Spectre.Console.Tests.Unit.RowsTests.Should_Render_Rows_Correctly_Inside_Other_Widget_When_Expanded"
+      ]
     },
     {
       "instance_id": "spectreconsole__spectre-console-1458",
@@ -37,7 +53,15 @@
       "language": "csharp",
       "repo": "spectreconsole/spectre.console",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Spectre.Console.Tests/Spectre.Console.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "Spectre.Console.Tests.Unit.TextPromptTests.Should_Return_Entered_Text",
+        "Spectre.Console.Tests.Unit.TextPromptTests.Should_Return_Validation_Error_If_Value_Cannot_Be_Converted",
+        "Spectre.Console.Tests.Unit.TextPromptTests.Should_Chose_Default_Value_If_Nothing_Is_Entered",
+        "Spectre.Console.Tests.Unit.TextPromptTests.Should_Accept_Choice_In_List",
+        "Spectre.Console.Tests.Unit.TextPromptTests.Should_Choose_Masked_Default_Value_If_Nothing_Is_Entered_And_Prompt_Is_Secret",
+        "Spectre.Console.Tests.Unit.TextPromptTests.Should_Choose_Custom_Masked_Default_Value_If_Nothing_Is_Entered_And_Prompt_Is_Secret_And_Mask_Is_Custom"
+      ]
     },
     {
       "instance_id": "polly-1852",
@@ -55,7 +79,13 @@
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "RestSharp.IntegrationTests.StatusCodeTests.Reports_1xx_Status_Code_Success_Accurately",
+        "RestSharp.IntegrationTests.StatusCodeTests.Reports_3xx_Status_Code_Success_Accurately",
+        "RestSharp.IntegrationTests.StatusCodeTests.Reports_4xx_Status_Code_Success_Accurately",
+        "RestSharp.IntegrationTests.StatusCodeTests.Reports_5xx_Status_Code_Success_Accurately"
+      ]
     },
     {
       "instance_id": "messagepack-csharp__messagepack-csharp-2045",
@@ -64,7 +94,19 @@
       "language": "csharp",
       "repo": "MessagePack-CSharp/MessagePack-CSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test tests/MessagePack.Tests/MessagePack.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/MessagePack.Tests/MessagePack.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "MessagePackSerializerOptionsTests.AllowAssemblyVersionMismatch",
+        "MessagePackSerializerOptionsTests.OmitAssemblyVersion",
+        "MessagePackSerializerOptionsTests.Compression",
+        "MessagePackSerializerOptionsTests.CompressionMinLength",
+        "MessagePackSerializerOptionsTests.SuggestedContiguousMemorySize",
+        "MessagePackSerializerOptionsTests.OldSpec",
+        "MessagePackSerializerOptionsTests.Resolver",
+        "MessagePackSerializerOptionsTests.WithOldSpec_PreservesOtherProperties",
+        "MessagePackSerializerOptionsTests.WithLZ4Compression_PreservesOtherProperties",
+        "MessagePackSerializerOptionsTests.WithSecurity_PreservesOtherProperties"
+      ]
     },
     {
       "instance_id": "autofac__autofac-1424",
@@ -73,7 +115,17 @@
       "language": "csharp",
       "repo": "autofac/Autofac",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/Autofac.Test/Autofac.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test test/Autofac.Test/Autofac.Test.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.RegistrationIncludesTheServiceType",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.RegistrationTargetsTheImplementationType",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.DecoratedRegistrationCanIncludeImplementationType",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.DecoratedInstancePerDependencyRegistrationCanIncludeOtherServices",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.DecoratedInstancePerLifetimeScopeRegistrationCanIncludeOtherServices",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.DecoratedSingleInstanceRegistrationCanIncludeOtherServices",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.ResolvesDecoratedServiceWhenNoDecoratorsRegistered",
+        "Autofac.Test.Features.Decorators.OpenGenericDecoratorTests.ResolvesDecoratedServiceWhenSingleDecoratorRegistered"
+      ]
     },
     {
       "instance_id": "vuejs__core-11915",
@@ -846,6 +898,11 @@
       "category": "TaskReview",
       "language": "python",
       "repo": "psf/requests",
+      "custom_container_image": "python:3.11-bookworm",
+      "pip_constraints": [
+        "MarkupSafe<2.1",
+        "Werkzeug<2.1"
+      ],
       "test_result_format": "JUnitXml"
     },
     {
@@ -854,6 +911,7 @@
       "category": "TaskReview",
       "language": "python",
       "repo": "pytest-dev/pytest",
+      "custom_container_image": "python:3.11-bookworm",
       "test_result_format": "JUnitXml"
     },
     {

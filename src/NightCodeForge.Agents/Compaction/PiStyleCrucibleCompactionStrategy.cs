@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -160,12 +161,15 @@ Keep each section concise. Preserve exact file paths, function names, and error 
     private int _lastCompactedIncludedTokenCount = 0;
     private long _totalSummarizerInputTokens = 0;
     private long _totalSummarizerOutputTokens = 0;
+    private long _totalSummarizerInferenceDurationTicks = 0;
 
     public CrucibleCompactionOptions Options => _options;
     public int LastCompactedTurnCount => _lastCompactedTurnCount;
     public int LastCompactedTokenCount => _lastCompactedTokenCount;
     public long TotalSummarizerInputTokens => Interlocked.Read(ref _totalSummarizerInputTokens);
     public long TotalSummarizerOutputTokens => Interlocked.Read(ref _totalSummarizerOutputTokens);
+    public long TotalSummarizerInferenceDurationMs =>
+        (long)Stopwatch.GetElapsedTime(0, Interlocked.Read(ref _totalSummarizerInferenceDurationTicks)).TotalMilliseconds;
     public Func<int, int, CancellationToken, Task>? OnCompacting { get; set; }
     public Func<CompactionCheckpointNotification, CancellationToken, Task>? OnCompacted { get; set; }
 
@@ -1205,7 +1209,20 @@ Keep each section concise. Preserve exact file paths, function names, and error 
             }
         };
 
-        var response = await _summarizerClient!.GetResponseAsync(messages, options, cancellationToken);
+        ChatResponse response;
+        long inferenceStartTicks = Stopwatch.GetTimestamp();
+        try
+        {
+            response = await _summarizerClient!.GetResponseAsync(messages, options, cancellationToken);
+        }
+        finally
+        {
+            long elapsedTicks = Stopwatch.GetTimestamp() - inferenceStartTicks;
+            if (elapsedTicks > 0)
+            {
+                Interlocked.Add(ref _totalSummarizerInferenceDurationTicks, elapsedTicks);
+            }
+        }
         if (response.Usage != null)
         {
             if (response.Usage.InputTokenCount.HasValue && response.Usage.InputTokenCount.Value > 0)

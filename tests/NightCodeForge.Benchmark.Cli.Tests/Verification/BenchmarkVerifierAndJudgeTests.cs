@@ -197,7 +197,7 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             judgeConfig: null);
 
         Assert.False(result.Passed);
-        Assert.Equal(0.5, result.DeterministicScore, 2);
+        Assert.Equal(0.0, result.DeterministicScore, 4);
         Assert.Equal("pytest -q --junitxml=.ncf-bench-results/junit.xml", capturedCmd);
         Assert.Contains("test_existing", result.FailedTests);
     }
@@ -2942,6 +2942,266 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.False(compileFail.Passed);
         Assert.False(compileFail.IsInfrastructureError);
         execEnv.Verify(e => e.ExecuteAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<IReadOnlyDictionary<string, string>?>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(0, 1, 79, 79, 1, 0.0)]
+    [InlineData(1, 1, 0, 1, 1, 0.0)]
+    [InlineData(1, 2, 3, 4, 1, 0.375)]
+    [InlineData(1, 1, 1, 1, 0, 1.0)]
+    [InlineData(1, 2, 0, 0, 1, 0.5)]
+    [InlineData(0, 0, 3, 4, 1, 0.75)]
+    [InlineData(0, 0, 0, 0, 0, 1.0)]
+    [InlineData(0, 0, 0, 0, 1, 0.0)]
+    public void ComputeImplementationDeterministicScore_AppliesFailToPassGatingAcrossAllAssertionCases(
+        int f2pPassed,
+        int f2pTotal,
+        int p2pPassed,
+        int p2pTotal,
+        int exitCode,
+        double expectedScore)
+    {
+        var score = BenchmarkVerifier.ComputeImplementationDeterministicScore(
+            f2pPassed,
+            f2pTotal,
+            p2pPassed,
+            p2pTotal,
+            exitCode);
+
+        Assert.Equal(expectedScore, score, 4);
+    }
+
+    [Theory]
+    [InlineData(true, 1.0, 0.5)]
+    [InlineData(false, 1.0, 0.5)]
+    [InlineData(true, 0.0, 0.0)]
+    [InlineData(false, 0.0, 0.0)]
+    public async Task VerifyAsync_TaskReview_WrongVerdictIsSymmetricAcrossBothDirections(
+        bool expectedIsReady,
+        double expectedAnchorScore,
+        double expectedDeterministicScore)
+    {
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var spec = "---\nid: 42\nstatus: Open\ndifficulty: standard\n---\n\nInitial spec.";
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "tr-sym",
+            Category = BenchmarkProblemCategory.TaskReview,
+            Repo = "owner/repo",
+            BaseCommit = "abc",
+            ProblemStatement = "Clarify or plan",
+            TaskSpecification = spec,
+            ExpectedVerdict = expectedIsReady ? "Ready" : "NeedsClarification",
+            ExpectedDifficulty = expectedIsReady ? "standard" : null,
+            ExpectedFindings = [new BenchmarkExpectedFinding("src/Target.cs", Keywords: ["Alpha", "Beta"])]
+        };
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "tr-sym",
+            Category = BenchmarkProblemCategory.TaskReview,
+            WorkspacePath = _tempDir,
+            BaseCommit = "abc"
+        };
+
+        var anchorText = expectedAnchorScore > 0
+            ? "Updated src/Target.cs with Alpha and Beta architectural details and regression unit tests."
+            : "Unrelated text with no matching terms at all for testing zero anchor coverage cleanly.";
+
+        BenchmarkAgentOutcome wrongOutcome = expectedIsReady
+            ? new BenchmarkAgentOutcome
+            {
+                RunStatus = AgentRunStatus.WaitingForHuman,
+                PendingQuestions = [new Question { Id = 1, Prompt = "Q", Rationale = anchorText, OptionsJson = "[]" }],
+                ModifiedFilesOutsideDocsTasks = Array.Empty<string>()
+            }
+            : new BenchmarkAgentOutcome
+            {
+                RunStatus = AgentRunStatus.Completed,
+                TaskMarkdownBefore = spec,
+                UpdatedTaskMarkdown = $"---\nid: 42\nstatus: Open\ndifficulty: standard\n---\n\nInitial spec.\n\n## Architecture & Plan\n{anchorText} Extra details so enrichment length threshold passes reliably.",
+                ModifiedFilesOutsideDocsTasks = Array.Empty<string>()
+            };
+
+        var result = await verifier.VerifyAsync(instance, handle, wrongOutcome, ExecutionMode.BareHost, false, null);
+
+        Assert.False(result.Passed);
+        Assert.Equal(expectedDeterministicScore, result.DeterministicScore, 4);
+        Assert.True(result.DeterministicScore <= 0.50);
+    }
+
+    [Fact]
+    public async Task VerifyAsync_TaskReview_WrongVerdictWithoutExpectedFindingsScoresZeroSymmetrically()
+    {
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var spec = "---\nid: 43\nstatus: Open\ndifficulty: standard\n---\n\nInitial spec.";
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "tr-sym-empty",
+            Category = BenchmarkProblemCategory.TaskReview,
+            WorkspacePath = _tempDir,
+            BaseCommit = "abc"
+        };
+
+        var readyExpected = new BenchmarkInstance
+        {
+            InstanceId = "tr-sym-empty",
+            Category = BenchmarkProblemCategory.TaskReview,
+            Repo = "o/r",
+            BaseCommit = "abc",
+            ProblemStatement = "p",
+            TaskSpecification = spec,
+            ExpectedVerdict = "Ready"
+        };
+        var needsExpected = readyExpected with { ExpectedVerdict = "NeedsClarification" };
+
+        var gotNeeds = new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.WaitingForHuman,
+            PendingQuestions = [new Question { Id = 1, Prompt = "Q", Rationale = "R", OptionsJson = "[]" }]
+        };
+        var gotReady = new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            TaskMarkdownBefore = spec,
+            UpdatedTaskMarkdown = spec + "\n\n## Plan\nLong enough enrichment text to satisfy minimum body delta and ready body length checks."
+        };
+
+        var r1 = await verifier.VerifyAsync(readyExpected, handle, gotNeeds, ExecutionMode.BareHost, false, null);
+        var r2 = await verifier.VerifyAsync(needsExpected, handle, gotReady, ExecutionMode.BareHost, false, null);
+
+        Assert.False(r1.Passed);
+        Assert.False(r2.Passed);
+        Assert.Equal(0.0, r1.DeterministicScore, 4);
+        Assert.Equal(0.0, r2.DeterministicScore, 4);
+    }
+
+    [Fact]
+    public async Task RunImplementationTestsAsync_PatchApplyFailure_SetsIsPatchApplicationErrorAndSkipsTestExecution()
+    {
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ApplyPatchAsync(_tempDir, "bad candidate patch", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new BenchmarkWorkspaceException("git apply rejected hunk", workspacePath: _tempDir));
+
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            envProvider.Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "cr-bad-cand",
+            Category = BenchmarkProblemCategory.CodeReview,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "o/r",
+            BaseCommit = "abc",
+            ProblemStatement = "Review",
+            FailToPass = ["BugTest"],
+            PassToPass = ["RegTest"]
+        };
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "cr-bad-cand",
+            Category = BenchmarkProblemCategory.CodeReview,
+            WorkspacePath = _tempDir,
+            BaseCommit = "abc"
+        };
+
+        var result = await verifier.RunImplementationTestsAsync(
+            instance,
+            handle,
+            "bad candidate patch",
+            ExecutionMode.BareHost,
+            failToPassOnly: true);
+
+        Assert.False(result.Passed);
+        Assert.True(result.IsPatchApplicationError);
+        Assert.False(result.IsInfrastructureError);
+        Assert.Contains("Patch failed to apply cleanly", result.ErrorMessage);
+        execEnv.Verify(e => e.ExecuteAsync(
+            It.IsAny<string>(),
+            It.IsAny<string?>(),
+            It.IsAny<int?>(),
+            It.IsAny<IReadOnlyDictionary<string, string>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunImplementationTestsAsync_TestPatchApplyFailure_SetsIsPatchApplicationErrorAndSkipsTestExecution()
+    {
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ApplyPatchAsync(_tempDir, "bad test patch", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new BenchmarkWorkspaceException("test_patch conflict", workspacePath: _tempDir));
+
+        var execEnv = new Mock<IExecutionEnvironment>();
+        var envProvider = new Mock<IExecutionEnvironmentProvider>();
+        envProvider.Setup(p => p.GetEnvironmentAsync(It.IsAny<SandboxScopeDescriptor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(execEnv.Object);
+
+        var verifier = new BenchmarkVerifier(
+            workspaceManager.Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            envProvider.Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "cr-bad-test-patch",
+            Category = BenchmarkProblemCategory.CodeReview,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "o/r",
+            BaseCommit = "abc",
+            ProblemStatement = "Review",
+            TestPatch = "bad test patch",
+            FailToPass = ["BugTest"]
+        };
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "cr-bad-test-patch",
+            Category = BenchmarkProblemCategory.CodeReview,
+            WorkspacePath = _tempDir,
+            BaseCommit = "abc"
+        };
+
+        var result = await verifier.RunImplementationTestsAsync(
+            instance,
+            handle,
+            "valid candidate patch",
+            ExecutionMode.BareHost,
+            failToPassOnly: true);
+
+        Assert.False(result.Passed);
+        Assert.True(result.IsPatchApplicationError);
+        Assert.False(result.IsInfrastructureError);
+        Assert.Contains("Evaluation TestPatch failed to apply cleanly", result.ErrorMessage);
+        execEnv.Verify(e => e.ExecuteAsync(
+            It.IsAny<string>(),
+            It.IsAny<string?>(),
+            It.IsAny<int?>(),
+            It.IsAny<IReadOnlyDictionary<string, string>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static string RunGit(string workingDir, params string[] args)

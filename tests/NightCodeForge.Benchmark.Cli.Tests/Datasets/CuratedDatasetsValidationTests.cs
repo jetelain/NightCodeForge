@@ -63,6 +63,10 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.Equal(fullEntry.PassToPass ?? [], smokeEntry.PassToPass ?? []);
         }
 
+        var trPy1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-tr-py-001");
+        Assert.Equal("python:3.11-bookworm", trPy1Smoke.CustomContainerImage);
+        Assert.Contains("MarkupSafe<2.1", trPy1Smoke.PipConstraints ?? []);
+
         var serilog1903 = Assert.Single(full.Entries, e => e.InstanceId == "serilog__serilog-1903");
         Assert.Equal(
             [
@@ -93,6 +97,32 @@ public sealed partial class CuratedDatasetsValidationTests
         var crPy2Full = Assert.Single(full.Entries, e => e.InstanceId == "ncf-cr-py-002");
         Assert.Equal("python:3.11-bookworm", crPy2Full.CustomContainerImage);
         Assert.Contains("Werkzeug<3.0", crPy2Full.PipConstraints ?? []);
+
+        foreach (var manifest in new[] { smoke, full })
+        {
+            var pythonEntries = manifest.Entries
+                .Where(e => string.Equals(BenchmarkLanguages.Normalize(e.Language), BenchmarkLanguages.Python, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            Assert.NotEmpty(pythonEntries);
+            Assert.All(pythonEntries, entry =>
+                Assert.Equal("python:3.11-bookworm", entry.CustomContainerImage));
+        }
+
+        foreach (var csharpSmokeId in new[]
+                 {
+                     "autofac__autofac-1424",
+                     "messagepack-csharp__messagepack-csharp-2045",
+                     "restsharp__restsharp-1676",
+                     "serilog__serilog-2103",
+                     "spectreconsole__spectre-console-1338",
+                     "spectreconsole__spectre-console-1458"
+                 })
+        {
+            var smokeCSharp = Assert.Single(smoke.Entries, e => e.InstanceId == csharpSmokeId);
+            var fullCSharp = Assert.Single(full.Entries, e => e.InstanceId == csharpSmokeId);
+            Assert.NotEmpty(smokeCSharp.PassToPass ?? []);
+            Assert.Equal(smokeCSharp.PassToPass ?? [], fullCSharp.PassToPass ?? []);
+        }
 
         var crRust1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-rust-001");
         Assert.Contains("grep-regex", crRust1Smoke.CustomTestCommand);
@@ -175,6 +205,26 @@ public sealed partial class CuratedDatasetsValidationTests
                 case CodeReviewVerdict.MinorFix:
                     minorFixCount++;
                     Assert.NotEmpty(instance.ExpectedFindings);
+                    Assert.False(string.IsNullOrWhiteSpace(instance.GoldPatch),
+                        $"MinorFix instance '{instance.InstanceId}' must define reference 'patch' (GoldPatch).");
+                    Assert.False(string.IsNullOrWhiteSpace(instance.TestPatch),
+                        $"MinorFix instance '{instance.InstanceId}' must define a bug-triggering 'test_patch'.");
+                    Assert.NotEmpty(instance.FailToPass);
+                    AssertValidUnifiedDiff(instance.TestPatch!, $"{instance.InstanceId} (test_patch)");
+
+                    var testPaths = BenchmarkWorkspaceManager.ExtractPatchTargetPaths(instance.TestPatch!);
+                    var candidatePaths = BenchmarkWorkspaceManager.ExtractPatchTargetPaths(instance.CandidatePatch!)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var goldPaths = BenchmarkWorkspaceManager.ExtractPatchTargetPaths(instance.GoldPatch!)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    Assert.NotEmpty(testPaths);
+                    Assert.All(testPaths, p =>
+                    {
+                        Assert.False(candidatePaths.Contains(p),
+                            $"MinorFix '{instance.InstanceId}' test_patch path '{p}' overlaps with candidate_patch.");
+                        Assert.False(goldPaths.Contains(p),
+                            $"MinorFix '{instance.InstanceId}' test_patch path '{p}' overlaps with gold patch.");
+                    });
                     break;
                 case CodeReviewVerdict.RequestChanges:
                     requestChangesCount++;
@@ -229,6 +279,19 @@ public sealed partial class CuratedDatasetsValidationTests
             Assert.False(string.IsNullOrWhiteSpace(body));
             Assert.NotEmpty(instance.ExpectedFindings);
 
+            if (string.Equals(BenchmarkLanguages.Normalize(instance.Language), BenchmarkLanguages.Python, StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Equal("python:3.11-bookworm", instance.CustomContainerImage);
+            }
+            if (string.Equals(instance.InstanceId, "ncf-tr-py-001", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Equal("0192aac24123735b3eaf9b08df46429bb770c283", instance.BaseCommit);
+            }
+            if (string.Equals(instance.InstanceId, "ncf-tr-csharp-003", StringComparison.OrdinalIgnoreCase))
+            {
+                Assert.Equal("standard", instance.ExpectedDifficulty);
+            }
+
             if (verdict == TaskReviewVerdict.Ready)
             {
                 Assert.True(Enum.TryParse<TaskDifficulty>(instance.ExpectedDifficulty, ignoreCase: true, out var expectedDiff));
@@ -250,6 +313,21 @@ public sealed partial class CuratedDatasetsValidationTests
         Assert.True(readyStandardCount >= 4);
         Assert.True(readyEscalatedCount >= 3);
         Assert.True(needsClarificationCount >= 5);
+
+        var trPy1 = Assert.Single(trDataset, i => i.InstanceId == "ncf-tr-py-001");
+        Assert.Contains("MarkupSafe<2.1", trPy1.PipConstraints);
+
+        var smokeTrIds = (await BenchmarkDatasetManifestLoader.LoadAsync(Path.Combine(datasetsDir, "v1-smoke.manifest.json")))
+            .Entries
+            .Where(e => e.Category == BenchmarkProblemCategory.TaskReview)
+            .Select(e => e.InstanceId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(trDataset, inst =>
+            smokeTrIds.Contains(inst.InstanceId) &&
+            BenchmarkDatasetLoader.TryParseTaskReviewVerdict(inst.ExpectedVerdict, out var trVerdict) &&
+            trVerdict == TaskReviewVerdict.Ready &&
+            Enum.TryParse<TaskDifficulty>(inst.ExpectedDifficulty, ignoreCase: true, out var diff) &&
+            diff is TaskDifficulty.Difficult or TaskDifficulty.Expert);
     }
 
     private static void AssertAllCategoriesPresent(IReadOnlyList<BenchmarkManifestEntry> entries)

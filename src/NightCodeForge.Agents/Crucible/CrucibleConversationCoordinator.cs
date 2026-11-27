@@ -257,6 +257,17 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
     private const string LegacyCompactionMarker = ConversationHistorySerializer.CompactionCheckpointHeader;
     private static readonly TimeSpan SessionTelemetryTimeout = TimeSpan.FromSeconds(5);
 
+    internal static long ComputeTotalInferenceDurationMs(
+        ThinkingAndActivityTracingChatClient? tracingClient,
+        HarnessAgentOptions? harnessOptions)
+    {
+        long primaryInferenceMs = tracingClient?.TotalInferenceDurationMs ?? 0;
+        long summarizerInferenceMs = harnessOptions?.CompactionStrategy is PiStyleCrucibleCompactionStrategy piCompaction
+            ? piCompaction.TotalSummarizerInferenceDurationMs
+            : 0;
+        return primaryInferenceMs + summarizerInferenceMs;
+    }
+
     private readonly ITaskRepository _taskRepository;
     private readonly SessionTranscriptService _transcriptService;
     private readonly ILlmGatewayService _llmGatewayService;
@@ -921,7 +932,8 @@ public sealed class CrucibleConversationCoordinator : ICrucibleConversationCoord
                 ActualCloudCost: usageDelta?.ActualCloudCost,
                 ElectricityCost: usageDelta?.ElectricityCost,
                 CloudSavings: usageDelta?.CloudSavings,
-                Currency: usageDelta?.Currency);
+                Currency: usageDelta?.Currency,
+                InferenceDurationMs: ComputeTotalInferenceDurationMs(tracingClient, harnessOptions));
 
             var meta = new TranscriptMetadata(
                 context.ForgeTask.Id,
