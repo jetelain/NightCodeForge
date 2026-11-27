@@ -3204,6 +3204,36 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
             It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public void ResolveTestCommands_PreservesDotNetFilterAndXunitRunSettingsBeforeAndAfterDoubleDash()
+    {
+        var csDir = Path.Combine(_tempDir, "restsharp-1676-cmd");
+        Directory.CreateDirectory(csDir);
+
+        const string customCmd =
+            "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --filter FullyQualifiedName~StatusCodeTests --logger trx --results-directory /workspace/.ncf-bench-results -- xunit.parallelizeTestCollections=false";
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "restsharp__restsharp-1676",
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "restsharp/RestSharp",
+            BaseCommit = "49ce0280",
+            ProblemStatement = "Fix IsSuccessful propagation",
+            CustomTestCommand = customCmd,
+            FailToPass = ["RestSharp.IntegrationTests.StatusCodeTests.ContentType_Additional_Information"],
+            PassToPass = ["RestSharp.IntegrationTests.StatusCodeTests.Reports_1xx_Status_Code_Success_Accurately"]
+        };
+
+        var agentCmd = BenchmarkTestCommandResolver.ResolveAgentTestCommand(instance, csDir, ExecutionMode.ContainerSandbox);
+        Assert.Equal(
+            "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --filter FullyQualifiedName~StatusCodeTests --no-build -- xunit.parallelizeTestCollections=false",
+            agentCmd);
+
+        var verifyF2pCmd = BenchmarkTestCommandResolver.ResolveTestCommand(instance, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
+        Assert.Equal(customCmd, verifyF2pCmd);
+    }
+
     private static string RunGit(string workingDir, params string[] args)
     {
         using var process = new System.Diagnostics.Process();

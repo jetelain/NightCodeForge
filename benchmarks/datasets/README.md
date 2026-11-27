@@ -3,7 +3,7 @@
 This directory stores **pinned selection manifests** and **crafted NightCodeForge-native review scenarios** under version control:
 
 - `v1-smoke.manifest.json` — Fast regression suite (28 instances: ~54% C#, ~21% TS/JS, ~14% Python, ~11% Rust) across Implementation, Code Review, and ForgeTask Review.
-- `v1-full.manifest.json` — Overnight model selection suite (90 instances: ~53% C#, ~20% TS/JS, ~16% Python, ~11% Rust) across Implementation, Code Review, and ForgeTask Review.
+- `v1-full.manifest.json` — Overnight model selection suite (89 instances: ~53% C#, ~20% TS/JS, ~16% Python, ~11% Rust) across Implementation, Code Review, and ForgeTask Review.
 - `v1-code-review.jsonl` — 18 crafted Code Review scenarios (`Approve`, `MinorFix`, `RequestChanges`) testing Tier-1 surgical fixes, false-positive rates, and Tier-2 rejections with regression-test enforcement.
 - `v1-task-review.jsonl` — 15 crafted ForgeTask Review scenarios (`Ready`, `Ready` + difficulty escalation, `NeedsClarification`) testing symbol grounding, YAML frontmatter preservation, difficulty escalation, and `ask` tool usage.
 
@@ -56,7 +56,7 @@ ncf-bench dataset validate --dataset benchmarks/datasets/v1-task-review.jsonl
 After changing NightCodeForge container management, verification wrappers, or test scorers, use `benchmarks/validate-golden.ps1` to revalidate the full suite (defaults to `v1-full`) with once-upfront compilation, incremental `summary.json`/`summary.md`/`validation.log` persistence, and `-Resume` support:
 
 ```powershell
-# Revalidate the full v1-full suite (90 instances) with container verification
+# Revalidate the full v1-full suite (89 instances) with container verification
 .\benchmarks\validate-golden.ps1 -CleanContainers
 
 # Revalidate the fast v1-smoke suite (28 instances)

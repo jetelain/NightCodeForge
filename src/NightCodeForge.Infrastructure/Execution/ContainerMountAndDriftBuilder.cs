@@ -249,9 +249,11 @@ public class ContainerMountAndDriftBuilder
                 AddMount(ResolveHostPath(options.NugetPackageCachePath, options), "/cache/nuget", isReadOnly: false);
             }
 
-            if (!string.IsNullOrWhiteSpace(options.NpmCachePath))
+            if (!string.IsNullOrWhiteSpace(options.NpmCachePath) &&
+                !options.IsRestrictedReadOnly &&
+                !options.DisableNetwork)
             {
-                AddMount(ResolveHostPath(options.NpmCachePath, options), "/cache/npm", isReadOnly: false);
+                AddMount(ResolveHostPath(options.NpmCachePath, options), ContainerExecutorOptions.ContainerNpmCachePath, isReadOnly: false);
             }
 
             if (!string.IsNullOrWhiteSpace(options.PnpmCachePath))
@@ -572,15 +574,17 @@ public class ContainerMountAndDriftBuilder
 
         var expectedRustupHome = ResolveRustupHomePath(options);
         var expectCargoHome = options.MountPackageCaches && !string.IsNullOrWhiteSpace(options.CargoCachePath);
-        if (!string.IsNullOrWhiteSpace(expectedRustupHome) || expectCargoHome)
+        var expectOfflineNpmEnv = networkExpectedNone;
+        var expectFallbackNpmCacheEnv = networkExpectedNone && options.MountPackageCaches;
+        if (!string.IsNullOrWhiteSpace(expectedRustupHome) || expectCargoHome || expectOfflineNpmEnv || expectFallbackNpmCacheEnv)
         {
             var envResult = await runInspect(BuildDockerProcessSpec(
                 options,
                 ["inspect", "-f", EnvInspectFormat, options.ContainerNameOrId],
                 timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-            if (envResult.ExitCode != 0)
+            if (envResult == null || envResult.ExitCode != 0)
             {
-                return $"Failed to inspect environment of container (exit code {envResult.ExitCode}): {envResult.StandardError}";
+                return $"Failed to inspect environment of container (exit code {envResult?.ExitCode ?? -1}): {envResult?.StandardError}";
             }
 
             if (!string.IsNullOrWhiteSpace(expectedRustupHome))
@@ -601,6 +605,39 @@ public class ContainerMountAndDriftBuilder
                 if (cargoDrift != null)
                 {
                     return cargoDrift;
+                }
+            }
+
+            if (expectOfflineNpmEnv)
+            {
+                var offlineLowerDrift = EvaluateRequiredEnvVarDrift(
+                    envResult.StandardOutput,
+                    ContainerExecutorOptions.NpmConfigOfflineEnvVarName,
+                    ContainerExecutorOptions.OfflineTrueValue);
+                if (offlineLowerDrift != null)
+                {
+                    return offlineLowerDrift;
+                }
+
+                var offlineUpperDrift = EvaluateRequiredEnvVarDrift(
+                    envResult.StandardOutput,
+                    ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName,
+                    ContainerExecutorOptions.OfflineTrueValue);
+                if (offlineUpperDrift != null)
+                {
+                    return offlineUpperDrift;
+                }
+            }
+
+            if (expectFallbackNpmCacheEnv)
+            {
+                var npmCacheDrift = EvaluateRequiredEnvVarDrift(
+                    envResult.StandardOutput,
+                    ContainerExecutorOptions.NpmCacheEnvVarName,
+                    ContainerExecutorOptions.FallbackNpmCachePath);
+                if (npmCacheDrift != null)
+                {
+                    return npmCacheDrift;
                 }
             }
         }
@@ -747,6 +784,15 @@ public class ContainerMountAndDriftBuilder
                 {
                     problems.Add($"{dest} (expected absent)");
                 }
+            }
+        }
+
+        if (options.IsRestrictedReadOnly || options.DisableNetwork)
+        {
+            var npmCacheDest = NormalizeContainerPath(ContainerExecutorOptions.ContainerNpmCachePath);
+            if (actual.TryGetValue(npmCacheDest, out var npmMount) && !string.IsNullOrEmpty(npmMount.Source))
+            {
+                problems.Add($"{ContainerExecutorOptions.ContainerNpmCachePath} (expected absent)");
             }
         }
 
@@ -1363,6 +1409,7 @@ public class ContainerMountAndDriftBuilder
 
         if (options.MountPackageCaches)
         {
+            var isOffline = options.IsRestrictedReadOnly || options.DisableNetwork;
             foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
             {
                 if (string.Equals(name, ContainerExecutorOptions.CargoHomeEnvVarName, StringComparison.Ordinal) &&
@@ -1371,7 +1418,11 @@ public class ContainerMountAndDriftBuilder
                     continue;
                 }
 
-                args.AddRange(["-e", $"{name}={value}"]);
+                var effectiveValue = isOffline && string.Equals(name, ContainerExecutorOptions.NpmCacheEnvVarName, StringComparison.Ordinal)
+                    ? ContainerExecutorOptions.FallbackNpmCachePath
+                    : value;
+
+                args.AddRange(["-e", $"{name}={effectiveValue}"]);
             }
         }
 
@@ -1420,6 +1471,8 @@ public class ContainerMountAndDriftBuilder
         if (options.IsRestrictedReadOnly || options.DisableNetwork)
         {
             args.AddRange(["--network", "none"]);
+            args.AddRange(["-e", $"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}"]);
+            args.AddRange(["-e", $"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}"]);
         }
         else if (options.BlockedHosts is { Count: > 0 })
         {

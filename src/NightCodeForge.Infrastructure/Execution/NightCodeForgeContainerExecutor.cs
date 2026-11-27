@@ -53,6 +53,9 @@ public class ContainerExecutorOptions
     public const string ContainerPnpmStorePath = "/cache/pnpm";
     public const string FallbackNpmCachePath = "/tmp/ncf-npm-cache";
     public const string FallbackPnpmStorePath = "/tmp/ncf-pnpm-store";
+    public const string NpmConfigOfflineEnvVarName = "npm_config_offline";
+    public const string NpmConfigOfflineUpperEnvVarName = "NPM_CONFIG_OFFLINE";
+    public const string OfflineTrueValue = "true";
     public const string HostDotnetToolsContainerPath = "/opt/ncf-dotnet-tools";
     public const string HostAgyContainerDirectory = "/opt/ncf-acp";
     public const string HostAgyContainerBinaryPath = "/opt/ncf-acp/agy";

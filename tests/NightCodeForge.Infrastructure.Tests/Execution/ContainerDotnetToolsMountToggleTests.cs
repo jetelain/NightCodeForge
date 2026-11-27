@@ -368,7 +368,7 @@ public sealed class ContainerDotnetToolsMountToggleTests
         Assert.Contains("Network mode mismatch", netDrift!);
         Assert.Equal(netDrift, ContainerMountAndDriftBuilder.DetectContainerDrift(bridgeRunner.Object, offlineOptions));
 
-        var noneRunner = CreateRunner(offlineOptions, networkMode: "none");
+        var noneRunner = CreateRunner(offlineOptions, networkMode: "none", envOut: "npm_config_offline=true\nNPM_CONFIG_OFFLINE=true\n");
         Assert.Null(await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(noneRunner.Object, offlineOptions));
         Assert.Null(ContainerMountAndDriftBuilder.DetectContainerDrift(noneRunner.Object, offlineOptions));
 
@@ -429,8 +429,166 @@ public sealed class ContainerDotnetToolsMountToggleTests
         Assert.Contains("Network mode mismatch", roNetDrift!);
         Assert.Equal(roNetDrift, ContainerMountAndDriftBuilder.DetectContainerDrift(roBridgeRunner.Object, readOnlyOptions));
 
-        var roCleanRunner = CreateRunner(readOnlyOptions, networkMode: "none");
+        var roCleanRunner = CreateRunner(readOnlyOptions, networkMode: "none", envOut: "npm_config_offline=true\nNPM_CONFIG_OFFLINE=true\n");
         Assert.Null(await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(roCleanRunner.Object, readOnlyOptions));
         Assert.Null(ContainerMountAndDriftBuilder.DetectContainerDrift(roCleanRunner.Object, readOnlyOptions));
+    }
+
+    [Fact]
+    public void BuildVolumeMounts_And_BuildDockerRunArgs_IsolateNpmCacheAndSetOfflineEnvWhenOfflineOrReadOnly_AndMountWhenOnline()
+    {
+        // 1. DisableNetwork = true, IsRestrictedReadOnly = false
+        var offlineOptions = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = true,
+            NpmCachePath = "/home/user/.npm",
+            MountHostSdks = false,
+            DisableNetwork = true,
+            IsRestrictedReadOnly = false
+        };
+
+        var offlineMounts = ContainerMountAndDriftBuilder.BuildVolumeMounts(offlineOptions);
+        Assert.DoesNotContain(offlineMounts, m => string.Equals(m.ContainerPath, ContainerExecutorOptions.ContainerNpmCachePath, StringComparison.OrdinalIgnoreCase));
+
+        var offlineArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(offlineOptions);
+        Assert.Contains($"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", offlineArgs);
+        Assert.Contains($"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", offlineArgs);
+        Assert.Contains($"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.FallbackNpmCachePath}", offlineArgs);
+        Assert.DoesNotContain($"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}", offlineArgs);
+
+        // 2. IsRestrictedReadOnly = true, DisableNetwork = false
+        var readOnlyOptions = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = true,
+            NpmCachePath = "/home/user/.npm",
+            MountHostSdks = false,
+            DisableNetwork = false,
+            IsRestrictedReadOnly = true
+        };
+
+        var roMounts = ContainerMountAndDriftBuilder.BuildVolumeMounts(readOnlyOptions);
+        Assert.DoesNotContain(roMounts, m => string.Equals(m.ContainerPath, ContainerExecutorOptions.ContainerNpmCachePath, StringComparison.OrdinalIgnoreCase));
+
+        var roArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(readOnlyOptions);
+        Assert.Contains($"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", roArgs);
+        Assert.Contains($"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", roArgs);
+        Assert.Contains($"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.FallbackNpmCachePath}", roArgs);
+        Assert.DoesNotContain($"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}", roArgs);
+
+        // 3. Online control: DisableNetwork = false, IsRestrictedReadOnly = false
+        var onlineOptions = new ContainerExecutorOptions
+        {
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = true,
+            NpmCachePath = "/home/user/.npm",
+            MountHostSdks = false,
+            DisableNetwork = false,
+            IsRestrictedReadOnly = false
+        };
+
+        var onlineMounts = ContainerMountAndDriftBuilder.BuildVolumeMounts(onlineOptions);
+        Assert.Contains(onlineMounts, m => string.Equals(m.ContainerPath, ContainerExecutorOptions.ContainerNpmCachePath, StringComparison.OrdinalIgnoreCase));
+
+        var onlineArgs = ContainerMountAndDriftBuilder.BuildDockerRunArgs(onlineOptions);
+        Assert.Contains($"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}", onlineArgs);
+        Assert.DoesNotContain($"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", onlineArgs);
+        Assert.DoesNotContain($"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", onlineArgs);
+    }
+
+    [Fact]
+    public async Task DetectContainerDrift_DetectsStaleNpmCacheMountAndMissingOfflineNpmEnvWhenOffline()
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-drift-npm-offline",
+            ContainerImage = "alpine",
+            HostWorkspacePath = "/tmp/bench-wks",
+            MountPackageCaches = true,
+            NugetPackageCachePath = null,
+            PnpmCachePath = null,
+            UvCachePath = null,
+            MavenCachePath = null,
+            PlaywrightCachePath = null,
+            CargoCachePath = null,
+            NpmCachePath = "/home/user/.npm",
+            MountHostSdks = false,
+            DisableNetwork = true,
+            IsRestrictedReadOnly = false
+        };
+
+        var expectedMounts = ContainerMountAndDriftBuilder.BuildVolumeMounts(options);
+        var cleanMountsOut = string.Concat(expectedMounts.Select(m =>
+            $"{m.ContainerPath}={m.HostPath}={(!m.IsReadOnly).ToString().ToLowerInvariant()};"));
+        var cleanEnvOut =
+            $"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}\n" +
+            $"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}\n" +
+            $"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.FallbackNpmCachePath}\n";
+
+        static Mock<IProcessRunner> CreateRunner(string mountsOut, string envOut)
+        {
+            var runner = new Mock<IProcessRunner>();
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Mounts}}{{.Destination}}={{.Source}}={{.RW}};{{end}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, mountsOut, string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Mounts}}{{.Destination}}={{.Source}}={{.RW}};{{end}}"))))
+                .Returns(new ProcessExecutionResult(0, mountsOut, string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.Config.Image}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "alpine\n", string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.Config.Image}}"))))
+                .Returns(new ProcessExecutionResult(0, "alpine\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "none\n", string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}"))))
+                .Returns(new ProcessExecutionResult(0, "none\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, envOut, string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}"))))
+                .Returns(new ProcessExecutionResult(0, envOut, string.Empty));
+            return runner;
+        }
+
+        // 1. Stale /cache/npm bind mount triggers drift
+        var staleMountRunner = CreateRunner(
+            cleanMountsOut + $"{ContainerExecutorOptions.ContainerNpmCachePath}=/home/user/.npm=true;",
+            cleanEnvOut);
+        var staleMountDrift = await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(staleMountRunner.Object, options);
+        Assert.NotNull(staleMountDrift);
+        Assert.Contains($"{ContainerExecutorOptions.ContainerNpmCachePath} (expected absent)", staleMountDrift!);
+        Assert.Equal(staleMountDrift, ContainerMountAndDriftBuilder.DetectContainerDrift(staleMountRunner.Object, options));
+
+        // 2. Missing npm_config_offline or NPM_CONFIG_OFFLINE triggers drift
+        var missingOfflineRunner = CreateRunner(
+            cleanMountsOut,
+            $"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.FallbackNpmCachePath}\n");
+        var missingOfflineDrift = await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(missingOfflineRunner.Object, options);
+        Assert.NotNull(missingOfflineDrift);
+        Assert.Contains(ContainerExecutorOptions.NpmConfigOfflineEnvVarName, missingOfflineDrift!);
+        Assert.Equal(missingOfflineDrift, ContainerMountAndDriftBuilder.DetectContainerDrift(missingOfflineRunner.Object, options));
+
+        var missingUpperOfflineRunner = CreateRunner(
+            cleanMountsOut,
+            $"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}\n" +
+            $"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.FallbackNpmCachePath}\n");
+        var missingUpperOfflineDrift = await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(missingUpperOfflineRunner.Object, options);
+        Assert.NotNull(missingUpperOfflineDrift);
+        Assert.Contains(ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName, missingUpperOfflineDrift!);
+        Assert.Equal(missingUpperOfflineDrift, ContainerMountAndDriftBuilder.DetectContainerDrift(missingUpperOfflineRunner.Object, options));
+
+        // 3. Stale npm_config_cache=/cache/npm triggers drift expecting fallback path
+        var staleCacheEnvRunner = CreateRunner(
+            cleanMountsOut,
+            $"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}\n" +
+            $"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}\n" +
+            $"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}\n");
+        var staleCacheEnvDrift = await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(staleCacheEnvRunner.Object, options);
+        Assert.NotNull(staleCacheEnvDrift);
+        Assert.Contains($"{ContainerExecutorOptions.NpmCacheEnvVarName}='{ContainerExecutorOptions.FallbackNpmCachePath}'", staleCacheEnvDrift!);
+        Assert.Equal(staleCacheEnvDrift, ContainerMountAndDriftBuilder.DetectContainerDrift(staleCacheEnvRunner.Object, options));
+
+        // 4. Clean offline container returns null
+        var cleanRunner = CreateRunner(cleanMountsOut, cleanEnvOut);
+        Assert.Null(await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(cleanRunner.Object, options));
+        Assert.Null(ContainerMountAndDriftBuilder.DetectContainerDrift(cleanRunner.Object, options));
     }
 }

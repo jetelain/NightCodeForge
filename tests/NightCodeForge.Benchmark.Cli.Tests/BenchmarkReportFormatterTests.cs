@@ -53,7 +53,7 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
         if (format != ReportOutputFormat.Json)
         {
             Assert.Contains("Pass@1 / Accuracy %", formatted);
-            Assert.Contains("Verdict / Patch %", formatted);
+            Assert.Contains("Output Produced %", formatted);
             Assert.Contains("Judge Score", formatted);
             Assert.Contains("Avg Duration", formatted);
             Assert.Contains("Avg Turns", formatted);

@@ -47,7 +47,7 @@ public static class BenchmarkReportFormatter
     [
         "Model",
         "Pass@1 / Accuracy %",
-        "Verdict / Patch %",
+        "Output Produced %",
         "Judge Score",
         "Avg Duration",
         "Avg Turns",
@@ -75,7 +75,7 @@ public static class BenchmarkReportFormatter
         "Model",
         "Run (Branch @ Commit / Version)",
         "Pass@1 / Accuracy %",
-        "Verdict / Patch %",
+        "Output Produced %",
         "Judge Score",
         "Avg Duration",
         "Avg Turns",

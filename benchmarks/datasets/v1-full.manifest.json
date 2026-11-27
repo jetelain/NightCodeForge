@@ -1,7 +1,7 @@
 {
   "suite_name": "v1-full",
   "version": "1.0.0",
-  "description": "Comprehensive multi-stack overnight benchmark suite (90 instances: ~53.3% C#, 20.0% TypeScript/JavaScript, ~15.6% Python, ~11.1% Rust) spanning Implementation, CodeReview, and TaskReview.",
+  "description": "Comprehensive multi-stack overnight benchmark suite (89 instances: ~52.8% C#, ~20.2% TypeScript/JavaScript, ~15.7% Python, ~11.2% Rust) spanning Implementation, CodeReview, and TaskReview.",
   "entries": [
     {
       "instance_id": "serilog__serilog-2083",
@@ -79,33 +79,12 @@
       "language": "csharp",
       "repo": "restsharp/RestSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "custom_test_command": "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --filter FullyQualifiedName~StatusCodeTests --logger trx --results-directory /workspace/.ncf-bench-results -- xunit.parallelizeTestCollections=false",
       "pass_to_pass": [
         "RestSharp.IntegrationTests.StatusCodeTests.Reports_1xx_Status_Code_Success_Accurately",
         "RestSharp.IntegrationTests.StatusCodeTests.Reports_3xx_Status_Code_Success_Accurately",
         "RestSharp.IntegrationTests.StatusCodeTests.Reports_4xx_Status_Code_Success_Accurately",
         "RestSharp.IntegrationTests.StatusCodeTests.Reports_5xx_Status_Code_Success_Accurately"
-      ]
-    },
-    {
-      "instance_id": "messagepack-csharp__messagepack-csharp-2045",
-      "source": "swe-sharp-bench",
-      "category": "Implementation",
-      "language": "csharp",
-      "repo": "MessagePack-CSharp/MessagePack-CSharp",
-      "test_result_format": "Trx",
-      "custom_test_command": "dotnet test tests/MessagePack.Tests/MessagePack.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
-      "pass_to_pass": [
-        "MessagePackSerializerOptionsTests.AllowAssemblyVersionMismatch",
-        "MessagePackSerializerOptionsTests.OmitAssemblyVersion",
-        "MessagePackSerializerOptionsTests.Compression",
-        "MessagePackSerializerOptionsTests.CompressionMinLength",
-        "MessagePackSerializerOptionsTests.SuggestedContiguousMemorySize",
-        "MessagePackSerializerOptionsTests.OldSpec",
-        "MessagePackSerializerOptionsTests.Resolver",
-        "MessagePackSerializerOptionsTests.WithOldSpec_PreservesOtherProperties",
-        "MessagePackSerializerOptionsTests.WithLZ4Compression_PreservesOtherProperties",
-        "MessagePackSerializerOptionsTests.WithSecurity_PreservesOtherProperties"
       ]
     },
     {
@@ -345,7 +324,15 @@
       "language": "csharp",
       "repo": "MessagePack-CSharp/MessagePack-CSharp",
       "test_result_format": "Trx",
-      "custom_test_command": "dotnet test tests/MessagePack.SourceGenerator.Tests/MessagePack.SourceGenerator.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results"
+      "custom_test_command": "dotnet test tests/MessagePack.SourceGenerator.Tests/MessagePack.SourceGenerator.Tests.csproj --nologo --logger trx --results-directory /workspace/.ncf-bench-results",
+      "pass_to_pass": [
+        "MsgPack00xAnalyzerTests.MessageFormatterAttribute",
+        "MsgPack00xAnalyzerTests.InvalidMessageFormatterType",
+        "MsgPack00xAnalyzerTests.AddAttributeToType",
+        "MsgPack00xAnalyzerTests.AddAttributesToMembers",
+        "MsgPack00xAnalyzerTests.DerivedAttributes"
+      ],
+      "notes": "SWE-Sharp-Bench C# Roslyn analyzer fix (MsgPack013/MsgPack009 ignore abstract formatters); replaces underspecified 2045"
     },
     {
       "instance_id": "serilog__serilog-1955",
@@ -671,7 +658,8 @@
       "category": "CodeReview",
       "language": "csharp",
       "repo": "restsharp/RestSharp",
-      "test_result_format": "Trx"
+      "test_result_format": "Trx",
+      "custom_test_command": "dotnet test test/RestSharp.IntegrationTests/RestSharp.IntegrationTests.csproj --nologo --filter FullyQualifiedName~StatusCodeTests --logger trx --results-directory /workspace/.ncf-bench-results -- xunit.parallelizeTestCollections=false"
     },
     {
       "instance_id": "ncf-cr-csharp-003",

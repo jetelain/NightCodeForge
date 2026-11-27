@@ -388,23 +388,39 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             return (true, "CandidatePatch applied cleanly and Approve tests passed.", null);
         }
 
-        if (expectedVerdict == CodeReviewVerdict.MinorFix)
+        if (expectedVerdict is CodeReviewVerdict.MinorFix or CodeReviewVerdict.RequestChanges)
         {
+            bool verifyPassToPass = expectedVerdict == CodeReviewVerdict.MinorFix && instance.PassToPass.Count > 0;
             var candidateTestResult = await _verifier.RunImplementationTestsAsync(
                 instance,
                 workspace,
                 patchToApply: instance.CandidatePatch,
                 ExecutionMode.ContainerSandbox,
-                failToPassOnly: instance.FailToPass.Count > 0,
+                failToPassOnly: !verifyPassToPass && instance.FailToPass.Count > 0,
                 cancellationToken).ConfigureAwait(false);
 
-            var preFixError = ValidatePreFixFailure(instance, candidateTestResult, "Pre-flight MinorFix", "CandidatePatch");
+            var preFixError = ValidatePreFixFailure(instance, candidateTestResult, $"Pre-flight {expectedVerdict}", "CandidatePatch");
             if (preFixError != null)
             {
                 return (false, null, preFixError);
             }
 
-            if (!string.IsNullOrWhiteSpace(instance.GoldPatch))
+            if (verifyPassToPass && candidateTestResult.PassToPassPassed < instance.PassToPass.Count)
+            {
+                var failedSet = candidateTestResult.FailedTests.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var regressedPassToPass = instance.PassToPass
+                    .Where(failedSet.Contains)
+                    .ToList();
+                var regressedDetail = regressedPassToPass.Count > 0
+                    ? $" Regressed PassToPass test(s): {string.Join(", ", regressedPassToPass)}"
+                    : string.Empty;
+                return (
+                    false,
+                    null,
+                    $"Pre-flight {expectedVerdict} PassToPass invariant violated: {candidateTestResult.PassToPassPassed}/{instance.PassToPass.Count} PassToPass test(s) passed on CandidatePatch.{regressedDetail}");
+            }
+
+            if (expectedVerdict == CodeReviewVerdict.MinorFix && !string.IsNullOrWhiteSpace(instance.GoldPatch))
             {
                 var goldTestResult = await _verifier.RunImplementationTestsAsync(
                     instance,
@@ -425,7 +441,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
                     null);
             }
 
-            return (true, "CandidatePatch failed MinorFix test assertions as expected.", null);
+            return (true, $"CandidatePatch failed {expectedVerdict} test assertions as expected.", null);
         }
 
         return (true, "CandidatePatch applied cleanly to BaseCommit with valid diff.", null);
@@ -473,6 +489,7 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
             return $"{prefix} {targetLabel} patch application failed: {preFixResult.ErrorMessage ?? "Patch failed to apply cleanly."}";
         }
 
+        var withoutGoldSuffix = string.IsNullOrWhiteSpace(instance.GoldPatch) ? string.Empty : " without GoldPatch";
         if (instance.FailToPass.Count > 0)
         {
             if (preFixResult.FailToPassPassed > 0 || preFixResult.Passed)
@@ -484,14 +501,14 @@ public sealed class BenchmarkDatasetValidator : IBenchmarkDatasetValidator
                 var passedDetail = passedBeforeFix.Count > 0
                     ? $" Passing test(s): {string.Join(", ", passedBeforeFix)}"
                     : string.Empty;
-                return $"{prefix} FailToPass invariant violated: {preFixResult.FailToPassPassed}/{preFixResult.FailToPassTotal} FailToPass test(s) already pass on {targetLabel} without GoldPatch.{passedDetail}";
+                return $"{prefix} FailToPass invariant violated: {preFixResult.FailToPassPassed}/{preFixResult.FailToPassTotal} FailToPass test(s) already pass on {targetLabel}{withoutGoldSuffix}.{passedDetail}";
             }
 
             return null;
         }
 
         return preFixResult.Passed
-            ? $"{prefix} invariant violated: test suite already passed on {targetLabel} without GoldPatch."
+            ? $"{prefix} invariant violated: test suite already passed on {targetLabel}{withoutGoldSuffix}."
             : null;
     }
 

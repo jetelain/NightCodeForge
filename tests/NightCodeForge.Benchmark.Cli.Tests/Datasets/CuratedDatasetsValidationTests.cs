@@ -111,7 +111,7 @@ public sealed partial class CuratedDatasetsValidationTests
         foreach (var csharpSmokeId in new[]
                  {
                      "autofac__autofac-1424",
-                     "messagepack-csharp__messagepack-csharp-2045",
+                     "messagepack-csharp__messagepack-csharp-2022",
                      "restsharp__restsharp-1676",
                      "serilog__serilog-2103",
                      "spectreconsole__spectre-console-1338",

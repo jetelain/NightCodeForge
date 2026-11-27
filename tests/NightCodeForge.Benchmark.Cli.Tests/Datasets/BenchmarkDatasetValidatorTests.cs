@@ -1011,13 +1011,15 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 It.IsAny<BenchmarkWorkspaceHandle>(),
                 "diff cand4",
                 ExecutionMode.ContainerSandbox,
-                true,
+                false,
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BenchmarkVerificationResult
             {
                 Passed = false,
                 FailToPassPassed = 0,
                 FailToPassTotal = 1,
+                PassToPassPassed = 1,
+                PassToPassTotal = 1,
                 FailedTests = ["BugTest4"]
             });
 
@@ -1137,5 +1139,158 @@ public sealed class BenchmarkDatasetValidatorTests : IDisposable
                 false,
                 It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_CodeReviewMinorFix_FailsWhenCandidateRegressesPassToPassTest()
+    {
+        var datasetPath = Path.Combine(_tempDir, "cr-minor-p2p-regress.jsonl");
+        await File.WriteAllTextAsync(datasetPath, """
+        {"instance_id":"cr-minor-p2p-fail","category":"CodeReview","language":"rust","repo":"burntsushi/ripgrep","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand","patch":"diff gold","test_patch":"diff test","expected_verdict":"MinorFix","fail_to_pass":["BugTest"],"pass_to_pass":["ExistingTest"]}
+        """);
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "cr-minor-p2p-fail",
+            Category = BenchmarkProblemCategory.CodeReview,
+            WorkspacePath = Path.Combine(_tempDir, "wks-p2p-fail"),
+            BaseCommit = "abc",
+            ReviewDiff = "diff --git a/src/word.rs b/src/word.rs\n+x"
+        };
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.CodeReview, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(handle);
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.IsAny<BenchmarkInstance>(),
+                handle,
+                "diff cand",
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                FailToPassPassed = 0,
+                FailToPassTotal = 1,
+                PassToPassPassed = 0,
+                PassToPassTotal = 1,
+                FailedTests = ["BugTest", "ExistingTest"]
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.False(report.AllPassed);
+        var result = Assert.Single(report.Results);
+        Assert.False(result.Passed);
+        Assert.Contains("PassToPass invariant violated", result.ErrorMessage);
+        Assert.Contains("ExistingTest", result.ErrorMessage);
+        verifier.Verify(
+            v => v.RunImplementationTestsAsync(
+                It.IsAny<BenchmarkInstance>(),
+                handle,
+                "diff gold",
+                ExecutionMode.ContainerSandbox,
+                false,
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_CodeReviewRequestChanges_AllowsPassToPassRegressionAndFailsWhenCandidatePasses()
+    {
+        var datasetPath = Path.Combine(_tempDir, "cr-request-changes.jsonl");
+        await File.WriteAllTextAsync(datasetPath, string.Join(Environment.NewLine,
+        [
+            """{"instance_id":"cr-rc-regresses-p2p","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand1","test_patch":"diff test1","expected_verdict":"RequestChanges","fail_to_pass":["BugTest1"],"pass_to_pass":["ExistingTest1"]}""",
+            """{"instance_id":"cr-rc-passes-f2p","category":"CodeReview","language":"csharp","repo":"o/r","base_commit":"abc","problem_statement":"Review","candidate_patch":"diff cand2","test_patch":"diff test2","expected_verdict":"RequestChanges","fail_to_pass":["BugTest2"]}"""
+        ]));
+
+        var workspaceManager = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceManager
+            .Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.CodeReview, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((BenchmarkInstance inst, BenchmarkProblemCategory cat, string? _, CancellationToken _) => new BenchmarkWorkspaceHandle
+            {
+                InstanceId = inst.InstanceId,
+                Category = cat,
+                WorkspacePath = Path.Combine(_tempDir, inst.InstanceId),
+                BaseCommit = "abc",
+                ReviewDiff = "diff --git a/A.cs b/A.cs\n+x"
+            });
+
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-rc-regresses-p2p"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand1",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = false,
+                FailToPassPassed = 0,
+                FailToPassTotal = 1,
+                PassToPassPassed = 0,
+                PassToPassTotal = 1,
+                FailedTests = ["BugTest1", "ExistingTest1"]
+            });
+
+        verifier
+            .Setup(v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-rc-passes-f2p"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand2",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkVerificationResult
+            {
+                Passed = true,
+                FailToPassPassed = 1,
+                FailToPassTotal = 1
+            });
+
+        var validator = new BenchmarkDatasetValidator(
+            _loader,
+            workspaceManager.Object,
+            verifier.Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<BenchmarkDatasetValidator>.Instance);
+
+        var report = await validator.ValidateAsync(datasetPath, null, null, null, verifyWithTests: true, progressCallback: null);
+
+        Assert.False(report.AllPassed);
+        Assert.Equal(2, report.Results.Count);
+
+        var regressedResult = report.Results[0];
+        Assert.True(regressedResult.Passed);
+        Assert.Contains("RequestChanges", regressedResult.Summary);
+        verifier.Verify(
+            v => v.RunImplementationTestsAsync(
+                It.Is<BenchmarkInstance>(i => i.InstanceId == "cr-rc-regresses-p2p"),
+                It.IsAny<BenchmarkWorkspaceHandle>(),
+                "diff cand1",
+                ExecutionMode.ContainerSandbox,
+                true,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        var unexpectedPassResult = report.Results[1];
+        Assert.False(unexpectedPassResult.Passed);
+        Assert.Contains("Pre-flight RequestChanges FailToPass invariant violated", unexpectedPassResult.ErrorMessage);
+        Assert.DoesNotContain("without GoldPatch", unexpectedPassResult.ErrorMessage);
     }
 }

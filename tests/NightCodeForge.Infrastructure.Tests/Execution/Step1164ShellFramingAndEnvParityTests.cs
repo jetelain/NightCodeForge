@@ -98,6 +98,54 @@ public sealed class Step1164ShellFramingAndEnvParityTests
         Assert.Contains("export npm_config_cache='/custom/npm-cache'", overridePreamble, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task WriteEnvironmentPreambleAsync_ForcesFallbackNpmCacheAndOfflineVarsWhenOffline(
+        bool disableNetwork,
+        bool isRestrictedReadOnly)
+    {
+        var options = new ContainerExecutorOptions
+        {
+            ContainerNameOrId = "ncf-step1164-offline-preamble",
+            MountPackageCaches = true,
+            MountHostSdks = false,
+            DisableNetwork = disableNetwork,
+            IsRestrictedReadOnly = isRestrictedReadOnly
+        };
+
+        var defaultPreamble = await CapturePreambleAsync(options, null);
+        Assert.DoesNotContain("if [ -d \"/cache/npm\" ]", defaultPreamble, StringComparison.Ordinal);
+        Assert.Contains(
+            $"mkdir -p \"{ContainerExecutorOptions.FallbackNpmCachePath}\" 2>/dev/null || true; export {ContainerExecutorOptions.NpmCacheEnvVarName}=\"{ContainerExecutorOptions.FallbackNpmCachePath}\"",
+            defaultPreamble,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"export {ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}",
+            defaultPreamble,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"export {ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}",
+            defaultPreamble,
+            StringComparison.Ordinal);
+
+        var overridePreamble = await CapturePreambleAsync(
+            options,
+            new Dictionary<string, string>
+            {
+                [ContainerExecutorOptions.NpmCacheEnvVarName] = "/custom/offline-npm",
+                [ContainerExecutorOptions.NpmConfigOfflineEnvVarName] = "false",
+                [ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName] = "false"
+            });
+
+        Assert.DoesNotContain(ContainerExecutorOptions.FallbackNpmCachePath, overridePreamble, StringComparison.Ordinal);
+        Assert.DoesNotContain($"export {ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", overridePreamble, StringComparison.Ordinal);
+        Assert.DoesNotContain($"export {ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}", overridePreamble, StringComparison.Ordinal);
+        Assert.Contains($"export {ContainerExecutorOptions.NpmCacheEnvVarName}='/custom/offline-npm'", overridePreamble, StringComparison.Ordinal);
+        Assert.Contains($"export {ContainerExecutorOptions.NpmConfigOfflineEnvVarName}='false'", overridePreamble, StringComparison.Ordinal);
+        Assert.Contains($"export {ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}='false'", overridePreamble, StringComparison.Ordinal);
+    }
+
     private static async Task<string> CapturePreambleAsync(
         ContainerExecutorOptions options,
         IReadOnlyDictionary<string, string>? envVars)

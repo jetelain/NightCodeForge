@@ -218,6 +218,7 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         await _stdin.WriteLineAsync($"if [ -d \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ] && [ -w \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ]; then export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\"; else export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{FallbackHomePathExpression}/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\"; mkdir -p \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" 2>/dev/null || true; fi");
         await _stdin.WriteLineAsync("git config --global --add safe.directory '*' 2>/dev/null || true");
 
+        var isOffline = _options.IsRestrictedReadOnly || _options.DisableNetwork;
         if (_options.MountPackageCaches)
         {
             foreach (var (name, value) in ContainerExecutorOptions.PackageCacheEnvironment)
@@ -230,6 +231,13 @@ public sealed partial class PersistentContainerShellSession : IDisposable
 
                 if (environmentVariables != null && environmentVariables.ContainsKey(name))
                 {
+                    continue;
+                }
+
+                if (isOffline && string.Equals(name, ContainerExecutorOptions.NpmCacheEnvVarName, StringComparison.Ordinal))
+                {
+                    await _stdin.WriteLineAsync(
+                        $"mkdir -p \"{ContainerExecutorOptions.FallbackNpmCachePath}\" 2>/dev/null || true; export {name}=\"{ContainerExecutorOptions.FallbackNpmCachePath}\"");
                     continue;
                 }
 
@@ -249,6 +257,21 @@ public sealed partial class PersistentContainerShellSession : IDisposable
                 {
                     await _stdin.WriteLineAsync($"export {name}=\"{value}\"");
                 }
+            }
+        }
+
+        if (isOffline)
+        {
+            if (environmentVariables == null || !environmentVariables.ContainsKey(ContainerExecutorOptions.NpmConfigOfflineEnvVarName))
+            {
+                await _stdin.WriteLineAsync(
+                    $"export {ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}");
+            }
+
+            if (environmentVariables == null || !environmentVariables.ContainsKey(ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName))
+            {
+                await _stdin.WriteLineAsync(
+                    $"export {ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}");
             }
         }
 
