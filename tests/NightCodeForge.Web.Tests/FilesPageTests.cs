@@ -438,4 +438,42 @@ public class FilesPageTests : BunitContext
         Assert.Contains("parent directory traversal", cut.Find("#files-error").TextContent);
         Assert.NotEmpty(cut.FindAll("[data-testid=files-tree-node]"));
     }
+
+    [Fact]
+    public void FilesPage_MarkdownPreview_RewritesRelativeAndSharedMemoryLinksInBranchContext()
+    {
+        var resolved = Resolved("feature/task-42", "dddd4444");
+        SetupRootAndSrcTree(resolved);
+
+        _browserMock.Setup(b => b.ResolveRefAsync(WorkspaceId, "feature/task-42", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(resolved);
+        _browserMock.Setup(b => b.InspectPathAsync(WorkspaceId, resolved.CommitSha, "docs/PLAN.md", 42, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitPathInspectionResult(
+                resolved,
+                "docs/PLAN.md",
+                "PLAN.md",
+                GitFileContentKind.Text,
+                80,
+                "See [12.46A](features/STEP_12_46A.md) and [Rules](../AGENTS.md).",
+                1,
+                null,
+                null,
+                null,
+                null,
+                null));
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{WorkspaceId}/files?ref=feature%2Ftask-42&path=docs%2FPLAN.md&taskId=42");
+
+        var cut = Render<Files>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+        var links = cut.FindAll("#files-markdown-rendered a");
+
+        Assert.Equal(2, links.Count);
+        Assert.Equal(
+            $"/w/{WorkspaceId}/files?ref=feature%2Ftask-42&path=docs%2Ffeatures%2FSTEP_12_46A.md&taskId=42",
+            links[0].GetAttribute("href"));
+        Assert.Equal(
+            $"/w/{WorkspaceId}/files?ref=feature%2Ftask-42&path=AGENTS.md&taskId=42",
+            links[1].GetAttribute("href"));
+    }
 }

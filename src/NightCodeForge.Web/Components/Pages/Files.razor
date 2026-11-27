@@ -296,8 +296,13 @@
                             }
                             else if (FileViewerPresentationHelper.IsMarkdownFile(_inspection.Path) && !_showRawMarkdown)
                             {
+                                var markdownContext = MarkdownLinkContext.ForRepositoryFile(
+                                    activeWorkspace,
+                                    currentRefDisplay,
+                                    _inspection.Path,
+                                    TaskIdQuery ?? _resolvedRef?.Fallback?.TaskId);
                                 <div class="files-markdown-wrap" id="files-markdown-rendered">
-                                    <MarkdownRenderer Content="@_inspection.TextContent" Class="forge-markdown" />
+                                    <MarkdownRenderer Content="@_inspection.TextContent" Class="forge-markdown" Context="@markdownContext" />
                                 </div>
                             }
                             else

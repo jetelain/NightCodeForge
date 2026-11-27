@@ -115,7 +115,7 @@
                             }
                             else
                             {
-                                @MarkdownHelper.ToMarkupString(_description)
+                                @MarkdownHelper.ToMarkupString(_description, MarkdownLinkContext.ForGeneralWorkspace(WorkspaceState.ActiveWorkspace))
                             }
                         </div>
                     }

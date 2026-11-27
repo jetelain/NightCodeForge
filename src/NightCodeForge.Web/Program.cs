@@ -117,6 +117,7 @@ try
     builder.Services.AddSingleton<IDagLayoutEngine, DagLayoutEngine>();
     builder.Services.AddScoped<OperationsTelemetryUiService>();
     builder.Services.AddSingleton<ISyntaxHighlightingService, SimpleSyntaxHighlighter>();
+    builder.Services.AddScoped<ITaskFileResolverService, TaskFileResolverService>();
     builder.Services.AddScoped<ITaskDiffService, TaskDiffService>();
     builder.Services.AddScoped<IGlobalSkillsManagerService, GlobalSkillsManagerService>();
     builder.Services.AddScoped<GitHubSettingsUiService>();

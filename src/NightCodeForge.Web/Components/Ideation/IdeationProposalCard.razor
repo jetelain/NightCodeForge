@@ -98,7 +98,7 @@
                 }
                 else
                 {
-                    <MarkdownRenderer Content="@Proposal.Description" />
+                    <MarkdownRenderer Content="@Proposal.Description" Context="@ProposalLinkContext" />
                 }
             </div>
         }
@@ -247,6 +247,17 @@
     private bool _isExpanded;
     private int? _standalonePreviewAttachmentId;
     private Dictionary<int, TaskAttachment> _resolvedAttachmentMap = new();
+
+    private MarkdownLinkContext ProposalLinkContext
+    {
+        get
+        {
+            var workspaceState = ServiceProvider.GetService(typeof(WorkspaceStateService)) as WorkspaceStateService;
+            return MarkdownLinkContext.ForGeneralWorkspace(
+                workspaceState?.ActiveWorkspace,
+                MarkdownLinkContext.BuildTaskPathLookup(WorkspaceTasks));
+        }
+    }
 
     protected override async Task OnParametersSetAsync()
     {

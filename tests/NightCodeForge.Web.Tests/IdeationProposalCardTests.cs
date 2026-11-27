@@ -218,4 +218,54 @@ public class IdeationProposalCardTests : BunitContext
         Assert.Equal("5", options[4].GetAttribute("value"));
         Assert.Contains("Lowest / Trivial", options[4].TextContent);
     }
+
+    [Fact]
+    public void PreviewMode_WithoutWorkspaceStateService_FallsBackCleanlyAndNeutralizesWorkspacePaths()
+    {
+        using var noWsCtx = new BunitContext();
+        noWsCtx.Services.AddSingleton(TestServices.CreateToastService());
+
+        var proposal = new IdeationProposalViewModel
+        {
+            Title = "Fallback Test",
+            Description = "See [mem](/workspace/memory/MEMORY.md) and [ext](https://example.com)."
+        };
+
+        var cut = noWsCtx.Render<IdeationProposalCard>(p => p.Add(x => x.Proposal, proposal));
+        var links = cut.FindAll(".proposal-desc-preview a");
+
+        Assert.Equal(2, links.Count);
+        Assert.Equal(string.Empty, links[0].GetAttribute("href"));
+        Assert.Equal("https://example.com", links[1].GetAttribute("href"));
+    }
+
+    [Fact]
+    public void PreviewMode_WithWorkspaceStateAndWorkspaceTasks_ResolvesTaskLinksDirectly()
+    {
+        var wsState = Services.GetRequiredService<WorkspaceStateService>();
+        wsState.SetActiveWorkspace(new Workspace
+        {
+            Id = 7,
+            Name = "WS",
+            RepositoryPath = "/repos/ws",
+            DefaultBaseBranch = "main"
+        });
+
+        var workspaceTasks = new[]
+        {
+            new ForgeTask { Id = 42, WorkspaceId = 7, Title = "My Task" }
+        };
+        var proposal = new IdeationProposalViewModel
+        {
+            Title = "Task Link Card",
+            Description = "Depends on [task](docs/tasks/2026-11-26-my-task.md)."
+        };
+
+        var cut = Render<IdeationProposalCard>(p => p
+            .Add(x => x.Proposal, proposal)
+            .Add(x => x.WorkspaceTasks, workspaceTasks));
+
+        var link = Assert.Single(cut.FindAll(".proposal-desc-preview a"));
+        Assert.Equal("/w/7/tasks/42", link.GetAttribute("href"));
+    }
 }

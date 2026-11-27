@@ -87,7 +87,7 @@
                             <span class="forge-badge badge-amber">@_report.FailureCategory</span>
                         </div>
                         <div class="diagnostic-markdown" style="margin: 0; color: var(--text-primary); font-size: 0.95rem; line-height: 1.6;">
-                            @MarkdownHelper.ToMarkupString(_report.RootCause)
+                            @MarkdownHelper.ToMarkupString(_report.RootCause, DiagnosticsLinkContext)
                         </div>
                     </div>
 
@@ -100,7 +100,7 @@
                                 <span>Detailed AI Diagnostic Analysis:</span>
                             </h4>
                             <div class="diagnostic-markdown" style="color: var(--text-primary); font-size: 0.92rem; line-height: 1.6;">
-                                @MarkdownHelper.ToMarkupString(_report.FullMarkdownReport)
+                                @MarkdownHelper.ToMarkupString(_report.FullMarkdownReport, DiagnosticsLinkContext)
                             </div>
                         </div>
                     }
@@ -118,7 +118,7 @@
                                 {
                                     <li style="margin-bottom: 0.45rem;">
                                         <div class="diagnostic-markdown-inline">
-                                            @MarkdownHelper.ToMarkupString(point)
+                                            @MarkdownHelper.ToMarkupString(point, DiagnosticsLinkContext)
                                         </div>
                                     </li>
                                 }
@@ -150,7 +150,7 @@
                                             }
                                         </div>
                                         <div class="diagnostic-markdown-inline text-muted mb-0" style="font-size: 0.85rem; margin: 0;">
-                                            @MarkdownHelper.ToMarkupString(action.Description)
+                                            @MarkdownHelper.ToMarkupString(action.Description, DiagnosticsLinkContext)
                                         </div>
                                     </div>
                                     <button type="button" 
@@ -187,6 +187,13 @@
     [Parameter] public EventCallback OnClosed { get; set; }
     [Parameter] public EventCallback<RemediationSuggestion> OnRemediationApplied { get; set; }
     [Parameter] public int? WorkspaceId { get; set; }
+    [Parameter] public string? DefaultBaseBranch { get; set; }
+
+    private MarkdownLinkContext DiagnosticsLinkContext =>
+        MarkdownLinkContext.ForTranscript(
+            WorkspaceId,
+            DefaultBaseBranch,
+            Transcript?.Metadata.TaskId ?? 0);
 
     private bool _isDiagnosing;
     private bool _isApplying;

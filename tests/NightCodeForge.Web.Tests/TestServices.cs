@@ -146,6 +146,14 @@ public static class TestServices
                 .ReturnsAsync(new RemotePublishAvailability(false, null, null, null));
             return mock.Object;
         });
+        services.TryAddSingleton<IGitRepositoryBrowserService>(_ => new Mock<IGitRepositoryBrowserService>().Object);
+        services.TryAddSingleton<ITaskFileResolverService>(sp => new TaskFileResolverService(
+            sp.GetRequiredService<IWorkspaceRepository>(),
+            sp.GetRequiredService<ITaskRepository>(),
+            sp.GetRequiredService<IGitRepositoryBrowserService>(),
+            sp.GetRequiredService<ITaskMarkdownSyncService>(),
+            sp.GetRequiredService<IWorkspacePathResolver>(),
+            NullLogger<TaskFileResolverService>.Instance));
         services.TryAddSingleton<ITaskReviewService>(sp => new TaskReviewService(
             sp.GetRequiredService<ITaskRepository>(),
             sp.GetRequiredService<IWorkspaceRepository>(),

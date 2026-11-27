@@ -1,7 +1,9 @@
+using System.IO;
 using System.Net;
 using System.Text;
 using Markdig;
 using Markdig.Extensions.GenericAttributes;
+using Markdig.Renderers;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 using Microsoft.AspNetCore.Components;
@@ -10,7 +12,7 @@ namespace NightCodeForge.Web.Services;
 
 /// <summary>
 /// Thread-safe markdown to HTML conversion helper using Markdig with advanced extensions,
-/// raw HTML disabled, generic attribute parsing removed, and unsafe URL schemes stripped.
+/// raw HTML disabled, generic attribute parsing removed, context-aware link rewriting, and unsafe URL schemes stripped.
 /// </summary>
 public static class MarkdownHelper
 {
@@ -18,28 +20,47 @@ public static class MarkdownHelper
     private const string HttpsScheme = "https";
     private const string MailtoScheme = "mailto";
 
-    private static readonly MarkdownPipeline Pipeline = BuildPipeline();
+    private static readonly MarkdownPipeline ParsePipeline = BuildParsePipeline();
 
     /// <summary>
-    /// Converts markdown text into rendered HTML.
+    /// Converts markdown text into rendered HTML without workspace link rewriting.
     /// </summary>
-    public static string ToHtml(string? markdown)
+    public static string ToHtml(string? markdown) => ToHtml(markdown, context: null);
+
+    /// <summary>
+    /// Converts markdown text into rendered HTML using an optional <see cref="MarkdownLinkContext"/>
+    /// to rewrite workspace, memory, task, and repository links.
+    /// </summary>
+    public static string ToHtml(string? markdown, MarkdownLinkContext? context)
     {
         if (string.IsNullOrWhiteSpace(markdown))
+        {
             return string.Empty;
+        }
 
-        return Markdown.ToHtml(markdown, Pipeline);
+        var document = Markdown.Parse(markdown, ParsePipeline);
+        ProcessDocumentLinks(document, context);
+
+        using var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        ParsePipeline.Setup(renderer);
+        renderer.Render(document);
+        writer.Flush();
+        return writer.ToString();
     }
 
     /// <summary>
     /// Converts markdown text into a Blazor MarkupString for safe HTML rendering in templates.
     /// </summary>
-    public static MarkupString ToMarkupString(string? markdown)
-    {
-        return new MarkupString(ToHtml(markdown));
-    }
+    public static MarkupString ToMarkupString(string? markdown) => new(ToHtml(markdown, context: null));
 
-    private static MarkdownPipeline BuildPipeline()
+    /// <summary>
+    /// Converts markdown text into a Blazor MarkupString using an optional <see cref="MarkdownLinkContext"/>.
+    /// </summary>
+    public static MarkupString ToMarkupString(string? markdown, MarkdownLinkContext? context) =>
+        new(ToHtml(markdown, context));
+
+    private static MarkdownPipeline BuildParsePipeline()
     {
         var builder = new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
@@ -48,23 +69,17 @@ public static class MarkdownHelper
 
         // Prevent `{onclick=...}` / `{onerror=...}` generic attribute injection into rendered elements.
         builder.Extensions.TryRemove<GenericAttributesExtension>();
-        builder.DocumentProcessed += SanitizeDocument;
         return builder.Build();
     }
 
-    private static void SanitizeDocument(MarkdownDocument document)
+    private static void ProcessDocumentLinks(MarkdownDocument document, MarkdownLinkContext? context)
     {
         foreach (var node in document.Descendants())
         {
             switch (node)
             {
                 case LinkInline link:
-                    var linkUrl = link.GetDynamicUrl != null ? (link.GetDynamicUrl() ?? link.Url) : link.Url;
-                    if (!IsSafeUrl(linkUrl, link.IsImage))
-                    {
-                        link.Url = string.Empty;
-                        link.GetDynamicUrl = null;
-                    }
+                    ProcessLinkInline(link, context);
                     break;
 
                 case AutolinkInline autolink when !IsSafeUrl(autolink.Url, isImage: false):
@@ -74,7 +89,55 @@ public static class MarkdownHelper
         }
     }
 
-    private static bool IsSafeUrl(string? url, bool isImage)
+    private static void ProcessLinkInline(LinkInline link, MarkdownLinkContext? context)
+    {
+        var rawUrl = link.GetDynamicUrl != null ? (link.GetDynamicUrl() ?? link.Url) : link.Url;
+
+        if (link.IsImage || context == null)
+        {
+            if (!IsSafeUrl(rawUrl, link.IsImage))
+            {
+                link.Url = string.Empty;
+                link.GetDynamicUrl = null;
+            }
+
+            return;
+        }
+
+        var resolution = MarkdownLinkBuilder.ResolveLink(rawUrl, context);
+        switch (resolution.Kind)
+        {
+            case MarkdownLinkResolutionKind.Neutralized:
+                link.Url = string.Empty;
+                link.GetDynamicUrl = null;
+                break;
+
+            case MarkdownLinkResolutionKind.Rewritten:
+                if (IsSafeUrl(resolution.TargetUrl, isImage: false))
+                {
+                    link.Url = resolution.TargetUrl;
+                }
+                else
+                {
+                    link.Url = string.Empty;
+                }
+
+                link.GetDynamicUrl = null;
+                break;
+
+            case MarkdownLinkResolutionKind.Unchanged:
+            default:
+                if (!IsSafeUrl(rawUrl, isImage: false))
+                {
+                    link.Url = string.Empty;
+                    link.GetDynamicUrl = null;
+                }
+
+                break;
+        }
+    }
+
+    internal static bool IsSafeUrl(string? url, bool isImage)
     {
         if (string.IsNullOrWhiteSpace(url))
         {

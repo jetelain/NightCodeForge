@@ -161,6 +161,11 @@ public static class WorkspaceUrlHelper
     {
         TryExtractWorkspaceId(currentUri, out _, out var remainingPath, out var queryAndFragment);
 
+        if (string.Equals(remainingPath, TaskFileResolverConstants.ByFileRouteSubPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPath(newWorkspaceId, "backlog");
+        }
+
         if (TryExtractTaskRoute(remainingPath, out var section, out _))
         {
             return section switch

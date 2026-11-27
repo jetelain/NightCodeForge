@@ -333,7 +333,7 @@
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
-                                            <MarkdownRenderer Content="@textPart.Text" />
+                                            <MarkdownRenderer Content="@textPart.Text" Context="@IdeationLinkContext" />
                                         </div>
                                     }
                                 }
@@ -372,7 +372,7 @@
                                 @if (!string.IsNullOrEmpty(msg.Content))
                                 {
                                     <div class="chat-content-wrap">
-                                        <MarkdownRenderer Content="@msg.Content" />
+                                        <MarkdownRenderer Content="@msg.Content" Context="@IdeationLinkContext" />
                                     </div>
                                 }
                             }
@@ -492,7 +492,7 @@
                                     else if (part is TextContentPart textPart && !string.IsNullOrWhiteSpace(textPart.Text))
                                     {
                                         <div class="chat-content-wrap">
-                                            <MarkdownRenderer Content="@textPart.Text" />
+                                            <MarkdownRenderer Content="@textPart.Text" Context="@IdeationLinkContext" />
                                             @if (part == Session.CurrentParts.LastOrDefault())
                                             {
                                                 <span class="cursor-blink">▌</span>
@@ -818,6 +818,9 @@
 
 @code {
     private bool _disposed;
+
+    private MarkdownLinkContext IdeationLinkContext =>
+        MarkdownLinkContext.ForGeneralWorkspace(WorkspaceState.ActiveWorkspace);
 
     private int? ActiveMemoryWorkspaceId => WorkspaceState.ActiveWorkspaceId;
 

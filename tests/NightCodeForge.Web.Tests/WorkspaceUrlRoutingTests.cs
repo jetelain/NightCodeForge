@@ -59,6 +59,7 @@ public class WorkspaceUrlRoutingTests : BunitContext
     [InlineData("http://localhost/w/1/backlog", 2, "/w/2/backlog")]
     [InlineData("http://localhost/w/1", 2, "/w/2")]
     [InlineData("http://localhost/w/1/tasks/15", 2, "/w/2/backlog")]
+    [InlineData("http://localhost/w/1/tasks/by-file?path=docs%2Ftasks%2Ffoo.md&ref=main", 2, "/w/2/backlog")]
     [InlineData("http://localhost/w/1/tasks/create", 2, "/w/2/tasks/create")]
     [InlineData("http://localhost/w/1/review/15", 2, "/w/2/review")]
     [InlineData("http://localhost/w/1/review", 2, "/w/2/review")]

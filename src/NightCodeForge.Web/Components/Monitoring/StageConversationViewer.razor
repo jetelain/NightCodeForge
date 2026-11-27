@@ -11,6 +11,7 @@
 @inject ITaskRepository TaskRepository
 @inject ITaskOrchestrator TaskOrchestrator
 @inject NavigationManager Navigation
+@inject IServiceProvider ServiceProvider
 @implements IAsyncDisposable
 
 <div id="@ChatPresentationHelper.StageConversationContainerId" class="stage-conversation-viewer card-surface" style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1.25rem; min-width: 0; position: relative;">
@@ -122,7 +123,7 @@
                     <div class="stage-summary-box" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.6rem 0.85rem; font-size: 0.82rem; max-width: 480px; flex: 1 1 300px;">
                         <span style="color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; font-weight: 600; display: block; margin-bottom: 0.25rem;">Summary</span>
                         <div class="forge-markdown stage-summary-markdown" style="font-size: 0.82rem; line-height: 1.5;">
-                            @MarkdownHelper.ToMarkupString(Conversation.Summary)
+                            @MarkdownHelper.ToMarkupString(Conversation.Summary, StageLinkContext)
                         </div>
                     </div>
                 }
@@ -188,7 +189,7 @@
                                         </div>
                                     }
                                     <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.86rem; line-height: 1.55; max-height: 450px; overflow-y: auto; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
-                                        @MarkdownHelper.ToMarkupString(turn.Content)
+                                        @MarkdownHelper.ToMarkupString(turn.Content, StageLinkContext)
                                     </div>
                                 </div>
                             </div>
@@ -334,7 +335,7 @@
                                     }
 
                                     <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
-                                        @MarkdownHelper.ToMarkupString(turn.Content)
+                                        @MarkdownHelper.ToMarkupString(turn.Content, StageLinkContext)
                                     </div>
                                 </div>
                             </div>
@@ -393,7 +394,7 @@
                             <span class="cursor-blink">▊</span>
                         </div>
                         <div class="chat-content-wrap forge-markdown turn-content-markdown" style="font-size: 0.88rem; line-height: 1.6; overflow-x: auto; max-width: 100%; min-width: 0; box-sizing: border-box;">
-                            @MarkdownHelper.ToMarkupString(LiveStreamingMessage)
+                            @MarkdownHelper.ToMarkupString(LiveStreamingMessage, StageLinkContext)
                         </div>
                     </div>
                 </div>
@@ -441,6 +442,9 @@
     private bool _shouldResetAutoScrollAfterRender;
 
     private bool IsStageWaitingForAnswer => StageConversationParser.IsStageWaitingForAnswer(Conversation, Task);
+
+    private MarkdownLinkContext StageLinkContext =>
+        MarkdownLinkContext.ForTask(Task, ServiceProvider.GetService<WorkspaceStateService>()?.ActiveWorkspace);
 
     protected override void OnParametersSet()
     {

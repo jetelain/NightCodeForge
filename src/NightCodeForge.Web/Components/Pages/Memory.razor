@@ -141,7 +141,7 @@
                                         class="memory-file-item forge-btn-ghost d-block text-start w-100 @(isSelected ? "active" : "")"
                                         data-testid="memory-file-item"
                                         data-memory-scope="local"
-                                        @onclick="() => SelectFileAsync(AgentMemoryScope.LocalWorkspace, file.RelativePath, scrollViewerIntoView: true)">
+                                        @onclick="() => SelectFileAsync(AgentMemoryScope.LocalWorkspace, file.RelativePath, scrollViewerIntoView: true, syncUrl: true)">
                                     <div class="font-mono">@file.RelativePath</div>
                                     @if (!string.IsNullOrEmpty(file.Summary))
                                     {
@@ -177,7 +177,7 @@
                                         class="memory-file-item forge-btn-ghost d-block text-start w-100 @(isSelected ? "active" : "")"
                                         data-testid="memory-file-item"
                                         data-memory-scope="shared"
-                                        @onclick="() => SelectFileAsync(AgentMemoryScope.SharedRepository, file.RelativePath, scrollViewerIntoView: true)">
+                                        @onclick="() => SelectFileAsync(AgentMemoryScope.SharedRepository, file.RelativePath, scrollViewerIntoView: true, syncUrl: true)">
                                     <div class="font-mono">@file.RelativePath</div>
                                     @if (!string.IsNullOrEmpty(file.Summary))
                                     {
@@ -248,7 +248,7 @@
                     }
                     else
                     {
-                        <div id="memory-rendered" class="markdown-body forge-markdown">@MarkdownHelper.ToMarkupString(_content)</div>
+                        <div id="memory-rendered" class="markdown-body forge-markdown">@MarkdownHelper.ToMarkupString(_content, MarkdownLinkContext.ForMemory(activeWorkspace, _selectedScope, _selectedPath))</div>
                     }
                 }
             </main>
@@ -416,7 +416,11 @@
         });
     }
 
-    private async Task SelectFileAsync(AgentMemoryScope scope, string relativePath, bool scrollViewerIntoView = false)
+    private async Task SelectFileAsync(
+        AgentMemoryScope scope,
+        string relativePath,
+        bool scrollViewerIntoView = false,
+        bool syncUrl = false)
     {
         if (!ActiveWorkspaceId.HasValue)
         {
@@ -445,6 +449,15 @@
             if (scrollViewerIntoView)
             {
                 _pendingScrollViewerToTop = true;
+            }
+
+            if (syncUrl)
+            {
+                var scopeQuery = MemoryPresentationHelper.FormatScopeQueryValue(scope);
+                _lastDeepLinkKey = BuildDeepLinkKey(workspaceId, scopeQuery, file.Entry.RelativePath);
+                Navigation.NavigateTo(
+                    MemoryPresentationHelper.BuildMemoryPageUrl(workspaceId, scope, file.Entry.RelativePath),
+                    replace: true);
             }
         }
         catch (Exception ex) when (ex is MemoryValidationException or MemoryFileNotFoundException or MemoryWorkspaceNotFoundException)
@@ -553,10 +566,19 @@
                 ToastService.Show("Memory saved", $"{kind} {pathToSave}", ToastLevel.Success);
                 if (_selectionVersion == version)
                 {
+                    var wasNewFile = _isNewFile;
                     _content = contentToSave;
                     _selectedBudget = MemoryPresentationHelper.ComputeBudget(_content);
                     _isEditing = false;
                     _isNewFile = false;
+
+                    if (wasNewFile)
+                    {
+                        _lastDeepLinkKey = BuildDeepLinkKey(workspaceId, MemoryPresentationHelper.ScopeLocalQueryValue, pathToSave);
+                        Navigation.NavigateTo(
+                            MemoryPresentationHelper.BuildMemoryPageUrl(workspaceId, AgentMemoryScope.LocalWorkspace, pathToSave),
+                            replace: true);
+                    }
                 }
 
                 var localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
@@ -594,6 +616,8 @@
             if (_selectionVersion == version)
             {
                 ResetSelection();
+                _lastDeepLinkKey = BuildDeepLinkKey(workspaceId, null, null);
+                Navigation.NavigateTo(MemoryPresentationHelper.BuildMemoryPageUrl(workspaceId), replace: true);
             }
 
             var localFiles = await MemoryService.ListAsync(workspaceId, AgentMemoryScope.LocalWorkspace);
@@ -677,6 +701,8 @@
                 if (notice.ChangeKind == AgentMemoryChangeKind.Deleted)
                 {
                     ResetSelection();
+                    _lastDeepLinkKey = BuildDeepLinkKey(workspaceId, null, null);
+                    Navigation.NavigateTo(MemoryPresentationHelper.BuildMemoryPageUrl(workspaceId), replace: true);
                 }
                 else
                 {
