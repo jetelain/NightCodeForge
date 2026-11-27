@@ -349,7 +349,7 @@
                                         }
                                         else
                                         {
-                                            @MarkdownHelper.ToMarkupString(_editedDescription)
+                                            @MarkdownHelper.ToMarkupString(_editedDescription, MarkdownLinkContext.ForTask(_task, WorkspaceState.ActiveWorkspace))
                                         }
                                     </div>
                                 }
@@ -391,7 +391,7 @@
                                 else
                                 {
                                     <div class="task-spec-markdown-body forge-markdown font-sans" style="color: var(--text-primary); line-height: 1.65; font-size: 0.95rem;">
-                                        @MarkdownHelper.ToMarkupString(_task.Description)
+                                        @MarkdownHelper.ToMarkupString(_task.Description, MarkdownLinkContext.ForTask(_task, WorkspaceState.ActiveWorkspace))
                                     </div>
                                 }
                             </div>

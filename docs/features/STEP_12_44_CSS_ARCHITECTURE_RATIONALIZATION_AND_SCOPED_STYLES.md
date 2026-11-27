@@ -15,16 +15,16 @@ Over the course of Phases 5–12, NightCodeForge's Web UI styling grew organical
 
 | Area | Verified Baseline | Architectural Issue |
 | :--- | :--- | :--- |
-| **Monolithic Global CSS** | [`wwwroot/css/app.css`](../../src/NightCodeForge.Web/wwwroot/css/app.css): **8,745 lines (191.8 KB)** | Accumulates 25+ feature sections chronologically in one flat global file with 908 class names across `theme.css` + `app.css`. |
-| **Mixed-Responsibility Theme Sheet** | [`wwwroot/css/theme.css`](../../src/NightCodeForge.Web/wwwroot/css/theme.css): **676 lines (16.2 KB)** | Mixes `:root` design tokens (lines 1–70) with unrelated form, settings, modal, transcript, diagnostics, turn-bubble, thinking-accordion, and Markdown rules. |
-| **Unused Vendor Assets** | `wwwroot/lib/bootstrap/`: **44 files (~8.5 MB)** | Never linked by [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor), yet bloats the repository, static asset manifests, and published output. |
+| **Monolithic Global CSS** | [`wwwroot/css/app.css`](../../src/NightCodeForge.Web/wwwroot/css/app.css): **9,243 lines (206.5 KB)** | Accumulates 26+ feature sections chronologically in one flat global file (including the 425-line Step `12.46A` `/files` viewer section at lines 8818–9242) with **1,027 unique class tokens** across `theme.css` + `app.css`. |
+| **Mixed-Responsibility Theme Sheet** | [`wwwroot/css/theme.css`](../../src/NightCodeForge.Web/wwwroot/css/theme.css): **676 lines (15.8 KB)** | Mixes `:root` design tokens (lines 1–70) with unrelated form, settings, modal, transcript, diagnostics, turn-bubble, thinking-accordion, and Markdown rules. |
+| **Unused Vendor Assets** | `wwwroot/lib/bootstrap/`: **44 files (~8.3 MB)** | Never linked by [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor), yet bloats the repository, static asset manifests, and published output. |
 | **Unlinked Blazor CSS Isolation** | [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor) omits `NightCodeForge.Web.styles.css` | Leaves [`ReconnectModal.razor.css`](../../src/NightCodeForge.Web/Components/Layout/ReconnectModal.razor.css) (157 lines, light-theme Blazor template leftover) and placeholder [`MainLayout.razor.css`](../../src/NightCodeForge.Web/Components/Layout/MainLayout.razor.css) / [`NavMenu.razor.css`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor.css) orphaned while forcing every component style into global `app.css`. |
 | **Inline `<style>` Blocks** | **4 Razor files (271 lines)** | Markup embeds raw `<style>` tags in [`Home.razor`](../../src/NightCodeForge.Web/Components/Pages/Home.razor) (138L), [`TranscriptAnalysisViewer.razor`](../../src/NightCodeForge.Web/Components/Transcripts/TranscriptAnalysisViewer.razor) (73L), [`FleetAnalysisDashboard.razor`](../../src/NightCodeForge.Web/Components/Transcripts/FleetAnalysisDashboard.razor) (53L), and [`Transcripts.razor`](../../src/NightCodeForge.Web/Components/Pages/Transcripts.razor) (7L). |
-| **Duplicated Selectors & Primitives** | **23 duplicate top-level selectors** | Overlapping definitions across `theme.css` and `app.css` (e.g., `.forge-modal-backdrop`, `.forge-modal-content`, `.form-control-dark`, `.badge-status`, `.badge-tag`, `.file-item`, `.card-surface`, `.pipeline-stepper-container`, `.step-connector`, `.log-line`, `.btn-xs`, `.btn-outline-indigo`, `.agent-question-*`). |
+| **Duplicated Selectors & Primitives** | **43 duplicate top-level selectors** | Overlapping definitions across `theme.css` and `app.css`, covering both component/primitive rules (e.g., `.forge-modal-backdrop`, `.form-control-dark`, `.badge-status`, `.badge-tag`, `.file-item`, `.card-surface`, `.pipeline-stepper-container`, `.step-connector`, `.log-line`, `.btn-xs`, `.btn-outline-indigo`, `.agent-question-*`, `.think-content`) and duplicated spacing/flex utilities (`.d-flex`, `.flex-column`, `.flex-wrap`, `.align-items-*`, `.justify-content-between`, `.gap-*`, `.mb-*`, `.mt-*`, `.p-*`). |
 | **Fragmented Systems** | **3 Markdown systems, 2 button/input families, 20 `@keyframes`** | `.markdown-body`, `.forge-markdown`, and `.diagnostic-markdown` overlap; `.btn-*` and `.forge-btn-*` / `.form-control-dark` and `.forge-input` drift; `@keyframes amberPulse` is defined twice alongside redundant pulse/spin animations. |
-| **Token Bypass & Overrides** | **285 hex values** (62 unique), **406 `rgb()`/`rgba()`** (165 unique), **71 `!important`** | Raw color literals bypass `:root` tokens; excessive `!important` flags compensate for cascade collisions. |
-| **Inconsistent Breakpoints & Dead Rules** | **12 `@media` blocks**, **~43 potentially unused classes** | Breakpoints mix `1100px`, `1024px`, `900px`, `767.98px`, and `479.98px`; obsolete selectors remain after UI refactors. |
-| **Inline `style="..."` Sprawl** | **2,599 `style=` attributes across 69 `.razor` files** | Repetitive static layout, spacing, border, typography, and color declarations are duplicated inline across Razor templates (up to 146 per file). |
+| **Token Bypass & Overrides** | **290 hex values** (62 unique), **416 `rgb()`/`rgba()`** (166 unique), **71 `!important`** | Raw color literals bypass `:root` tokens; excessive `!important` flags compensate for cascade collisions. |
+| **Inconsistent Breakpoints & Dead Rules** | **14 `@media` blocks**, **~43 potentially unused classes** | Breakpoints mix `1100px`, `1024px`, `900px` (×2, including Step `12.46A`), `767.98px`, `479.98px`, `min-width: 768px`, and `hover: none`; obsolete selectors remain after UI refactors. |
+| **Inline `style="..."` Sprawl** | **2,609 `style=` attributes across 71 `.razor` files** | Repetitive static layout, spacing, border, typography, and color declarations are duplicated inline across Razor templates (up to 146 per file; plus Step `12.46A`'s dynamic tree-indentation style in `Files.razor` and Step `12.46B`'s 9 static inline styles in `TaskByFile.razor`). |
 
 ---
 
@@ -51,9 +51,9 @@ flowchart TB
      - Explicit syntax-highlighting and chart/SVG palette tokens where distinct from UI accents.
 
 2. **Layer 2 — Modular Global Design System:**
-   - `wwwroot/css/base.css`: Global box-sizing reset, custom Obsidian scrollbars, base typography, accessible `:focus-visible` outlines, and a **single unified Markdown rendering system**.
+   - `wwwroot/css/base.css`: Global box-sizing reset, custom Obsidian scrollbars, base typography, accessible `:focus-visible` outlines, a **single unified Markdown rendering system**, and shared syntax-highlighting token rules (`.tok-keyword`, `.tok-type`, `.tok-string`, `.tok-comment`, `.tok-number`, `.tok-punct` emitted via `MarkupString` by `SimpleSyntaxHighlighter` across `Files.razor` and `DiffViewer.razor`) backed by syntax tokens in `theme.css`.
    - `wwwroot/css/layout.css`: Application shell (`.forge-layout`, sidebar collapse, `NavMenu`, `TopNavBar`), standardized responsive shell breakpoints, mobile drawer & touch ergonomics, PWA safe-area insets, non-blocking Obsidian dark reconnect banner, and toast host positioning.
-   - `wwwroot/css/components.css`: Shared design-system primitives reused across multiple features — harmonized buttons, dark form inputs/selects/checkbox tiles, cards/subcards, status/tag badges, alerts/banners, modals/drawers, tables and responsive card-tables, tabs/steppers, accordions, spinners, and a lean utility class set.
+   - `wwwroot/css/components.css`: Shared design-system primitives reused across multiple features — harmonized buttons, dark form inputs/selects/checkbox tiles, cards/subcards, status/tag badges, alerts/banners, modals/drawers (including overlay/bottom-sheet drawer primitives), empty-state hero, cross-page raw code/pre preview blocks (such as the block currently shared via `.memory-raw-pre` between `Memory.razor` and `Files.razor`'s `#files-symlink-target`), tables and responsive card-tables, tabs/steppers, accordions, spinners, and a lean utility class set.
    - **Clean Break:** Retire the monolithic `wwwroot/css/app.css` once all global primitives and feature rules are migrated to the layered global stylesheets and colocated scoped styles. Do not maintain compatibility duplicate aliases for superseded class names.
 
 3. **Layer 3 — Colocated Blazor Scoped Stylesheets (`*.razor.css`):**
@@ -63,18 +63,23 @@ flowchart TB
      - Ideation chat, proposal cards, dependency accordion & attachments (`Pages/Ideation.razor.css`, `Ideation/*.razor.css`)
      - Workspace creation wizard & steps (`Workspaces/**/*.razor.css`)
      - Backlog Kanban board, cards, DAG visualizer & detail drawer (`Pages/Backlog.razor.css`, `Backlog/*.razor.css`)
-     - Monitoring, active operations hero, pipeline stepper, worker cards, inspector, terminal console & shell modals (`Pages/Monitoring.razor.css`, `Monitoring/*.razor.css`)
+     - Monitoring, active operations hero, pipeline stepper, worker cards, inspector, terminal console & shell modals (`Pages/Monitoring.razor.css`, `Pages/TaskInspector.razor.css`, `Monitoring/*.razor.css`)
      - Question inbox & agent turn cards (`Pages/Inbox.razor.css`, `Inbox/*.razor.css`, `Monitoring/AgentQuestionTurnCard.razor.css`)
      - Review Room, gate metrics, diff workspace & file tree (`Pages/Review.razor.css`, `Review/*.razor.css`)
      - Untrusted intake & triage portal (`Pages/Triage.razor.css`, `Triage/*.razor.css`)
      - Git Ext4 mirror & host sync (`Pages/GitSync.razor.css`, `GitSync/*.razor.css`)
+     - Git Branch Repository File Viewer (`Pages/Files.razor.css`, migrating the 425-line Step `12.46A` section and consolidating its `@media (max-width: 900px)` block onto the 4-tier responsive scale)
      - Dev-Queue operations console (`Pages/DevQueue.razor.css`, `DevQueue/*.razor.css`)
      - Diagnostic Bash console (`Pages/EnvironmentDiagnosticShell.razor.css`)
      - Agent Memory Explorer (`Pages/Memory.razor.css`)
      - Transcripts & Fleet Analysis (`Pages/Transcripts.razor.css`, `Transcripts/*.razor.css`)
-     - Tasks & TaskDetail (`Pages/Tasks.razor.css`, `Pages/TaskDetail.razor.css`, `Pages/CreateTask.razor.css`)
+     - Tasks, TaskDetail, CreateTask & Task-File Resolver (`Pages/Tasks.razor.css`, `Pages/TaskDetail.razor.css`, `Pages/CreateTask.razor.css`, and `Pages/TaskByFile.razor.css` or shared card/state primitives in `components.css` for Step `12.46B`'s static inline styles)
      - Settings shell & settings tabs (`Pages/Settings.razor.css`, `Settings/*.razor.css`)
-   - Where a parent/child component boundary spans scoped styles, use `::deep` deliberately and minimally, or promote truly cross-cutting primitives to `components.css`.
+   - **Blazor CSS Isolation Boundary Constraints:**
+     - HTML emitted via `MarkupString` (Markdown rendering, `.tok-*` syntax-highlighted code spans, inline SVGs) never receives Blazor's `b-xxxxxxxxxx` scope attribute; keep all styling targeting `MarkupString` content in Layer 2 global CSS (`base.css` / `components.css`).
+     - Parent-to-child component selectors such as `.memory-page-container:has(> .workspace-empty-hero)` and `.files-page-container:has(> .workspace-empty-hero)` cross into `<WorkspaceEmptyStateHero />`; handle them explicitly (via `::deep`, a conditional wrapper class on the parent container, or global layout rules) so empty-workspace rendering on `/memory` and `/files` does not regress.
+     - Co-locate feature-specific responsive overrides from the Step `12.8A` block in `app.css` into their owning `*.razor.css` files alongside desktop rules, keeping only shell and shared-primitive breakpoints in `layout.css` / `components.css`.
+     - Where any other parent/child component boundary spans scoped styles, use `::deep` deliberately and minimally, or promote truly cross-cutting primitives to `components.css`.
 
 ---
 
@@ -82,7 +87,7 @@ flowchart TB
 
 ### 3.1 Vendor Bloat & Orphaned Template Cleanup
 
-1. Delete the unused `src/NightCodeForge.Web/wwwroot/lib/bootstrap/` directory completely (~8.5 MB, 44 files). Verify zero references remain in markup, stylesheets, scripts, or service worker precache lists.
+1. **Vendor Bloat (`wwwroot/lib/bootstrap/`):** Delete the unused `src/NightCodeForge.Web/wwwroot/lib/bootstrap/` directory completely (~8.3 MB, 44 files). Verify zero references remain in markup, stylesheets, scripts, or service worker precache lists.
 2. Delete the orphaned light-theme Blazor template [`ReconnectModal.razor.css`](../../src/NightCodeForge.Web/Components/Layout/ReconnectModal.razor.css) and ensure `ReconnectModal` renders cleanly using the Obsidian dark theme non-blocking reconnect styles in `layout.css`.
 3. Clean up placeholder-only `.razor.css` files ([`MainLayout.razor.css`](../../src/NightCodeForge.Web/Components/Layout/MainLayout.razor.css), [`NavMenu.razor.css`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor.css)) either by populating them with their genuine component-scoped rules or removing empty placeholders.
 
@@ -94,7 +99,8 @@ flowchart TB
 ### 3.3 Primitives, Design Tokens, Breakpoints & Dead-Code Cleanup
 
 1. **Unified Primitives (Clean Break):**
-   - Consolidate `.markdown-body`, `.forge-markdown`, and `.diagnostic-markdown` into a single canonical Markdown system in `base.css` (with an inline variant where needed).
+   - Consolidate `.markdown-body`, `.forge-markdown`, and `.diagnostic-markdown` into a single canonical Markdown system in `base.css` (with an inline variant where needed), aligning [`Files.razor`](../../src/NightCodeForge.Web/Components/Pages/Files.razor) (`<MarkdownRenderer Class="forge-markdown" />`) and [`Memory.razor`](../../src/NightCodeForge.Web/Components/Pages/Memory.razor) (`markdown-body forge-markdown`) onto that canonical class.
+   - Promote cross-page shared primitives such as `.memory-raw-pre` (used by both [`Memory.razor`](../../src/NightCodeForge.Web/Components/Pages/Memory.razor) and `#files-symlink-target` in [`Files.razor`](../../src/NightCodeForge.Web/Components/Pages/Files.razor)) to `components.css` (or style `#files-symlink-target` independently in `Files.razor.css`) so scoping `Memory.razor.css` does not strip symlink preview styling.
    - Harmonize duplicate button families (`.btn-*` / `.forge-btn-*`), form controls (`.form-control-dark` / `.forge-input` / `.forge-select`), modals (`.forge-modal*`), cards, and badges (`.badge-status`, `.badge-tag`) in `components.css` and update all Razor callers to use the canonical classes.
 2. **Zero Duplicate Selectors & Keyframes:**
    - Merge or eliminate all duplicate top-level selectors across global CSS files.
@@ -103,20 +109,20 @@ flowchart TB
    - Replace hardcoded hex and `rgb()`/`rgba()` literals with `:root` custom properties from `theme.css` across both global stylesheets and `*.razor.css` files.
    - Eliminate unnecessary `!important` overrides caused by load-order conflicts; reserve `!important` strictly for deliberate single-purpose utility classes where cascade override is intentional.
 4. **Standardized Responsive Breakpoints:**
-   - Consolidate ad-hoc breakpoints (`1100px`, `1024px`, `900px`, `767.98px`, `479.98px`) onto a consistent 4-tier responsive scale:
+   - Consolidate ad-hoc breakpoints (`1100px`, `1024px`, `900px` including Step `12.46A`'s `/files` layout breakpoint, `767.98px`, `479.98px`) onto a consistent 4-tier responsive scale:
      - Desktop: `> 1024px`
      - Tablet / Compact Desktop: `<= 1024px`
      - Mobile: `< 768px` (or `<= 767.98px`)
      - Small Phone: `< 480px` (or `<= 479.98px`)
    - Preserve all mobile touch-target, drawer, and responsive table behaviors from Step `12.8A`.
 5. **Dead Rule Pruning:**
-   - Audit unused CSS classes before deletion, explicitly checking C# string interpolation and conditional class builders (e.g., `badge-priority-*`, `badge-status.*`, `log-*`, `log-level-*`, Blazor `components-reconnect-*`) so dynamically assigned classes are preserved.
+   - Audit unused CSS classes before deletion, explicitly checking C# string interpolation and conditional class builders (e.g., `badge-priority-*`, `badge-status.*`, `log-*`, `log-level-*`, `tok-*`, Blazor `components-reconnect-*`) so dynamically assigned classes are preserved.
 
 ### 3.4 Pragmatic Inline `style="..."` Attribute Reduction
 
-1. Replace static, repetitive inline `style="..."` attributes across Razor components (especially high-density pages/tabs such as `TaskDetail.razor`, `AgentProfilesTab.razor`, `FleetAnalysisDashboard.razor`, `OllamaRouterGatewayCard.razor`, `CreateTask.razor`, `WorkspaceSettingsTab.razor`, `TranscriptAnalysisViewer.razor`, `Home.razor`, `GitHubSettingsTab.razor`, `TailscaleSettingsCard.razor`, `TaskExecutionInspector.razor`, `ActiveOperationsHero.razor`) with semantic classes in `*.razor.css` or shared primitives/utilities in `components.css`.
-2. Target at least a **70% reduction** in inline `style="..."` attributes compared to the 2,599 baseline.
-3. Retain inline `style="..."` **only** for genuinely dynamic runtime-computed values (e.g., workspace accent CSS custom properties `--ws-accent`, dynamic percentage progress/meter widths, dynamic SVG positioning, or explicit per-item dynamic colors).
+1. Replace static, repetitive inline `style="..."` attributes across Razor components (especially high-density pages/tabs such as `TaskDetail.razor`, `AgentProfilesTab.razor`, `FleetAnalysisDashboard.razor`, `OllamaRouterGatewayCard.razor`, `CreateTask.razor`, `WorkspaceSettingsTab.razor`, `TranscriptAnalysisViewer.razor`, `Home.razor`, `GitHubSettingsTab.razor`, `TailscaleSettingsCard.razor`, `TaskExecutionInspector.razor`, `ActiveOperationsHero.razor`, `TaskByFile.razor`) with semantic classes in `*.razor.css` or shared primitives/utilities in `components.css`.
+2. Target at least a **70% reduction** in inline `style="..."` attributes compared to the **2,609** baseline.
+3. Retain inline `style="..."` **only** for genuinely dynamic runtime-computed values (e.g., workspace accent CSS custom properties `--ws-accent`, dynamic percentage progress/meter widths, dynamic SVG positioning, dynamic tree-depth indentation in `Files.razor` via `FormatTreeRowIndentStyle`, or explicit per-item dynamic colors).
 
 ### 3.5 Air-Gapped Hardening, PWA Service Worker & Existing Test Alignment
 
@@ -127,29 +133,32 @@ flowchart TB
    - Do **not** add `NightCodeForge.Web.styles.css` to `PRECACHE_URLS` unless it resolves cleanly via physical path checks, or ensure `PwaManifestAndServiceWorkerTests` validates both `wwwroot` assets and the bundled scoped stylesheet appropriately; update the static precache URL count assertion in [`PwaManifestAndServiceWorkerTests.cs`](../../tests/NightCodeForge.Web.Tests/PwaManifestAndServiceWorkerTests.cs) to match the updated `PRECACHE_URLS` list.
 3. **Update Location-Coupled Tests:**
    - Update [`DevQueueComponentTests.cs`](../../tests/NightCodeForge.Web.Tests/DevQueueComponentTests.cs) (`DevQueueStyles_AreDefinedInAppCss`) and [`EnvironmentDiagnosticShellPageTests.cs`](../../tests/NightCodeForge.Web.Tests/EnvironmentDiagnosticShellPageTests.cs) (`DiagnosticShellStyles_AreDefinedInAppCss_AndDoNotUseUnlinkedScopedCss`) to verify selectors against the new modular global stylesheets (`base.css`, `layout.css`, `components.css`) and colocated `*.razor.css` files rather than asserting everything lives in `app.css` or forbidding `*.razor.css`.
+4. **Test & Client-Side JS Selector Contracts:**
+   - [`MobileResponsiveLayoutE2ETests.cs`](../../tests/NightCodeForge.Web.Tests/E2E/MobileResponsiveLayoutE2ETests.cs) (`TaskDrawer_RendersAsBottomSheet_OnMobile`) injects raw DOM elements (`.task-drawer-overlay`, `.task-drawer`, `.task-drawer-body`) via JavaScript without Blazor scope attributes; keep shared drawer/bottom-sheet layout primitives in Layer 2 global `components.css` (or update the E2E test alongside the refactor).
+   - [`wwwroot/js/app.js`](../../src/NightCodeForge.Web/wwwroot/js/app.js) queries `.forge-main-content`, `.think-content`, `.turn-live-thinking`, `.chat-bubble.streaming`, and `.streaming-message`, and bUnit/Playwright suites assert canonical selectors including `.forge-layout`, `.forge-nav-link`, `.forge-btn-*`, `.forge-input`, `.forge-modal*`, `.task-spec-markdown-body`, `.workspace-empty-hero`, and `.tok-*`. Preserve canonical `forge-*` primitive names and update any affected tests or JS queries in lockstep when retiring legacy aliases.
 
 ### 3.6 Automated CSS Hygiene & Budget Guardrail Tests
 
 Add automated test coverage in [`tests/NightCodeForge.Web.Tests`](../../tests/NightCodeForge.Web.Tests) to prevent CSS regressions from re-emerging:
 
-1. **Cascade Link Order (`App.razor`):** Verify [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor) loads stylesheets in strict layer order (`css/fonts.css` → `css/theme.css` → `css/base.css` → `css/layout.css` → `css/components.css` → `NightCodeForge.Web.styles.css`) and does not reference `app.css` or `bootstrap`.
+1. **Cascade Link Order (`App.razor`):** Verify [`App.razor`](../../src/NightCodeForge.Web/Components/App.razor) loads stylesheets in strict layer order (`css/fonts.css` → `css/theme.css` → `css/base.css` → `css/layout.css` → `css/components.css` → `NightCodeForge.Web.styles.css`, accepting either direct `NightCodeForge.Web.styles.css` or `@Assets["NightCodeForge.Web.styles.css"]`) and does not reference `app.css` or `bootstrap`.
 2. **No Inline `<style>` Tags:** Assert zero `<style` blocks exist in any `.razor` file under `src/NightCodeForge.Web/Components`.
 3. **No Vendor Bootstrap Bloat:** Assert `wwwroot/lib/bootstrap` does not exist.
 4. **Global Stylesheet Size Ceiling:** Assert no single CSS file under `wwwroot/css/` exceeds **1,000 lines**.
-5. **Zero Duplicate Top-Level Selectors:** Assert no exact top-level selector appears more than once across global `wwwroot/css/*.css` files.
+5. **Zero Duplicate Top-Level Selectors:** Assert no exact root-level rule selector appears more than once across global `wwwroot/css/*.css` files (while permitting responsive overrides nested inside `@media` blocks).
 6. **Pure Token Theme Sheet:** Assert `wwwroot/css/theme.css` contains only `:root` variable definitions and `@keyframes` blocks (zero component/page class selectors).
 
 ---
 
 ## 4. Definition of Done (DoD) Checklist
 
-- [ ] Remove unused `src/NightCodeForge.Web/wwwroot/lib/bootstrap/` (44 files / ~8.5 MB) and orphaned light-theme `ReconnectModal.razor.css` (and clean up empty layout `.razor.css` placeholders).
+- [ ] Remove unused `src/NightCodeForge.Web/wwwroot/lib/bootstrap/` (44 files / ~8.3 MB) and orphaned light-theme `ReconnectModal.razor.css` (and clean up empty layout `.razor.css` placeholders).
 - [ ] Refactor `wwwroot/css/theme.css` to strictly `:root` design tokens and canonical `@keyframes`, and split monolithic `wwwroot/css/app.css` into layered global sheets (`base.css`, `layout.css`, `components.css`) under 1,000 lines each.
 - [ ] Link `NightCodeForge.Web.styles.css` and the layered global stylesheets in `App.razor` in strict cascade order.
 - [ ] Migrate all feature/page-specific CSS rules and all 4 inline `<style>` blocks into colocated `*.razor.css` files.
 - [ ] Consolidate duplicate Markdown, button, form-control, modal, badge, breakpoint, and `@keyframes` definitions; replace hardcoded hex/`rgba()` values with `:root` tokens; prune verified dead rules.
-- [ ] Reduce static inline `style="..."` attributes across Razor components by $\ge 70\%$ from the 2,599 baseline, keeping inline styles only for runtime-computed values.
-- [ ] Update `wwwroot/service-worker.js` (`PRECACHE_URLS` and `CACHE_NAME`), `PwaManifestAndServiceWorkerTests.cs`, `DevQueueComponentTests.cs`, and `EnvironmentDiagnosticShellPageTests.cs`.
+- [ ] Reduce static inline `style="..."` attributes across Razor components by $\ge 70\%$ from the 2,609 baseline, keeping inline styles only for runtime-computed values.
+- [ ] Update `wwwroot/service-worker.js` (`PRECACHE_URLS` and `CACHE_NAME`), `PwaManifestAndServiceWorkerTests.cs`, `DevQueueComponentTests.cs`, `EnvironmentDiagnosticShellPageTests.cs`, and any selector-coupled bUnit/E2E tests (including `MobileResponsiveLayoutE2ETests.cs`).
 - [ ] Add automated CSS hygiene and budget guardrail tests in `tests/NightCodeForge.Web.Tests`.
-- [ ] Verify visual parity across desktop, tablet, and mobile viewports on core routes (`/`, `/ideation`, `/backlog`, `/monitoring`, `/inbox`, `/review/{id}`, `/triage`, `/git-sync`, `/dev-queue`, `/memory`, `/diagnostics/shell`, `/transcripts`, `/settings`, and the dark-theme reconnect banner).
+- [ ] Verify visual parity across desktop, tablet, and mobile viewports on core routes (`/`, `/ideation`, `/backlog`, `/monitoring`, `/inspector/{id}`, `/inbox`, `/review/{id}`, `/triage`, `/git-sync`, `/files`, `/dev-queue`, `/memory`, `/diagnostics/shell`, `/transcripts`, `/tasks/by-file`, `/settings`, and the dark-theme reconnect banner).
 - [ ] Verify full non-E2E suite passes via `dotnet test --filter "Category!=Acceptance&Category!=E2E"` and full Playwright E2E suite passes via `dotnet test`.

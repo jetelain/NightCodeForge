@@ -337,6 +337,40 @@ window.NightCodeForge = window.NightCodeForge || {};
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
+    /**
+     * Scrolls a target code line element into view while respecting prefers-reduced-motion.
+     * @param {string} elementId
+     */
+    window.NightCodeForge.scrollCodeLineIntoView = function (elementId) {
+        const el = document.getElementById(elementId);
+        if (!el || typeof el.scrollIntoView !== 'function') return;
+
+        const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        el.scrollIntoView({
+            behavior: prefersReducedMotion ? 'auto' : 'smooth',
+            block: 'center',
+            inline: 'nearest'
+        });
+    };
+
+    /**
+     * Copies text to the browser clipboard using the Clipboard API.
+     * @param {string} text
+     * @returns {Promise<boolean>}
+     */
+    window.NightCodeForge.copyTextToClipboard = async function (text) {
+        if (!text || !navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+            return false;
+        }
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (err) {
+            console.warn('NightCodeForge: clipboard copy failed', err);
+            return false;
+        }
+    };
+
     const STICKY_TOP_OFFSET_PX = 16;
     const VIEWPORT_BOTTOM_VISIBILITY_MARGIN_PX = 120;
 

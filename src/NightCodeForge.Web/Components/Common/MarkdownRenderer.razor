@@ -3,7 +3,7 @@
 @if (!string.IsNullOrEmpty(Content))
 {
     <div class="markdown-body @Class">
-        @MarkdownHelper.ToMarkupString(Content)
+        @MarkdownHelper.ToMarkupString(Content, Context)
     </div>
 }
 
@@ -13,4 +13,7 @@
 
     [Parameter]
     public string? Class { get; set; }
+
+    [Parameter]
+    public MarkdownLinkContext? Context { get; set; }
 }

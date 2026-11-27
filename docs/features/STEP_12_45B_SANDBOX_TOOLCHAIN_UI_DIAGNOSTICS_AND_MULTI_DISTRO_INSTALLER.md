@@ -3,7 +3,7 @@
 > **Phase 12 Implementation Step (Extend Features — Toolchain UI, Diagnostics & Cross-Platform Installer)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Companion Step:* [Step 12.45A: Cross-Platform Layered Container Images, Named Toolchain Volumes & Runtime Hardening](STEP_12_45A_CROSS_PLATFORM_LAYERED_CONTAINER_IMAGES_AND_TOOLCHAIN_VOLUMES.md)  
-> *Related Steps:* [Step 12.18A: Installer Core Services, NuGet Tooling, Air-Gapped Bundle & Uninstaller](STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md) | [Step 12.22A: Container Diagnostic Shell Service, Environment Doctor & SIGINT Cancellation Fix](STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)  
+> *Related Steps:* [Step 12.18A: Installer Core Services, NuGet Tooling, Air-Gapped Bundle & Uninstaller](../archive/phase-12/STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md) | [Step 12.22A: Container Diagnostic Shell Service, Environment Doctor & SIGINT Cancellation Fix](../archive/phase-12/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md) | [docs/ARCHITECTURE.md](../ARCHITECTURE.md)  
 > *Project Target:* `src/NightCodeForge.Web`, `src/NightCodeForge.Agents`, `src/NightCodeForge.Installer`, `tests/NightCodeForge.Web.Tests`, `tests/NightCodeForge.Agents.Tests`, `tests/NightCodeForge.Installer.Tests` | *Status:* Deferred (v0.2) | *Target Framework:* .NET 10 (C# 13)
 
@@ -60,7 +60,7 @@ Extend [`EnvironmentDoctorProbe`](../../src/NightCodeForge.Agents/Diagnostics/En
 
 ### 2.4 Installer Multi-Distro Linux & macOS Alignment (`NightCodeForge.Installer`)
 
-Update [`EnvironmentProvisioner`](../../src/NightCodeForge.Installer/Core/Services/EnvironmentProvisioner.cs) (aligning with [Step 12.18A](STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md)):
+Update [`EnvironmentProvisioner`](../../src/NightCodeForge.Installer/Core/Services/EnvironmentProvisioner.cs) (aligning with [Step 12.18A](../archive/phase-12/STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md)):
 
 1. **Multi-Package-Manager Linux Support:**
    - Remove the hard `apt-get`-only exit in `EnvironmentProvisioner.BuildLinuxToolchainScript`.
@@ -76,7 +76,7 @@ Update [`EnvironmentProvisioner`](../../src/NightCodeForge.Installer/Core/Servic
    - Probe Docker Desktop, OrbStack, and Colima sockets/contexts cleanly on macOS; install missing `git` / `ripgrep` via Homebrew (`brew`) when available or surface concise Xcode CLT / Homebrew instructions.
 3. **Container-First Host Prerequisite Policy (Linux & macOS):**
    - Because `ContainerSandbox` provides .NET, JDK, Node, Python, Go, Rust, and companion CLI tools inside self-contained stack images, **host .NET 10 SDK is optional on Linux and macOS** (required only if the user installs/runs `ncf` or `nightcodeassay` directly on the host or selects `BareHost` mode).
-   - **Windows/WSL2 preservation:** Windows provisioning continues setting up WSL2, Ubuntu, Docker Engine, and .NET 10 SDK as specified in [Step 12.18A](STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md), while container sandboxes inside WSL2 use the new Step 12.45A stack images and named volumes.
+   - **Windows/WSL2 preservation:** Windows provisioning continues setting up WSL2, Ubuntu, Docker Engine, and .NET 10 SDK as specified in [Step 12.18A](../archive/phase-12/STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md), while container sandboxes inside WSL2 use the new Step 12.45A stack images and named volumes.
 4. **Optional Air-Gapped OCI Image Archive Loading:**
    - Extend `IReleaseManager` / air-gapped bundle detection to recognize optional pre-exported container image tarballs (`ncf-agent-base-{arch}.tar`, `ncf-agent-{stack}-{arch}.tar`) in `<bundleDir>` and load them automatically via `docker load -i` / `podman load -i` so fully offline Linux/macOS/WSL2 installations can run `ContainerSandbox` with zero registry access.
 

@@ -334,6 +334,7 @@ public class ContainerReplExecutorTests
 
         public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(NightCodeForge.Core.Interfaces.ProcessStartSpec spec) => throw new NotImplementedException();
         public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<NightCodeForge.Core.Interfaces.ProcessRawExecutionResult> RunRawAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> RunStreamingAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
     }
 
@@ -397,6 +398,7 @@ public class ContainerReplExecutorTests
 
         public NightCodeForge.Core.Interfaces.ProcessExecutionResult Run(NightCodeForge.Core.Interfaces.ProcessStartSpec spec) => throw new NotImplementedException();
         public Task<NightCodeForge.Core.Interfaces.ProcessExecutionResult> RunAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<NightCodeForge.Core.Interfaces.ProcessRawExecutionResult> RunRawAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public IAsyncEnumerable<NightCodeForge.Core.Interfaces.ProcessStreamChunk> RunStreamingAsync(NightCodeForge.Core.Interfaces.ProcessStartSpec spec, CancellationToken cancellationToken = default) => throw new NotImplementedException();
     }
 

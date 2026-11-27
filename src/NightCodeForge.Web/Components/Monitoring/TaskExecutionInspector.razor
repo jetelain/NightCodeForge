@@ -244,7 +244,7 @@
                         }
                         else
                         {
-                            @MarkdownHelper.ToMarkupString(_task!.Description)
+                            @MarkdownHelper.ToMarkupString(_task!.Description, TaskLinkContext)
                         }
                     </div>
                 </div>
@@ -338,7 +338,7 @@
                                     @if (!string.IsNullOrWhiteSpace(q.Answer))
                                     {
                                         <div class="forge-markdown" style="color: #a5b4fc; font-size: 0.84rem; margin-top: 0.25rem;">
-                                            <strong>Answer:</strong> @MarkdownHelper.ToMarkupString(q.Answer)
+                                            <strong>Answer:</strong> @MarkdownHelper.ToMarkupString(q.Answer, TaskLinkContext)
                                         </div>
                                     }
                                 </div>
@@ -504,6 +504,7 @@
 
     private WorkerStateService? WorkerState => ServiceProvider.GetService<WorkerStateService>();
     private IDevQueueService? DevQueueService => ServiceProvider.GetService<IDevQueueService>();
+    private MarkdownLinkContext TaskLinkContext => MarkdownLinkContext.ForTask(_task, ServiceProvider.GetService<WorkspaceStateService>()?.ActiveWorkspace);
 
     private bool IsTaskRunningInWorker(int taskId)
     {

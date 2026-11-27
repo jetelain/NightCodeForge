@@ -344,4 +344,16 @@ public class NavMenuShellTests : BunitContext
         tracker.Reset(5);
         cut.WaitForAssertion(() => Assert.Empty(cut.FindAll("[data-testid=nav-memory-badge]")));
     }
+
+    [Fact]
+    public void NavMenu_RepositoryFilesLink_UsesWorkspaceScopedHref()
+    {
+        var workspaceState = Services.GetRequiredService<WorkspaceStateService>();
+        workspaceState.SetActiveWorkspace(new Workspace { Id = 5, Name = "Files WS", RepositoryPath = "/repos/files" });
+
+        var cut = Render<NavMenu>();
+        var filesLink = cut.Find("#nav-files-link");
+        Assert.Equal("w/5/files", filesLink.GetAttribute("href"));
+        Assert.Contains("Repository Files", filesLink.TextContent);
+    }
 }

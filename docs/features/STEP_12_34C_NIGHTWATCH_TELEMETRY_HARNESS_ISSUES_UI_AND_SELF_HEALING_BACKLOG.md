@@ -3,7 +3,7 @@
 > **Feature & Developer Ergonomics Specification (Part 3 of 3 — Web UI Dashboard, Settings, Timeline Badges & Self-Healing Backlog Loop)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *Prerequisite Steps:* [Step 12.34A: Autonomous Nightwatch — Harness Issue Ledger, Tiered Triage Engine & Orchestrator Failure Recovery](STEP_12_34A_NIGHTWATCH_DOMAIN_LEDGER_AND_ORCHESTRATOR_REACTIVE_TRIAGE.md) | [Step 12.34B: Agent-Invocable Nightwatch SOS Tool (`report_environment_issue`) & In-Flight Remediation](STEP_12_34B_AGENT_NIGHTWATCH_SOS_TOOL_AND_ENVIRONMENT_REMEDIATION.md)  
-> *Related Steps:* [Step 12.13B: "Refine in Ideation" Workflow & Mutation UI](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md) | [Step 12.22B: Interactive Container Diagnostic Bash Console Web UI (`/diagnostics/shell`)](STEP_12_22B_DIAGNOSTIC_BASH_CONSOLE_WEB_UI.md)  
+> *Related Steps:* [Step 12.13B: "Refine in Ideation" Workflow & Mutation UI](../archive/phase-12/STEP_12_13B_REFINE_IN_IDEATION_WORKFLOW_AND_MUTATION_UI.md) | [Step 12.22B: Interactive Container Diagnostic Bash Console Web UI (`/diagnostics/shell`)](../archive/phase-12/STEP_12_22B_DIAGNOSTIC_BASH_CONSOLE_WEB_UI.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md) | [docs/ARCHITECTURE.md](../ARCHITECTURE.md)  
 > *Target Projects:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests`, `tests/NightCodeForge.Acceptance.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 

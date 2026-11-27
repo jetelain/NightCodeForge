@@ -677,6 +677,90 @@ public class MemoryPageTests : BunitContext
         Assert.Empty(cut.FindAll("#memory-selected-path"));
         Assert.Single(JSInterop.Invocations, i => i.Identifier == MemoryUiConstants.ScrollViewerTopIntoViewJsFunction);
     }
+
+    [Fact]
+    public void MemoryPage_SidebarSelectionSyncsUrl_AndInPageCrossFileLinksNavigateCleanly()
+    {
+        SetupLocal(
+            Entry(AgentMemoryScope.LocalWorkspace, "MEMORY.md", "Index"),
+            Entry(AgentMemoryScope.LocalWorkspace, "config-file-decisions.md", "Decisions"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "MEMORY.md", "See [Config file decisions](config-file-decisions.md).");
+        SetupRead(AgentMemoryScope.LocalWorkspace, "config-file-decisions.md", "Back to [Pinned](MEMORY.md).");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{WorkspaceId}/memory?scope=local&path=MEMORY.md");
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+        Assert.Equal("MEMORY.md", cut.Find("#memory-selected-path").TextContent);
+
+        var renderedLink = cut.Find("#memory-rendered a");
+        Assert.Equal($"/w/{WorkspaceId}/memory?scope=local&path=config-file-decisions.md", renderedLink.GetAttribute("href"));
+
+        // Switch via sidebar click -> URL must update to config-file-decisions.md
+        cut.FindAll("[data-testid=memory-file-item]")[1].Click();
+        Assert.Equal("config-file-decisions.md", cut.Find("#memory-selected-path").TextContent);
+        Assert.EndsWith($"/w/{WorkspaceId}/memory?scope=local&path=config-file-decisions.md", nav.Uri);
+
+        // Follow in-page cross-file link back to MEMORY.md -> must reload MEMORY.md cleanly
+        var backHref = cut.Find("#memory-rendered a").GetAttribute("href")!;
+        Assert.Equal($"/w/{WorkspaceId}/memory?scope=local&path=MEMORY.md", backHref);
+        nav.NavigateTo($"http://localhost{backHref}");
+        cut.Render(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        Assert.Equal("MEMORY.md", cut.Find("#memory-selected-path").TextContent);
+    }
+
+    [Fact]
+    public void MemoryPage_CreateAndSaveNewFile_SyncsUrlAndAllowsInPageLinkNavigation()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "MEMORY.md", "Index"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "MEMORY.md", "See [New](fresh.md).");
+        _service.Setup(s => s.SaveLocalAsync(WorkspaceId, "fresh.md", "Back to [Pinned](MEMORY.md).", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AgentMemoryChangeKind.Created);
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{WorkspaceId}/memory?scope=local&path=MEMORY.md");
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        cut.Find("#memory-new-file-name").Change("fresh.md");
+        cut.Find("#memory-create-btn").Click();
+        SetupLocal(
+            Entry(AgentMemoryScope.LocalWorkspace, "MEMORY.md", "Index"),
+            Entry(AgentMemoryScope.LocalWorkspace, "fresh.md", "Fresh"));
+        cut.Find("#memory-editor").Input("Back to [Pinned](MEMORY.md).");
+        cut.Find("#memory-save-btn").Click();
+
+        Assert.EndsWith($"/w/{WorkspaceId}/memory?scope=local&path=fresh.md", nav.Uri);
+
+        var backHref = cut.Find("#memory-rendered a").GetAttribute("href")!;
+        Assert.Equal($"/w/{WorkspaceId}/memory?scope=local&path=MEMORY.md", backHref);
+        nav.NavigateTo($"http://localhost{backHref}");
+        cut.Render(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+
+        Assert.Equal("MEMORY.md", cut.Find("#memory-selected-path").TextContent);
+    }
+
+    [Fact]
+    public void MemoryPage_ExternalDeleteOfSelectedFile_ResetsBrowserUrl()
+    {
+        SetupLocal(Entry(AgentMemoryScope.LocalWorkspace, "a.md"));
+        SetupRead(AgentMemoryScope.LocalWorkspace, "a.md", "initial");
+
+        var nav = Services.GetRequiredService<NavigationManager>();
+        nav.NavigateTo($"http://localhost/w/{WorkspaceId}/memory?scope=local&path=a.md");
+
+        var cut = Render<Memory>(p => p.Add(x => x.WorkspaceId, WorkspaceId));
+        Assert.EndsWith($"/w/{WorkspaceId}/memory?scope=local&path=a.md", nav.Uri);
+
+        SetupLocal();
+        _hub.TriggerMemoryUpdated(WorkspaceId, null, "", AgentMemoryConstants.ScopeLocalMetadataValue, "/workspace/memory/a.md", "Deleted", "");
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.Empty(cut.FindAll("#memory-selected-path"));
+            Assert.EndsWith($"/w/{WorkspaceId}/memory", nav.Uri);
+        });
+    }
 }
 
 public class MemoryBadgeComponentTests : BunitContext

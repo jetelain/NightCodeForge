@@ -161,6 +161,11 @@ public static class WorkspaceUrlHelper
     {
         TryExtractWorkspaceId(currentUri, out _, out var remainingPath, out var queryAndFragment);
 
+        if (string.Equals(remainingPath, TaskFileResolverConstants.ByFileRouteSubPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPath(newWorkspaceId, "backlog");
+        }
+
         if (TryExtractTaskRoute(remainingPath, out var section, out _))
         {
             return section switch
@@ -182,6 +187,12 @@ public static class WorkspaceUrlHelper
             remainingPath.StartsWith(MemoryUiConstants.WorkspaceMemoryUrlSuffix + "/", StringComparison.OrdinalIgnoreCase))
         {
             return BuildPath(newWorkspaceId, MemoryUiConstants.WorkspaceMemoryUrlSuffix);
+        }
+
+        if (string.Equals(remainingPath, FilesUiConstants.RouteSegment, StringComparison.OrdinalIgnoreCase) ||
+            remainingPath.StartsWith(FilesUiConstants.RouteSegment + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildPath(newWorkspaceId, FilesUiConstants.RouteSegment);
         }
 
         if (string.Equals(remainingPath, "ideation", StringComparison.OrdinalIgnoreCase))
@@ -210,6 +221,7 @@ public static class WorkspaceUrlHelper
             "" => "Overview",
             "ideation" => "Ideation Chat",
             MemoryUiConstants.WorkspaceMemoryUrlSuffix => "Agent Memory",
+            FilesUiConstants.RouteSegment => FilesUiConstants.SectionDisplayName,
             "backlog" => "Backlog & DAG",
             "monitoring" => "Live Telemetry",
             "inspector" => "Task Inspector",

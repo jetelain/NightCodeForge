@@ -389,7 +389,10 @@ public class AttachmentUiService : IAttachmentUiService
                 }
             }
 
-            var renderedHtml = readSucceeded ? MarkdownHelper.ToHtml(markdownContent) : string.Empty;
+            var linkContext = MarkdownLinkContext.ForGeneralWorkspace(
+                attachment.WorkspaceId > 0 ? attachment.WorkspaceId : null,
+                workspace?.DefaultBaseBranch);
+            var renderedHtml = readSucceeded ? MarkdownHelper.ToHtml(markdownContent, linkContext) : string.Empty;
             return new AttachmentPreviewModel
             {
                 Attachment = attachment,

@@ -68,6 +68,7 @@ public static class ServiceCollectionExtensions
             services.RemoveAll<IOperationsTelemetryService>();
             services.AddSingleton<IOperationsTelemetryService, Telemetry.OperationsTelemetryService>();
         }
+        services.TryAddScoped<IGitRepositoryBrowserService, GitRepositoryBrowserService>();
         services.BindConfigurationSectionAsDefault<NightCodeForge.Core.Domain.LocalDiscoveryOptions>(
             NightCodeForge.Core.Domain.LocalDiscoveryOptions.SectionName);
         services.TryAddSingleton<ILocalRepositoryDiscoveryService, Git.LocalRepositoryDiscoveryService>();

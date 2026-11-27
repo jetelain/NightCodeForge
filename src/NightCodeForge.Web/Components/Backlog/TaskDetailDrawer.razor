@@ -320,7 +320,7 @@
                             else
                             {
                                 <div class="formatted-desc forge-markdown">
-                                    @MarkdownHelper.ToMarkupString(Task.Description)
+                                    @MarkdownHelper.ToMarkupString(Task.Description, MarkdownLinkContext.ForTask(Task, WorkspaceState.ActiveWorkspace))
                                 </div>
                             }
                         </div>

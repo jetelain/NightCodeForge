@@ -28,6 +28,13 @@ public class ProcessRunnerExtensionsTests
             return Task.FromResult(new ProcessExecutionResult(0, "async out", "async err"));
         }
 
+        public Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+        {
+            RunAsyncCount++;
+            LastSpec = spec;
+            return Task.FromResult(new ProcessRawExecutionResult(0, System.Text.Encoding.UTF8.GetBytes("async out"), "async err"));
+        }
+
         public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             RunStreamingCount++;

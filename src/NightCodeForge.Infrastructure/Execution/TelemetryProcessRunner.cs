@@ -14,6 +14,9 @@ namespace NightCodeForge.Infrastructure.Execution;
 /// </summary>
 public class TelemetryProcessRunner : IProcessRunner
 {
+    private const int MaxRawPreviewBytes = 4096;
+    private const int MaxTelemetryPreviewLength = 2_000;
+
     private readonly IProcessRunner _innerRunner;
     private readonly IOperationsTelemetryService _telemetryService;
     private readonly ILogger<TelemetryProcessRunner> _logger;
@@ -224,6 +227,85 @@ public class TelemetryProcessRunner : IProcessRunner
             spec.OnStandardOutput = originalStdOut;
             spec.OnStandardError = originalStdErr;
         }
+    }
+
+    public async Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+
+        var commandId = Guid.NewGuid().ToString("N");
+        var cmdLine = FormatCommandLine(spec);
+        var workingDir = ResolveWorkingDirectory(spec);
+        var startTime = DateTime.UtcNow;
+
+        var runningRecord = new ShellCommandRecord(
+            CommandId: commandId,
+            CommandLine: cmdLine,
+            WorkingDirectory: workingDir,
+            StartTime: startTime,
+            DurationMs: 0,
+            ExitCode: null,
+            Status: ShellCommandStatus.Running,
+            OutputPreview: null,
+            ErrorPreview: null);
+
+        _telemetryService.RecordShellCommandStarted(runningRecord);
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            var result = await _innerRunner.RunRawAsync(spec, cancellationToken).ConfigureAwait(false);
+            sw.Stop();
+
+            var outPreview = FormatRawOutputPreview(result.StandardOutputBytes);
+            var errPreview = !string.IsNullOrEmpty(result.StandardError)
+                ? Truncate(GitCredentialRedactor.Redact(result.StandardError), MaxTelemetryPreviewLength)
+                : string.Empty;
+
+            var completedRecord = runningRecord with
+            {
+                DurationMs = sw.Elapsed.TotalMilliseconds,
+                ExitCode = result.ExitCode,
+                OutputPreview = outPreview,
+                ErrorPreview = errPreview,
+                Status = result.ExitCode == 0 ? ShellCommandStatus.Completed : ShellCommandStatus.Failed
+            };
+
+            _telemetryService.RecordShellCommandCompleted(completedRecord);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            var redactedError = GitCredentialRedactor.Redact(ex.Message);
+            var failedRecord = runningRecord with
+            {
+                DurationMs = sw.Elapsed.TotalMilliseconds,
+                ExitCode = -1,
+                ErrorPreview = redactedError,
+                Status = ShellCommandStatus.Failed
+            };
+
+            _telemetryService.RecordShellCommandCompleted(failedRecord);
+            _logger.LogDebug("Intercepted failure running raw async shell command {CommandId}: {Cmd} ({Error})", commandId, cmdLine, redactedError);
+            throw;
+        }
+    }
+
+    private static string FormatRawOutputPreview(byte[] standardOutputBytes)
+    {
+        if (standardOutputBytes.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (BinaryContentDetector.IsBinary(standardOutputBytes, BinaryContentDetector.DefaultRawByteSampleSize) ||
+            !BinaryContentDetector.TryDecodeTextPreview(standardOutputBytes, MaxRawPreviewBytes, out var decoded, out _))
+        {
+            return $"[binary output: {standardOutputBytes.Length} bytes]";
+        }
+
+        return Truncate(GitCredentialRedactor.Redact(decoded), MaxTelemetryPreviewLength);
     }
 
     public async IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(

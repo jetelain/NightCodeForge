@@ -1,0 +1,175 @@
+@page "/tasks/by-file"
+@page "/w/{WorkspaceId:int}/tasks/by-file"
+@namespace NightCodeForge.Web.Components.Pages
+@using NightCodeForge.Web.Services
+@inject WorkspaceStateService WorkspaceState
+@inject ITaskFileResolverService TaskFileResolver
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>Resolve Task File - NightCodeForge</PageTitle>
+
+<div class="task-by-file-page" id="task-by-file-page">
+    @if (_isResolving)
+    {
+        <div class="card-surface card-glass" id="task-by-file-loading" style="padding: 2.5rem 1.5rem; text-align: center; color: var(--text-muted); border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); margin-top: 1rem;">
+            <div class="status-dot running" style="margin: 0 auto 1rem auto; width: 14px; height: 14px;"></div>
+            <h3 style="color: var(--text-primary); font-size: 1.1rem; margin-bottom: 0.35rem;">Resolving Task File…</h3>
+            <p style="font-size: 0.88rem; margin: 0;">Looking up <code>@PathQuery</code> in workspace <strong>@(WorkspaceState.ActiveWorkspace?.Name ?? $"#{TargetWorkspaceId}")</strong>.</p>
+        </div>
+    }
+    else if (_result is { Outcome: not TaskFileResolutionOutcome.TaskFound and not TaskFileResolutionOutcome.FallbackToFileViewer })
+    {
+        <div class="card-surface card-glass" id="task-by-file-not-found" style="padding: 2.5rem 1.5rem; text-align: center; border-radius: var(--radius-lg); border: 1px solid var(--border-subtle); margin-top: 1rem;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">📂</div>
+            <h2 style="color: var(--text-primary); font-size: 1.25rem; margin-bottom: 0.5rem;">Task File Not Found</h2>
+            <p style="color: var(--text-secondary); font-size: 0.9rem; max-width: 520px; margin: 0 auto 1.5rem auto;">
+                @(_result.ErrorMessage ?? $"Could not resolve '{PathQuery}'.")
+            </p>
+            <a id="task-by-file-backlog-link"
+               href="@WorkspaceState.GetPath("backlog")"
+               class="forge-btn forge-btn-primary"
+               style="text-decoration: none; padding: 0.45rem 1rem;">
+                ← Return to Backlog &amp; DAG
+            </a>
+        </div>
+    }
+    else if (!TargetWorkspaceId.HasValue)
+    {
+        <WorkspaceEmptyStateHero />
+    }
+</div>
+
+@code {
+    [Parameter] public int? WorkspaceId { get; set; }
+
+    [SupplyParameterFromQuery(Name = TaskFileResolverConstants.PathQueryParameter)]
+    public string? PathQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = TaskFileResolverConstants.RefQueryParameter)]
+    public string? RefQuery { get; set; }
+
+    [SupplyParameterFromQuery(Name = TaskFileResolverConstants.TaskIdQueryParameter)]
+    public int? TaskIdQuery { get; set; }
+
+    private bool _isResolving;
+    private bool _hasRedirected;
+    private bool _disposed;
+    private int _resolveVersion;
+    private TaskFileResolutionResult? _result;
+    private string? _lastResolveKey;
+
+    private int? TargetWorkspaceId => WorkspaceId ?? WorkspaceState.ActiveWorkspaceId;
+
+    protected override void OnInitialized()
+    {
+        WorkspaceState.OnWorkspaceChanged += HandleWorkspaceChanged;
+    }
+
+    protected override Task OnParametersSetAsync() => ResolveCurrentTargetAsync();
+
+    private void HandleWorkspaceChanged()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            await ResolveCurrentTargetAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task ResolveCurrentTargetAsync()
+    {
+        if (_hasRedirected)
+        {
+            WorkspaceUrlHelper.TryExtractWorkspaceId(Navigation.Uri, out _, out var currentRemainingPath, out _);
+            if (!string.Equals(currentRemainingPath, TaskFileResolverConstants.ByFileRouteSubPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _hasRedirected = false;
+        }
+
+        if (WorkspaceId.HasValue)
+        {
+            WorkspaceState.TryActivateWorkspaceById(WorkspaceId.Value);
+        }
+
+        var targetWorkspaceId = TargetWorkspaceId;
+        if (!targetWorkspaceId.HasValue)
+        {
+            _result = null;
+            _isResolving = false;
+            return;
+        }
+
+        var key = $"{targetWorkspaceId.Value}|{PathQuery ?? string.Empty}|{RefQuery ?? string.Empty}|{TaskIdQuery?.ToString() ?? string.Empty}";
+        if (string.Equals(_lastResolveKey, key, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var version = ++_resolveVersion;
+        _lastResolveKey = key;
+        _isResolving = true;
+        _result = null;
+
+        try
+        {
+            var resolved = await TaskFileResolver.ResolveAsync(
+                targetWorkspaceId.Value,
+                PathQuery,
+                RefQuery,
+                TaskIdQuery);
+
+            if (_disposed || _resolveVersion != version)
+            {
+                return;
+            }
+
+            if (resolved.Outcome == TaskFileResolutionOutcome.TaskFound && resolved.TaskId.HasValue)
+            {
+                _hasRedirected = true;
+                Navigation.NavigateTo(WorkspaceUrlHelper.BuildPath(targetWorkspaceId.Value, $"tasks/{resolved.TaskId.Value}"), replace: true);
+                return;
+            }
+
+            if (resolved.Outcome == TaskFileResolutionOutcome.FallbackToFileViewer && !string.IsNullOrEmpty(resolved.CanonicalPath))
+            {
+                _hasRedirected = true;
+                var filesUrl = FileViewerPresentationHelper.BuildFileViewerUrl(
+                    targetWorkspaceId.Value,
+                    resolved.ResolvedRef,
+                    resolved.CanonicalPath,
+                    resolved.TaskIdHint);
+                Navigation.NavigateTo(filesUrl, replace: true);
+                return;
+            }
+
+            _result = resolved;
+        }
+        finally
+        {
+            if (!_disposed && _resolveVersion == version)
+            {
+                _isResolving = false;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        WorkspaceState.OnWorkspaceChanged -= HandleWorkspaceChanged;
+    }
+}

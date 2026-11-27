@@ -1012,6 +1012,9 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
             return inner.RunAsync(spec, cancellationToken);
         }
 
+        public Task<ProcessRawExecutionResult> RunRawAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
+            => inner.RunRawAsync(spec, cancellationToken);
+
         public IAsyncEnumerable<ProcessStreamChunk> RunStreamingAsync(ProcessStartSpec spec, CancellationToken cancellationToken = default)
             => inner.RunStreamingAsync(spec, cancellationToken);
 
