@@ -1,12 +1,12 @@
 # ⚡ Step 12.32B: From-Scratch Workspace Templates (Native CLI Clean Architecture) & Remote Forge Publishing
 
 > **Feature Implementation Step (Part 2 of 2 — Native CLI Scaffolding, Clean Architecture Templates & Remote Publishing)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
 > *Prerequisite Step:* [Step 12.32A: Workspace Wizard Local Git Discovery & Remote Hosting](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md)  
-> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
+> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.14: Global Skills Injection & Stack Tooling](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -28,7 +28,7 @@ This step (Part 2 of Step 12.32) enables creating fresh, production-ready worksp
    - **CLI Application (Clean Architecture):** Command-line tool structured into `Cli`, `Core` with test suites.
    - **Class Library:** Reusable modular library with documentation and unit tests.
 4. **Automated Git Initialization & Clean First Commit:** Auto-provisions `.gitignore`, `.editorconfig`, `README.md`, runs `git init -b main`, stages all files, and creates the baseline commit.
-5. **Remote Forge Publishing (GitHub / GitLab):** When VCS provider integration ([Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md) / [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is active, developers can choose to automatically create the remote repository (public or private), register the `origin` remote, push `main`, and link workspace integration settings in one seamless flow.
+5. **Remote Forge Publishing (GitHub / GitLab):** When VCS provider integration ([Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md) / [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is active, developers can choose to automatically create the remote repository (public or private), register the `origin` remote, push `main`, and link workspace integration settings in one seamless flow.
 
 ---
 
@@ -192,8 +192,8 @@ public interface IWorkspaceTemplateService
 Upon executing template CLI commands, the service writes canonical NCF hygiene assets **before** staging and committing so the initial commit has clean LF line endings and passes all cross-platform checks out of the box:
 - `docs/ARCHITECTURE.md`: High-level system overview documenting layered dependencies.
 - `docs/tasks/.gitkeep`: Ready for autonomous task markdown sync.
-- `.gitignore`: Standard .NET gitignore combined with the NCF managed block via [`GitignorePreparer.Prepare(...)`](../../src/NightCodeForge.Core/Services/GitignorePreparer.cs) (`TaskSyncConstants.RequiredGitIgnoreEntries`).
-- `.editorconfig`: Standard C# / general formatting rules enforcing 4 spaces, UTF-8, and `end_of_line = lf` via [`EditorConfigPreparer.Prepare(...)`](../../src/NightCodeForge.Core/Services/EditorConfigPreparer.cs) (`EditorConfigConstants.BaselineEditorConfigContent`).
+- `.gitignore`: Standard .NET gitignore combined with the NCF managed block via [`GitignorePreparer.Prepare(...)`](../../../src/NightCodeForge.Core/Services/GitignorePreparer.cs) (`TaskSyncConstants.RequiredGitIgnoreEntries`).
+- `.editorconfig`: Standard C# / general formatting rules enforcing 4 spaces, UTF-8, and `end_of_line = lf` via [`EditorConfigPreparer.Prepare(...)`](../../../src/NightCodeForge.Core/Services/EditorConfigPreparer.cs) (`EditorConfigConstants.BaselineEditorConfigContent`).
 - `.gitattributes`: Enforces `* text=auto eol=lf` to prevent Windows vs. WSL2/Container line-ending drift.
 - `README.md`: Project summary mentioning NightCodeForge workspace scaffolding.
 - Git Initial Commit:
@@ -211,8 +211,8 @@ When `PublishToRemoteForge == true`:
 3. Calls `IVcsHostingProvider.CreateRepositoryAsync(request.ProjectName, request.RemoteDescription, request.RemoteIsPrivate)`.
 4. Obtains the ephemeral HTTP auth header via `IVcsHostingProvider.GetGitHttpAuthHeaderAsync` ([Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md), keeping publishing provider-agnostic without coupling directly to `IGitHubDeviceAuthService`) and executes native Git remote linkage via `IGitCliRunner` / `CliWrap`:
    - `git remote add origin <HttpsCloneUrl>`
-   - `git -c http.extraHeader="<authHeader>" push -u origin main` (with `GIT_TERMINAL_PROMPT=0` per [Step 12.11B](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) so short-lived `ghu_...` tokens are **never** written into `.git/config`).
-5. Populates `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`) onto [`WorkspaceCreationModel`](../../src/NightCodeForge.Web/Models/WorkspaceCreationModel.cs) (introduced in [Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md)) so Phase B persists it on the newly provisioned [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite.
+   - `git -c http.extraHeader="<authHeader>" push -u origin main` (with `GIT_TERMINAL_PROMPT=0` per [Step 12.11B](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) so short-lived `ghu_...` tokens are **never** written into `.git/config`).
+5. Populates `GitHubIntegrationSettings` (`RepositoryOwner`, `RepositoryName`, `Enabled = true`) onto [`WorkspaceCreationModel`](../../../src/NightCodeForge.Web/Models/WorkspaceCreationModel.cs) (introduced in [Step 12.32A](STEP_12_32A_WORKSPACE_WIZARD_REPO_DISCOVERY_AND_REMOTE_PROJECT_PICKER.md)) so Phase B persists it on the newly provisioned [`Workspace`](../../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite.
 
 ---
 
@@ -242,9 +242,9 @@ At the entry of the wizard, developers see an intuitive intake selector:
 - Stepper dynamically skips Step 2 (Stack & Branch) since stack is predetermined by the template and base branch is initialized as `main`.
 - Transitions directly to Step 3 (Execution Environment: WSL2 / Container / BareHost) and Step 4 (Provisioning), showing live progress in two coordinated phases:
   1. **Phase A — Template Scaffolding & Remote Publish (`IWorkspaceTemplateService.ScaffoldWorkspaceAsync`):** Creates the target directory, runs native `dotnet new` / `dotnet sln` commands, writes hygiene files (`.gitignore`, `.editorconfig`, `.gitattributes`, `docs/`), initializes Git (`git init -b main` + baseline commit), and (if enabled) creates the remote forge repository and pushes `main`.
-  2. **Phase B — Workspace Onboarding (`IWorkspaceProvisioningService.ProvisionWorkspaceAsync`):** Persists the [`Workspace`](../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite (mapping `WorkspaceCreationModel.GitHubSettings` from Step 12.32A when published), clones the isolated Ext4 mirror from the newly committed `main` branch, starts the `docs/tasks/` markdown sync watcher, and configures agent profiles.
+  2. **Phase B — Workspace Onboarding (`IWorkspaceProvisioningService.ProvisionWorkspaceAsync`):** Persists the [`Workspace`](../../../src/NightCodeForge.Core/Domain/Workspace.cs) record in SQLite (mapping `WorkspaceCreationModel.GitHubSettings` from Step 12.32A when published), clones the isolated Ext4 mirror from the newly committed `main` branch, starts the `docs/tasks/` markdown sync watcher, and configures agent profiles.
 - **Partial Failure & Retry Recovery:** If Phase A succeeds locally (`dotnet new` + `git commit`) but remote publishing fails (e.g., a GitHub repository with the same name already exists or network drops), the UI surfaces the specific `VcsHostingProviderException` message and allows retrying remote publish/provisioning or proceeding with local-only onboarding without re-running `dotnet new` over a non-empty directory.
-- **Constructor Limit Compliance ([AGENTS.md](../../AGENTS.md)):** Keep `IWorkspaceTemplateService` as a separate service orchestrated by the wizard (or a dedicated coordinator) rather than adding more dependencies to [`WorkspaceProvisioningService`](../../src/NightCodeForge.Web/Services/WorkspaceProvisioningService.cs) (which already has 9 constructor parameters).
+- **Constructor Limit Compliance ([AGENTS.md](../../../AGENTS.md)):** Keep `IWorkspaceTemplateService` as a separate service orchestrated by the wizard (or a dedicated coordinator) rather than adding more dependencies to [`WorkspaceProvisioningService`](../../../src/NightCodeForge.Web/Services/WorkspaceProvisioningService.cs) (which already has 9 constructor parameters).
 
 ---
 

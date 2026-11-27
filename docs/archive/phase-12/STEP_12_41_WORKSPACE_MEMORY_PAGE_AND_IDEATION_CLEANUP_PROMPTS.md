@@ -1,11 +1,11 @@
 # 🧠 Step 12.41: Full-Page Agent Memory Explorer, Quick Ideation Cleanup Prompts & Nightwatch Memory Audit
 
 > **Feature Implementation Step (Replacing `WorkspaceMemoryDrawer` Modal with Dedicated `/memory` Page & Ideation Cleanup Workflows)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Prerequisite Step:* [Step 12.39: Two-Tier Agent Memory Management, Selective `:rw` Memory Mount & Live UI Notifications](../archive/phase-12/STEP_12_39_TWO_TIER_AGENT_MEMORY_MANAGEMENT_AND_UI_NOTIFICATIONS.md)  
-> *Companion Step:* [Step 12.35B: Idle-GPU Nightwatch Deep Transcript & Workspace Analysis](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) *(Memory scanning & improvement suggestions)*  
-> *Target Components:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
+> *Prerequisite Step:* [Step 12.39: Two-Tier Agent Memory Management, Selective `:rw` Memory Mount & Live UI Notifications](STEP_12_39_TWO_TIER_AGENT_MEMORY_MANAGEMENT_AND_UI_NOTIFICATIONS.md)  
+> *Companion Step:* [Step 12.35B: Idle-GPU Nightwatch Deep Transcript & Workspace Analysis](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) *(Memory scanning & improvement suggestions)*  
+> *Target Components:* `src/NightCodeForge.Web`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 >
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -13,14 +13,14 @@
 
 ## 1. Problem Statement & Motivation
 
-[Step 12.39](../archive/phase-12/STEP_12_39_TWO_TIER_AGENT_MEMORY_MANAGEMENT_AND_UI_NOTIFICATIONS.md) introduced the two-tier Markdown memory system (Tier 1 Committed Repository Memory: `AGENTS.md` + `.agents/memory/*.md`; Tier 2 Local Workspace Memory: `/workspace/memory/MEMORY.md` + topic `.md` files) and surfaced it through `WorkspaceMemoryDrawer.razor` — a modal dialog accessible primarily from Ideation, Settings, and tool-call badges.
+[Step 12.39](STEP_12_39_TWO_TIER_AGENT_MEMORY_MANAGEMENT_AND_UI_NOTIFICATIONS.md) introduced the two-tier Markdown memory system (Tier 1 Committed Repository Memory: `AGENTS.md` + `.agents/memory/*.md`; Tier 2 Local Workspace Memory: `/workspace/memory/MEMORY.md` + topic `.md` files) and surfaced it through `WorkspaceMemoryDrawer.razor` — a modal dialog accessible primarily from Ideation, Settings, and tool-call badges.
 
 In practice, the modal layout has three major usability limitations:
 1. **Constrained Viewport:** A modal dialog is too narrow and short to comfortably read, compare, or edit multi-section Markdown memory files alongside the file catalog.
 2. **Hidden Discoverability:** Memory is a first-class workspace artifact across Ideation, Backlog, Execution, and Review, yet it has no top-level navigation entry or dedicated URL.
 3. **Manual Maintenance Friction:** As `MEMORY.md` approaches its pinned injection limits (`MaxPinnedMemoryLines = 150`, `MaxPinnedMemoryBytes = 12_288`) or accumulates stale notes, there is no one-click way to ask the Ideation agent to summarize, deduplicate, or promote durable conventions into a repository memory task.
 
-This step replaces the modal with a dedicated full-page **Agent Memory Explorer** (`/memory` and `/w/{WorkspaceId:int}/memory`), adds **Quick Ideation Prompts** to summarize and clean up memory (updating local workspace memory directly and proposing a Stage 2 task when repository memory needs updates), and pairs with [Step 12.35B](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) so **Nightwatch** proactively scans memory for improvement opportunities.
+This step replaces the modal with a dedicated full-page **Agent Memory Explorer** (`/memory` and `/w/{WorkspaceId:int}/memory`), adds **Quick Ideation Prompts** to summarize and clean up memory (updating local workspace memory directly and proposing a Stage 2 task when repository memory needs updates), and pairs with [Step 12.35B](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) so **Nightwatch** proactively scans memory for improvement opportunities.
 
 ---
 
@@ -92,12 +92,12 @@ Provide a **Quick Ideation Actions** toolbar/panel on `Memory.razor` that lets t
      - Respect `Session.IsGenerating`: if an Ideation turn is currently active, do not clobber the running session or overwrite the composer; surface a warning toast/notice instead.
      - Deduplicate handled memory-action query parameters across `OnParametersSetAsync` re-renders (mirroring `TaskId` / `DraftId` deduplication).
 
-### 3.3 Nightwatch Proactive Memory Scanning (Companion Scope — [Step 12.35B](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md))
+### 3.3 Nightwatch Proactive Memory Scanning (Companion Scope — [Step 12.35B](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md))
 
 > [!NOTE]
-> Nightwatch idle-GPU memory scanning is **owned by and specified in [Step 12.35B](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)** (deferred post-`v0.1.0`) and is **out of scope for Step 12.41 implementation** — no Nightwatch code changes are required to complete Step 12.41.
+> Nightwatch idle-GPU memory scanning is **owned by and specified in [Step 12.35B](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md)** (deferred post-`v0.1.0`) and is **out of scope for Step 12.41 implementation** — no Nightwatch code changes are required to complete Step 12.41.
 
-Complementing the user-initiated Quick Ideation Prompts in Step 12.41, autonomous **Nightwatch** memory auditing in [Step 12.35B](STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) operates as follows:
+Complementing the user-initiated Quick Ideation Prompts in Step 12.41, autonomous **Nightwatch** memory auditing in [Step 12.35B](../../features/STEP_12_35B_NIGHTWATCH_IDLE_DEEP_ANALYSIS_AND_LEGACY_DIAGNOSTIC_REPLACEMENT.md) operates as follows:
 
 - During idle-GPU deep analysis passes, Nightwatch already holds `RestrictedReadOnly` access to `/nightcodeforge/wks/{id}/memory/` and each workspace's repository (`AGENTS.md`, `.agents/memory/*.md`).
 - Nightwatch scans both memory tiers alongside recent transcripts to detect:
@@ -106,7 +106,7 @@ Complementing the user-initiated Quick Ideation Prompts in Step 12.41, autonomou
   - Recurring operational discoveries or transcript friction that should be codified in `AGENTS.md` / `.agents/memory/*.md` or pruned from `/workspace/memory/*.md`.
 - Nightwatch routes concrete memory cleanup or repo-memory promotion proposals into `TaskOverallStatus.Suggested` `ForgeTask`s via `propose_workspace_task` (or `HarnessIssue` entries when NCF's own memory/prompt harness is at fault), ready for the user to approve or refine in Ideation.
 
-### 3.4 UI & Presentation Separation ([AGENTS.md](../../AGENTS.md))
+### 3.4 UI & Presentation Separation ([AGENTS.md](../../../AGENTS.md))
 
 - Keep `Memory.razor` and `Ideation.razor` strictly focused on layout, rendering, and event binding.
 - Extract URL building, query-parameter parsing, memory action prompt generation, and scope/file grouping into dedicated testable services/helpers in `src/NightCodeForge.Web/Services/` (e.g., `MemoryPresentationHelper`, `WorkspaceMemoryUiService`, `IdeationMemoryPromptHelper`), adhering to $\le 10$ required constructor parameters, no optional constructor parameters, no bare `catch { }` blocks, and named constants/enums instead of magic strings.
@@ -119,4 +119,4 @@ Complementing the user-initiated Quick Ideation Prompts in Step 12.41, autonomou
 - [x] Display both Tier 2 Local Workspace Memory (atomic CRUD + `MEMORY.md` near-budget and over-budget meter) and Tier 1 Committed Repository Memory (`AGENTS.md`, `.agents/AGENTS.md`, `.agents/memory/*.md`, read-only) simultaneously in the left navigation pane with HTML-disabled Markdown rendering, graceful deep-link error handling, and live `MemoryUpdateTracker` refresh and reset.
 - [x] Update `Ideation.razor`, `StageConversationViewer.razor`, `WorkspaceMemoryTab.razor`, `WebNotificationService` push notification URLs (`MemoryUiConstants.WorkspaceMemoryUrlSuffix`), and memory badge tooltips to navigate to `/w/{WorkspaceId}/memory` (with deep-link `scope` and `path` query support), and remove `WorkspaceMemoryDrawer.razor`.
 - [x] Add Quick Ideation Prompt actions on `Memory.razor` (with clear enablement and near/over-budget emphasis rules) that navigate to `/w/{WorkspaceId}/ideation`, start a fresh session (respecting `Session.IsGenerating` and deduplicating query parameters), and pre-fill curated prompts instructing Ideation to update workspace memory directly and propose a Stage 2 task if repository memory needs updating.
-- [ ] Cover `Memory.razor`, URL/query helpers, `IdeationMemoryPromptHelper`, deep-link navigation from Ideation/Inspector/Settings/Notifications, and `Ideation.razor` memory prompt handoff with unit and bUnit tests in `NightCodeForge.Web.Tests`, then run the full test suite per [AGENTS.md](../../AGENTS.md).
+- [x] Cover `Memory.razor`, URL/query helpers, `IdeationMemoryPromptHelper`, deep-link navigation from Ideation/Inspector/Settings/Notifications, and `Ideation.razor` memory prompt handoff with unit and bUnit tests in `NightCodeForge.Web.Tests`, then run the full test suite per [AGENTS.md](../../../AGENTS.md).

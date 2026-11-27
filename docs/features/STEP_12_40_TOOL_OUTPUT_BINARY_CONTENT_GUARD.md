@@ -2,7 +2,7 @@
 
 > **Feature Implementation Step — Context Protection & Binary Guardrail**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Related Steps:* [Step 12.2D: Multimodal Vision & In-Loop Image Inspection](../archive/phase-12/STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md) | [Step 12.22A: Diagnostic Shell Service](STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)  
+> *Related Steps:* [Step 12.2D: Multimodal Vision & In-Loop Image Inspection](../archive/phase-12/STEP_12_2D_MULTIMODAL_VISION_AND_IN_LOOP_IMAGE_INSPECTION.md) | [Step 12.22A: Diagnostic Shell Service](../archive/phase-12/STEP_12_22A_DIAGNOSTIC_SHELL_SERVICE_AND_CONTAINER_SIGINT_RECOVERY.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Agents.Tests`  
 > *Status:* Planned | *Target Framework:* .NET 10 (C# 13)

@@ -1,11 +1,11 @@
 # 📂 Step 12.46A: Git Branch Repository File Viewer (`/files`)
 
 > **Feature Implementation Step (Part 1 of 2 — Read-Only Git Ref Tree & File Inspector Page)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
 > *Companion Step:* [Step 12.46B: Context-Aware Markdown Link Builder & Unified UI Integration](STEP_12_46B_CONTEXT_AWARE_MARKDOWN_LINK_BUILDER.md)  
-> *Related Steps:* [Step 12.41: Full-Page Agent Memory Explorer](STEP_12_41_WORKSPACE_MEMORY_PAGE_AND_IDEATION_CLEANUP_PROMPTS.md) *(Implemented)* | [Step 12.40: Tool Output & File Read Binary Content Guard](STEP_12_40_TOOL_OUTPUT_BINARY_CONTENT_GUARD.md) *(Planned)* | [Step 12.44: CSS Architecture Rationalization & Scoped Styles](STEP_12_44_CSS_ARCHITECTURE_RATIONALIZATION_AND_SCOPED_STYLES.md) *(Planned)*  
-> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Related Steps:* [Step 12.41: Full-Page Agent Memory Explorer](STEP_12_41_WORKSPACE_MEMORY_PAGE_AND_IDEATION_CLEANUP_PROMPTS.md) *(Implemented)* | [Step 12.40: Tool Output & File Read Binary Content Guard](../../features/STEP_12_40_TOOL_OUTPUT_BINARY_CONTENT_GUARD.md) *(Planned)* | [Step 12.44: CSS Architecture Rationalization & Scoped Styles](../../features/STEP_12_44_CSS_ARCHITECTURE_RATIONALIZATION_AND_SCOPED_STYLES.md) *(Planned)*  
+> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 >
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -45,15 +45,15 @@ flowchart LR
 
 ### 3.1 Read-Only Git Ref, Tree & File Service (`Core` / `Infrastructure`)
 
-Provide a dedicated read-only repository browsing service backed exclusively by [`IGitCliRunner`](../../src/NightCodeForge.Core/Interfaces/IGitCliRunner.cs) (no shell interpolation, no arbitrary host filesystem reads outside Git object queries):
+Provide a dedicated read-only repository browsing service backed exclusively by [`IGitCliRunner`](../../../src/NightCodeForge.Core/Interfaces/IGitCliRunner.cs) (no shell interpolation, no arbitrary host filesystem reads outside Git object queries):
 
 1. **Repository Location, Cross-Platform Accessibility & Binary-Safe Git Capture:**
-   - Resolve the workspace's canonical Git inspection directory using the same priority and Windows/WSL2 UNC accessibility rules as [`GitWorkspaceManager`](../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs), [`GitSyncService`](../../src/NightCodeForge.Web/Services/GitSyncService.cs), and [`TaskMarkdownSyncService`](../../src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs):
-     1. Prefer `Workspace.Ext4MirrorPath` when configured and accessible (mapping WSL/Linux paths via `WslPathConverter` / [`IWorkspacePathResolver`](../../src/NightCodeForge.Core/Interfaces/IWorkspacePathResolver.cs) `.ToHostPath` on Windows).
+   - Resolve the workspace's canonical Git inspection directory using the same priority and Windows/WSL2 UNC accessibility rules as [`GitWorkspaceManager`](../../../src/NightCodeForge.Infrastructure/Git/GitWorkspaceManager.cs), [`GitSyncService`](../../../src/NightCodeForge.Web/Services/GitSyncService.cs), and [`TaskMarkdownSyncService`](../../../src/NightCodeForge.Core/Services/TaskMarkdownSyncService.cs):
+     1. Prefer `Workspace.Ext4MirrorPath` when configured and accessible (mapping WSL/Linux paths via `WslPathConverter` / [`IWorkspacePathResolver`](../../../src/NightCodeForge.Core/Interfaces/IWorkspacePathResolver.cs) `.ToHostPath` on Windows).
      2. Otherwise, for non-`BareHost` workspaces, check the canonical working clone (`IWorkspacePathResolver.GetAgentWorkingClonePath(workspace.Id)`) if accessible.
      3. Fall back to `Workspace.RepositoryPath`.
    - Enforce read-only Git operations on committed Git objects only (`for-each-ref` / `branch`, `rev-parse`, `ls-tree`, `cat-file`, `show`). Never mutate repository state, checkout branches, modify working tree files, or read arbitrary host working-tree files.
-   - **Raw-Byte Git Stdout Capability:** Today, [`SystemProcessRunner`](../../src/NightCodeForge.Core/Execution/SystemProcessRunner.cs) decodes `StandardOutput` as UTF-8 and strips `\0` bytes, and [`IGitCliRunner`](../../src/NightCodeForge.Core/Interfaces/IGitCliRunner.cs) returns only `string StandardOutput`. Add a binary-safe raw-byte stdout capture path across [`IProcessRunner`](../../src/NightCodeForge.Core/Interfaces/IProcessRunner.cs) / `SystemProcessRunner` and `IGitCliRunner` / `GitCliRunner` (preserving existing WSL2 routing, timeouts, and stderr credential redaction) so `git ls-tree -l -z` preserves `\0` record delimiters and `git show <ref>:<path>` delivers unmodified raw bytes for accurate binary detection and size-safe decoding.
+   - **Raw-Byte Git Stdout Capability:** Today, [`SystemProcessRunner`](../../../src/NightCodeForge.Core/Execution/SystemProcessRunner.cs) decodes `StandardOutput` as UTF-8 and strips `\0` bytes, and [`IGitCliRunner`](../../../src/NightCodeForge.Core/Interfaces/IGitCliRunner.cs) returns only `string StandardOutput`. Add a binary-safe raw-byte stdout capture path across [`IProcessRunner`](../../../src/NightCodeForge.Core/Interfaces/IProcessRunner.cs) / `SystemProcessRunner` and `IGitCliRunner` / `GitCliRunner` (preserving existing WSL2 routing, timeouts, and stderr credential redaction) so `git ls-tree -l -z` preserves `\0` record delimiters and `git show <ref>:<path>` delivers unmodified raw bytes for accurate binary detection and size-safe decoding.
 2. **Branch & Ref Enumeration:**
    - Enumerate local branches using machine-safe formatting (such as `git for-each-ref --format=%(refname:short) refs/heads/` or `git branch --format=%(refname:short)`) so current-branch `*` / worktree `+` markers and detached `HEAD` entries never pollute branch names.
    - Return local branches in deterministic display order:
@@ -89,11 +89,11 @@ Provide a dedicated read-only repository browsing service backed exclusively by 
      - Check blob byte size via `git cat-file -s` (or the `ls-tree -l` size) before loading file bytes.
      - Enforce a named maximum preview byte threshold (consistent with UI preview budgets, e.g., 512 KB–1 MB). If the blob exceeds the limit, do not load its content into memory; return structured metadata indicating the file is oversized along with its exact byte size.
    - **Binary Content Detection (Shared Core Guard):**
-     - Inspect raw bytes returned by `git show <ref>:<path>` (via the binary-safe raw-byte Git capture path) for NUL bytes outside valid UTF-16/UTF-32 BOM-decoded text, non-printable ASCII control-character density, and invalid UTF-8 / `U+FFFD` replacement-character density (aligned with the heuristics specified in [Step 12.40](STEP_12_40_TOOL_OUTPUT_BINARY_CONTENT_GUARD.md), with zero false positives on empty files or valid multilingual UTF-8 text).
+     - Inspect raw bytes returned by `git show <ref>:<path>` (via the binary-safe raw-byte Git capture path) for NUL bytes outside valid UTF-16/UTF-32 BOM-decoded text, non-printable ASCII control-character density, and invalid UTF-8 / `U+FFFD` replacement-character density (aligned with the heuristics specified in [Step 12.40](../../features/STEP_12_40_TOOL_OUTPUT_BINARY_CONTENT_GUARD.md), with zero false positives on empty files or valid multilingual UTF-8 text).
      - Because Step 12.40 is still planned, place the reusable raw-byte binary detection helper in `NightCodeForge.Core` with unit tests in `NightCodeForge.Core.Tests` so Step 12.40 can build on or share it without duplication.
      - When binary content is detected, return a structured binary-file result (without decoded garbled text) so the UI displays a clear binary preview notice and metadata.
    - **Fail-Fast Domain Exceptions:**
-     - Per [AGENTS.md](../../AGENTS.md), never synthesize fake files or swallow errors in bare `catch { }` blocks. Throw dedicated domain exceptions when the workspace does not exist, the Git repository is missing/inaccessible, the ref cannot be resolved (even after task fallback), the path/ref fails validation, or the requested file/directory does not exist at that ref.
+     - Per [AGENTS.md](../../../AGENTS.md), never synthesize fake files or swallow errors in bare `catch { }` blocks. Throw dedicated domain exceptions when the workspace does not exist, the Git repository is missing/inaccessible, the ref cannot be resolved (even after task fallback), the path/ref fails validation, or the requested file/directory does not exist at that ref.
 
 ### 3.2 Dedicated Full-Page File Viewer UI (`Files.razor`, `NavMenu`, `WorkspaceUrlHelper`)
 
@@ -106,8 +106,8 @@ Provide a dedicated read-only repository browsing service backed exclusively by 
      - `path`: Normalized repository-relative file or directory path (defaults to repository root when omitted).
      - `taskId` *(optional)*: Task ID hint enabling `feature/task-{id}` fallback lookup and linking back to `/w/{WorkspaceId}/tasks/{TaskId}`.
      - `lines` *(optional)*: Explicit line or range query fallback (e.g., `42` or `42-58`), in addition to standard URL fragment anchors (`#L42`, `#L42-L58`).
-   - Add a **Repository Files** (`📂 Repository Files`) navigation link in [`NavMenu.razor`](../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor) (in the `Workflow` section alongside `Agent Memory`) using `WorkspaceState.GetNavHref(...)`.
-   - Update [`WorkspaceUrlHelper.cs`](../../src/NightCodeForge.Web/Services/WorkspaceUrlHelper.cs):
+   - Add a **Repository Files** (`📂 Repository Files`) navigation link in [`NavMenu.razor`](../../../src/NightCodeForge.Web/Components/Layout/NavMenu.razor) (in the `Workflow` section alongside `Agent Memory`) using `WorkspaceState.GetNavHref(...)`.
+   - Update [`WorkspaceUrlHelper.cs`](../../../src/NightCodeForge.Web/Services/WorkspaceUrlHelper.cs):
      - Map `"files"` in `GetSectionDisplayName` to `"Repository Files"`.
      - Strip file/ref/task/line query parameters and fragments in `GetTargetUrlForWorkspaceSwitch` when switching workspaces on `/files`, landing cleanly on `/w/{newWorkspaceId}/files`.
    - Render `<WorkspaceEmptyStateHero />` when no workspace is active (`WorkspaceState.ActiveWorkspace == null`).
@@ -125,25 +125,25 @@ Provide a dedicated read-only repository browsing service backed exclusively by 
    - **Fragment & `LocationChanged` Synchronization:**
      - Blazor's `[SupplyParameterFromQuery]` does not bind URL fragments (`#L42`, `#L42-L58`). Parse the fragment from `NavigationManager.Uri` via the dedicated line-range helper and subscribe to `NavigationManager.LocationChanged` (disposing the subscription cleanly) so in-page fragment-only navigation and line clicks update the highlighted range without losing tree expansion state.
    - **Code & Plain-Text Files:**
-     - Render line-by-line with line numbers in a monospace code viewer using `ISyntaxHighlightingService` ([`SimpleSyntaxHighlighter`](../../src/NightCodeForge.Web/Services/SimpleSyntaxHighlighter.cs)) and the existing `.tok-*` token CSS classes.
+     - Render line-by-line with line numbers in a monospace code viewer using `ISyntaxHighlightingService` ([`SimpleSyntaxHighlighter`](../../../src/NightCodeForge.Web/Services/SimpleSyntaxHighlighter.cs)) and the existing `.tok-*` token CSS classes.
      - Support single-line and range highlighting parsed from URL fragments (`#L42`, `#L42-L58`, case-insensitive `L`) or the `lines` query parameter (`42`, `42-58`), clamping inverted or out-of-bounds ranges safely without crashing.
-     - Highlight matched lines visually with a distinct row accent and automatically scroll the first highlighted line into view via JS interop in [`wwwroot/js/app.js`](../../src/NightCodeForge.Web/wwwroot/js/app.js) (`window.NightCodeForge.*`, respecting `prefers-reduced-motion` and handling `JSDisconnectedException` / `TaskCanceledException` cleanly, matching [`Memory.razor`](../../src/NightCodeForge.Web/Components/Pages/Memory.razor)).
+     - Highlight matched lines visually with a distinct row accent and automatically scroll the first highlighted line into view via JS interop in [`wwwroot/js/app.js`](../../../src/NightCodeForge.Web/wwwroot/js/app.js) (`window.NightCodeForge.*`, respecting `prefers-reduced-motion` and handling `JSDisconnectedException` / `TaskCanceledException` cleanly, matching [`Memory.razor`](../../../src/NightCodeForge.Web/Components/Pages/Memory.razor)).
      - Clicking a line number updates the URL anchor (`#L{n}`, or `Shift+Click` for `#L{start}-L{end}`, e.g. with `replace: true`) so users can copy/share exact line links.
    - **Markdown Files (`.md` / `.markdown`):**
-     - Default to **Rendered** mode using [`MarkdownRenderer.razor`](../../src/NightCodeForge.Web/Components/Common/MarkdownRenderer.razor) (HTML-disabled, XSS-safe, and wired for [Step 12.46B](STEP_12_46B_CONTEXT_AWARE_MARKDOWN_LINK_BUILDER.md) relative links using the current ref, `taskId` if present, and file path).
+     - Default to **Rendered** mode using [`MarkdownRenderer.razor`](../../../src/NightCodeForge.Web/Components/Common/MarkdownRenderer.razor) (HTML-disabled, XSS-safe, and wired for [Step 12.46B](STEP_12_46B_CONTEXT_AWARE_MARKDOWN_LINK_BUILDER.md) relative links using the current ref, `taskId` if present, and file path).
      - Provide a **Rendered / Raw** toggle; **Raw** mode renders the syntax-highlighted, line-numbered source.
      - **Anchor Override Rule:** If the URL targets a specific line or line range (`#L...` or `lines=...`), automatically open the Markdown file in **Raw** mode so the targeted lines are highlighted and scrolled into view (allowing the user to toggle back to **Rendered** at any time).
    - **Directory Index & Degraded States:**
      - When `path` is empty or targets a directory (`tree`), render a clean directory table showing entries (name, type icon, size) clickable to drill down.
      - Render clear, accessible inline notices for binary files, oversized files, symlinks, submodules, missing refs, or missing file paths while keeping the branch selector and directory tree functional.
    - **Styling Alignment:**
-     - Define viewer styles in [`wwwroot/css/app.css`](../../src/NightCodeForge.Web/wwwroot/css/app.css) using tokens from [`wwwroot/css/theme.css`](../../src/NightCodeForge.Web/wwwroot/css/theme.css) (consistent with the current non-isolated stylesheet architecture while [Step 12.44](STEP_12_44_CSS_ARCHITECTURE_RATIONALIZATION_AND_SCOPED_STYLES.md) remains planned).
+     - Define viewer styles in [`wwwroot/css/app.css`](../../../src/NightCodeForge.Web/wwwroot/css/app.css) using tokens from [`wwwroot/css/theme.css`](../../../src/NightCodeForge.Web/wwwroot/css/theme.css) (consistent with the current non-isolated stylesheet architecture while [Step 12.44](../../features/STEP_12_44_CSS_ARCHITECTURE_RATIONALIZATION_AND_SCOPED_STYLES.md) remains planned).
 
 ### 3.3 UI & Presentation Separation & `AGENTS.md` Constraints
 
-- Keep `Files.razor` strictly focused on layout, rendering, and user interaction per [AGENTS.md](../../AGENTS.md).
+- Keep `Files.razor` strictly focused on layout, rendering, and user interaction per [AGENTS.md](../../../AGENTS.md).
 - Extract URL/query building, line-range parsing and formatting (`#L42`, `#L42-L58`), breadcrumb generation, path validation/normalization, and tree node state helpers into dedicated, unit-testable services/helpers in `src/NightCodeForge.Web/Services/`.
-- Follow all [AGENTS.md](../../AGENTS.md) rules: no optional constructor parameters, $\le 10$ required constructor parameters per service, named constants/enums instead of magic numbers or strings, no synthetic database records, and no bare `catch { }` blocks.
+- Follow all [AGENTS.md](../../../AGENTS.md) rules: no optional constructor parameters, $\le 10$ required constructor parameters per service, named constants/enums instead of magic numbers or strings, no synthetic database records, and no bare `catch { }` blocks.
 
 ---
 
@@ -153,5 +153,5 @@ Provide a dedicated read-only repository browsing service backed exclusively by 
 - [x] Implement the read-only Git repository browser service in `Core` / `Infrastructure` using `IGitCliRunner` (`Ext4MirrorPath` -> canonical clone -> `RepositoryPath` priority with Windows/WSL2 UNC support), supporting machine-safe branch/ref enumeration, workspace-scoped `feature/task-{nnn}` fallback (`SquashCommitSha` -> `ForgeTask.BaseBranch` -> `Workspace.DefaultBaseBranch`), `git ls-tree -l -z` directory listing, entry-type dispatch (directory/symlink/submodule/blob), `git cat-file -s` + `git show` file reading, strict ref/path traversal & option/specifier-injection validation, named-constant size limit, and raw-byte binary detection.
 - [x] Create `Files.razor` (`@page "/files"` and `@page "/w/{WorkspaceId:int}/files"`), add the `📂 Repository Files` entry to `NavMenu.razor`, render `<WorkspaceEmptyStateHero />` when no workspace is active, and update `WorkspaceUrlHelper` (`GetSectionDisplayName` + stripping file query/fragment parameters on workspace switch).
 - [x] Implement the File Viewer UI: branch/ref dropdown, task fallback banner, clickable path breadcrumbs, expandable directory tree, syntax-highlighted line-numbered code viewer, `#L` / `#L-L` line-range parsing and `LocationChanged` fragment sync, row highlighting & JS scroll-into-view, clickable line numbers, Markdown Rendered/Raw toggle (with Raw auto-selection when line anchors are present), and clear directory/symlink/submodule/binary/oversized/error states styled via `app.css` / `theme.css`.
-- [x] Extract all URL building, line-range parsing, breadcrumb, and presentation logic into dedicated helpers/services in `src/NightCodeForge.Web/Services/` per [AGENTS.md](../../AGENTS.md) (no non-trivial logic in `@code`, no optional constructor parameters, no magic strings, no bare `catch { }`).
-- [x] Add unit tests in `NightCodeForge.Core.Tests` (raw-byte process/Git capture, binary detector), `NightCodeForge.Infrastructure.Tests` (Git browser service, task branch fallback & workspace isolation, path/ref security rejection, directory/symlink/submodule/size/binary guards), and unit + bUnit tests in `NightCodeForge.Web.Tests` (`Files.razor`, fragment `LocationChanged` sync, URL/line-range helpers, `WorkspaceUrlHelper`), then run the full test suite per [AGENTS.md](../../AGENTS.md).
+- [x] Extract all URL building, line-range parsing, breadcrumb, and presentation logic into dedicated helpers/services in `src/NightCodeForge.Web/Services/` per [AGENTS.md](../../../AGENTS.md) (no non-trivial logic in `@code`, no optional constructor parameters, no magic strings, no bare `catch { }`).
+- [x] Add unit tests in `NightCodeForge.Core.Tests` (raw-byte process/Git capture, binary detector), `NightCodeForge.Infrastructure.Tests` (Git browser service, task branch fallback & workspace isolation, path/ref security rejection, directory/symlink/submodule/size/binary guards), and unit + bUnit tests in `NightCodeForge.Web.Tests` (`Files.razor`, fragment `LocationChanged` sync, URL/line-range helpers, `WorkspaceUrlHelper`), then run the full test suite per [AGENTS.md](../../../AGENTS.md).

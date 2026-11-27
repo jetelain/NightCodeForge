@@ -1,11 +1,11 @@
 # 🖥️ Step 12.18B: OllamaRouter Setup Wizard Integration, Role Recommendation Sync & Custom Protocol Shortcut
 
 > **Feature Implementation Step (Part 2 of 3 — Delegated OllamaRouter Setup Handoff, Recommendations Sync & `ollamarouter://` Shortcut)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
 > *Prerequisite Step:* [Step 12.18A: Installer Core Services](STEP_12_18A_INSTALLER_CORE_HARDWARE_RELEASE_AND_PROVISIONER.md)  
 > *Companion Step:* [Step 12.18C: Avalonia OOBE Setup Wizard & Maintenance Hub UI](STEP_12_18C_INSTALLER_AVALONIA_OOBE_WIZARD_AND_MAINTENANCE_HUB.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `src/NightCodeForge.Installer`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`, `tests/NightCodeForge.Installer.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `src/NightCodeForge.Installer`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`, `tests/NightCodeForge.Installer.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -144,7 +144,7 @@ OllamaRouter exposes its active recommendation matrix at `GET /api/router/recomm
    - Registered in the OS by the OllamaRouter installation/setup process (`HKCU\Software\Classes\ollamarouter` on Windows, `x-scheme-handler/ollamarouter` desktop entry on Linux):
      - `ollamarouter://open` — Opens the `OllamaRouter.App` desktop dashboard (Monitor & Savings, Fleet & Cloud Targets, Model Cartography & Preload, Settings & API Keys).
      - `ollamarouter://wizard` — Opens `OllamaRouter.App` directly in the 5-step Setup Wizard (`--wizard`).
-2. **Updates to [`OllamaRouterGatewayCard.razor`](file:///c:/Users/Julien/source/repos/jetelain/NightCodeForge/src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor):**
+2. **Updates to [`OllamaRouterGatewayCard.razor`](../../../src/NightCodeForge.Web/Components/Settings/OllamaRouterGatewayCard.razor):**
    - Replace the obsolete `<a href="@GetRouterMonitorUrl()" target="_blank">↗ Open Router Monitor</a>` link (`${baseUrl}/monitor`, which was removed when `ollamarouter-server` became headless) with:
      - **`🖥️ Open OllamaRouter App`** (`href="ollamarouter://open"`, without `target="_blank"` so the browser invokes the registered OS protocol handler cleanly without leaving a blank tab).
      - **`🧙 Run Router Setup Wizard`** (`href="ollamarouter://wizard"`).
@@ -156,8 +156,8 @@ OllamaRouter exposes its active recommendation matrix at `GET /api/router/recomm
 
 ## 3. Implementation Checklist & Deliverables
 
-- [ ] Add `OllamaApiPaths.RouterRecommendations = "/api/router/recommendations"` and recommendation response DTOs (`RouterRecommendationsDto`, `RouterRoleRecommendationDto`, `RouterNodeRoleProfileDto`), plus `GetRecommendationsAsync` on `ILlmGatewayService` / `OllamaRouterGatewayService`.
-- [ ] Implement `IOllamaRouterRecommendationSyncService` in `NightCodeForge.Installer` (without referencing `NightCodeForge.Infrastructure` or `ILlmConfigurationWriter`) using source-generated `System.Text.Json` (`InstallerJsonContext`) and `JsonObject` to map `GET /api/router/recommendations` onto `LlmProviderOptions` (`ArchitectModelId`, `CoderModelId`, `DefaultModelId`, `ContextWindowTokens`) and update `<InstallDir>/config/config.json` atomically.
-- [ ] Update `OllamaRouterGatewayCard.razor` to replace the removed `/monitor` link with `ollamarouter://open` (**Open OllamaRouter App**), `ollamarouter://wizard` (**Run Setup Wizard**), a **Sync Recommended Models** action (querying `ILlmGatewayService.GetRecommendationsAsync()` and persisting via `ILlmConfigurationWriter`), and role differentiation UI/persistence for `OllamaRouter` / `Ollama`.
-- [ ] Implement `IOllamaRouterSetupHandoffService` in `NightCodeForge.Installer` invoking `ollamarouter setup --wizard --wait` and syncing recommendations into `<InstallDir>/config/config.json` upon exit code `0`.
-- [ ] Add unit tests in `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Web.Tests`, and `NightCodeForge.Installer.Tests` covering `/api/router/recommendations` deserialization, role-to-options mapping, `ollamarouter://` shortcut rendering, and `ollamarouter setup --wizard --wait` exit-code handling.
+- [x] Add `OllamaApiPaths.RouterRecommendations = "/api/router/recommendations"` and recommendation response DTOs (`RouterRecommendationsDto`, `RouterRoleRecommendationDto`, `RouterNodeRoleProfileDto`), plus `GetRecommendationsAsync` on `ILlmGatewayService` / `OllamaRouterGatewayService`.
+- [x] Implement `IOllamaRouterRecommendationSyncService` in `NightCodeForge.Installer` (without referencing `NightCodeForge.Infrastructure` or `ILlmConfigurationWriter`) using source-generated `System.Text.Json` (`InstallerJsonContext`) and `JsonObject` to map `GET /api/router/recommendations` onto `LlmProviderOptions` (`ArchitectModelId`, `CoderModelId`, `DefaultModelId`, `ContextWindowTokens`) and update `<InstallDir>/config/config.json` atomically.
+- [x] Update `OllamaRouterGatewayCard.razor` to replace the removed `/monitor` link with `ollamarouter://open` (**Open OllamaRouter App**), `ollamarouter://wizard` (**Run Setup Wizard**), a **Sync Recommended Models** action (querying `ILlmGatewayService.GetRecommendationsAsync()` and persisting via `ILlmConfigurationWriter`), and role differentiation UI/persistence for `OllamaRouter` / `Ollama`.
+- [x] Implement `IOllamaRouterSetupHandoffService` in `NightCodeForge.Installer` invoking `ollamarouter setup --wizard --wait` and syncing recommendations into `<InstallDir>/config/config.json` upon exit code `0`.
+- [x] Add unit tests in `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Web.Tests`, and `NightCodeForge.Installer.Tests` covering `/api/router/recommendations` deserialization, role-to-options mapping, `ollamarouter://` shortcut rendering, and `ollamarouter setup --wizard --wait` exit-code handling.

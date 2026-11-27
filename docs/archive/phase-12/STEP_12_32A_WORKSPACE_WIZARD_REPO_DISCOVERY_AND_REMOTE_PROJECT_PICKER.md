@@ -1,12 +1,12 @@
 # 📁 Step 12.32A: Workspace Wizard Local Git Discovery, Provider-Agnostic Remote Hosting & Existing Project Picker
 
 > **Feature Implementation Step (Part 1 of 2 — Existing Repository Discovery, Remote Forge Browser & Auto-Completion)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
 > *Companion Step:* [Step 12.32B: From-Scratch Workspace Templates & Remote Forge Publishing](STEP_12_32B_WORKSPACE_TEMPLATES_NATIVE_CLI_SCAFFOLDING_AND_REMOTE_PUBLISH.md)  
-> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](../archive/phase-12/STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](../archive/phase-12/STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
+> *Related Steps:* [Step 12.11A: GitHub Client, Device Auth & Settings](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) | [Step 12.11B: Outbound PR Delivery](STEP_12_11B_GITHUB_PULL_REQUEST_DELIVERY.md) | [Step 12.26: Workspace Visual Identity](STEP_12_26_WORKSPACE_EMOJI_COLOR_CODE_AND_SETTINGS.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
 > *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Web`, `tests/NightCodeForge.Infrastructure.Tests`, `tests/NightCodeForge.Web.Tests`  
-> *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)
+> *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -14,13 +14,13 @@
 
 ## 1. Executive Objective
 
-When onboarding existing projects into NightCodeForge via [`WorkspaceCreationWizardModal.razor`](../../src/NightCodeForge.Web/Components/Workspaces/WorkspaceCreationWizardModal.razor), developers currently must manually copy-paste or type absolute paths into [`WizardStep1PathProbe.razor`](../../src/NightCodeForge.Web/Components/Workspaces/Steps/WizardStep1PathProbe.razor) (`C:\Users\...\source\repos\...`). If the directory has not been initialized with Git, or if the project resides on a remote hosting forge (GitHub, GitLab), the user experience requires external terminal commands before NightCodeForge can begin.
+When onboarding existing projects into NightCodeForge via [`WorkspaceCreationWizardModal.razor`](../../../src/NightCodeForge.Web/Components/Workspaces/WorkspaceCreationWizardModal.razor), developers currently must manually copy-paste or type absolute paths into [`WizardStep1PathProbe.razor`](../../../src/NightCodeForge.Web/Components/Workspaces/Steps/WizardStep1PathProbe.razor) (`C:\Users\...\source\repos\...`). If the directory has not been initialized with Git, or if the project resides on a remote hosting forge (GitHub, GitLab), the user experience requires external terminal commands before NightCodeForge can begin.
 
 This step (Part 1 of Step 12.32) eliminates onboarding friction for existing repositories:
 1. **Local Repository Auto-Discovery (`ILocalRepositoryDiscoveryService`):** Proactively scan standard developer workspace directories across Windows, Linux, and WSL2 (`%USERPROFILE%\source\repos`, `~/repos`, `~/projects`, `~/Development`, etc.) for Git repositories (`.git` directories or worktree pointers).
 2. **Searchable Autocomplete & Quick-Picker (`WizardStep1PathProbe.razor`):** Provide a responsive, filtered dropdown/datalist in Step 1 of the wizard displaying discovered repositories (with friendly name, relative folder, detected branch, and last modified date) while preserving free-form manual path entry.
 3. **Provider-Agnostic Remote Forge Abstraction (`IVcsHostingProvider`, `IVcsHostingProviderRegistry`):** Define a clean provider contract for remote Git hosting services (supporting GitHub, GitLab, Gitea, Bitbucket) without vendor lock-in.
-4. **Remote Project Browser & Quick Clone:** When a remote forge (e.g. GitHub via [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is connected and active:
+4. **Remote Project Browser & Quick Clone:** When a remote forge (e.g. GitHub via [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md)) is connected and active:
    - Query and display accessible remote repositories in the wizard.
    - If the remote repository is already cloned locally, automatically resolve and select the local path.
    - If not yet cloned locally, allow 1-click cloning into the developer's default repository directory (`git clone`) and proceed directly to branch and environment configuration.
@@ -185,18 +185,18 @@ public interface IVcsHostingProviderRegistry
 
 ### 2.4 GitHub Provider Implementation
 
-- Implements `IVcsHostingProvider` using the GitHub App Device Flow infrastructure from [Step 12.11A](../archive/phase-12/STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) (`IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`).
+- Implements `IVcsHostingProvider` using the GitHub App Device Flow infrastructure from [Step 12.11A](STEP_12_11A_GITHUB_CLIENT_DEVICE_AUTH_AND_SETTINGS.md) (`IGitHubClientService`, `IGitHubDeviceAuthService`, `IGitHubTokenStore`).
 - `IGitHubClientService.ListAccessibleRepositoriesAsync()` already queries `GET /user/repos?sort=updated&per_page=100` through `GitHubClientService`'s reactive 401 token refresh pipeline. To support `IVcsHostingProvider` cleanly without duplicating HTTP/auth plumbing:
-  - Extend [`GitHubRepository`](../../src/NightCodeForge.Core/Domain/GitHubModels.cs) and `GitHubClientService.ParseRepository` with `Description`, `CloneUrl` (`HttpsCloneUrl`), `SshUrl` (`SshCloneUrl`), and `UpdatedAt`.
-  - Add `CreateRepositoryAsync` (`POST /user/repos`) to [`IGitHubClientService`](../../src/NightCodeForge.Core/Interfaces/IGitHubClientService.cs) / `GitHubClientService` so repository creation also reuses the reactive 401 refresh pipeline.
+  - Extend [`GitHubRepository`](../../../src/NightCodeForge.Core/Domain/GitHubModels.cs) and `GitHubClientService.ParseRepository` with `Description`, `CloneUrl` (`HttpsCloneUrl`), `SshUrl` (`SshCloneUrl`), and `UpdatedAt`.
+  - Add `CreateRepositoryAsync` (`POST /user/repos`) to [`IGitHubClientService`](../../../src/NightCodeForge.Core/Interfaces/IGitHubClientService.cs) / `GitHubClientService` so repository creation also reuses the reactive 401 refresh pipeline.
 - `GitHubVcsHostingProvider.GetGitHttpAuthHeaderAsync()` obtains a refresh-aware token via `IGitHubDeviceAuthService.GetValidAccessTokenAsync()` and formats the ephemeral `Authorization: Basic <base64(x-access-token:token)>` header for `git clone` / `git push` (Steps 12.32A and 12.32B).
 - **GitHub App Permission Requirement for `CreateRepositoryAsync`:** Creating a remote repository via `POST /user/repos` with a GitHub App user-to-server token (`ghu_...`) requires the NightCodeForge GitHub App registration to include **`Administration: Read & write`** repository permission. If the GitHub API returns `403 Forbidden` (e.g., the app installation is restricted to selected repositories and does not permit user-level repository creation), `CreateRepositoryAsync` throws a clear `VcsHostingProviderException` explaining the required GitHub App installation/permission setting.
 - Extensible design: adding GitLab in the future only requires implementing `IVcsHostingProvider` and registering it in `IVcsHostingProviderRegistry`.
 
-### 2.5 Constructor Parameter Limit & Service Cohesion ([AGENTS.md](../../AGENTS.md))
+### 2.5 Constructor Parameter Limit & Service Cohesion ([AGENTS.md](../../../AGENTS.md))
 
-- [`WorkspaceProvisioningService`](../../src/NightCodeForge.Web/Services/WorkspaceProvisioningService.cs) already has 9 constructor parameters. Per [AGENTS.md](../../AGENTS.md) (*"never exceed 10 constructor parameters"*), do **not** inject `ILocalRepositoryDiscoveryService`, `IVcsHostingProviderRegistry`, and `IWorkspaceTemplateService` all directly into `WorkspaceProvisioningService`. Either extract cohesive collaborator services (e.g., `IWorkspaceRemoteCloneService` or `WorkspaceGitHygieneService`) or keep discovery and remote cloning in dedicated services injected into the wizard presentation helper.
-- To persist linked remote repository metadata (`GitHubIntegrationSettings`) during workspace provisioning without adding constructor parameters to `WorkspaceProvisioningService`, extend [`WorkspaceCreationModel`](../../src/NightCodeForge.Web/Models/WorkspaceCreationModel.cs) with optional `GitHubIntegrationSettings? GitHubSettings` (carrying `RepositoryOwner`, `RepositoryName`, `Enabled = true`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to map it onto the created [`Workspace.GitHubSettings`](../../src/NightCodeForge.Core/Domain/Workspace.cs).
+- [`WorkspaceProvisioningService`](../../../src/NightCodeForge.Web/Services/WorkspaceProvisioningService.cs) already has 9 constructor parameters. Per [AGENTS.md](../../../AGENTS.md) (*"never exceed 10 constructor parameters"*), do **not** inject `ILocalRepositoryDiscoveryService`, `IVcsHostingProviderRegistry`, and `IWorkspaceTemplateService` all directly into `WorkspaceProvisioningService`. Either extract cohesive collaborator services (e.g., `IWorkspaceRemoteCloneService` or `WorkspaceGitHygieneService`) or keep discovery and remote cloning in dedicated services injected into the wizard presentation helper.
+- To persist linked remote repository metadata (`GitHubIntegrationSettings`) during workspace provisioning without adding constructor parameters to `WorkspaceProvisioningService`, extend [`WorkspaceCreationModel`](../../../src/NightCodeForge.Web/Models/WorkspaceCreationModel.cs) with optional `GitHubIntegrationSettings? GitHubSettings` (carrying `RepositoryOwner`, `RepositoryName`, `Enabled = true`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to map it onto the created [`Workspace.GitHubSettings`](../../../src/NightCodeForge.Core/Domain/Workspace.cs).
 
 ---
 
@@ -249,7 +249,7 @@ public interface IVcsHostingProviderRegistry
   - [x] Add remote forge project browser tab with search filter and canonical URL-normalized local clone status badges.
   - [x] Add 1-click ephemeral-auth clone workflow (`CloneRemoteRepositoryAsync`) with editable target path and non-empty directory collision validation, respecting the 10-constructor-parameter limit on `WorkspaceProvisioningService`.
   - [x] Extend `WorkspaceCreationModel` with optional `GitHubSettings` (`GitHubIntegrationSettings`) and update `WorkspaceProvisioningService.ProvisionWorkspaceAsync` to persist `Workspace.GitHubSettings`.
-  - [x] Extract presentation, URL normalization, and list mapping from `.razor` components into dedicated helper services per [AGENTS.md](../../AGENTS.md).
+  - [x] Extract presentation, URL normalization, and list mapping from `.razor` components into dedicated helper services per [AGENTS.md](../../../AGENTS.md).
 - [x] **Automated Testing:**
   - [x] Unit tests for `LocalRepositoryDiscoveryService` testing Windows and Linux standard paths, `.git` folder/worktree file detection, `.git/HEAD` + `.git/config` parsing, depth-2 limits, and caching in `NightCodeForge.Infrastructure.Tests`.
   - [x] Unit tests for canonical Git URL normalization, `VcsHostingProviderRegistry`, and `GitHubVcsHostingProvider` / `GitHubClientService` mock responses.

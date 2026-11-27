@@ -1,9 +1,9 @@
 # 🔧 Step 12.42: Non-Incremental Deterministic Build (`--no-incremental`) & Combined Build+Test Conversation Seed
 
 > **Feature Implementation Step (Accurate Warning Counting in Deterministic Gates & Combined `build && test` Synthetic Priming)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
-> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Cli.Tests`, `tests/NightCodeForge.Agents.Tests` | *Status:* Implemented | *Target Framework:* .NET 10 (C# 13)  
-> *Aligns With:* [AGENTS.md](../../AGENTS.md), [docs/PLAN.md](../PLAN.md)
+> *Parent Plan:* [Features & Integrations Roadmap](../../features/README.md)  
+> *Target Components:* `src/NightCodeForge.Core`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Core.Tests`, `tests/NightCodeForge.Cli.Tests`, `tests/NightCodeForge.Agents.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)  
+> *Aligns With:* [AGENTS.md](../../../AGENTS.md), [docs/PLAN.md](../../PLAN.md)
 >
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
