@@ -8115,7 +8115,21 @@ html, body, .forge-layout, .forge-main-content {
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: 0.25rem 0;
+    height: calc(100vh - 64px - 3.5rem);
+    height: calc(100dvh - 64px - 3.5rem);
+    min-height: 560px;
+    overflow: hidden;
+}
+
+.memory-page-container:has(> .workspace-empty-hero) {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+}
+
+.memory-page-container > .alert {
+    flex-shrink: 0;
+    margin: 0;
 }
 
 .memory-page-header {
@@ -8123,6 +8137,7 @@ html, body, .forge-layout, .forge-main-content {
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
+    flex-shrink: 0;
     gap: 1rem;
 }
 
@@ -8140,6 +8155,7 @@ html, body, .forge-layout, .forge-main-content {
 .memory-quick-actions-card {
     display: flex;
     flex-direction: column;
+    flex-shrink: 0;
     gap: 0.55rem;
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
@@ -8169,6 +8185,7 @@ html, body, .forge-layout, .forge-main-content {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
+    flex-shrink: 0;
     gap: 0.5rem;
     padding: 0.65rem 0.9rem;
     border-radius: var(--radius-sm);
@@ -8193,23 +8210,29 @@ html, body, .forge-layout, .forge-main-content {
 .memory-explorer-grid {
     display: grid;
     grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     gap: 1rem;
-    align-items: start;
-}
-
-@media (max-width: 900px) {
-    .memory-explorer-grid {
-        grid-template-columns: 1fr;
-    }
+    flex: 1 1 auto;
+    min-height: 0;
+    align-items: stretch;
+    overflow: hidden;
 }
 
 .memory-sidebar-pane {
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    padding-right: 0.25rem;
 }
 
 .memory-tier-section {
+    flex-shrink: 0;
     background: var(--bg-surface);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
@@ -8241,6 +8264,7 @@ html, body, .forge-layout, .forge-main-content {
     border-radius: var(--radius-sm);
     border: 1px solid transparent;
     background: var(--bg-input);
+    overflow-wrap: anywhere;
 }
 
 .memory-file-item.active {
@@ -8253,7 +8277,50 @@ html, body, .forge-layout, .forge-main-content {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     padding: 1rem 1.15rem;
-    min-height: 420px;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-margin-top: 1rem;
+}
+
+@media (max-width: 1024px) {
+    .memory-page-container {
+        height: calc(100vh - 64px - 2.5rem);
+        height: calc(100dvh - 64px - 2.5rem);
+    }
+}
+
+@media (max-width: 900px) {
+    .memory-page-container {
+        height: auto;
+        min-height: 0;
+        overflow: visible;
+    }
+
+    .memory-explorer-grid {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto;
+        flex: 0 0 auto;
+        overflow: visible;
+    }
+
+    .memory-sidebar-pane {
+        height: auto;
+        max-height: 45vh;
+        max-height: 45dvh;
+        overscroll-behavior: auto;
+        padding-right: 0;
+    }
+
+    .memory-main-pane {
+        height: auto;
+        min-height: 420px;
+        overflow-x: auto;
+        overflow-y: visible;
+        overscroll-behavior: auto;
+    }
 }
 
 .memory-viewer-toolbar {
@@ -8265,6 +8332,10 @@ html, body, .forge-layout, .forge-main-content {
     padding-bottom: 0.75rem;
     margin-bottom: 0.85rem;
     border-bottom: 1px solid var(--border-subtle);
+}
+
+.memory-viewer-toolbar #memory-selected-path {
+    overflow-wrap: anywhere;
 }
 
 .memory-empty-selection {

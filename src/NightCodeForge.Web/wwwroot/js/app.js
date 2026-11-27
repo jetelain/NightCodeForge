@@ -337,6 +337,66 @@ window.NightCodeForge = window.NightCodeForge || {};
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
+    const STICKY_TOP_OFFSET_PX = 16;
+    const VIEWPORT_BOTTOM_VISIBILITY_MARGIN_PX = 120;
+
+    /**
+     * Resets any internal vertical scroll on the target element and scrolls its top edge into view
+     * within .forge-main-content only when its top edge is scrolled above the viewport or sits below the visible fold.
+     * @param {string} elementId
+     */
+    window.NightCodeForge.scrollElementTopIntoViewIfNeeded = function (elementId) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+
+        const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const behavior = prefersReducedMotion ? 'auto' : 'smooth';
+
+        if (el.scrollTop > 0) {
+            el.scrollTop = 0;
+        }
+
+        const elRect = el.getBoundingClientRect();
+
+        const scrollContainer = typeof el.closest === 'function' ? el.closest('.forge-main-content') : null;
+        if (!scrollContainer) {
+            const effectiveWindowMargin = Math.min(VIEWPORT_BOTTOM_VISIBILITY_MARGIN_PX, window.innerHeight / 2);
+            if ((elRect.top < 0 || elRect.top > window.innerHeight - effectiveWindowMargin) &&
+                typeof el.scrollIntoView === 'function') {
+                el.scrollIntoView({ behavior: behavior, block: 'start' });
+            }
+            return;
+        }
+
+        const containerRect = scrollContainer.getBoundingClientRect();
+        if (containerRect.height <= 0) {
+            return;
+        }
+
+        const effectiveMargin = Math.min(VIEWPORT_BOTTOM_VISIBILITY_MARGIN_PX, containerRect.height / 2);
+        const isTopAboveViewport = elRect.top < containerRect.top;
+        const isTopBelowFold = elRect.top > containerRect.bottom - effectiveMargin;
+
+        if (!isTopAboveViewport && !isTopBelowFold) {
+            return;
+        }
+
+        const computedScrollMarginTop = window.getComputedStyle
+            ? parseFloat(window.getComputedStyle(el).scrollMarginTop)
+            : NaN;
+        const topOffsetPx = Number.isFinite(computedScrollMarginTop) && computedScrollMarginTop > 0
+            ? computedScrollMarginTop
+            : STICKY_TOP_OFFSET_PX;
+
+        const targetTop = scrollContainer.scrollTop + (elRect.top - containerRect.top) - topOffsetPx;
+        const clampedTop = Math.max(0, targetTop);
+        if (typeof scrollContainer.scrollTo === 'function') {
+            scrollContainer.scrollTo({ top: clampedTop, behavior: behavior });
+        } else {
+            scrollContainer.scrollTop = clampedTop;
+        }
+    };
+
     let foregroundHandler = null;
 
     /**

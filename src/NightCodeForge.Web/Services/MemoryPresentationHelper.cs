@@ -25,6 +25,8 @@ public static class MemoryUiConstants
     public const string FrontmatterDescriptionKey = "description:";
     public const string MemoryNotificationTag = "ncf-memory-updated";
     public const string WorkspaceMemoryUrlSuffix = "memory";
+    public const string MainPaneElementId = "memory-main-pane";
+    public const string ScrollViewerTopIntoViewJsFunction = "NightCodeForge.scrollElementTopIntoViewIfNeeded";
 
     public static class ToolNames
     {
