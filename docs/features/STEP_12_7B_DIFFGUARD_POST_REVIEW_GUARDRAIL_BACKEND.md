@@ -1,12 +1,11 @@
-# 🛡️ Step 12.28A: DiffGuard CLI Security Scanner, Endpoint Wiring & Post-Review Guardrail Stage
+# 🛡️ Step 12.7B: DiffGuard CLI Security Scanner, Endpoint Wiring & Post-Review Guardrail Backend
 
-> **Feature Implementation Step (Part 1 of 2 — `Pmad.AI.DiffGuard` CLI Integration, Configuration, Endpoint Wiring, Post-Review Guardrail Stage & Auto-Merge Downgrade)**  
+> **Phase 12 Implementation Step (Part 2 of 3 — `Pmad.AI.DiffGuard` CLI Integration, Endpoint & WSL Gateway Wiring, Shared SARIF 2.1.0 Ingestion, Stage 6 `security-guardrail` Sub-Stage & Auto-Merge Downgrade)**  
 > *Parent Plan:* [Features & Integrations Roadmap](README.md)  
 > *CLI Tool Package:* [`Pmad.AI.DiffGuard` on NuGet](https://www.nuget.org/packages/Pmad.AI.DiffGuard/)  
-> *Companion Step:* [Step 12.28B: Review Room Risk Report UI & Security Guardrail Settings](STEP_12_28B_REVIEW_ROOM_RISK_REPORT_AND_GUARDRAIL_SETTINGS_UI.md)  
+> *Companion Steps:* [Step 12.7A: Unified Security Foundation & DevSkim SAST Backend](STEP_12_7A_UNIFIED_SECURITY_DOMAIN_AND_DEVSKIM_SAST_BACKEND.md) | [Step 12.7C: Unified Security Review UI & Settings](STEP_12_7C_UNIFIED_SECURITY_REVIEW_AND_SETTINGS_UI.md)  
 > *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests)  
-> *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Project Target:* [`src/NightCodeForge.Core`](../../src/NightCodeForge.Core), [`src/NightCodeForge.Infrastructure`](../../src/NightCodeForge.Infrastructure), [`src/NightCodeForge.Agents`](../../src/NightCodeForge.Agents), [`tests/NightCodeForge.Core.Tests`](../../tests/NightCodeForge.Core.Tests), [`tests/NightCodeForge.Agents.Tests`](../../tests/NightCodeForge.Agents.Tests) | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -18,12 +17,15 @@ Recent empirical studies show that open-weight coding models can inadvertently i
 
 NightCodeForge delegates Git diff security screening and backdoor auditing to the dedicated CLI tool **`diffguard`** ([`Pmad.AI.DiffGuard`](https://www.nuget.org/packages/Pmad.AI.DiffGuard/)).
 
-`diffguard` executes directly inside the target execution environment (**WSL2** or **bare Unix host**, as well as host Windows when configured). It unifies two critical audit layers into a single CLI execution:
+`diffguard` executes directly inside the target execution environment (**WSL2** or **bare Unix host**, as well as host Windows when configured). It unifies two audit layers into a single CLI execution:
 1. **Deterministic Static Analysis:** Instantaneous rule-based scanning for public IPs, non-allowlisted network endpoints, secrets, high Shannon entropy, Base64/Hex decoders, Unicode BiDi Trojan Source obfuscation (`CVE-2021-42574`), non-image binaries (with strict magic-byte validation), unverified package dependencies, version downgrades, blast-radius thresholds, and context-aware test tolerance.
 2. **Cross-Model LLM Security Judge:** Stateless semantic evaluation of diff hunks using an independent model family (e.g. [`jetelain/Flint`](https://ollama.com/jetelain/Flint) or [`jetelain/Gemma-4-26B-A4B`](https://ollama.com/jetelain/Gemma-4-26B-A4B)) via Ollama or OpenAI endpoints, detecting intentional backdoors, logic bombs, and weakened access controls.
 
 > [!IMPORTANT]
 > **Scope Exclusion:** Prompt injection detection rules (`PI001`–`PI013`) are explicitly disabled (`--no-prompt-injection` or `"enablePromptInjectionRules": false`) for code changes produced by the coding agent, keeping the scan strictly focused on executable code, dependencies, and diff blast radius.
+
+> [!IMPORTANT]
+> **Enforcement Distinction vs. DevSkim (Step 12.7A):** Unlike DevSkim blocking findings (which loop back to `StandardStageIds.Implementation` so the coding LLM can fix code vulnerabilities), **DiffGuard blocking findings NEVER loop back to the coding LLM** (preventing an adversarial or confused coding agent from iterating to evade the security guardrail). Blocking DiffGuard findings carry `Disposition = SecurityFindingDisposition.HumanReviewRequired`, automatically downgrade `MergeMode.Automatic` to `MergeMode.ManualReview`, and advance the task to `Ready` so a human maintainer inspects all findings in the unified Review Room (Step 12.7C).
 
 ---
 
@@ -31,29 +33,29 @@ NightCodeForge delegates Git diff security screening and backdoor auditing to th
 
 ```mermaid
 flowchart TD
-    CodeReview["Stage 5: Code Review &amp; Fix (Agentic LLM)"]
-    PostReview["Stage 6: Post-Review Verification (CompositeDeterministicStage)<br/>1. build<br/>2. test-with-coverage<br/>3. security-guardrail (DeterministicSecurityGuardrailStage)"]
+    CodeReview["Stage 5: Code Review & Fix (Agentic LLM)"]
+    PostReview["Stage 6: Post-Review Verification (CompositeDeterministicStage)<br/>1. build<br/>2. test-with-coverage<br/>3. sast (DevSkim re-run - loops back on breach)<br/>4. security-guardrail (DeterministicSecurityGuardrailStage)"]
     
     subgraph Guardrail["Sub-Stage: security-guardrail"]
         Provision["1. Ensure diffguard installed (ICompanionToolInstaller)"]
         GenConfig["2. Generate scratch .diffguard.json (IDiffGuardConfigManager)"]
-        ResolveEndpoint["3. Resolve LLM Endpoint &amp; Model (IDiffGuardEndpointResolver)<br/>(Ollama/OpenAI, WSL host gateway translation, model diversity)"]
+        ResolveEndpoint["3. Resolve LLM Endpoint & Model (IDiffGuardEndpointResolver)<br/>(Ollama/OpenAI, WSL host gateway translation, model diversity)"]
         ExecCLI["4. Execute diffguard CLI on WSL or Host<br/>diffguard --base &lt;base&gt; --head &lt;head&gt; --sarif &lt;out&gt; --markdown &lt;out&gt;"]
-        ParseSARIF["5. Parse SARIF 2.1.0 &amp; Markdown Report<br/>(Store SecurityGuardrailReport in PipelineDataBag)"]
+        ParseSARIF["5. Parse SARIF 2.1.0 via shared Sarif210Parser &amp; DiffGuardSarifMapper<br/>(Store SecurityScannerReport in PipelineDataBagKeys.SecurityGuardrailReport)"]
 
         Provision --> GenConfig --> ResolveEndpoint --> ExecCLI --> ParseSARIF
     end
 
-    RiskCheck{"Report.HasRisks?"}
+    RiskCheck{"GuardrailReport.BlockingCount &gt; 0?"}
     AutoCheck{"task.MergeMode == Automatic?"}
-    Downgrade["Transform task.MergeMode = ManualReview<br/>Record Audit &amp; Warning Log<br/>Set Status = Ready (Review Room)"]
+    Downgrade["Transform task.MergeMode = ManualReview<br/>Set AutoMergeDowngraded = true &amp; Record Audit Log<br/>Set Status = Ready (Unified Review Room)"]
     AutoMerge["Execute Auto-Merge to BaseBranch"]
-    ManualReady["Set Status = Ready (Review Room)<br/>Display Risk Report Banner &amp; Findings"]
+    ManualReady["Set Status = Ready (Unified Review Room)<br/>Display Unified Security Banner &amp; Findings"]
 
     CodeReview --> PostReview --> Guardrail
     ParseSARIF --> RiskCheck
-    RiskCheck -- "true (Risks Detected)" --> Downgrade
-    RiskCheck -- "false (Clean)" --> AutoCheck
+    RiskCheck -- "true (Human Review Required)" --> Downgrade
+    RiskCheck -- "false (Clean / Advisory Only)" --> AutoCheck
     AutoCheck -- "true" --> AutoMerge
     AutoCheck -- "false" --> ManualReady
 ```
@@ -78,50 +80,22 @@ flowchart TD
 
 ---
 
-### 3.2 Domain Models & Configuration (`SecurityGuardrailOptions`)
+### 3.2 Unified Domain Reuse & `SecurityGuardrailOptions`
 
-Define strongly-typed configuration and finding models in `NightCodeForge.Core`:
-
-1. **`SecurityRiskCategory` Enum:**
-   - `HardcodedNetworkEndpoint` (`NET-*`)
-   - `BackdoorPattern` (`BD-*`, `LLM-*`)
-   - `SuspiciousPayload` (`PAY-*` secrets, entropy, hex/base64, unicode)
-   - `BinaryArtifact` (`PAY-BIN-*` non-image binaries or disguised files)
-   - `UnverifiedDependency` (`DEP-NEW-*`)
-   - `DependencyDowngrade` (`DEP-DOWN-*`)
-   - `ExcessiveBlastRadius` (`SCOPE-*`)
-
-2. **`SecurityRiskSeverity` Enum:**
-   - `Low = 0`, `Medium = 1`, `High = 2`, `Critical = 3`
-
-3. **`SecurityRiskFinding` Record:**
-   - `string RuleId` (e.g. `NET-IP-001`, `PAY-SEC-001`, `DEP-NEW-001`, `SCOPE-PCT-001`, `LLM-JUDGE-001`)
-   - `string Title`
-   - `SecurityRiskCategory Category`
-   - `SecurityRiskSeverity Severity`
-   - `string? FilePath` (workspace-relative path)
-   - `int? LineNumber`
-   - `string Description`
-   - `string? Snippet`
-
-4. **`SecurityGuardrailReport` Record:**
-   - `bool HasRisks => Findings.Count > 0;`
-   - `bool AutoMergeDowngraded { get; set; }`
-   - `string? JudgeModelId { get; init; }`
-   - `int ScannedFilesCount { get; init; }`
-   - `int AddedLinesCount { get; init; }`
-   - `int DeletedLinesCount { get; init; }`
-   - `double CodebaseImpactPercent { get; init; }`
-   - `double DurationMs { get; init; }`
-   - `List<SecurityRiskFinding> Findings { get; init; } = [];`
-   - `string MarkdownSummary { get; init; } = string.Empty;`
-
-5. **`SecurityGuardrailOptions` (Configurable Settings & Allowlists):**
+1. **Reuse Step 12.7A Domain Models (No Parallel Types):**
+   - Reuse [`SecurityFinding`](STEP_12_7A_UNIFIED_SECURITY_DOMAIN_AND_DEVSKIM_SAST_BACKEND.md#31-canonical-security-enums--finding-models), `SecurityFindingSeverity`, `SecurityFindingSource` (`DiffGuardStatic` / `DiffGuardLlmJudge`), `SecurityFindingDisposition` (`HumanReviewRequired` / `Advisory`), `SecurityFindingCategory`, `SecurityScanStatus`, and `SecurityScannerReport` from `NightCodeForge.Core`.
+2. **Extend `SecuritySettings` & `ISecuritySettingsService` (`NightCodeForge.Core`):**
+   - Add `SecurityGuardrailOptions Guardrail { get; set; } = new();` to `SecuritySettings` (introduced in Step 12.7A).
+   - Extend `ISecuritySettingsService` with 1-click allowlist and reset operations (exposed in Step 12.7C Review Room & Settings UI):
+     - `AddWellKnownDomainAsync(string domain, int? workspaceId = null, ...)`
+     - `AddWellKnownPackageAsync(string packagePattern, int? workspaceId = null, ...)`
+     - `ResetToDefaultsAsync(int? workspaceId = null, ...)`
+3. **`SecurityGuardrailOptions` (Configurable Settings & Allowlists):**
    ```csharp
    public class SecurityGuardrailOptions
    {
        public bool Enabled { get; set; } = true;
-       public SecurityRiskSeverity MinimumRiskSeverity { get; set; } = SecurityRiskSeverity.Medium;
+       public SecurityFindingSeverity MinimumRiskSeverity { get; set; } = SecurityFindingSeverity.Medium;
 
        // Blast Radius Thresholds
        public double MaxCodebaseImpactPercent { get; set; } = 10.0;
@@ -155,6 +129,7 @@ Define strongly-typed configuration and finding models in `NightCodeForge.Core`:
            "playwright", "@playwright/*", "pytest", "requests", "pydantic"
        ];
 
+       public List<string> AllowedImageExtensions { get; set; } = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico"];
        public List<string> ExcludedFileGlobs { get; set; } = [".scratch/**", "docs/tasks/**", "docs/transcripts/**"];
        public List<string> TestFileGlobs { get; set; } = ["test/**", "tests/**", "src/*.Tests/**"];
        public bool EnableTestTolerance { get; set; } = true;
@@ -176,7 +151,7 @@ Define strongly-typed configuration and finding models in `NightCodeForge.Core`:
 To prevent repository workspace pollution and avoid triggering `diffguard`'s repository configuration tampering check (`BD-CONFIG-001`), NightCodeForge generates a runtime configuration file in the task's execution scratch folder (e.g. `.scratch/diffguard.config.json`):
 
 1. **Mapping `SecurityGuardrailOptions` to `.diffguard.json` Schema:**
-   - Serializes thresholds, allowlists, test file globs, test tolerance toggle, and `enablePromptInjectionRules: false`.
+   - Serializes thresholds, allowlists (including `AllowedImageExtensions`), excluded/test file globs, test tolerance toggle, and `enablePromptInjectionRules: false`.
 2. **Scratch Lifecycle:** Passed explicitly via `--config <scratchPath>` to each `diffguard` execution.
 
 ---
@@ -203,8 +178,8 @@ To prevent repository workspace pollution and avoid triggering `diffguard`'s rep
      1. If `SecurityGuardrailOptions.ExplicitJudgeModelId` is configured, use it.
      2. Otherwise, query available models via `ILlmModelCatalogService` and select the first matching model from `PreferredJudgeModels` (`jetelain/Flint`, `jetelain/Gemma-4-26B-A4B`).
      3. If neither preferred judge model is installed and no override is provided:
-        - When `options.EnableLlmJudge == true`, emit a finding (`LLM-JUDGE-UNAVAILABLE`, `Category = BackdoorPattern`, `Severity = Medium`) warning the maintainer in the Review Room that cross-model LLM judge verification could not run. This also prevents unverified automatic merge.
-   - If the resolved judge model family matches the task's primary `Implementation` model family, record a warning notice on `SecurityGuardrailReport`.
+        - When `options.EnableLlmJudge == true`, emit a finding (`RuleId = "LLM-JUDGE-UNAVAILABLE"`, `Source = SecurityFindingSource.DiffGuardLlmJudge`, `Category = SecurityFindingCategory.BackdoorPattern`, `Severity = SecurityFindingSeverity.Medium`, `Disposition = SecurityFindingDisposition.HumanReviewRequired`) warning the maintainer in the Review Room that cross-model LLM judge verification could not run and preventing unverified automatic merge.
+   - If the resolved judge model family matches the task's primary `Implementation` model family, record a warning `Notice` on `SecurityScannerReport`.
 
 ---
 
@@ -224,7 +199,7 @@ To prevent repository workspace pollution and avoid triggering `diffguard`'s rep
        --sarif <scratchSarifPath> \
        --markdown <scratchMarkdownPath> \
        --format console \
-       --min-severity Medium \
+       --min-severity <MinimumRiskSeverity> \
        --no-prompt-injection \
        [--llm-provider <ollama|openai> --llm-model <modelId> --llm-endpoint <endpoint> --filter-deleted-lines --max-chunk-bytes 120000]
      ```
@@ -237,23 +212,29 @@ To prevent repository workspace pollution and avoid triggering `diffguard`'s rep
 
 ---
 
-### 3.6 SARIF 2.1.0 Ingestion & Domain Mapping
+### 3.6 Shared SARIF 2.1.0 Ingestion (`DiffGuardSarifMapper`)
 
-1. **SARIF Parsing:**
-   - Read the generated SARIF file (`<scratchSarifPath>`).
-   - Map SARIF rule ID prefixes to `SecurityRiskCategory`:
-     - `NET-*` $\rightarrow$ `SecurityRiskCategory.HardcodedNetworkEndpoint`
-     - `BD-*`, `LLM-*` $\rightarrow$ `SecurityRiskCategory.BackdoorPattern`
-     - `PAY-BIN-*` $\rightarrow$ `SecurityRiskCategory.BinaryArtifact`
-     - `PAY-*` $\rightarrow$ `SecurityRiskCategory.SuspiciousPayload`
-     - `DEP-NEW-*` $\rightarrow$ `SecurityRiskCategory.UnverifiedDependency`
-     - `DEP-DOWN-*` $\rightarrow$ `SecurityRiskCategory.DependencyDowngrade`
-     - `SCOPE-*` $\rightarrow$ `SecurityRiskCategory.ExcessiveBlastRadius`
-   - Map SARIF level to `SecurityRiskSeverity`:
-     - `error` $\rightarrow$ `SecurityRiskSeverity.High` (or `Critical` for critical rule IDs such as `NET-URL-002`, `PAY-UNI-001`, `PAY-BIN-002`)
-     - `warning` $\rightarrow$ `SecurityRiskSeverity.Medium`
-     - `note` $\rightarrow$ `SecurityRiskSeverity.Low`
-   - Map location to `FilePath`, `LineNumber`, `Snippet`, and `Description`.
+Use Step 12.7A's shared `Sarif210Parser` paired with a thin `DiffGuardSarifMapper`:
+
+1. **Rule ID Prefix $\rightarrow$ `SecurityFindingCategory`:**
+   - `NET-*` $\rightarrow$ `SecurityFindingCategory.HardcodedNetworkEndpoint`
+   - `BD-*`, `LLM-*` $\rightarrow$ `SecurityFindingCategory.BackdoorPattern`
+   - `PAY-BIN-*` $\rightarrow$ `SecurityFindingCategory.BinaryArtifact`
+   - `PAY-*` $\rightarrow$ `SecurityFindingCategory.SuspiciousPayload`
+   - `DEP-NEW-*` $\rightarrow$ `SecurityFindingCategory.UnverifiedDependency`
+   - `DEP-DOWN-*` $\rightarrow$ `SecurityFindingCategory.DependencyDowngrade`
+   - `SCOPE-*` $\rightarrow$ `SecurityFindingCategory.ExcessiveBlastRadius`
+2. **Source & Severity Mapping (`SecurityFindingSeverity`):**
+   - `Source`: `SecurityFindingSource.DiffGuardLlmJudge` for `LLM-*` rules; `SecurityFindingSource.DiffGuardStatic` otherwise.
+   - `Severity`:
+     - `error` $\rightarrow$ `SecurityFindingSeverity.High` (or `Critical` for critical rule IDs such as `NET-URL-002`, `PAY-UNI-001`, `PAY-BIN-002`)
+     - `warning` $\rightarrow$ `SecurityFindingSeverity.Medium`
+     - `note` $\rightarrow$ `SecurityFindingSeverity.Low`
+3. **Disposition & Allowlist Target:**
+   - `Disposition`: `SecurityFindingDisposition.HumanReviewRequired` when `Severity >= options.MinimumRiskSeverity`; `SecurityFindingDisposition.Advisory` when below threshold.
+   - `AllowlistTarget`: extract the normalized domain (for `NET-URL-*`) or package pattern/name (for `DEP-NEW-*`) during SARIF mapping so Step 12.7C 1-click allowlist buttons require zero regex parsing in Blazor components.
+4. **Telemetry & Report Assembly:**
+   - Populate `SecurityScannerReport` (`Source = DiffGuardStatic` or `DiffGuardLlmJudge` / scanner name `"DiffGuard"`), including `ScannedFilesCount`, `AddedLinesCount`, `DeletedLinesCount`, `CodebaseImpactPercent`, `DurationMs`, `JudgeModelId`, `BlockingCount`, `AdvisoryCount`, `MarkdownSummary`, and `Status` (`Failed` when `BlockingCount > 0` to indicate human-review-required risks, `Warning` when advisory-only, `Passed` when clean, `Skipped` when `Enabled == false`).
 
 ---
 
@@ -263,19 +244,23 @@ To prevent repository workspace pollution and avoid triggering `diffguard`'s rep
    - Add stage constants:
      - `DeterministicStageConstants.SecurityGuardrailSubStage = "security-guardrail";`
      - `StageImplementationTypes.DeterministicSecurityGuardrail = "deterministic-security-guardrail";`
-   - Register in `WorkflowStageRegistry`.
-   - Update `StandardStageIds.PostReviewVerification` in `StandardWorkflowDefinitions.cs` so Stage 6 runs:
-     `"ExtraParameters": {"Stages": "build,test-with-coverage,security-guardrail"}`
+   - Register in [`WorkflowStageRegistry`](../../src/NightCodeForge.Core/Workflow/WorkflowStageRegistry.cs).
+   - Update [`StandardStageIds.PostReviewVerification`](../../src/NightCodeForge.Core/Domain/StandardWorkflowDefinitions.cs#L115-L124) in `StandardWorkflowDefinitions.cs` so Stage 6 runs after DevSkim re-verification:
+     `"ExtraParameters": {"Stages": "build,test-with-coverage,sast,security-guardrail"}`
 2. **Execution Behavior:**
+   - If `GuardrailOptions.Enabled == false`, skip gracefully, record `SkippedCommandSuffix`, store a `SecurityScanStatus.Skipped` `SecurityScannerReport` in `PipelineDataBagKeys.SecurityGuardrailReport`, and return `StageExecutionResult.Success()`.
    - Resolves target execution environment for the task workspace.
    - Ensures `diffguard` is installed via `ICompanionToolInstaller`.
    - Generates scratch `.diffguard.json` configuration.
    - Resolves LLM judge endpoint and model (if enabled).
    - Executes `diffguard` via `IExecutionEnvironment.ExecuteAsync`, streaming console output live to `IAgentActivityStreamer`.
-   - Reads SARIF and Markdown report files into `SecurityGuardrailReport`.
+   - Reads SARIF and Markdown report files into `SecurityScannerReport` via `Sarif210Parser` + `DiffGuardSarifMapper`.
    - Stores report in `context.DataBag.Set(PipelineDataBagKeys.SecurityGuardrailReport, report)`.
    - Stores Markdown summary in `PipelineDataBagKeys.StageOutput(StageId)` for inspection in the Task Execution Inspector.
-   - Returns `StageExecutionResult.Success()` so the pipeline advances directly to the Review Room / merge gate without looping back to the coding agent.
+   - Emits deterministic gate completion telemetry via `IAgentActivityStreamer` → `SignalRActivityBridgeService` → `IOrchestratorHubClient.ReceiveDeterministicGateResult` (`gateName = "security-guardrail"`).
+   - **Always returns `StageExecutionResult.Success()`** (unless a tool/execution infrastructure failure throws `SecurityGuardrailExecutionException`) so the pipeline advances directly to the Review Room / merge gate without looping back to the coding agent.
+3. **Startup Recovery:**
+   - Update [`StartupRecoveryService`](../../src/NightCodeForge.Core/Services/StartupRecoveryService.cs) to clear stale `SecurityGuardrailReport` on recovery where appropriate.
 
 ---
 
@@ -283,28 +268,29 @@ To prevent repository workspace pollution and avoid triggering `diffguard`'s rep
 
 In `TaskOrchestrator.cs`, in the pipeline completion handler immediately prior to auto-merge evaluation:
 
-1. Inspect `pipelineContext.DataBag.Get<SecurityGuardrailReport>(PipelineDataBagKeys.SecurityGuardrailReport)`.
-2. If `report is { HasRisks: true }`:
+1. Inspect `pipelineContext.DataBag.Get<SecurityScannerReport>(PipelineDataBagKeys.SecurityGuardrailReport)` (or `TaskSecurityReportExtractor.Extract(task)`).
+2. If `report is { BlockingCount: > 0 }`:
    - If `task.MergeMode == MergeMode.Automatic`:
      - Mutate `task.MergeMode = MergeMode.ManualReview`.
-     - Set `report.AutoMergeDowngraded = true` and update `PipelineDataBagKeys.SecurityGuardrailReport` in `pipelineContext.DataBag`.
+     - Update `AutoMergeDowngraded = true` on the stored `SecurityScannerReport` in `PipelineDataBagKeys.SecurityGuardrailReport`.
      - Log a warning and record an execution log entry:
-       `"🛡️ Security guardrail detected {report.Findings.Count} risk(s). Downgraded MergeMode from Automatic to ManualReview for human inspection."`
-   - The task transitions to `TaskOverallStatus.Ready`, halting before merge and appearing in the **Review Room** with all detected findings attached.
+       `"🛡️ Security guardrail detected {report.BlockingCount} risk(s) requiring human review. Downgraded MergeMode from Automatic to ManualReview."`
+   - The task transitions to `TaskOverallStatus.Ready`, halting before merge and appearing in the unified **Review Room** (Step 12.7C) with all detected findings attached.
 
 ---
 
 ## 4. Definition of Done (DoD) Checklist
 
 - [ ] Add `Pmad.AI.DiffGuard` to `CompanionToolInstaller.DefaultKnownTools` with auto-installation via `dotnet tool install -g Pmad.AI.DiffGuard` on host and WSL.
-- [ ] Define `SecurityRiskCategory`, `SecurityRiskSeverity`, `SecurityRiskFinding`, `SecurityGuardrailReport`, and `SecurityGuardrailOptions` in `NightCodeForge.Core`.
-- [ ] Implement `IDiffGuardConfigManager` in `NightCodeForge.Infrastructure` to serialize `SecurityGuardrailOptions` into a valid `.diffguard.json` scratch file.
+- [ ] Add `SecurityGuardrailOptions` to `SecuritySettings` and implement allowlist/reset methods (`AddWellKnownDomainAsync`, `AddWellKnownPackageAsync`, `ResetToDefaultsAsync`) on `ISecuritySettingsService` (reusing Step 12.7A's `SecurityFinding` / `SecurityScannerReport` models).
+- [ ] Add `PipelineDataBagKeys.SecurityGuardrailReport` and guardrail stage constants (`DeterministicStageConstants.SecurityGuardrailSubStage`, `StageImplementationTypes.DeterministicSecurityGuardrail`).
+- [ ] Implement `IDiffGuardConfigManager` in `NightCodeForge.Infrastructure` to serialize `SecurityGuardrailOptions` into a valid `.diffguard.json` scratch file (with `enablePromptInjectionRules: false`).
 - [ ] Implement `IDiffGuardEndpointResolver` in `NightCodeForge.Infrastructure` / `NightCodeForge.Agents` resolving Ollama and OpenAI provider options, credentials, and WSL host IP gateway translation.
-- [ ] Implement cross-model judge candidate resolution selecting from `PreferredJudgeModels` (`jetelain/Flint`, `jetelain/Gemma-4-26B-A4B`) and handling missing judge models with `LLM-JUDGE-UNAVAILABLE` findings.
+- [ ] Implement cross-model judge candidate resolution selecting from `PreferredJudgeModels` (`jetelain/Flint`, `jetelain/Gemma-4-26B-A4B`) and handling missing judge models with `LLM-JUDGE-UNAVAILABLE` (`Disposition = HumanReviewRequired`).
 - [ ] Implement `DiffGuardCliRunner` / `IDiffRiskScanner` in `NightCodeForge.Infrastructure` / `NightCodeForge.Agents` using `IExecutionEnvironment` to invoke `diffguard` with `--base`, `--head`, `--config`, `--sarif`, `--markdown`, `--no-prompt-injection`, and LLM flags.
-- [ ] Implement SARIF 2.1.0 parser mapping `diffguard` SARIF output to `IReadOnlyList<SecurityRiskFinding>`.
-- [ ] Implement `DeterministicSecurityGuardrailStage` (`security-guardrail`), registering it in `WorkflowStageRegistry` and including it in Stage 6 (`PostReviewVerification`) in `StandardWorkflowDefinitions`.
-- [ ] Update `TaskOrchestrator` to automatically downgrade `task.MergeMode` from `Automatic` to `ManualReview` when `SecurityGuardrailReport.HasRisks == true` and transition to `Ready` without loopback.
-- [ ] Write unit and integration tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Agents.Tests` covering configuration generation, CLI argument assembly, SARIF deserialization, endpoint resolution (including WSL host IP translation), judge model resolution, and `TaskOrchestrator` auto-merge downgrade logic.
+- [ ] Implement `DiffGuardSarifMapper` on top of Step 12.7A's `Sarif210Parser` mapping `diffguard` SARIF output to `SecurityFinding` and `SecurityScannerReport` (including `AllowlistTarget` extraction).
+- [ ] Implement `DeterministicSecurityGuardrailStage` (`security-guardrail`), registering it in `WorkflowStageRegistry` and updating Stage 6 (`PostReviewVerification`) in `StandardWorkflowDefinitions` to `build,test-with-coverage,sast,security-guardrail`.
+- [ ] Update `TaskOrchestrator` to automatically downgrade `task.MergeMode` from `Automatic` to `ManualReview` when `GuardrailReport.BlockingCount > 0` and transition to `Ready` without loopback.
+- [ ] Update `StartupRecoveryService` and `SignalRActivityBridgeService` for guardrail report cleanup and `ReceiveDeterministicGateResult` telemetry.
+- [ ] Write unit and integration tests in `NightCodeForge.Core.Tests` and `NightCodeForge.Agents.Tests` covering configuration generation, CLI argument assembly, `DiffGuardSarifMapper`, endpoint resolution (including WSL host IP translation), judge model resolution, Stage 6 execution order (`sast` then `security-guardrail`), and `TaskOrchestrator` auto-merge downgrade logic.
 - [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
-
