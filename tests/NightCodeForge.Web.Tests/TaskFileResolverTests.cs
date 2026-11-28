@@ -241,7 +241,7 @@ public class TaskFileResolverTests : BunitContext
                 Title = "notes.md",
                 SourceRef = tempFile,
                 RelativePath = Path.GetFileName(tempFile),
-                MarkdownPath = tempFile,
+                MarkdownPath = Path.GetFileName(tempFile),
                 ContentKind = TaskAttachmentContentKind.PlainText
             };
 

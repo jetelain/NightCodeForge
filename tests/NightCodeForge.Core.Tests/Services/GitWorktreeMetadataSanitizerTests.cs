@@ -340,11 +340,16 @@ public class GitWorktreeMetadataSanitizerTests : IDisposable
 
         var repairs = GitWorktreeMetadataSanitizer.Sanitize(cloneDir, _pathResolverMock.Object, NullLogger.Instance);
 
-        Assert.Equal(0, repairs);
         Assert.True(Directory.Exists(customAdminDir));
         if (OperatingSystem.IsWindows())
         {
+            Assert.Equal(0, repairs);
             Assert.True(Directory.Exists(tmpFailSafeAdminDir));
+        }
+        else
+        {
+            Assert.Equal(1, repairs);
+            Assert.False(Directory.Exists(tmpFailSafeAdminDir));
         }
     }
 
