@@ -1,11 +1,11 @@
 # 🏁 Step 12.23B: Standalone Benchmark CLI (`NightCodeForge.Benchmark.Cli`)
 
 > **Feature Implementation Step (Part 2 of 3 — Dedicated Standalone CLI Commands & Cross-Version Comparative Reporting)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 (Archive): Completed Features & Integrations](../12_EXTEND_FEATURES.md)  
 > *Prerequisite Step:* [Step 12.23A: Standalone Crucible Benchmark Engine, Mock DB & Verifier](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md)  
 > *Companion Step:* [Step 12.23C: Multi-Stack Benchmark Datasets, Importers & Crafted Scenarios](STEP_12_23C_BENCHMARK_DATASETS_IMPORTERS_AND_SCENARIOS.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Benchmark.Cli`, `src/NightCodeForge.Infrastructure`, `tests/NightCodeForge.Benchmark.Cli.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Project Target:* `src/NightCodeForge.Benchmark.Cli`, `src/NightCodeForge.Infrastructure`, `tests/NightCodeForge.Benchmark.Cli.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -43,9 +43,9 @@ With the core Crucible Benchmark Engine (`ICrucibleBenchmarkRunner`), mock/in-me
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Create dedicated `src/NightCodeForge.Benchmark.Cli` (`ncf-bench`) and `tests/NightCodeForge.Benchmark.Cli.Tests` projects without bloating `src/NightCodeForge.Cli`.
-- [ ] Extract DB-free `AddNightCodeForgeExecutionInfrastructure()` in `NightCodeForge.Infrastructure` and wire `NightCodeForge.Benchmark.Cli` DI with `NightCodeForge.Agents` and mock/in-memory DB stubs (no SQLite, Hangfire, SignalR, or `NightCodeForge.Web` dependency).
-- [ ] Implement `run` and `report` commands supporting `Implementation`, `CodeReview`, and `TaskReview` datasets, `--models` / `--config` + `--provider` / `--endpoint` configuration, `--resume`, optional `--judge-*` flags, `BenchmarkRunProvenance` capture, and single-run + cross-commit baseline regression reporting.
-- [ ] Add unit tests verifying CLI argument parsing, candidate config loading, DB-free DI resolution, resume filtering, and comparative + regression report formatting.
+- [x] Create dedicated `src/NightCodeForge.Benchmark.Cli` (`ncf-bench`) and `tests/NightCodeForge.Benchmark.Cli.Tests` projects without bloating `src/NightCodeForge.Cli`.
+- [x] Extract DB-free `AddNightCodeForgeExecutionInfrastructure()` in `NightCodeForge.Infrastructure` and wire `NightCodeForge.Benchmark.Cli` DI with `NightCodeForge.Agents` and mock/in-memory DB stubs (no SQLite, Hangfire, SignalR, or `NightCodeForge.Web` dependency).
+- [x] Implement `run` and `report` commands supporting `Implementation`, `CodeReview`, and `TaskReview` datasets, `--models` / `--config` + `--provider` / `--endpoint` configuration, `--resume`, optional `--judge-*` flags, `BenchmarkRunProvenance` capture, and single-run + cross-commit baseline regression reporting.
+- [x] Add unit tests verifying CLI argument parsing, candidate config loading, DB-free DI resolution, resume filtering, and comparative + regression report formatting.
 
 

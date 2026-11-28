@@ -1,10 +1,10 @@
 # 🏁 Step 12.23C: Multi-Stack Benchmark Datasets, Importers & Crafted Scenarios
 
 > **Feature Implementation Step (Part 3 of 3 — Dataset Curation, External Importers, Crafted Review Scenarios & Pre-Flight Validation)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 (Archive): Completed Features & Integrations](../12_EXTEND_FEATURES.md)  
 > *Prerequisite Steps:* [Step 12.23A: Standalone Crucible Benchmark Engine, Mock DB & Verifier](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md) | [Step 12.23B: Standalone Benchmark CLI (`NightCodeForge.Benchmark.Cli`)](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `benchmarks/datasets/`, `src/NightCodeForge.Benchmark.Cli`, `tests/NightCodeForge.Benchmark.Cli.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Project Target:* `benchmarks/datasets/`, `src/NightCodeForge.Benchmark.Cli`, `tests/NightCodeForge.Benchmark.Cli.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -67,8 +67,8 @@ Craft NCF-native specification scenarios anchored on the cached OSS repositories
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Define pinned selection manifests for `v1-smoke` (~24–30 instances) and `v1-full` (~80–100 instances) in `benchmarks/datasets/` following the C#-first + TS/JS + Python + Rust target distribution.
-- [ ] Implement `IBenchmarkDatasetImporter` with normalized adapters for `swe-sharp-bench`, `swebench-multilingual` / `multi-swe-bench`, and `swebench-verified`, and expose `ncf-bench dataset import`.
-- [ ] Author initial crafted `CodeReview` (15–24 instances across `Approve`, `MinorFix`, `RequestChanges`) and `TaskReview` (12–18 instances across `Ready`, `Ready` difficulty escalation, `NeedsClarification`) scenario datasets under `benchmarks/datasets/`.
-- [ ] Implement pre-flight gold-patch & fixture validation exposed via `ncf-bench dataset validate`.
-- [ ] Add unit tests in `tests/NightCodeForge.Benchmark.Cli.Tests` covering importer normalization, manifest filtering/fail-fast errors, crafted scenario schema validation, and `ncf-bench dataset` CLI argument parsing and pre-flight execution.
+- [x] Define pinned selection manifests for `v1-smoke` (~24–30 instances) and `v1-full` (~80–100 instances) in `benchmarks/datasets/` following the C#-first + TS/JS + Python + Rust target distribution.
+- [x] Implement `IBenchmarkDatasetImporter` with normalized adapters for `swe-sharp-bench`, `swebench-multilingual` / `multi-swe-bench`, and `swebench-verified`, and expose `ncf-bench dataset import`.
+- [x] Author initial crafted `CodeReview` (15–24 instances across `Approve`, `MinorFix`, `RequestChanges`) and `TaskReview` (12–18 instances across `Ready`, `Ready` difficulty escalation, `NeedsClarification`) scenario datasets under `benchmarks/datasets/`.
+- [x] Implement pre-flight gold-patch & fixture validation exposed via `ncf-bench dataset validate`.
+- [x] Add unit tests in `tests/NightCodeForge.Benchmark.Cli.Tests` covering importer normalization, manifest filtering/fail-fast errors, crafted scenario schema validation, and `ncf-bench dataset` CLI argument parsing and pre-flight execution.

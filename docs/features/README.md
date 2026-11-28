@@ -39,14 +39,8 @@ To accelerate delivery of **`v0.1.0`**, remaining work is organized into four st
 
 ---
 
-#### 3. Benchmark Stream (`v0.1.0` — Parallel Dedicated Standalone CLI)
-*Dedicated standalone CLI (`NightCodeForge.Benchmark.Cli`) using `NightCodeForge.Agents` classes + mock/in-memory DB (no Web UI or Hangfire, keeping `NightCodeForge.Cli` lean) to evaluate Implementation, Code Review, and ForgeTask Review problems across models and track regressions across NightCodeForge commits/branches.*
-
-| Step | Specification | Focus & Key Deliverables | Status |
-| :--- | :--- | :--- | :--- |
-| **12.23A** | [🏁 Step 12.23A: Standalone Crucible Benchmark Engine, Mock DB & Verifier](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md) | `IBenchmarkDatasetLoader` (Implementation, Code Review, and ForgeTask Review JSONL/JSON problems), `IBenchmarkWorkspaceManager` (leak-free `git init` + `git fetch <cache> <BaseCommit>` + category workspace setup), decoupled turn sink & mock/in-memory coordinator for `CrucibleAgentHarness`, category-accurate tool/skill gating, multi-stack (`.trx`/JUnit XML/`cargo`) container verification, deterministic review checks, and optional `IBenchmarkLlmJudge`. | Planned |
-| **12.23B** | [🏁 Step 12.23B: Standalone Benchmark CLI (`NightCodeForge.Benchmark.Cli`)](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md) | Dedicated `ncf-bench` CLI (`run` / `report`) sweeping models with provider/config selection, `--resume`, `BenchmarkRunProvenance` capture, live progress, `predictions.jsonl`, `results.json`, `summary.md`, `transcripts/`, and single-run + cross-commit baseline regression leaderboards with per-language breakdown (standalone CLI only; no Benchmark Web UI). | Planned |
-| **12.23C** | [🏁 Step 12.23C: Multi-Stack Benchmark Datasets, Importers & Crafted Scenarios](STEP_12_23C_BENCHMARK_DATASETS_IMPORTERS_AND_SCENARIOS.md) | C#-first (`SWE-Sharp-Bench`) + TS/JS + Python + Rust tiered suite manifests (`v1-smoke` / `v1-full`), `IBenchmarkDatasetImporter`, crafted Code Review (`Approve`/`MinorFix`/`RequestChanges`) & ForgeTask Review (`Ready`/`NeedsClarification`) scenarios, and `ncf-bench dataset import/validate` pre-flight container checks. | Planned |
+#### 3. Benchmark Stream (`v0.1.0` — Parallel Dedicated Standalone CLI) — Completed ✅
+*All Benchmark stream steps (`12.23A`, `12.23B`, `12.23C`) have been implemented, verified, and archived (`docs/archive/phase-12/`).*
 
 ---
 
@@ -90,6 +84,7 @@ The following specifications are deferred until after `v0.1.0` ships:
 ### ✅ Recently Completed (Phase 12)
 * **12.18A, 12.18B & 12.18C:** Native AOT Desktop Installer, Companion NuGet Tool Provisioning, OllamaRouter Setup Wizard Handoff & Role Sync, Avalonia OOBE/Maintenance Hub & GitHub Actions CI/Release.
 * **12.22A & 12.22B:** Container Diagnostic Shell Service, `SIGINT` Partial-Output Recovery & Interactive `/diagnostics/shell` Web Console.
+* **12.23A, 12.23B & 12.23C:** Standalone Crucible Benchmark Engine, Leak-Free Workspaces, Container Verifier, `NightCodeForge.Benchmark.Cli` (`ncf-bench`), Multi-Stack Importers & Crafted Review Scenarios.
 * **12.32A & 12.32B:** Workspace Wizard Local Git Discovery, Provider-Agnostic Remote Hosting (`IVcsHostingProvider`), From-Scratch Clean Architecture Templates & Remote Forge Publishing.
 * **12.41:** Full-Page Agent Memory Explorer (`/memory`) & Quick Ideation Cleanup Prompts.
 * **12.42:** Non-Incremental Deterministic Build (`--no-incremental`) & Combined `build && test` Synthetic Conversation Seed.
@@ -99,6 +94,6 @@ The following specifications are deferred until after `v0.1.0` ships:
 
 ## 3. Completed Features Archive
 
-Completed feature steps (`12.1A`, `12.1B`, `12.2A`, `12.2B`, `12.2C`, `12.2D`, `12.3`, `12.5A`, `12.5B`, `12.6`, `12.8A`, `12.8B`, `12.8C`, `12.11A`, `12.11B`, `12.11C`, `12.11D`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.16B`, `12.17`, `12.18A`, `12.18B`, `12.18C`, `12.19`, `12.20A`, `12.22A`, `12.22B`, `12.24`, `12.25A`, `12.25B`, `12.26`, `12.27`, `12.29`, `12.30`, `12.31`, `12.32A`, `12.32B`, `12.33A`, `12.33B`, `12.35A`, `12.36A`, `12.36B`, `12.37`, `12.38`, `12.39`, `12.41`, `12.42`, `12.46A`, `12.46B`) are archived in:
+Completed feature steps (`12.1A`, `12.1B`, `12.2A`, `12.2B`, `12.2C`, `12.2D`, `12.3`, `12.5A`, `12.5B`, `12.6`, `12.8A`, `12.8B`, `12.8C`, `12.11A`, `12.11B`, `12.11C`, `12.11D`, `12.13A`, `12.13B`, `12.14`, `12.16A`, `12.16B`, `12.17`, `12.18A`, `12.18B`, `12.18C`, `12.19`, `12.20A`, `12.22A`, `12.22B`, `12.23A`, `12.23B`, `12.23C`, `12.24`, `12.25A`, `12.25B`, `12.26`, `12.27`, `12.29`, `12.30`, `12.31`, `12.32A`, `12.32B`, `12.33A`, `12.33B`, `12.35A`, `12.36A`, `12.36B`, `12.37`, `12.38`, `12.39`, `12.41`, `12.42`, `12.46A`, `12.46B`) are archived in:
 - **Summary & DoD Record:** [`docs/archive/12_EXTEND_FEATURES.md`](../archive/12_EXTEND_FEATURES.md)
 - **Step Specifications:** [`docs/archive/phase-12/`](../archive/phase-12/)

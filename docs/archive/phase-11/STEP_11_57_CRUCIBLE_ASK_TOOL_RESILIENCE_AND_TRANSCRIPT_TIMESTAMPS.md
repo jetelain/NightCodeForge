@@ -1,6 +1,6 @@
-# 🔧 Step 11.57: Crucible `ask` Tool Lenient Parsing, Error Diagnostics & Transcript Turn Timestamps
+# ðŸ”§ Step 11.57: Crucible `ask` Tool Lenient Parsing, Error Diagnostics & Transcript Turn Timestamps
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Agents`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Core`  
@@ -33,7 +33,7 @@ Analysis of the `v1-smoke-Flint-latest-20261123-214242` transcripts exposed thre
 ### 2.2 Lenient `QuestionItem.Options` Parsing in `ask` Tool
 - `QuestionItem.Options` deserialization / normalization for the `ask` tool MUST accept both:
   - Plain strings (e.g., `"Idempotent verbs only"`), and
-  - Structured choice objects containing fields such as `label` and optional `description` (e.g., `{"label": "5 seconds", "description": "5000 ms"}`), normalizing them cleanly into human-readable `string` option entries (e.g., `"Label — Description"` or `"Label"` when description is absent/empty) without throwing a JSON deserialization exception.
+  - Structured choice objects containing fields such as `label` and optional `description` (e.g., `{"label": "5 seconds", "description": "5000 ms"}`), normalizing them cleanly into human-readable `string` option entries (e.g., `"Label â€” Description"` or `"Label"` when description is absent/empty) without throwing a JSON deserialization exception.
 - Existing `QuestionItemParser.Normalize` behavior (trimming, filtering blank entries, preserving `Prompt` and `Rationale`) MUST continue to hold.
 
 ### 2.3 Actionable Tool Binding Error Messages

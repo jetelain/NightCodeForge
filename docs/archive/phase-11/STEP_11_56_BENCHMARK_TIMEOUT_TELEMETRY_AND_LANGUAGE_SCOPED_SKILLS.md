@@ -1,6 +1,6 @@
-# 📊 Step 11.56: Benchmark Timeout Telemetry Preservation, Summary Aggregation & Language-Scoped Skills
+# ðŸ“Š Step 11.56: Benchmark Timeout Telemetry Preservation, Summary Aggregation & Language-Scoped Skills
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Implemented  
 > **Target Projects:** `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `NightCodeForge.Agents`  
@@ -17,7 +17,7 @@
 In the `v1-smoke-Flint-latest-20261123-214242` benchmark run, four telemetry and prompt-scoping issues distorted metrics and wasted context tokens:
 
 1. **Token Telemetry Loss on Timeout (6/28 instances):** When an instance hits `InstanceTimeoutSeconds` (e.g., `autofac__autofac-1424`, `burntsushi__ripgrep-2576`, `messagepack-csharp__messagepack-csharp-1798`, `ncf-cr-csharp-008`, `ncf-cr-rust-001`, `spectreconsole__spectre-console-1338`), `CrucibleAgentHarness` saves the transcript containing real accumulated token counts (e.g., `6,798,607` tokens in `autofac__autofac-1424.md`) and rethrows `OperationCanceledException`. `CrucibleBenchmarkRunner` catches the timeout and builds `AgentRunResult.Cancelled(..., new AgentRunMetrics(DurationMs: ...))`, zeroing out `PromptTokens`, `CompletionTokens`, `TotalTokens`, and `TokensPerSecond` in `results.json`.
-2. **Skewed Summary Averages:** `BenchmarkSummaryAggregator` averages `TotalTokens` and `TokensPerSecond` across all `total_instances`—including `0`-token timeouts and unstarted `0`-turn provisioning errors (`facebook__docusaurus-9897`)—artificially depressing `Avg Tokens` and `Tokens/s` (`23.2` vs ~`30.6` tok/s on completed runs).
+2. **Skewed Summary Averages:** `BenchmarkSummaryAggregator` averages `TotalTokens` and `TokensPerSecond` across all `total_instances`â€”including `0`-token timeouts and unstarted `0`-turn provisioning errors (`facebook__docusaurus-9897`)â€”artificially depressing `Avg Tokens` and `Tokens/s` (`23.2` vs ~`30.6` tok/s on completed runs).
 3. **Unscoped C# Stack Skills on Non-C# Repositories:** `BenchmarkStagePolicyResolver.ConfigureWorkspaceSkills` enables global stack skills unconditionally across all languages, injecting C#-only skills (`csharp-nav`, `codecondenser`) into Python, JavaScript, TypeScript, and Rust system prompts (`load_skill_calls = 0` across all 28 runs) and wasting system prompt tokens.
 4. **Dispatcher Repair Sub-Counter Discrepancy:** In `ncf-tr-py-001`, `results.json` recorded `dispatcher_repairs: 5` while `tool_aliases_resolved: 0`, `parameter_aliases_resolved: 1`, and `stringified_json_repaired: 0`, leaving 4 repair hits unaccounted for in the breakdown fields.
 
@@ -31,7 +31,7 @@ In the `v1-smoke-Flint-latest-20261123-214242` benchmark run, four telemetry and
 
 ### 2.2 Accurate Summary Aggregation
 - `BenchmarkSummaryAggregator.AggregateCandidate` MUST compute `AverageTokensPerSecond` (and token throughput summaries) without letting unstarted / zero-token error instances (such as workspace provisioning failures with `0` turns) pull down generation throughput averages.
-- Timeout instances whose token metrics are preserved under §2.1 MUST contribute their real token counts and throughput accurately to candidate summaries.
+- Timeout instances whose token metrics are preserved under Â§2.1 MUST contribute their real token counts and throughput accurately to candidate summaries.
 
 ### 2.3 Language-Scoped Stack Skill Injection
 - C#-specific stack skills (`csharp-nav`, `codecondenser`) MUST only be enabled/injected when the benchmark instance (or workspace project config) targets C# (`BenchmarkLanguages.CSharp`).

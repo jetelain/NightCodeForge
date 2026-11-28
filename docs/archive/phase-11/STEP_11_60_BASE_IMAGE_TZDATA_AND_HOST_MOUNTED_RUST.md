@@ -1,6 +1,6 @@
-# 🐳 Step 11.60: Base Image Timezone Data (`tzdata`/`tzdata-legacy`), Host-Mounted Rust Cache & Python CodeReview Image Parity
+# ðŸ³ Step 11.60: Base Image Timezone Data (`tzdata`/`tzdata-legacy`), Host-Mounted Rust Cache & Python CodeReview Image Parity
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Infrastructure`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `benchmarks/datasets`  
@@ -21,7 +21,7 @@ Analysis of the November 24 `v1-smoke` benchmark runs (`Flint:latest` and `Qwen3
    - Bind-mounting `/usr/share/zoneinfo` from the host WSL Ubuntu distribution is not a viable fix: Ubuntu 24.04 splits legacy IANA links (`Cuba`, `US/Eastern`, etc.) out of `tzdata` into `tzdata-legacy`, which is not installed by default on the host WSL Ubuntu distro (`/usr/share/zoneinfo/Cuba` does not exist on the host), and host-level zoneinfo mounts reduce cross-platform portability.
    - Baking `tzdata` (~283 KB download / ~1,391 KB installed) and `tzdata-legacy` (~95 KB download / ~1,154 KB installed) directly into the managed base image adds only ~2.5 MB installed total.
 2. **Host-Mounted Rust Cache & Pre-Flight Validation Gaps (`burntsushi__ripgrep-2576`, `ncf-cr-rust-001`):**
-   - Consistent with `.NET` and `JDK`, `HostSdkDiscoveryService` and `ContainerMountAndDriftBuilder` already support host-mounting Rust (`~/.cargo`, `~/.rustup`, `RUSTUP_HOME`, and `$sdk/bin` on `PATH`). The November 24 Rust runs failed with `bash: cargo: command not found` because `rustup` was not installed in the host WSL distribution at the time—forcing agents to waste turns downloading `rustup` and leaving fresh verification containers without `cargo`.
+   - Consistent with `.NET` and `JDK`, `HostSdkDiscoveryService` and `ContainerMountAndDriftBuilder` already support host-mounting Rust (`~/.cargo`, `~/.rustup`, `RUSTUP_HOME`, and `$sdk/bin` on `PATH`). The November 24 Rust runs failed with `bash: cargo: command not found` because `rustup` was not installed in the host WSL distribution at the timeâ€”forcing agents to waste turns downloading `rustup` and leaving fresh verification containers without `cargo`.
    - However, unlike `.NET` and `JDK` (which separate read-only SDK mounts from writable `/cache/*` package caches), Rust stores both binaries (`~/.cargo/bin`) and writable crate registries/downloads (`~/.cargo/registry`, `~/.cargo/git`) under `~/.cargo`. Currently, `ContainerExecutorOptions.PackageCacheEnvironment` has no `/cache/cargo` mount, so mounting host `~/.cargo:ro` forces Cargo to fall back to container-local `/ncf-home/.cargo` (re-downloading all crates on every run) or fail if `CARGO_HOME` points at a read-only mount.
    - Additionally, there is no fast pre-flight diagnostic when a Rust benchmark instance runs without a `custom_container_image` and host SDK discovery finds no `cargo`/`rustc` toolchain.
 3. **Python Code Review Custom Image Gaps (`ncf-cr-py-001`, `ncf-cr-py-002`):**
@@ -34,7 +34,7 @@ Analysis of the November 24 `v1-smoke` benchmark runs (`Flint:latest` and `Qwen3
 
 ### 2.1 Base Image `ncf-agent-base:v6` with Full Timezone Data & `/cache/cargo`
 - Bump the default managed base image version from `v5` (`ncf-agent-base:v5` / `nightcodeforge-agent:v5`) to `v6` (`ncf-agent-base:v6` / `nightcodeforge-agent:v6`).
-- Recognize `ncf-agent-base:v5` and `nightcodeforge-agent:v5` as legacy aliases resolving to the active default base image (`v6`), alongside existing `v1`–`v4` aliases.
+- Recognize `ncf-agent-base:v5` and `nightcodeforge-agent:v5` as legacy aliases resolving to the active default base image (`v6`), alongside existing `v1`â€“`v4` aliases.
 - Install both `tzdata` and `tzdata-legacy` in `DefaultAgentBaseDockerfile` under `DEBIAN_FRONTEND=noninteractive` (cleaning `/var/lib/apt/lists/*` afterward) so standard and legacy IANA time zones (including `/usr/share/zoneinfo/Cuba`) resolve inside containers without host `/usr/share/zoneinfo` mounts.
 - Pre-create `/cache/cargo` with container-writable permissions alongside `/cache/nuget`, `/cache/npm`, `/cache/pnpm`, `/cache/uv`, `/cache/m2`, and `/cache/ms-playwright`, and set `ENV CARGO_HOME=/cache/cargo`.
 
