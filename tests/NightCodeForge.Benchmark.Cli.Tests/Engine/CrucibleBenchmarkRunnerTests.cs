@@ -810,8 +810,8 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
             enableStackSkills: true,
             language: BenchmarkLanguages.CSharp,
             category: BenchmarkProblemCategory.TaskReview);
-        Assert.True(trScope.DisableNetwork);
-        Assert.Empty(trScope.BlockedHosts);
+        Assert.False(trScope.DisableNetwork);
+        Assert.Equal(BenchmarkDefaults.BlockedAntiCheatHosts, trScope.BlockedHosts);
         Assert.False(trScope.MountAcpHostPaths);
     }
 
@@ -1430,6 +1430,7 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         Assert.Contains("\"enum_values_snapped\":1", json);
         Assert.Contains("\"parameter_envelopes_unwrapped\":2", json);
         Assert.Contains("\"other_dispatcher_repairs\":1", json);
+        Assert.Contains("\"anti_cheat_alert_count\":0", json);
     }
 
     [Fact]
@@ -1837,5 +1838,404 @@ public sealed class CrucibleBenchmarkRunnerTests : IDisposable
         var capturedTokensNoInference = new AgentRunMetrics(DurationMs: 50_000, PromptTokens: 800, CompletionTokens: 150, TotalTokens: 950, InferenceDurationMs: 0);
         var crossFromPrimary = CrucibleBenchmarkRunner.ResolveEffectiveMetrics(primaryInferenceOnly, capturedTokensNoInference, fallbackAgentDurationMs: 60_000);
         Assert.Equal(100.0, crossFromPrimary.TokensPerSecond, 2);
+    }
+
+    [Fact]
+    public void BlockedAntiCheatHosts_IncludesCdnAndSourceMirrors_AndOmitsPrimaryPackageRegistries()
+    {
+        var hosts = BenchmarkDefaults.BlockedAntiCheatHosts;
+        foreach (var expectedCdnOrMirror in new[]
+                 {
+                     "unpkg.com",
+                     "cdn.jsdelivr.net",
+                     "esm.sh",
+                     "skypack.dev",
+                     "cdnjs.cloudflare.com",
+                     "deps.dev",
+                     "fuget.org",
+                     "nuget.info",
+                     "sourcegraph.com",
+                     "grep.app",
+                     "searchcode.com",
+                     "github.com",
+                     "raw.githubusercontent.com",
+                     "gitlab.com",
+                     "bitbucket.org",
+                     "huggingface.co"
+                 })
+        {
+            Assert.Contains(expectedCdnOrMirror, hosts);
+        }
+
+        foreach (var primaryRegistry in new[]
+                 {
+                     "pypi.org",
+                     "files.pythonhosted.org",
+                     "registry.npmjs.org",
+                     "api.nuget.org",
+                     "crates.io",
+                     "static.crates.io"
+                 })
+        {
+            Assert.DoesNotContain(primaryRegistry, hosts);
+        }
+    }
+
+    [Theory]
+    [InlineData("pip download pytest==7.2.0", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("/tmp/ncf-bench-venv/bin/pip download pytest==7.2.0", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("pip --no-cache-dir download pytest", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("python3 -m pip download flask -d /tmp/wheels", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("/tmp/ncf-bench-venv/bin/python -m pip download flask", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("npm pack @vue/compiler-core", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("/usr/local/bin/npm pack @vue/compiler-core", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("npm pack --pack-destination /tmp vue@3.4.0", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("npm view @vue/compiler-core version", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("npm --silent view lodash", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("npm info lodash", BenchmarkAntiCheatAuditor.PackageArchiveDownload)]
+    [InlineData("curl -s https://unpkg.com/@vue/compiler-core/dist/compiler-core.cjs.js", BenchmarkAntiCheatAuditor.CdnOrSourceHostFetch)]
+    [InlineData("wget https://raw.githubusercontent.com/vuejs/core/main/package.json", BenchmarkAntiCheatAuditor.CdnOrSourceHostFetch)]
+    [InlineData("python3 -c \"import urllib.request; print(urllib.request.urlopen('https://cdn.jsdelivr.net/npm/vue').read())\"", BenchmarkAntiCheatAuditor.CdnOrSourceHostFetch)]
+    [InlineData("git ls-remote https://github.com/pytest-dev/pytest.git", BenchmarkAntiCheatAuditor.ExternalGitRemoteQuery)]
+    [InlineData("/usr/bin/git ls-remote https://github.com/org/repo.git", BenchmarkAntiCheatAuditor.ExternalGitRemoteQuery)]
+    [InlineData("git fetch origin", BenchmarkAntiCheatAuditor.ExternalGitRemoteQuery)]
+    [InlineData("git fetch --upload-pack /usr/bin/git-upload-pack origin", BenchmarkAntiCheatAuditor.ExternalGitRemoteQuery)]
+    [InlineData("git clone git@github.com:org/repo.git /tmp/r", BenchmarkAntiCheatAuditor.ExternalGitRemoteQuery)]
+    [InlineData("git clone user@host:org/repo.git /tmp/r", BenchmarkAntiCheatAuditor.ExternalGitRemoteQuery)]
+    [InlineData("ilspycmd /cache/nuget/packages/spectre.console/0.49.1/lib/net8.0/Spectre.Console.dll", BenchmarkAntiCheatAuditor.BinaryOrCacheInspection)]
+    [InlineData("~/.dotnet/tools/ilspycmd Foo.dll", BenchmarkAntiCheatAuditor.BinaryOrCacheInspection)]
+    [InlineData("unzip -l /cache/nuget/spectre.console.0.49.1.nupkg", BenchmarkAntiCheatAuditor.BinaryOrCacheInspection)]
+    [InlineData("rg \"Prompt\" /cache/cargo/registry/src/", BenchmarkAntiCheatAuditor.BinaryOrCacheInspection)]
+    [InlineData("cat ~/.cargo/registry/src/foo/lib.rs", BenchmarkAntiCheatAuditor.BinaryOrCacheInspection)]
+    [InlineData("CARGO_HOME=/cache/cargo nl /cache/cargo/registry/src/foo/lib.rs", BenchmarkAntiCheatAuditor.BinaryOrCacheInspection)]
+    public void AntiCheatAuditor_FlagsHighSignalCheatPatterns(string command, string expectedSignal)
+    {
+        var signals = BenchmarkAntiCheatAuditor.DetectSignals(command);
+        Assert.Contains(expectedSignal, signals);
+    }
+
+    [Theory]
+    [InlineData("pip install -e .")]
+    [InlineData("pip install -r requirements/tests.txt")]
+    [InlineData("npm ci")]
+    [InlineData("npm install --ignore-scripts")]
+    [InlineData("npm pack .")]
+    [InlineData("npm pack --dry-run")]
+    [InlineData("npm pack > /tmp/pack.log")]
+    [InlineData("npm pack --dry-run 2>/dev/null")]
+    [InlineData("npm pack --loglevel silent .")]
+    [InlineData("dotnet build --nologo")]
+    [InlineData("dotnet test --no-build")]
+    [InlineData("cargo test --no-fail-fast")]
+    [InlineData("CARGO_HOME=/cache/cargo cargo test")]
+    [InlineData("NUGET_PACKAGES=/cache/nuget/ dotnet build")]
+    [InlineData("csnav decompile --type System.Uri")]
+    [InlineData("curl -s http://localhost:8080/health")]
+    [InlineData("wget -qO- http://127.0.0.1:5000/status")]
+    [InlineData("rg \"github.com\" README.md")]
+    [InlineData("git clone /tmp/local-src /tmp/local-dst")]
+    [InlineData("git fetch file:///tmp/local-repo")]
+    [InlineData("git fetch --depth 1 file:///tmp/local-repo")]
+    [InlineData("git diff HEAD~1")]
+    public void AntiCheatAuditor_AllowsLegitimateBuildTestAndLocalhostCommands(string command)
+    {
+        var signals = BenchmarkAntiCheatAuditor.DetectSignals(command);
+        Assert.Empty(signals);
+    }
+
+    [Fact]
+    public void BuildTelemetryBreakdown_DeduplicatesAntiCheatAlertsAcrossBashAuditAndToolArguments()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new()
+            {
+                TurnIndex = 0,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Bash,
+                ToolArguments = """{"command":"curl -s https://unpkg.com/@vue/compiler-core"}""",
+                MetadataJson = """{"CallId":"call-ac-1"}"""
+            },
+            new()
+            {
+                TurnIndex = 1,
+                Role = StageTurnRole.ToolResult,
+                ToolName = CanonicalToolNames.Bash,
+                MetadataJson = JsonSerializer.Serialize(new
+                {
+                    CallId = "call-ac-1",
+                    BashAudit = new BashExecutionAuditEntry("curl -s https://unpkg.com/@vue/compiler-core", 0, null, "ok", 2, 2, false, false)
+                })
+            },
+            new()
+            {
+                TurnIndex = 2,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Bash,
+                ToolArguments = """{"command":"pip download pytest==7.2.0"}""",
+                MetadataJson = """{"CallId":"call-ac-2"}"""
+            },
+            new()
+            {
+                TurnIndex = 3,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Bash,
+                ToolArguments = """{"command":"dotnet test --no-build"}""",
+                MetadataJson = """{"CallId":"call-ok"}"""
+            }
+        };
+
+        var breakdown = CrucibleBenchmarkRunner.BuildTelemetryBreakdown(turns, new LenientDispatchTelemetry().CreateSnapshot());
+
+        Assert.Equal(2, breakdown.AntiCheatAlertCount);
+        Assert.Equal(
+            [
+                BenchmarkAntiCheatAuditor.CdnOrSourceHostFetch,
+                BenchmarkAntiCheatAuditor.PackageArchiveDownload
+            ],
+            breakdown.AntiCheatSignals);
+    }
+
+    [Fact]
+    public async Task RunAsync_TaskReview_SynchronizesFrontmatterIdAndFullTitle_AndTracksRevertedOutOfScopeEditsWithoutAlteringPassedScore()
+    {
+        const string longTitle = "Fix batchDepth decrement ordering and remove NO_BATCH effect flag across reactive watchers with nested recursive triggers";
+        var taskSpec = $"""
+            ---
+            id: 202
+            title: "{longTitle}"
+            status: Open
+            difficulty: standard
+            ---
+
+            Audit `endBatch` in `effect.ts`.
+            """;
+
+        var datasetPath = Path.Combine(_tempDir, "dataset-tr-sync.jsonl");
+        await File.WriteAllTextAsync(datasetPath, JsonSerializer.Serialize(new
+        {
+            instance_id = "ncf-tr-ts-002",
+            category = "task_review",
+            language = "typescript",
+            repo = "vuejs/core",
+            base_commit = "3653bc0f",
+            problem_statement = "Fallback problem statement that is definitely longer than eighty characters to verify truncation fallback",
+            task_specification = taskSpec,
+            expected_verdict = "Ready"
+        }));
+
+        var wks = Path.Combine(_tempDir, "wks-tr-sync");
+        Directory.CreateDirectory(wks);
+
+        var workspaceMgr = new Mock<IBenchmarkWorkspaceManager>();
+        workspaceMgr.Setup(m => m.ProvisionAsync(It.IsAny<BenchmarkInstance>(), BenchmarkProblemCategory.TaskReview, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkWorkspaceHandle
+            {
+                InstanceId = "ncf-tr-ts-002",
+                Category = BenchmarkProblemCategory.TaskReview,
+                WorkspacePath = wks,
+                BaseCommit = "3653bc0f",
+                TaskMarkdownPath = "docs/tasks/ncf-tr-ts-002.md",
+                TaskMarkdownInitialContent = taskSpec
+            });
+        workspaceMgr.Setup(m => m.GetModifiedFilesAsync(wks, "3653bc0f", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(["docs/tasks/ncf-tr-ts-002.md"]);
+
+        ForgeTask? capturedTask = null;
+        var harness = new Mock<IAgentHarness>();
+        harness.Setup(h => h.RunStageAsync(It.IsAny<AgentSessionContext>(), It.IsAny<CancellationToken>()))
+            .Returns<AgentSessionContext, CancellationToken>(async (ctx, ct) =>
+            {
+                capturedTask = ctx.ForgeTask;
+                var sink = InMemoryCrucibleConversationCoordinator.CurrentCapture!.TurnSink;
+                // Legitimate scratch file under /tmp and docs/tasks/ edit must be ignored; reverted src edit is tracked
+                await sink.AddTurnAsync(1, StageTurnRole.Tool, toolName: CanonicalToolNames.Write,
+                    toolArguments: """{"path":"/tmp/scratch-check.ts","content":"x"}""", cancellationToken: ct);
+                await sink.AddTurnAsync(1, StageTurnRole.Tool, toolName: CanonicalToolNames.Edit,
+                    toolArguments: """{"path":"/workspace/docs/tasks/ncf-tr-ts-002.md"}""", cancellationToken: ct);
+                await sink.AddTurnAsync(1, StageTurnRole.Tool, toolName: CanonicalToolNames.Edit,
+                    toolArguments: """{"file_path":"packages/reactivity/src/effect.ts"}""", cancellationToken: ct);
+                await sink.AddTurnAsync(1, StageTurnRole.Tool, toolName: CanonicalToolNames.Bash,
+                    toolArguments: """{"command":"npm pack @vue/compiler-core"}""",
+                    metadataJson: """{"CallId":"call-cheat"}""", cancellationToken: ct);
+                return AgentRunResult.Completed(new AgentRunMetrics(100, 10, 10, 20), summary: "Ready");
+            });
+
+        var registry = new Mock<IHarnessRegistry>();
+        registry.Setup(r => r.GetHarness(StandardHarnessIds.Crucible)).Returns(harness.Object);
+
+        BenchmarkAgentOutcome? capturedOutcome = null;
+        var verifier = new Mock<IBenchmarkVerifier>();
+        verifier.Setup(v => v.VerifyAsync(It.IsAny<BenchmarkInstance>(), It.IsAny<BenchmarkWorkspaceHandle>(), It.IsAny<BenchmarkAgentOutcome>(), ExecutionMode.BareHost, true, null, It.IsAny<CancellationToken>()))
+            .Callback<BenchmarkInstance, BenchmarkWorkspaceHandle, BenchmarkAgentOutcome, ExecutionMode, bool, BenchmarkJudgeConfig?, CancellationToken>((_, _, o, _, _, _, _) => capturedOutcome = o)
+            .ReturnsAsync(new BenchmarkVerificationResult { Passed = true, DeterministicScore = 1.0, ActualVerdict = "Ready" });
+
+        var provenance = new Mock<IBenchmarkProvenanceProvider>();
+        provenance.Setup(p => p.CaptureAsync(It.IsAny<LlmProviderType>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<LocalOptimizationFlags?>(), It.IsAny<ExecutionMode>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BenchmarkRunProvenance("0.1.0", "sha", "main", DateTimeOffset.UtcNow, LlmProviderType.Ollama, "http://localhost:11434", true, null));
+
+        var runner = new CrucibleBenchmarkRunner(
+            new BenchmarkDatasetLoader(),
+            workspaceMgr.Object,
+            registry.Object,
+            verifier.Object,
+            provenance.Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            Mock.Of<IBenchmarkToolchainPreflightValidator>(),
+            NullLogger<CrucibleBenchmarkRunner>.Instance);
+
+        var report = await runner.RunAsync(new BenchmarkRunRequest
+        {
+            SuiteName = "tr-sync",
+            DatasetPath = datasetPath,
+            OutputDirectory = Path.Combine(_tempDir, "out-tr-sync"),
+            Candidates = [new BenchmarkModelCandidate { CandidateId = "cand", ModelName = "m1" }],
+            ExecutionMode = ExecutionMode.BareHost
+        });
+
+        Assert.NotNull(capturedTask);
+        Assert.Equal(202, capturedTask!.Id);
+        Assert.Equal(longTitle, capturedTask.Title);
+        Assert.True(capturedTask.Title.Length > 80);
+
+        Assert.NotNull(capturedOutcome);
+        Assert.Equal(["packages/reactivity/src/effect.ts"], capturedOutcome!.RevertedOutOfScopeEditPaths);
+
+        var result = Assert.Single(report.Results);
+        Assert.Equal(BenchmarkInstanceOutcome.Passed, result.Outcome);
+        Assert.Equal(1.0, result.DeterministicScore);
+        Assert.Equal(1, result.Telemetry.AntiCheatAlertCount);
+        Assert.Equal([BenchmarkAntiCheatAuditor.PackageArchiveDownload], result.Telemetry.AntiCheatSignals);
+        Assert.Equal(1, Assert.Single(report.Summaries).TotalAntiCheatAlerts);
+    }
+
+    [Fact]
+    public void ResolveEphemeralTaskMetadata_FallsBackSafelyAndLeavesImplementationAndCodeReviewUnchanged()
+    {
+        var longProblem = new string('x', 120);
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "meta-1",
+            Repo = "o/r",
+            BaseCommit = "c1",
+            ProblemStatement = longProblem
+        };
+
+        var malformedHandle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "meta-1",
+            Category = BenchmarkProblemCategory.TaskReview,
+            WorkspacePath = _tempDir,
+            BaseCommit = "c1",
+            TaskMarkdownInitialContent = "---\nid: not-a-number\n---\nBody"
+        };
+        var (badId, badTitle) = CrucibleBenchmarkRunner.ResolveEphemeralTaskMetadata(instance, BenchmarkProblemCategory.TaskReview, malformedHandle);
+        Assert.Equal(0, badId);
+        Assert.Equal(80, badTitle.Length);
+
+        var missingHandle = malformedHandle with { TaskMarkdownInitialContent = null };
+        var (missingId, missingTitle) = CrucibleBenchmarkRunner.ResolveEphemeralTaskMetadata(instance, BenchmarkProblemCategory.TaskReview, missingHandle);
+        Assert.Equal(0, missingId);
+        Assert.Equal(80, missingTitle.Length);
+
+        var validHandle = malformedHandle with
+        {
+            TaskMarkdownInitialContent = "---\nid: 301\ntitle: \"" + new string('t', 100) + "\"\nstatus: Open\n---\nBody"
+        };
+        var (implId, implTitle) = CrucibleBenchmarkRunner.ResolveEphemeralTaskMetadata(instance, BenchmarkProblemCategory.Implementation, validHandle);
+        Assert.Equal(0, implId);
+        Assert.Equal(80, implTitle.Length);
+
+        var (crId, crTitle) = CrucibleBenchmarkRunner.ResolveEphemeralTaskMetadata(instance, BenchmarkProblemCategory.CodeReview, validHandle);
+        Assert.Equal(0, crId);
+        Assert.Equal(80, crTitle.Length);
+    }
+
+    [Fact]
+    public void ExtractOutOfScopeTaskReviewMutationPaths_CanonicalizesTraversalAndWslPaths()
+    {
+        var turns = new List<ConversationTurn>
+        {
+            new()
+            {
+                TurnIndex = 0,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Write,
+                ToolArguments = """{"path":"/tmp/../workspace/src/Foo.cs","content":"x"}"""
+            },
+            new()
+            {
+                TurnIndex = 1,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Edit,
+                ToolArguments = """{"path":"docs/tasks/../../src/Bar.cs"}"""
+            },
+            new()
+            {
+                TurnIndex = 2,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Edit,
+                ToolArguments = """{"file_path":"./src/./Baz.cs"}"""
+            },
+            new()
+            {
+                TurnIndex = 3,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Edit,
+                ToolArguments = """{"path":"./docs/tasks/../tasks/101.md"}"""
+            },
+            new()
+            {
+                TurnIndex = 4,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Write,
+                ToolArguments = """{"path":"/tmp/scratch.txt","content":"ok"}"""
+            }
+        };
+
+        var extracted = CrucibleBenchmarkRunner.ExtractOutOfScopeTaskReviewMutationPaths(turns, _tempDir);
+        Assert.Equal(["src/Bar.cs", "src/Baz.cs", "src/Foo.cs"], extracted);
+
+        const string wslWorkspace = @"\\wsl.localhost\Ubuntu-24.04\home\user\wks";
+        var wslTurns = new List<ConversationTurn>
+        {
+            new()
+            {
+                TurnIndex = 0,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Edit,
+                ToolArguments = """{"path":"/home/user/wks/docs/tasks/101.md"}"""
+            },
+            new()
+            {
+                TurnIndex = 1,
+                Role = StageTurnRole.Tool,
+                ToolName = CanonicalToolNames.Edit,
+                ToolArguments = """{"path":"/home/user/wks/src/WslTarget.cs"}"""
+            }
+        };
+
+        var wslExtracted = CrucibleBenchmarkRunner.ExtractOutOfScopeTaskReviewMutationPaths(wslTurns, wslWorkspace);
+        Assert.Equal(["src/WslTarget.cs"], wslExtracted);
+    }
+
+    [Fact]
+    public void ToolCallTelemetryBreakdown_NullAntiCheatSignalsAfterJsonDeserialization_HandlesEqualsAndGetHashCodeSafely()
+    {
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true
+        };
+
+        var deserialized = JsonSerializer.Deserialize<ToolCallTelemetryBreakdown>(
+            """{"total_tool_calls":2,"anti_cheat_alert_count":0,"anti_cheat_signals":null}""",
+            options);
+
+        Assert.NotNull(deserialized);
+        var expected = new ToolCallTelemetryBreakdown { TotalToolCalls = 2 };
+
+        Assert.Equal(expected, deserialized);
+        Assert.Equal(expected.GetHashCode(), deserialized!.GetHashCode());
     }
 }

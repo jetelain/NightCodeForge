@@ -20,13 +20,16 @@ public sealed class BenchmarkToolchainPreflightValidator : IBenchmarkToolchainPr
 
     private readonly IHostSdkDiscoveryService _sdkDiscoveryService;
     private readonly IContainerEnvironmentFactory _containerFactory;
+    private readonly IBenchmarkCustomImageBuilder _customImageBuilder;
 
     public BenchmarkToolchainPreflightValidator(
         IHostSdkDiscoveryService sdkDiscoveryService,
-        IContainerEnvironmentFactory containerFactory)
+        IContainerEnvironmentFactory containerFactory,
+        IBenchmarkCustomImageBuilder customImageBuilder)
     {
         _sdkDiscoveryService = sdkDiscoveryService ?? throw new ArgumentNullException(nameof(sdkDiscoveryService));
         _containerFactory = containerFactory ?? throw new ArgumentNullException(nameof(containerFactory));
+        _customImageBuilder = customImageBuilder ?? throw new ArgumentNullException(nameof(customImageBuilder));
     }
 
     public async Task<string?> ValidateAsync(
@@ -36,6 +39,22 @@ public sealed class BenchmarkToolchainPreflightValidator : IBenchmarkToolchainPr
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(instance);
+
+        if (executionMode == ExecutionMode.ContainerSandbox &&
+            !string.IsNullOrWhiteSpace(instance.CustomContainerImage) &&
+            _customImageBuilder.IsManagedBenchmarkImage(instance.CustomContainerImage))
+        {
+            try
+            {
+                await _customImageBuilder
+                    .EnsureImageAsync(instance.CustomContainerImage, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (BenchmarkException ex)
+            {
+                return ex.Message;
+            }
+        }
 
         if (executionMode != ExecutionMode.ContainerSandbox ||
             category is not (BenchmarkProblemCategory.Implementation or BenchmarkProblemCategory.CodeReview) ||

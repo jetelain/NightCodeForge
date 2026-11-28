@@ -64,7 +64,7 @@ public sealed partial class CuratedDatasetsValidationTests
         }
 
         var trPy1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-tr-py-001");
-        Assert.Equal("python:3.11-bookworm", trPy1Smoke.CustomContainerImage);
+        Assert.Equal(BenchmarkContainerImages.Python311ChildImage, trPy1Smoke.CustomContainerImage);
         Assert.Contains("MarkupSafe<2.1", trPy1Smoke.PipConstraints ?? []);
 
         var serilog1903 = Assert.Single(full.Entries, e => e.InstanceId == "serilog__serilog-1903");
@@ -83,19 +83,19 @@ public sealed partial class CuratedDatasetsValidationTests
         Assert.Contains("mocha-junit-reporter", axiosSmoke.CustomTestCommand);
 
         var pytestSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pytest-dev__pytest-10356");
-        Assert.Equal("python:3.11-bookworm", pytestSmoke.CustomContainerImage);
+        Assert.Equal(BenchmarkContainerImages.Python311ChildImage, pytestSmoke.CustomContainerImage);
 
         var flaskSmoke = Assert.Single(smoke.Entries, e => e.InstanceId == "pallets__flask-5014");
-        Assert.Equal("python:3.11-bookworm", flaskSmoke.CustomContainerImage);
+        Assert.Equal(BenchmarkContainerImages.Python311ChildImage, flaskSmoke.CustomContainerImage);
         Assert.Contains("Werkzeug<3.0", flaskSmoke.PipConstraints ?? []);
 
         var crPy1Smoke = Assert.Single(smoke.Entries, e => e.InstanceId == "ncf-cr-py-001");
-        Assert.Equal("python:3.11-bookworm", crPy1Smoke.CustomContainerImage);
+        Assert.Equal(BenchmarkContainerImages.Python311ChildImage, crPy1Smoke.CustomContainerImage);
         Assert.Contains("tests/test_utils.py", crPy1Smoke.CustomTestCommand);
         Assert.Contains("MarkupSafe<2.1", crPy1Smoke.PipConstraints ?? []);
 
         var crPy2Full = Assert.Single(full.Entries, e => e.InstanceId == "ncf-cr-py-002");
-        Assert.Equal("python:3.11-bookworm", crPy2Full.CustomContainerImage);
+        Assert.Equal(BenchmarkContainerImages.Python311ChildImage, crPy2Full.CustomContainerImage);
         Assert.Contains("Werkzeug<3.0", crPy2Full.PipConstraints ?? []);
 
         foreach (var manifest in new[] { smoke, full })
@@ -105,7 +105,7 @@ public sealed partial class CuratedDatasetsValidationTests
                 .ToList();
             Assert.NotEmpty(pythonEntries);
             Assert.All(pythonEntries, entry =>
-                Assert.Equal("python:3.11-bookworm", entry.CustomContainerImage));
+                Assert.Equal(BenchmarkContainerImages.Python311ChildImage, entry.CustomContainerImage));
         }
 
         foreach (var csharpSmokeId in new[]
@@ -294,7 +294,7 @@ public sealed partial class CuratedDatasetsValidationTests
 
             if (string.Equals(BenchmarkLanguages.Normalize(instance.Language), BenchmarkLanguages.Python, StringComparison.OrdinalIgnoreCase))
             {
-                Assert.Equal("python:3.11-bookworm", instance.CustomContainerImage);
+                Assert.Equal(BenchmarkContainerImages.Python311ChildImage, instance.CustomContainerImage);
             }
             if (string.Equals(instance.InstanceId, "ncf-tr-py-001", StringComparison.OrdinalIgnoreCase))
             {

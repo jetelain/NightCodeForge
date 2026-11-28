@@ -187,4 +187,47 @@ public sealed class BenchmarkSummaryAggregatorTests
         // Only inst-valid-throughput has finite positive TokensPerSecond (0.0, +Inf, NaN excluded)
         Assert.Equal(40.0, summary.AverageTokensPerSecond, 2);
     }
+
+    [Fact]
+    public void AggregateCandidate_SumsAntiCheatAlertsAcrossInstances()
+    {
+        var candidate = new BenchmarkModelCandidate
+        {
+            CandidateId = "cand-ac",
+            ModelName = "test-model"
+        };
+
+        var results = new List<BenchmarkInstanceResult>
+        {
+            new()
+            {
+                InstanceId = "i1",
+                CandidateId = "cand-ac",
+                ModelName = "test-model",
+                Outcome = BenchmarkInstanceOutcome.Passed,
+                DurationMs = 1000,
+                Telemetry = new ToolCallTelemetryBreakdown
+                {
+                    AntiCheatAlertCount = 2,
+                    AntiCheatSignals = ["cdn_or_source_host_fetch", "package_archive_download"]
+                }
+            },
+            new()
+            {
+                InstanceId = "i2",
+                CandidateId = "cand-ac",
+                ModelName = "test-model",
+                Outcome = BenchmarkInstanceOutcome.Failed,
+                DurationMs = 1000,
+                Telemetry = new ToolCallTelemetryBreakdown
+                {
+                    AntiCheatAlertCount = 1,
+                    AntiCheatSignals = ["binary_or_cache_inspection"]
+                }
+            }
+        };
+
+        var summary = BenchmarkSummaryAggregator.AggregateCandidate(candidate, results);
+        Assert.Equal(3, summary.TotalAntiCheatAlerts);
+    }
 }

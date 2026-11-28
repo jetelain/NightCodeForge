@@ -158,9 +158,79 @@ public sealed record ToolCallTelemetryBreakdown
     public int OtherDispatcherRepairs { get; init; }
     public int CsNavBashCalls { get; init; }
     public int CodeCondenserBashCalls { get; init; }
+    public int AntiCheatAlertCount { get; init; }
+    public IReadOnlyList<string> AntiCheatSignals { get; init; } = Array.Empty<string>();
 
     [JsonIgnore]
     public double EditFailureRate => EditCalls > 0 ? (double)EditFailures / EditCalls : 0.0;
+
+    public bool Equals(ToolCallTelemetryBreakdown? other)
+    {
+        if (ReferenceEquals(this, other))
+        {
+            return true;
+        }
+
+        if (other is null)
+        {
+            return false;
+        }
+
+        return TotalToolCalls == other.TotalToolCalls &&
+               ReadCalls == other.ReadCalls &&
+               EditCalls == other.EditCalls &&
+               WriteCalls == other.WriteCalls &&
+               BashCalls == other.BashCalls &&
+               LoadSkillCalls == other.LoadSkillCalls &&
+               AskCalls == other.AskCalls &&
+               RequestChangesCalls == other.RequestChangesCalls &&
+               EditFailures == other.EditFailures &&
+               DispatcherRepairs == other.DispatcherRepairs &&
+               ToolAliasesResolved == other.ToolAliasesResolved &&
+               ParameterAliasesResolved == other.ParameterAliasesResolved &&
+               NamespacesStripped == other.NamespacesStripped &&
+               CasingNormalized == other.CasingNormalized &&
+               EnumValuesSnapped == other.EnumValuesSnapped &&
+               StringifiedJsonRepaired == other.StringifiedJsonRepaired &&
+               ParameterEnvelopesUnwrapped == other.ParameterEnvelopesUnwrapped &&
+               OtherDispatcherRepairs == other.OtherDispatcherRepairs &&
+               CsNavBashCalls == other.CsNavBashCalls &&
+               CodeCondenserBashCalls == other.CodeCondenserBashCalls &&
+               AntiCheatAlertCount == other.AntiCheatAlertCount &&
+               (AntiCheatSignals ?? Array.Empty<string>()).SequenceEqual(other.AntiCheatSignals ?? Array.Empty<string>(), StringComparer.Ordinal);
+    }
+
+    public override int GetHashCode()
+    {
+        var hc = new HashCode();
+        hc.Add(TotalToolCalls);
+        hc.Add(ReadCalls);
+        hc.Add(EditCalls);
+        hc.Add(WriteCalls);
+        hc.Add(BashCalls);
+        hc.Add(LoadSkillCalls);
+        hc.Add(AskCalls);
+        hc.Add(RequestChangesCalls);
+        hc.Add(EditFailures);
+        hc.Add(DispatcherRepairs);
+        hc.Add(ToolAliasesResolved);
+        hc.Add(ParameterAliasesResolved);
+        hc.Add(NamespacesStripped);
+        hc.Add(CasingNormalized);
+        hc.Add(EnumValuesSnapped);
+        hc.Add(StringifiedJsonRepaired);
+        hc.Add(ParameterEnvelopesUnwrapped);
+        hc.Add(OtherDispatcherRepairs);
+        hc.Add(CsNavBashCalls);
+        hc.Add(CodeCondenserBashCalls);
+        hc.Add(AntiCheatAlertCount);
+        foreach (var signal in AntiCheatSignals ?? Array.Empty<string>())
+        {
+            hc.Add(signal, StringComparer.Ordinal);
+        }
+
+        return hc.ToHashCode();
+    }
 }
 
 /// <summary>
@@ -263,6 +333,7 @@ public sealed record BenchmarkCandidateSummary
     public int TotalCsNavBashCalls { get; init; }
     public int TotalCodeCondenserBashCalls { get; init; }
     public int TotalDispatcherRepairs { get; init; }
+    public int TotalAntiCheatAlerts { get; init; }
     public IReadOnlyList<BenchmarkLanguageBreakdown> ByLanguage { get; init; } = Array.Empty<BenchmarkLanguageBreakdown>();
 }
 
@@ -312,4 +383,5 @@ public sealed record BenchmarkAgentOutcome
     public string? UpdatedTaskMarkdown { get; init; }
     public string? TaskMarkdownBefore { get; init; }
     public IReadOnlyList<string> ModifiedFilesOutsideDocsTasks { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> RevertedOutOfScopeEditPaths { get; init; } = Array.Empty<string>();
 }

@@ -37,7 +37,7 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
             version: "0.1.0",
             summaries:
             [
-                BuildSummary("qwen-3.8", "Qwen 3.8", passRate: 0.75, passed: 3, total: 4, patchRate: 1.0, judgeScore: 0.86, avgDurationMs: 12500, avgTurns: 8.5, avgTokens: 4200, tps: 44.2, editFailureRate: 0.05, csnav: 12, condenser: 3, repairs: 2),
+                BuildSummary("qwen-3.8", "Qwen 3.8", passRate: 0.75, passed: 3, total: 4, patchRate: 1.0, judgeScore: 0.86, avgDurationMs: 12500, avgTurns: 8.5, avgTokens: 4200, tps: 44.2, editFailureRate: 0.05, csnav: 12, condenser: 3, repairs: 2) with { TotalAntiCheatAlerts = 4 },
                 BuildSummary("llama-3.1", "Llama 3.1", passRate: 0.50, passed: 2, total: 4, patchRate: 0.75, judgeScore: 0.72, avgDurationMs: 18000, avgTurns: 11.0, avgTokens: 5100, tps: 31.0, editFailureRate: 0.12, csnav: 4, condenser: 1, repairs: 5)
             ]);
 
@@ -63,16 +63,20 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
             Assert.Contains("csnav Calls", formatted);
             Assert.Contains("codecondenser Calls", formatted);
             Assert.Contains("Dispatcher Repairs", formatted);
+            Assert.Contains("Anti-Cheat Alerts", formatted);
             Assert.Contains("75.0% (3/4)", formatted);
             Assert.Contains("12.5s", formatted);
             Assert.Contains("4,200", formatted);
             Assert.Contains("main @ 1111111", formatted);
+            Assert.Contains("4", formatted);
         }
         else
         {
             using var doc = JsonDocument.Parse(formatted);
             Assert.Equal("single", doc.RootElement.GetProperty("mode").GetString());
-            Assert.Equal(2, doc.RootElement.GetProperty("summaries").GetArrayLength());
+            var summaries = doc.RootElement.GetProperty("summaries");
+            Assert.Equal(2, summaries.GetArrayLength());
+            Assert.Equal(4, summaries[0].GetProperty("total_anti_cheat_alerts").GetInt32());
             Assert.Equal(4, doc.RootElement.GetProperty("languages").GetArrayLength());
         }
     }
@@ -104,7 +108,7 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
             version: "0.1.2",
             summaries:
             [
-                BuildSummary("qwen", "Qwen 3.8", passRate: 0.50, passed: 2, total: 4, patchRate: 0.75, judgeScore: 0.65, avgDurationMs: 14500, avgTurns: 12.0, avgTokens: 6000, tps: 30.0, editFailureRate: 0.25, csnav: 6, condenser: 0, repairs: 4)
+                BuildSummary("qwen", "Qwen 3.8", passRate: 0.50, passed: 2, total: 4, patchRate: 0.75, judgeScore: 0.65, avgDurationMs: 14500, avgTurns: 12.0, avgTokens: 6000, tps: 30.0, editFailureRate: 0.25, csnav: 6, condenser: 0, repairs: 4) with { TotalAntiCheatAlerts = 3 }
             ]));
 
         var runBase = await BenchmarkReportLoader.LoadAsync(dirBase);
@@ -126,6 +130,8 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
         Assert.Contains("-25.0%", markdown);
         Assert.Contains("+4.5s", markdown);
         Assert.Contains("-1.0s", markdown);
+        Assert.Contains("Anti-Cheat Alerts", markdown);
+        Assert.Contains("3 (+3)", markdown);
 
         var json = BenchmarkReportFormatter.FormatComparison(
             [runBase, runImproved, runRegressed],
@@ -140,6 +146,7 @@ public sealed class BenchmarkReportFormatterTests : IDisposable
         Assert.False(comparisons[1].GetProperty("is_regression").GetBoolean());
         Assert.True(comparisons[2].GetProperty("is_regression").GetBoolean());
         Assert.Equal(-0.25, comparisons[2].GetProperty("deltas").GetProperty("pass_rate").GetDouble(), 4);
+        Assert.Equal(3, comparisons[2].GetProperty("deltas").GetProperty("anti_cheat_alerts").GetInt32());
     }
 
     [Fact]

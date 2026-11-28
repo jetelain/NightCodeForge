@@ -797,6 +797,17 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             deterministicScore = checks.Average();
         }
 
+        string? verificationDiagnostic = null;
+        if (outcome.RevertedOutOfScopeEditPaths.Count > 0)
+        {
+            var revertedSummary = string.Join(", ", outcome.RevertedOutOfScopeEditPaths);
+            _logger.LogWarning(
+                "TaskReview instance '{InstanceId}' invoked mid-run edit/write tool call(s) outside docs/tasks/ that were reverted before completion: {Paths}",
+                instance.InstanceId,
+                revertedSummary);
+            verificationDiagnostic = $"[WARNING] Mid-run edit/write tool call(s) targeted out-of-scope path(s) outside docs/tasks/ that were reverted before completion: {revertedSummary}";
+        }
+
         BenchmarkJudgeResult? judgeResult = null;
         if (judgeConfig != null)
         {
@@ -811,6 +822,7 @@ public sealed partial class BenchmarkVerifier : IBenchmarkVerifier
             TaskDifficultyResult = detectedDifficulty,
             JudgeScore = judgeResult?.Score,
             JudgeRationale = judgeResult?.Rationale,
+            VerificationLog = verificationDiagnostic,
             ErrorMessage = passed ? null : string.Join(" ", failureReasons)
         };
     }

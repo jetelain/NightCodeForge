@@ -53,6 +53,15 @@ public static class BenchmarkLanguages
 }
 
 /// <summary>
+/// Container image tags referenced by benchmark datasets and custom image provisioning.
+/// </summary>
+public static class BenchmarkContainerImages
+{
+    public const string Python311BaseImage = "python:3.11-bookworm";
+    public const string Python311ChildImage = "ncf-bench-python-3.11:v1";
+}
+
+/// <summary>
 /// Ephemeral branch names created during leak-free benchmark workspace materialization.
 /// </summary>
 public static class BenchmarkBranchNames
@@ -129,7 +138,18 @@ public static class BenchmarkDefaults
         "gitlab.com",
         "bitbucket.org",
         "huggingface.co",
-        "datasets-server.huggingface.co"
+        "datasets-server.huggingface.co",
+        "unpkg.com",
+        "cdn.jsdelivr.net",
+        "esm.sh",
+        "skypack.dev",
+        "cdnjs.cloudflare.com",
+        "deps.dev",
+        "fuget.org",
+        "nuget.info",
+        "sourcegraph.com",
+        "grep.app",
+        "searchcode.com"
     ];
 
     public static readonly IReadOnlyList<string> ImplementationPermittedTools =

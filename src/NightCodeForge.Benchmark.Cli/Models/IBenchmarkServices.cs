@@ -118,6 +118,16 @@ public interface IBenchmarkProvenanceProvider
 }
 
 /// <summary>
+/// Builds and ensures benchmark-scoped custom container images on demand.
+/// </summary>
+public interface IBenchmarkCustomImageBuilder
+{
+    bool IsManagedBenchmarkImage(string? containerImage);
+
+    Task EnsureImageAsync(string containerImage, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Validates host-mounted toolchain availability for sandboxed benchmark runs before provisioning workspaces.
 /// </summary>
 public interface IBenchmarkToolchainPreflightValidator

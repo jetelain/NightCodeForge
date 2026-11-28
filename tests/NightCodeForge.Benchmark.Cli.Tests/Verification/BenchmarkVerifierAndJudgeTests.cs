@@ -2459,8 +2459,10 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("/etc/ssl/certs/ca-certificates.crt", wrappedDefault);
         Assert.Contains("SETUPTOOLS_SCM_PRETEND_VERSION", wrappedDefault);
         Assert.DoesNotContain("ncf-pip-constraints.txt\"", wrappedDefault);
-        Assert.Contains("if ! pytest --version >/dev/null 2>&1; then", wrappedDefault);
+        Assert.DoesNotContain("if ! pytest --version", wrappedDefault);
         Assert.DoesNotContain("command -v pytest", wrappedDefault);
+        Assert.Contains("if [ ! -x /tmp/ncf-bench-venv/bin/pytest ]; then", wrappedDefault);
+        Assert.Contains("export PATH=\"/tmp/ncf-bench-venv/bin:$PATH\" && { pytest --junitxml=/workspace/.ncf-bench-results/junit.xml; }", wrappedDefault);
         Assert.Contains("if [ -f /tmp/ncf-bench-venv/.ncf-pip-constraints ]; then rm -rf /tmp/ncf-bench-venv /tmp/ncf-pip-constraints.txt; fi", wrappedDefault);
 
         var wrappedNode = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
@@ -3237,6 +3239,70 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
 
         var verifyF2pCmd = BenchmarkTestCommandResolver.ResolveTestCommand(instance, csDir, ExecutionMode.ContainerSandbox, failToPassOnly: true);
         Assert.Equal(customCmd, verifyF2pCmd);
+    }
+
+    [Fact]
+    public async Task Step1167_VerifyTaskReviewAsync_ZeroesScoreOnOutOfScopeFiles_AndLogsWarningForRevertedMidRunEdits()
+    {
+        var verifier = new BenchmarkVerifier(
+            new Mock<IBenchmarkWorkspaceManager>().Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            new Mock<IExecutionEnvironmentProvider>().Object,
+            new Mock<IBenchmarkLlmJudge>().Object,
+            NullLogger<BenchmarkVerifier>.Instance);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "tr-scope-1167",
+            Category = BenchmarkProblemCategory.TaskReview,
+            Language = BenchmarkLanguages.CSharp,
+            Repo = "serilog/serilog",
+            BaseCommit = "abc",
+            ProblemStatement = "Fix JsonFormatter",
+            TaskSpecification = "---\nid: 101\ntitle: \"Fix JsonFormatter\"\nstatus: Open\ndifficulty: standard\n---\n\nFix JsonFormatter.",
+            ExpectedVerdict = "Ready",
+            ExpectedDifficulty = "standard",
+            ExpectedFindings = [new BenchmarkExpectedFinding("src/Serilog/Formatting/Json/JsonFormatter.cs", Keywords: ["RenderedMessage"])]
+        };
+
+        var handle = new BenchmarkWorkspaceHandle
+        {
+            InstanceId = "tr-scope-1167",
+            Category = BenchmarkProblemCategory.TaskReview,
+            WorkspacePath = _tempDir,
+            BaseCommit = "abc"
+        };
+
+        var baseValidOutcome = new BenchmarkAgentOutcome
+        {
+            RunStatus = AgentRunStatus.Completed,
+            TaskMarkdownBefore = instance.TaskSpecification,
+            UpdatedTaskMarkdown = "---\nid: 101\ntitle: \"Fix JsonFormatter\"\nstatus: Open\ndifficulty: standard\n---\n\nFix JsonFormatter.\n\n## Plan\nUpdate src/Serilog/Formatting/Json/JsonFormatter.cs to emit valid delimiter before RenderedMessage and add unit tests.",
+            ModifiedFilesOutsideDocsTasks = Array.Empty<string>()
+        };
+
+        // Out-of-scope file modified on completion => hard fail and 0.0 score even though verdict & anchors match
+        var outOfScope = baseValidOutcome with
+        {
+            ModifiedFilesOutsideDocsTasks = ["src/Serilog/Formatting/Json/JsonFormatter.cs"]
+        };
+        var outOfScopeResult = await verifier.VerifyAsync(instance, handle, outOfScope, ExecutionMode.ContainerSandbox, false, null);
+        Assert.False(outOfScopeResult.Passed);
+        Assert.Equal(0.0, outOfScopeResult.DeterministicScore);
+        Assert.Contains("Modified files outside docs/tasks/", outOfScopeResult.ErrorMessage);
+        Assert.Contains("src/Serilog/Formatting/Json/JsonFormatter.cs", outOfScopeResult.ErrorMessage);
+
+        // Reverted mid-run out-of-scope edit => warning diagnostic in VerificationLog without breaking pass/score
+        var revertedOnly = baseValidOutcome with
+        {
+            RevertedOutOfScopeEditPaths = ["src/Serilog/Formatting/Json/JsonFormatter.cs"]
+        };
+        var revertedResult = await verifier.VerifyAsync(instance, handle, revertedOnly, ExecutionMode.ContainerSandbox, false, null);
+        Assert.True(revertedResult.Passed);
+        Assert.Equal(1.0, revertedResult.DeterministicScore);
+        Assert.NotNull(revertedResult.VerificationLog);
+        Assert.Contains("[WARNING]", revertedResult.VerificationLog);
+        Assert.Contains("src/Serilog/Formatting/Json/JsonFormatter.cs", revertedResult.VerificationLog);
     }
 
     private static string RunGit(string workingDir, params string[] args)

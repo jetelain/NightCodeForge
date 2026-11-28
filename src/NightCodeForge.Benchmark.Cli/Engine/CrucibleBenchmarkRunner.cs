@@ -381,11 +381,12 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             };
             BenchmarkStagePolicyResolver.ConfigureWorkspaceSkills(ephemeralWorkspace, candidate.EnableStackSkills, instance.Language);
 
+            var (taskId, taskTitle) = ResolveEphemeralTaskMetadata(instance, category, workspace, _logger);
             var ephemeralTask = new ForgeTask
             {
-                Id = 0,
+                Id = taskId,
                 WorkspaceId = 0,
-                Title = TruncateTitle(instance.ProblemStatement),
+                Title = taskTitle,
                 Description = BuildTaskDescription(instance, category, request.IncludeHints, workspace),
                 Status = TaskOverallStatus.Open,
                 CurrentStageId = policy.StageId,
@@ -530,6 +531,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
 
             string? updatedTaskMarkdown = null;
             IReadOnlyList<string> modifiedOutsideDocsTasks = Array.Empty<string>();
+            IReadOnlyList<string> revertedOutOfScopeEdits = Array.Empty<string>();
 
             if (category == BenchmarkProblemCategory.Implementation)
             {
@@ -556,6 +558,20 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 modifiedOutsideDocsTasks = modified
                     .Where(path => !path.Replace('\\', '/').StartsWith(BenchmarkPaths.DocsTasksPrefix, StringComparison.OrdinalIgnoreCase))
                     .ToList();
+
+                var modifiedOutsideSet = modifiedOutsideDocsTasks
+                    .Select(p => p.Replace('\\', '/'))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                revertedOutOfScopeEdits = ExtractOutOfScopeTaskReviewMutationPaths(capture.TurnSink.Turns, workspace.WorkspacePath)
+                    .Where(path => !modifiedOutsideSet.Contains(path))
+                    .ToList();
+                if (revertedOutOfScopeEdits.Count > 0)
+                {
+                    _logger.LogWarning(
+                        "TaskReview evaluation '{InstanceId}' had mid-run edit/write call(s) outside docs/tasks/ that were reverted before completion: {Paths}",
+                        instance.InstanceId,
+                        string.Join(", ", revertedOutOfScopeEdits));
+                }
             }
 
             if (category == BenchmarkProblemCategory.Implementation ||
@@ -581,7 +597,8 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                 PendingQuestions = runResult.PendingQuestions ?? Array.Empty<Question>(),
                 UpdatedTaskMarkdown = updatedTaskMarkdown,
                 TaskMarkdownBefore = workspace.TaskMarkdownInitialContent,
-                ModifiedFilesOutsideDocsTasks = modifiedOutsideDocsTasks
+                ModifiedFilesOutsideDocsTasks = modifiedOutsideDocsTasks,
+                RevertedOutOfScopeEditPaths = revertedOutOfScopeEdits
             };
 
             var verification = await _verifier.VerifyAsync(
@@ -809,8 +826,6 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             wslWorkingDirectory: isWslUnc ? wslLinuxPath : null,
             isReadOnly: false);
 
-        bool disableNetwork = category == BenchmarkProblemCategory.TaskReview;
-
         return new SandboxScopeDescriptor(
             scopeKind: SandboxScopeKind.WorkspaceClone,
             executionMode: executionMode,
@@ -831,9 +846,177 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             canonicalClonePath: null,
             mountHostDotnetTools: enableStackSkills && BenchmarkLanguages.IsCSharp(language),
             protectCloneWorkingTree: false,
-            disableNetwork: disableNetwork,
-            blockedHosts: disableNetwork ? Array.Empty<string>() : BenchmarkDefaults.BlockedAntiCheatHosts,
+            disableNetwork: false,
+            blockedHosts: BenchmarkDefaults.BlockedAntiCheatHosts,
             mountAcpHostPaths: false);
+    }
+
+    internal static (int TaskId, string TaskTitle) ResolveEphemeralTaskMetadata(
+        BenchmarkInstance instance,
+        BenchmarkProblemCategory category,
+        BenchmarkWorkspaceHandle workspace,
+        ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        if (category == BenchmarkProblemCategory.TaskReview)
+        {
+            var (frontmatter, _) = Verification.BenchmarkVerifier.ParseTaskMarkdown(workspace.TaskMarkdownInitialContent, logger);
+            int taskId = frontmatter?.Id is > 0 ? frontmatter.Id.Value : 0;
+            string taskTitle = !string.IsNullOrWhiteSpace(frontmatter?.Title)
+                ? frontmatter.Title.Trim()
+                : TruncateTitle(instance.ProblemStatement);
+            return (taskId, taskTitle);
+        }
+
+        return (0, TruncateTitle(instance.ProblemStatement));
+    }
+
+    internal static IReadOnlyList<string> ExtractOutOfScopeTaskReviewMutationPaths(
+        IReadOnlyList<ConversationTurn>? turns,
+        string? workspacePath)
+    {
+        if (turns == null || turns.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var normalizedWorkspace = string.IsNullOrWhiteSpace(workspacePath)
+            ? null
+            : workspacePath.Replace('\\', '/').TrimEnd('/');
+        string? wslLinuxWorkspace = null;
+        if (!string.IsNullOrWhiteSpace(workspacePath) &&
+            WslPathConverter.TryExtractWslUnc(workspacePath, out _, out var extractedWslLinux) &&
+            !string.IsNullOrWhiteSpace(extractedWslLinux))
+        {
+            wslLinuxWorkspace = extractedWslLinux.Replace('\\', '/').TrimEnd('/');
+        }
+
+        var normalizedTempRoot = CanonicalizePosixPath(Path.GetTempPath().Replace('\\', '/')).TrimEnd('/');
+        var outOfScopePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var turn in turns)
+        {
+            if (turn.Role != StageTurnRole.Tool ||
+                (!string.Equals(turn.ToolName, CanonicalToolNames.Edit, StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(turn.ToolName, CanonicalToolNames.Write, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var rawPath = ExtractMutationTargetPathFromArguments(turn.ToolArguments);
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                continue;
+            }
+
+            var trimmedRaw = rawPath.Trim();
+            string normalizedPath;
+            if (WslPathConverter.TryExtractWslUnc(trimmedRaw, out _, out var rawWslLinux) &&
+                !string.IsNullOrWhiteSpace(rawWslLinux))
+            {
+                normalizedPath = CanonicalizePosixPath(rawWslLinux.Replace('\\', '/'));
+            }
+            else if (!string.IsNullOrWhiteSpace(normalizedWorkspace) &&
+                     normalizedWorkspace.StartsWith("//", StringComparison.Ordinal) &&
+                     trimmedRaw.Replace('\\', '/').StartsWith(normalizedWorkspace + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedPath = CanonicalizePosixPath(trimmedRaw.Replace('\\', '/')[(normalizedWorkspace.Length + 1)..]);
+            }
+            else
+            {
+                normalizedPath = CanonicalizePosixPath(trimmedRaw.Replace('\\', '/'));
+            }
+
+            if (normalizedPath.StartsWith("/tmp/", StringComparison.Ordinal) ||
+                string.Equals(normalizedPath, "/tmp", StringComparison.Ordinal) ||
+                (!string.IsNullOrWhiteSpace(normalizedTempRoot) &&
+                 (normalizedPath.StartsWith(normalizedTempRoot + "/", StringComparison.OrdinalIgnoreCase) ||
+                  string.Equals(normalizedPath, normalizedTempRoot, StringComparison.OrdinalIgnoreCase))))
+            {
+                continue;
+            }
+
+            if (normalizedPath.StartsWith(SandboxMountTable.WorkspaceVirtualRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedPath = normalizedPath[(SandboxMountTable.WorkspaceVirtualRoot.Length + 1)..];
+            }
+            else if (string.Equals(normalizedPath, SandboxMountTable.WorkspaceVirtualRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            else if (!string.IsNullOrWhiteSpace(wslLinuxWorkspace) &&
+                     normalizedPath.StartsWith(wslLinuxWorkspace + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedPath = normalizedPath[(wslLinuxWorkspace.Length + 1)..];
+            }
+            else if (!string.IsNullOrWhiteSpace(wslLinuxWorkspace) &&
+                     string.Equals(normalizedPath, wslLinuxWorkspace, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            else if (!string.IsNullOrWhiteSpace(normalizedWorkspace) &&
+                     normalizedPath.StartsWith(normalizedWorkspace + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedPath = normalizedPath[(normalizedWorkspace.Length + 1)..];
+            }
+            else if (!string.IsNullOrWhiteSpace(normalizedWorkspace) &&
+                     string.Equals(normalizedPath, normalizedWorkspace, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            normalizedPath = CanonicalizePosixPath(normalizedPath).TrimStart('/');
+            if (string.IsNullOrWhiteSpace(normalizedPath) ||
+                normalizedPath.StartsWith(BenchmarkPaths.DocsTasksPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            outOfScopePaths.Add(normalizedPath);
+        }
+
+        return outOfScopePaths.Count == 0
+            ? Array.Empty<string>()
+            : outOfScopePaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static string CanonicalizePosixPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return string.Empty;
+        }
+
+        bool isAbsolute = path.StartsWith('/');
+        var stack = new List<string>();
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".")
+            {
+                continue;
+            }
+
+            if (segment == "..")
+            {
+                if (stack.Count > 0 && stack[^1] != "..")
+                {
+                    stack.RemoveAt(stack.Count - 1);
+                }
+                else if (!isAbsolute)
+                {
+                    stack.Add("..");
+                }
+
+                continue;
+            }
+
+            stack.Add(segment);
+        }
+
+        var joined = string.Join('/', stack);
+        return isAbsolute ? "/" + joined : joined;
     }
 
     private static string BuildTaskDescription(
@@ -1112,8 +1295,32 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         int editFailures = 0;
         int csNavBashCalls = 0;
         int codeCondenserBashCalls = 0;
+        int antiCheatAlertCount = 0;
+        var antiCheatSignals = new HashSet<string>(StringComparer.Ordinal);
         int auditedBashCount = 0;
         var auditedBashCallIds = new HashSet<string>(StringComparer.Ordinal);
+
+        void InspectBashCommand(string command)
+        {
+            if (CsNavInvocationRegex().IsMatch(command))
+            {
+                csNavBashCalls++;
+            }
+            if (CodeCondenserInvocationRegex().IsMatch(command))
+            {
+                codeCondenserBashCalls++;
+            }
+
+            var signals = BenchmarkAntiCheatAuditor.DetectSignals(command);
+            if (signals.Count > 0)
+            {
+                antiCheatAlertCount++;
+                foreach (var signal in signals)
+                {
+                    antiCheatSignals.Add(signal);
+                }
+            }
+        }
 
         if (turns is { Count: > 0 })
         {
@@ -1158,14 +1365,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                         var (callId, auditedCommand) = ExtractBashAuditMetadata(turn.MetadataJson);
                         if (!string.IsNullOrWhiteSpace(auditedCommand))
                         {
-                            if (CsNavInvocationRegex().IsMatch(auditedCommand))
-                            {
-                                csNavBashCalls++;
-                            }
-                            if (CodeCondenserInvocationRegex().IsMatch(auditedCommand))
-                            {
-                                codeCondenserBashCalls++;
-                            }
+                            InspectBashCommand(auditedCommand);
                             if (!string.IsNullOrWhiteSpace(callId))
                             {
                                 auditedBashCallIds.Add(callId);
@@ -1197,14 +1397,7 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
                     continue;
                 }
 
-                if (CsNavInvocationRegex().IsMatch(command))
-                {
-                    csNavBashCalls++;
-                }
-                if (CodeCondenserInvocationRegex().IsMatch(command))
-                {
-                    codeCondenserBashCalls++;
-                }
+                InspectBashCommand(command);
             }
         }
 
@@ -1238,7 +1431,11 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
             ParameterEnvelopesUnwrapped = dispatchSnapshot.ParameterEnvelopesUnwrapped,
             OtherDispatcherRepairs = otherDispatcherRepairs,
             CsNavBashCalls = csNavBashCalls,
-            CodeCondenserBashCalls = codeCondenserBashCalls
+            CodeCondenserBashCalls = codeCondenserBashCalls,
+            AntiCheatAlertCount = antiCheatAlertCount,
+            AntiCheatSignals = antiCheatSignals.Count == 0
+                ? Array.Empty<string>()
+                : antiCheatSignals.OrderBy(s => s, StringComparer.Ordinal).ToList()
         };
     }
 
@@ -1295,6 +1492,32 @@ public sealed partial class CrucibleBenchmarkRunner : ICrucibleBenchmarkRunner
         catch (JsonException)
         {
             // Justification: malformed tool argument JSON yields no bash command match.
+            return null;
+        }
+    }
+
+    private static string? ExtractMutationTargetPathFromArguments(string? toolArguments)
+    {
+        if (string.IsNullOrWhiteSpace(toolArguments))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(toolArguments);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return TryGetStringPropertyIgnoreCase(doc.RootElement, "path")
+                ?? TryGetStringPropertyIgnoreCase(doc.RootElement, "file_path")
+                ?? TryGetStringPropertyIgnoreCase(doc.RootElement, "filePath");
+        }
+        catch (JsonException)
+        {
+            // Justification: malformed tool argument JSON yields no mutation path.
             return null;
         }
     }

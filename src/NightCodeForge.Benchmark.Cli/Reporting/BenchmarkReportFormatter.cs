@@ -56,7 +56,8 @@ public static class BenchmarkReportFormatter
         "Edit Failure %",
         "csnav Calls",
         "codecondenser Calls",
-        "Dispatcher Repairs"
+        "Dispatcher Repairs",
+        "Anti-Cheat Alerts"
     ];
 
     private static readonly IReadOnlyList<string> LanguageHeaders =
@@ -85,6 +86,7 @@ public static class BenchmarkReportFormatter
         "csnav Calls",
         "codecondenser Calls",
         "Dispatcher Repairs",
+        "Anti-Cheat Alerts",
         "Status"
     ];
 
@@ -198,7 +200,8 @@ public static class BenchmarkReportFormatter
                 FormatPercent(s.EditFailureRate),
                 s.TotalCsNavBashCalls.ToString(CultureInfo.InvariantCulture),
                 s.TotalCodeCondenserBashCalls.ToString(CultureInfo.InvariantCulture),
-                s.TotalDispatcherRepairs.ToString(CultureInfo.InvariantCulture)
+                s.TotalDispatcherRepairs.ToString(CultureInfo.InvariantCulture),
+                s.TotalAntiCheatAlerts.ToString(CultureInfo.InvariantCulture)
             ])
             .ToList();
 
@@ -326,7 +329,8 @@ public static class BenchmarkReportFormatter
                         edit_failure_rate = c.Summary.EditFailureRate - c.BaselineSummary.EditFailureRate,
                         csnav_calls = c.Summary.TotalCsNavBashCalls - c.BaselineSummary.TotalCsNavBashCalls,
                         codecondenser_calls = c.Summary.TotalCodeCondenserBashCalls - c.BaselineSummary.TotalCodeCondenserBashCalls,
-                        dispatcher_repairs = c.Summary.TotalDispatcherRepairs - c.BaselineSummary.TotalDispatcherRepairs
+                        dispatcher_repairs = c.Summary.TotalDispatcherRepairs - c.BaselineSummary.TotalDispatcherRepairs,
+                        anti_cheat_alerts = c.Summary.TotalAntiCheatAlerts - c.BaselineSummary.TotalAntiCheatAlerts
                     }
                 }).ToList(),
                 language_comparisons = languageComparisons.Select(lc => new
@@ -438,6 +442,7 @@ public static class BenchmarkReportFormatter
                 FormatIntWithDelta(s.TotalCsNavBashCalls, b?.TotalCsNavBashCalls),
                 FormatIntWithDelta(s.TotalCodeCondenserBashCalls, b?.TotalCodeCondenserBashCalls),
                 FormatIntWithDelta(s.TotalDispatcherRepairs, b?.TotalDispatcherRepairs),
+                FormatIntWithDelta(s.TotalAntiCheatAlerts, b?.TotalAntiCheatAlerts),
                 c.Status
             ];
         }).ToList();

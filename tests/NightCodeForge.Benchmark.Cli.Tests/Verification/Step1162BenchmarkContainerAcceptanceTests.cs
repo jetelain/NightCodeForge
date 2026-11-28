@@ -60,7 +60,7 @@ public sealed class Step1162BenchmarkContainerAcceptanceTests : IDisposable
         }
 
         var (factory, sdkDiscovery, _) = CreateRuntimeServices();
-        var validator = new BenchmarkToolchainPreflightValidator(sdkDiscovery, factory);
+        var validator = new BenchmarkToolchainPreflightValidator(sdkDiscovery, factory, Mock.Of<IBenchmarkCustomImageBuilder>());
 
         foreach (var category in new[] { BenchmarkProblemCategory.Implementation, BenchmarkProblemCategory.CodeReview })
         {

@@ -63,6 +63,7 @@ public sealed class BenchmarkCliDependencyInjectionTests
         var loader = sp.GetRequiredService<IBenchmarkDatasetLoader>();
         var importerRegistry = sp.GetRequiredService<IBenchmarkDatasetImporterRegistry>();
         var datasetValidator = sp.GetRequiredService<IBenchmarkDatasetValidator>();
+        var customImageBuilder = sp.GetRequiredService<IBenchmarkCustomImageBuilder>();
         var preflightValidator = sp.GetRequiredService<IBenchmarkToolchainPreflightValidator>();
         var workspaceManager = sp.GetRequiredService<IBenchmarkWorkspaceManager>();
         var verifier = sp.GetRequiredService<IBenchmarkVerifier>();
@@ -90,6 +91,7 @@ public sealed class BenchmarkCliDependencyInjectionTests
         Assert.NotNull(importerRegistry.GetImporter(BenchmarkDatasetSource.MultiSweBench));
         Assert.NotNull(importerRegistry.GetImporter(BenchmarkDatasetSource.SweBenchVerified));
         Assert.NotNull(datasetValidator);
+        Assert.NotNull(customImageBuilder);
         Assert.NotNull(preflightValidator);
         Assert.NotNull(workspaceManager);
         Assert.NotNull(verifier);

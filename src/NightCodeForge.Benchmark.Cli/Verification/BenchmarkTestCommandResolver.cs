@@ -888,12 +888,9 @@ internal static partial class BenchmarkTestCommandResolver
                    $"export PATH=\"{PythonVenvDir}/bin:$PATH\" && {WrapPosixCompoundBody(testCommand)}";
         }
 
-        return $"{caBundleExport} && {scmVersionGuard} && " +
-               "if ! pytest --version >/dev/null 2>&1; then " +
-               $"{staleVenvGuard}" +
-               $"{venvInstallBody} && " +
-               $"export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
-               $"fi && {WrapPosixCompoundBody(testCommand)}";
+        return $"{caBundleExport} && {scmVersionGuard} && {staleVenvGuard}" +
+               $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then {venvInstallBody}; fi && " +
+               $"export PATH=\"{PythonVenvDir}/bin:$PATH\" && {WrapPosixCompoundBody(testCommand)}";
     }
 
     private static string QuoteSinglePosix(string value) =>

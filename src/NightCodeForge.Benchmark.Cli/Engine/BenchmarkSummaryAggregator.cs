@@ -138,6 +138,7 @@ public static class BenchmarkSummaryAggregator
             TotalCsNavBashCalls = results.Sum(r => r.Telemetry.CsNavBashCalls),
             TotalCodeCondenserBashCalls = results.Sum(r => r.Telemetry.CodeCondenserBashCalls),
             TotalDispatcherRepairs = results.Sum(r => r.Telemetry.DispatcherRepairs),
+            TotalAntiCheatAlerts = results.Sum(r => r.Telemetry.AntiCheatAlertCount),
             ByLanguage = byLanguage
         };
     }

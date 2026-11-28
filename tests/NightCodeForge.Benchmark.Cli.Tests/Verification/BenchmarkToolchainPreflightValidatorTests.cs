@@ -20,7 +20,9 @@ public sealed class BenchmarkToolchainPreflightValidatorTests
         CustomContainerImage = customImage
     };
 
-    private static BenchmarkToolchainPreflightValidator CreateValidator(HostSdkDiscoveryDetails details)
+    private static BenchmarkToolchainPreflightValidator CreateValidator(
+        HostSdkDiscoveryDetails details,
+        IBenchmarkCustomImageBuilder? customImageBuilder = null)
     {
         var sdkService = new Mock<IHostSdkDiscoveryService>();
         sdkService
@@ -30,7 +32,10 @@ public sealed class BenchmarkToolchainPreflightValidatorTests
         var containerFactory = new Mock<IContainerEnvironmentFactory>();
         containerFactory.SetupGet(f => f.DefaultWslDistribution).Returns("Ubuntu-24.04");
 
-        return new BenchmarkToolchainPreflightValidator(sdkService.Object, containerFactory.Object);
+        return new BenchmarkToolchainPreflightValidator(
+            sdkService.Object,
+            containerFactory.Object,
+            customImageBuilder ?? Mock.Of<IBenchmarkCustomImageBuilder>());
     }
 
     [Fact]
@@ -129,7 +134,10 @@ public sealed class BenchmarkToolchainPreflightValidatorTests
     {
         var sdkService = new Mock<IHostSdkDiscoveryService>(MockBehavior.Strict);
         var containerFactory = new Mock<IContainerEnvironmentFactory>();
-        var validator = new BenchmarkToolchainPreflightValidator(sdkService.Object, containerFactory.Object);
+        var validator = new BenchmarkToolchainPreflightValidator(
+            sdkService.Object,
+            containerFactory.Object,
+            Mock.Of<IBenchmarkCustomImageBuilder>());
 
         var instance = new BenchmarkInstance
         {
@@ -275,5 +283,74 @@ public sealed class BenchmarkToolchainPreflightValidatorTests
 
         Assert.NotNull(error);
         Assert.Contains("RUSTUP_HOME", error);
+    }
+
+    [Theory]
+    [InlineData(BenchmarkProblemCategory.Implementation)]
+    [InlineData(BenchmarkProblemCategory.CodeReview)]
+    [InlineData(BenchmarkProblemCategory.TaskReview)]
+    public async Task ValidateAsync_WhenCustomImageIsManagedPythonChildImageInContainerSandbox_EnsuresImageAcrossAllCategories(
+        BenchmarkProblemCategory category)
+    {
+        var imageBuilder = new Mock<IBenchmarkCustomImageBuilder>();
+        imageBuilder.Setup(b => b.IsManagedBenchmarkImage(BenchmarkContainerImages.Python311ChildImage)).Returns(true);
+        imageBuilder.Setup(b => b.EnsureImageAsync(BenchmarkContainerImages.Python311ChildImage, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var sdkService = new Mock<IHostSdkDiscoveryService>(MockBehavior.Strict);
+        var validator = new BenchmarkToolchainPreflightValidator(
+            sdkService.Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            imageBuilder.Object);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = $"py-{category}",
+            Category = category,
+            Language = BenchmarkLanguages.Python,
+            Repo = "psf/requests",
+            BaseCommit = "abc123",
+            ProblemStatement = "Fix python",
+            CustomContainerImage = BenchmarkContainerImages.Python311ChildImage
+        };
+
+        var error = await validator.ValidateAsync(instance, category, ExecutionMode.ContainerSandbox);
+        Assert.Null(error);
+        imageBuilder.Verify(b => b.EnsureImageAsync(BenchmarkContainerImages.Python311ChildImage, It.IsAny<CancellationToken>()), Times.Once);
+
+        // BareHost mode must skip container image provisioning
+        var bareError = await validator.ValidateAsync(instance, category, ExecutionMode.BareHost);
+        Assert.Null(bareError);
+        imageBuilder.Verify(b => b.EnsureImageAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ValidateAsync_WhenCustomImageBuildFails_ReturnsFailFastErrorMessage()
+    {
+        var imageBuilder = new Mock<IBenchmarkCustomImageBuilder>();
+        imageBuilder.Setup(b => b.IsManagedBenchmarkImage(BenchmarkContainerImages.Python311ChildImage)).Returns(true);
+        imageBuilder.Setup(b => b.EnsureImageAsync(BenchmarkContainerImages.Python311ChildImage, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new BenchmarkException("Failed to build benchmark custom image 'ncf-bench-python-3.11:v1' (exit code 1): apt-get failed"));
+
+        var validator = new BenchmarkToolchainPreflightValidator(
+            new Mock<IHostSdkDiscoveryService>(MockBehavior.Strict).Object,
+            new Mock<IContainerEnvironmentFactory>().Object,
+            imageBuilder.Object);
+
+        var instance = new BenchmarkInstance
+        {
+            InstanceId = "py-build-fail",
+            Category = BenchmarkProblemCategory.Implementation,
+            Language = BenchmarkLanguages.Python,
+            Repo = "psf/requests",
+            BaseCommit = "abc123",
+            ProblemStatement = "Fix python",
+            CustomContainerImage = BenchmarkContainerImages.Python311ChildImage
+        };
+
+        var error = await validator.ValidateAsync(instance, BenchmarkProblemCategory.Implementation, ExecutionMode.ContainerSandbox);
+        Assert.NotNull(error);
+        Assert.Contains("ncf-bench-python-3.11:v1", error);
+        Assert.Contains("apt-get failed", error);
     }
 }
