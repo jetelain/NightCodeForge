@@ -724,4 +724,113 @@ public class QuestionItemParserTests
         Assert.Equal(["1", "2", "3"], parsed[0].Options);
         Assert.Equal(["5", "10"], parsed[1].Options);
     }
+
+    [Fact]
+    public void RootQuestionProse_And_NullQuestionWithSiblingPrompt_PreserveSiblingsAcrossParsers()
+    {
+        // 1. Root "question" with bracketed prose preserves sibling options and rationale
+        const string bracketedJson = """{"question": "[Auth] Use JWT or cookies?", "options": ["JWT", "Cookies"], "rationale": "Session design"}""";
+        using var bracketedDoc = JsonDocument.Parse(bracketedJson);
+
+        Assert.True(QuestionItemParser.TryBindAskQuestions(bracketedDoc.RootElement, out var boundFromEl));
+        var boundItem = Assert.Single(boundFromEl!);
+        Assert.Equal("[Auth] Use JWT or cookies?", boundItem.Prompt);
+        Assert.Equal("Session design", boundItem.Rationale);
+        Assert.Equal(["JWT", "Cookies"], boundItem.Options);
+
+        var bracketedDict = new Dictionary<string, object?>
+        {
+            ["question"] = "[Auth] Use JWT or cookies?",
+            ["options"] = new[] { "JWT", "Cookies" },
+            ["rationale"] = "Session design"
+        };
+        Assert.True(QuestionItemParser.TryBindAskQuestions(bracketedDict, out var boundFromDict));
+        Assert.Equal(boundItem.Prompt, Assert.Single(boundFromDict!).Prompt);
+        Assert.Equal(["JWT", "Cookies"], boundFromDict![0].Options);
+        Assert.Equal("Session design", boundFromDict[0].Rationale);
+
+        var parsedFromObj = QuestionItemParser.ParseFromObject(bracketedDict);
+        Assert.Single(parsedFromObj!);
+        Assert.Equal(["JWT", "Cookies"], parsedFromObj![0].Options);
+        Assert.Equal("Session design", parsedFromObj[0].Rationale);
+
+        var parsedFromJson = QuestionItemParser.ParseFromJsonElement(bracketedDoc.RootElement);
+        Assert.Single(parsedFromJson);
+        Assert.Equal(["JWT", "Cookies"], parsedFromJson[0].Options);
+        Assert.Equal("Session design", parsedFromJson[0].Rationale);
+
+        // 2. Root "question" with braced prose preserves sibling options
+        using var bracedDoc = JsonDocument.Parse("""{"question": "{env} default to prod?", "options": ["Yes", "No"]}""");
+        Assert.True(QuestionItemParser.TryBindAskQuestions(bracedDoc.RootElement, out var bracedBound));
+        Assert.Equal("{env} default to prod?", Assert.Single(bracedBound!).Prompt);
+        Assert.Equal(["Yes", "No"], bracedBound![0].Options);
+
+        // 3. Single-item JSON encoded inside "question" merges enclosing options and rationale
+        using var nestedDoc = JsonDocument.Parse("""{"question": "{\"prompt\": \"Use JWT?\"}", "options": ["JWT", "Cookies"], "rationale": "Session"}""");
+        Assert.True(QuestionItemParser.TryBindAskQuestions(nestedDoc.RootElement, out var nestedBound));
+        var nestedItem = Assert.Single(nestedBound!);
+        Assert.Equal("Use JWT?", nestedItem.Prompt);
+        Assert.Equal("Session", nestedItem.Rationale);
+        Assert.Equal(["JWT", "Cookies"], nestedItem.Options);
+
+        var nestedObj = new Dictionary<string, object?>
+        {
+            ["question"] = """{"prompt": "Use JWT?"}""",
+            ["options"] = new[] { "JWT", "Cookies" },
+            ["rationale"] = "Session"
+        };
+        var parsedNestedObj = QuestionItemParser.ParseFromObject(nestedObj);
+        Assert.Single(parsedNestedObj!);
+        Assert.Equal(["JWT", "Cookies"], parsedNestedObj![0].Options);
+        Assert.Equal("Session", parsedNestedObj[0].Rationale);
+
+        // 4. "question": null with sibling "prompt" must not shadow "prompt"
+        using var nullQuestionDoc = JsonDocument.Parse("""{"question": null, "prompt": "Real question?"}""");
+        Assert.True(QuestionItemParser.TryBindAskQuestions(nullQuestionDoc.RootElement, out var nullQuestionBound));
+        Assert.Equal("Real question?", Assert.Single(nullQuestionBound!).Prompt);
+
+        var nullQuestionDict = new Dictionary<string, object?>
+        {
+            ["question"] = null,
+            ["prompt"] = "Real question?"
+        };
+        Assert.True(QuestionItemParser.TryBindAskQuestions(nullQuestionDict, out var nullQuestionDictBound));
+        Assert.Equal("Real question?", Assert.Single(nullQuestionDictBound!).Prompt);
+
+        // 5. "question": null with sibling "items" must not shadow "items"
+        using var nullQuestionItemsDoc = JsonDocument.Parse("""{"question": null, "items": [{"prompt": "From items?"}]}""");
+        Assert.True(QuestionItemParser.TryBindAskQuestions(nullQuestionItemsDoc.RootElement, out var nullItemsBound));
+        Assert.Equal("From items?", Assert.Single(nullItemsBound!).Prompt);
+
+        var nullQuestionItemsDict = new Dictionary<string, object?>
+        {
+            ["question"] = null,
+            ["items"] = new[] { new Dictionary<string, object?> { ["prompt"] = "From items?" } }
+        };
+        Assert.True(QuestionItemParser.TryBindAskQuestions(nullQuestionItemsDict, out var nullItemsDictBound));
+        Assert.Equal("From items?", Assert.Single(nullItemsDictBound!).Prompt);
+
+        // 6. List of dictionaries with single-item nested JSON merges outer options/rationale,
+        //    and blank inner rationale/empty inner options fall back to outer values.
+        var listWithNestedDict = new object?[]
+        {
+            new Dictionary<string, object?>
+            {
+                ["prompt"] = """{"prompt": "Nested Q?", "rationale": "", "options": []}""",
+                ["options"] = new[] { "Opt1", "Opt2" },
+                ["rationale"] = "Outer rationale"
+            }
+        };
+        var parsedListObj = QuestionItemParser.ParseFromObject(listWithNestedDict);
+        var mergedListItem = Assert.Single(parsedListObj!);
+        Assert.Equal("Nested Q?", mergedListItem.Prompt);
+        Assert.Equal("Outer rationale", mergedListItem.Rationale);
+        Assert.Equal(["Opt1", "Opt2"], mergedListItem.Options);
+
+        using var blankInnerDoc = JsonDocument.Parse("""{"question": "{\"prompt\": \"Use JWT?\", \"rationale\": \"\", \"options\": []}", "options": ["JWT", "Cookies"], "rationale": "Session"}""");
+        Assert.True(QuestionItemParser.TryBindAskQuestions(blankInnerDoc.RootElement, out var blankInnerBound));
+        var blankInnerItem = Assert.Single(blankInnerBound!);
+        Assert.Equal("Session", blankInnerItem.Rationale);
+        Assert.Equal(["JWT", "Cookies"], blankInnerItem.Options);
+    }
 }

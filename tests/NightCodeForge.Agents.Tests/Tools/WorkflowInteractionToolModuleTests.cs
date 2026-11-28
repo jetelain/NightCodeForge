@@ -220,6 +220,49 @@ public class WorkflowInteractionToolModuleTests
     }
 
     [Fact]
+    public async Task AskAIFunction_RewritesNonListEnumerableQuestionsUnderCanonicalKey_AndPrefersExactQuestionsKey()
+    {
+        var module = new WorkflowInteractionToolModule();
+        IReadOnlyList<QuestionItem>? captured = null;
+        module.AskHandler = (qs, _) =>
+        {
+            captured = qs;
+            return Task.FromResult("ok");
+        };
+
+        var askFn = module.CreateFunctions().Single(f => f.Name == CanonicalToolNames.Ask);
+
+        // 1. HashSet<QuestionItem> under canonical "questions" key must be materialized into IReadOnlyList<QuestionItem>
+        var hashSetQuestions = new HashSet<QuestionItem> { new("Pick cache?") };
+        var hashSetResult = await askFn.InvokeAsync(new AIFunctionArguments { ["questions"] = hashSetQuestions });
+        Assert.Equal("ok", hashSetResult?.ToString());
+        Assert.Equal("Pick cache?", Assert.Single(captured!).Prompt);
+
+        // 2. Deferred IEnumerable<QuestionItem> iterator under canonical "questions" key must bind cleanly
+        IEnumerable<QuestionItem> deferredQuestions = new[] { "Pick region?" }.Select(p => new QuestionItem(p));
+        var deferredResult = await askFn.InvokeAsync(new AIFunctionArguments { ["questions"] = deferredQuestions });
+        Assert.Equal("ok", deferredResult?.ToString());
+        Assert.Equal("Pick region?", Assert.Single(captured!).Prompt);
+
+        // 3. When both "Questions" and exact "questions" are present, exact "questions" wins
+        var result = await askFn.InvokeAsync(new AIFunctionArguments
+        {
+            ["Questions"] = new[] { new QuestionItem("Stale key?") },
+            ["questions"] = new[] { new QuestionItem("Canonical key?") }
+        });
+        Assert.Equal("ok", result?.ToString());
+        Assert.Equal("Canonical key?", Assert.Single(captured!).Prompt);
+
+        // 4. Case-variant "Questions" with IReadOnlyList<QuestionItem> still rewrites to canonical "questions"
+        var caseVariantResult = await askFn.InvokeAsync(new AIFunctionArguments
+        {
+            ["Questions"] = new[] { new QuestionItem("Case variant?") }
+        });
+        Assert.Equal("ok", caseVariantResult?.ToString());
+        Assert.Equal("Case variant?", Assert.Single(captured!).Prompt);
+    }
+
+    [Fact]
     public async Task DiagnosticBindingAIFunction_PropagatesCancellationAndDomainExceptions()
     {
         var cancellingFn = DiagnosticBindingAIFunction.Wrap(AIFunctionFactory.Create(
@@ -544,6 +587,88 @@ public class WorkflowInteractionToolModuleTests
 
         var missingRequiredResult = await argThrowingCustomFn.InvokeAsync(new AIFunctionArguments());
         Assert.StartsWith("Error: Invalid arguments for tool 'custom_schema_tool' (parameter 'mode')", missingRequiredResult?.ToString());
+    }
+
+    [Fact]
+    public async Task DiagnosticBindingAIFunction_HandlesRecursiveUnionSchema_AIParameterName_AndNonNumericDashStrings()
+    {
+        // 1. Recursive self-referencing anyOf/oneOf schemas must terminate cleanly at MaxSchemaDepth instead of overflowing.
+        var recursiveFn = DiagnosticBindingAIFunction.Wrap(new RecursiveUnionSchemaAIFunction());
+        var recursiveResult = await recursiveFn.InvokeAsync(new AIFunctionArguments());
+        var recursiveText = recursiveResult?.ToString() ?? string.Empty;
+        Assert.StartsWith("Error: Invalid arguments for tool 'recursive_union_tool'", recursiveText);
+        Assert.Contains("anyNode", recursiveText);
+        Assert.Contains("oneNode", recursiveText);
+        Assert.Contains("any", recursiveText);
+
+        // 2. [AIParameterName] must be used as the schema parameter name on binding diagnostics.
+#pragma warning disable MEAI001
+        var renamedFn = DiagnosticBindingAIFunction.Wrap(AIFunctionFactory.Create(
+            ([AIParameterName("custom_arg")] int count) => count.ToString(),
+            "renamed_param_tool",
+            "Tests AIParameterNameAttribute resolution"));
+#pragma warning restore MEAI001
+        var renamedResult = await renamedFn.InvokeAsync(new AIFunctionArguments { ["custom_arg"] = "not-a-number" });
+        Assert.StartsWith("Error: Invalid arguments for tool 'renamed_param_tool' (parameter 'custom_arg'", renamedResult?.ToString());
+
+        // 3. Non-numeric leading-dash strings (e.g. "--flag") must not be treated as JSON and still produce binding errors,
+        //    while valid numeric strings like "42" bind cleanly and propagate inner body exceptions.
+        var numericCheckFn = DiagnosticBindingAIFunction.Wrap(AIFunctionFactory.Create(
+            (int count) => count == 42
+                ? throw new ArgumentException("Inner body rejection", "internalCount")
+                : count.ToString(),
+            "numeric_or_dash_tool",
+            "Tests dash-prefixed string classification"));
+
+        var flagResult = await numericCheckFn.InvokeAsync(new AIFunctionArguments { ["count"] = "--flag" });
+        Assert.StartsWith("Error: Invalid arguments for tool 'numeric_or_dash_tool' (parameter 'count'", flagResult?.ToString());
+
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await numericCheckFn.InvokeAsync(new AIFunctionArguments { ["count"] = "42" }));
+
+        var negativeNumericFn = DiagnosticBindingAIFunction.Wrap(AIFunctionFactory.Create(
+            (int count) => count == -42
+                ? throw new ArgumentException("Negative integer bound cleanly", "internalCount")
+                : count.ToString(),
+            "negative_numeric_tool",
+            "Tests negative numeric string classification"));
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await negativeNumericFn.InvokeAsync(new AIFunctionArguments { ["count"] = "-42" }));
+    }
+
+    private sealed class RecursiveUnionSchemaAIFunction : AIFunction
+    {
+        private static readonly JsonElement Schema = JsonDocument.Parse("""
+        {
+            "$defs": {
+                "anyNode": {
+                    "anyOf": [
+                        { "$ref": "#/$defs/anyNode" },
+                        { "type": "string" }
+                    ]
+                },
+                "oneNode": {
+                    "oneOf": [
+                        { "$ref": "#/$defs/oneNode" },
+                        { "type": "string" }
+                    ]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "anyNode": { "$ref": "#/$defs/anyNode" },
+                "oneNode": { "$ref": "#/$defs/oneNode" }
+            },
+            "required": ["anyNode", "oneNode"]
+        }
+        """).RootElement.Clone();
+
+        public override string Name => "recursive_union_tool";
+        public override string Description => "Tests recursive union schema formatting";
+        public override JsonElement JsonSchema => Schema;
+
+        protected override ValueTask<object?> InvokeCoreAsync(AIFunctionArguments arguments, CancellationToken cancellationToken) =>
+            throw new JsonException("Invalid recursive payload");
     }
 
     private sealed class CustomSchemaBodyThrowingAIFunction(Func<object?> body) : AIFunction

@@ -603,6 +603,76 @@ public class CrucibleAgentHarnessReviewFixesTests : IDisposable
         Assert.DoesNotContain("<request_changes>", CrucibleAgentHarness.BuildReviewDirective(hasRequestChangesTool: true), StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Step1166_CompleteWithRequestChanges_FlushesBufferedAssistantTextIntoStateAndTranscript()
+    {
+        var repo = new InMemoryTaskRepository();
+        var workspace = new Workspace { Id = 1, RepositoryPath = _tempDir };
+        var task = new ForgeTask
+        {
+            Id = 404,
+            WorkspaceId = workspace.Id,
+            Title = "Flush on request_changes",
+            Description = "Verify buffered turn text is flushed"
+        };
+
+        var client = new ScriptedChatClient((messages, options, ct) =>
+        {
+            var rcArgs = new Dictionary<string, object?>
+            {
+                ["feedback"] = "Fix null handling",
+                ["reason"] = "Possible NullReferenceException"
+            };
+            // Single ChatResponseUpdate: FunctionCallContent runs first (tool throws RequestChangesException),
+            // leaving TextReasoningContent and TextContent buffered in accumulatedText/accumulatedReasoning until
+            // CompleteWithRequestChangesAsync calls FlushTurnToHistory().
+            return Task.FromResult<IReadOnlyList<ChatResponseUpdate>>(
+            [
+                new ChatResponseUpdate
+                {
+                    Contents =
+                    [
+                        new FunctionCallContent("call_rc_flush", CanonicalToolNames.RequestChanges, rcArgs),
+                        new TextReasoningContent("Buffered reasoning before rejection."),
+                        new TextContent("Pre-rejection review analysis in same turn.")
+                    ]
+                }
+            ]);
+        });
+        var harness = CreateHarness(client, repo: repo);
+
+        var profile = new AgentProfile
+        {
+            Id = "reviewer",
+            Mode = AgentMode.Full,
+            PermittedTools = [CanonicalToolNames.RequestChanges]
+        };
+        var context = new AgentSessionContext
+        {
+            ForgeTask = task,
+            Workspace = workspace,
+            Profile = profile,
+            StageId = StandardStageIds.CodeReviewAndFix,
+            RequiredMode = AgentMode.Full,
+            WorkspacePath = _tempDir,
+            BootstrapPrompt = string.Empty
+        };
+
+        var result = await harness.RunStageAsync(context);
+
+        Assert.Equal(AgentRunStatus.Completed, result.Status);
+        Assert.Equal("Fix null handling", result.ReviewerFeedback);
+        Assert.Contains("Pre-rejection review analysis in same turn.", result.UpdatedState);
+        Assert.Contains("Buffered reasoning before rejection.", result.UpdatedState);
+
+        var transcriptDir = Path.Combine(_tempDir, "docs", "transcripts");
+        Assert.True(Directory.Exists(transcriptDir));
+        var transcriptFile = Assert.Single(Directory.GetFiles(transcriptDir, "*.md"));
+        var transcriptText = await File.ReadAllTextAsync(transcriptFile);
+        Assert.Contains("Pre-rejection review analysis in same turn.", transcriptText);
+        Assert.Contains("Buffered reasoning before rejection.", transcriptText);
+    }
+
     // ---------- Helpers ----------
 
     private AgentSessionContext NewContext(AgentProfile? profile = null, string? state = null, string? bootstrap = null)

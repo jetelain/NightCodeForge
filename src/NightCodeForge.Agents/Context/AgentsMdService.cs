@@ -12,10 +12,10 @@ namespace NightCodeForge.Agents.Context;
 /// </summary>
 public partial class AgentsMdService
 {
-    [GeneratedRegex(@"(?:^|\s)--no-incremental(?=\s|$|[;&|])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?:^|[ \t])--no-incremental(?=\s|$|[;&|])", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline)]
     private static partial Regex NoIncrementalFlagRegex();
 
-    [GeneratedRegex(@"\s{2,}", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"(?<=[^ \t\r\n])[ \t]{2,}", RegexOptions.CultureInvariant)]
     private static partial Regex MultipleSpacesRegex();
     private static readonly string[] RuleCandidatePaths =
     [
@@ -313,6 +313,11 @@ public partial class AgentsMdService
         if (string.IsNullOrWhiteSpace(command))
         {
             return string.Empty;
+        }
+
+        if (!NoIncrementalFlagRegex().IsMatch(command))
+        {
+            return command.Trim();
         }
 
         var stripped = NoIncrementalFlagRegex().Replace(command, " ");

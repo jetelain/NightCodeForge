@@ -547,6 +547,7 @@ public class AttachmentPersistenceAndSandboxMountTests : IDisposable
 
     private static Task<string?> DetectDriftAsync(ContainerExecutorOptions options, string mountInspectOutput)
     {
+        var isOffline = options.IsRestrictedReadOnly || options.DisableNetwork;
         var runnerMock = new Mock<IProcessRunner>();
         runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Mounts}}{{.Destination}}={{.Source}}={{.RW}};{{end}}")), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(0, mountInspectOutput, string.Empty));
@@ -554,10 +555,14 @@ public class AttachmentPersistenceAndSandboxMountTests : IDisposable
             .ReturnsAsync(new ProcessExecutionResult(0, "alpine\n", string.Empty));
         runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.Config.User}}")), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ProcessExecutionResult(0, ContainerExecutorOptions.RestrictedReadOnlyUserUidGid + "\n", string.Empty));
+        runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, options.IsRestrictedReadOnly ? "true\n" : "false\n", string.Empty));
         runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}")), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProcessExecutionResult(0, "none\n", string.Empty));
+            .ReturnsAsync(new ProcessExecutionResult(0, isOffline ? "none\n" : "bridge\n", string.Empty));
+        runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .HostConfig.ExtraHosts}}{{.}};{{end}}")), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
         runnerMock.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}")), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ProcessExecutionResult(0, "npm_config_offline=true\nNPM_CONFIG_OFFLINE=true\n", string.Empty));
+            .ReturnsAsync(new ProcessExecutionResult(0, isOffline ? "npm_config_offline=true\nNPM_CONFIG_OFFLINE=true\n" : string.Empty, string.Empty));
 
         return ContainerMountAndDriftBuilder.DetectContainerDriftAsync(runnerMock.Object, options);
     }

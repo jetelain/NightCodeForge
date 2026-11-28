@@ -193,7 +193,7 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
     }
 
     private static string ResolveParameterSchemaName(ParameterInfo parameter) =>
-        parameter.GetCustomAttribute<System.Text.Json.Serialization.JsonPropertyNameAttribute>()?.Name
+        parameter.GetCustomAttribute<AIParameterNameAttribute>(inherit: true)?.Name
         ?? parameter.Name
         ?? string.Empty;
 
@@ -272,7 +272,7 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
         char c = trimmed[0];
         return c is '"' or '[' or '{' ||
                char.IsAsciiDigit(c) ||
-               c == '-' ||
+               (c == '-' && trimmed.Length > 1 && char.IsAsciiDigit(trimmed[1])) ||
                trimmed.StartsWith("null", StringComparison.Ordinal) ||
                trimmed.StartsWith("true", StringComparison.Ordinal) ||
                trimmed.StartsWith("false", StringComparison.Ordinal) ||
@@ -689,7 +689,7 @@ public sealed class DiagnosticBindingAIFunction : DelegatingAIFunction
                 {
                     continue;
                 }
-                nonNullBranches.Add(FormatSchemaType(branch, rootSchema, depth));
+                nonNullBranches.Add(FormatSchemaType(branch, rootSchema, depth + 1));
             }
 
             if (nonNullBranches.Count > 0)

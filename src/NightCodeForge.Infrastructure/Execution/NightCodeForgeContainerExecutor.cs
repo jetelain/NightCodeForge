@@ -43,6 +43,7 @@ public class ContainerExecutorOptions
     public const string ManagedBaseImageLocale = "en_US.UTF-8";
     public const string CustomImageFallbackLocale = "C.UTF-8";
     public const string CargoHomeEnvVarName = "CARGO_HOME";
+    public const string RustupHomeEnvVarName = "RUSTUP_HOME";
     public const string ContainerCargoCachePath = "/cache/cargo";
     public const string DefaultCargoCachePath = "~/.cache/ncf-cargo";
     public const string DotNetRollForwardEnvVar = "DOTNET_ROLL_FORWARD";

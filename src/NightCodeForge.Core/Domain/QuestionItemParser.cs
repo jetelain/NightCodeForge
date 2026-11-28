@@ -7,10 +7,12 @@ namespace NightCodeForge.Core.Domain;
 /// </summary>
 public static class QuestionItemParser
 {
+    private const string SingularQuestionKey = "question";
+
     private static readonly string[] QuestionKeys =
     [
         "questions",
-        "question",
+        SingularQuestionKey,
         "items",
         "question_items",
         "questionItems"
@@ -205,17 +207,15 @@ public static class QuestionItemParser
         {
             foreach (var qk in QuestionKeys)
             {
-                if (TryGetValueIgnoreCase(singleDict, qk, out var nested) && nested != null && !ReferenceEquals(nested, singleDict))
+                if (TryGetValueIgnoreCase(singleDict, qk, out var nested) && !ReferenceEquals(nested, singleDict))
                 {
-                    var nestedScalar = nested switch
+                    if (string.Equals(qk, SingularQuestionKey, StringComparison.OrdinalIgnoreCase) &&
+                        nested is null or string or JsonElement { ValueKind: JsonValueKind.String or JsonValueKind.Null or JsonValueKind.Undefined })
                     {
-                        string s => s,
-                        JsonElement nestedJe when nestedJe.ValueKind == JsonValueKind.String => nestedJe.GetString(),
-                        _ => null
-                    };
-                    if (string.Equals(qk, "question", StringComparison.OrdinalIgnoreCase) &&
-                        nestedScalar != null &&
-                        !LooksLikeJsonOrCodeFence(nestedScalar))
+                        continue;
+                    }
+
+                    if (nested == null)
                     {
                         continue;
                     }
@@ -231,18 +231,27 @@ public static class QuestionItemParser
             string prompt = GetQuestionPrompt(singleDict);
             if (!string.IsNullOrWhiteSpace(prompt))
             {
+                string? rationale = GetQuestionRationale(singleDict);
+                var options = ExtractOptionsFromDictionary(singleDict);
+
                 var trimmed = prompt.TrimStart();
                 if (trimmed.StartsWith('{') || trimmed.StartsWith('[') || trimmed.StartsWith("```", StringComparison.Ordinal))
                 {
                     var inner = TryParseQuestionsFromJsonString(prompt, requireJsonPrefix: true);
                     if (inner != null && inner.Count > 0)
                     {
+                        if (inner.Count == 1)
+                        {
+                            return new List<QuestionItem>
+                            {
+                                MergeSingleNestedQuestion(inner[0], rationale, options)
+                            };
+                        }
+
                         return inner;
                     }
                 }
 
-                string? rationale = GetQuestionRationale(singleDict);
-                var options = ExtractOptionsFromDictionary(singleDict);
                 return new List<QuestionItem> { new(prompt, rationale, options) };
             }
         }
@@ -261,19 +270,27 @@ public static class QuestionItemParser
                     string prompt = GetQuestionPrompt(d);
                     if (!string.IsNullOrWhiteSpace(prompt))
                     {
+                        string? rationale = GetQuestionRationale(d);
+                        var options = ExtractOptionsFromDictionary(d);
+
                         var trimmed = prompt.TrimStart();
                         if (trimmed.StartsWith('{') || trimmed.StartsWith('[') || trimmed.StartsWith("```", StringComparison.Ordinal))
                         {
                             var inner = TryParseQuestionsFromJsonString(prompt, requireJsonPrefix: true);
                             if (inner != null && inner.Count > 0)
                             {
-                                result.AddRange(inner);
+                                if (inner.Count == 1)
+                                {
+                                    result.Add(MergeSingleNestedQuestion(inner[0], rationale, options));
+                                }
+                                else
+                                {
+                                    result.AddRange(inner);
+                                }
                                 continue;
                             }
                         }
 
-                        string? rationale = GetQuestionRationale(d);
-                        var options = ExtractOptionsFromDictionary(d);
                         result.Add(new QuestionItem(prompt, rationale, options));
                     }
                 }
@@ -364,7 +381,8 @@ public static class QuestionItemParser
                         {
                             var mergedOptions = (first.Options is { Count: > 0 } ? NormalizeOptionsList(first.Options) : null)
                                 ?? NormalizeOptionsList(item.Options);
-                            result.Add(new QuestionItem(first.Prompt, first.Rationale ?? item.Rationale, mergedOptions));
+                            var mergedRationale = !string.IsNullOrWhiteSpace(first.Rationale) ? first.Rationale : item.Rationale;
+                            result.Add(new QuestionItem(first.Prompt, mergedRationale, mergedOptions));
                         }
                         else
                         {
@@ -447,6 +465,11 @@ public static class QuestionItemParser
                     }
                     if (prop.ValueKind == JsonValueKind.String)
                     {
+                        if (string.Equals(key, SingularQuestionKey, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         var str = prop.GetString();
                         if (!string.IsNullOrWhiteSpace(str))
                         {
@@ -456,10 +479,7 @@ public static class QuestionItemParser
                                 return parsed;
                             }
 
-                            if (!string.Equals(key, "question", StringComparison.OrdinalIgnoreCase))
-                            {
-                                return new List<QuestionItem> { new(str) };
-                            }
+                            return new List<QuestionItem> { new(str) };
                         }
                     }
                     if (prop.ValueKind == JsonValueKind.Object)
@@ -568,6 +588,18 @@ public static class QuestionItemParser
 
         if (el.ValueKind == JsonValueKind.Object)
         {
+            string? rationale = null;
+            foreach (var rk in RationaleKeys)
+            {
+                if (TryGetPropertyIgnoreCase(el, rk, out var rProp) && rProp.ValueKind == JsonValueKind.String)
+                {
+                    rationale = rProp.GetString();
+                    break;
+                }
+            }
+
+            var options = ParseOptionsFromJsonElement(el);
+
             string prompt = string.Empty;
             foreach (var pk in PromptKeys)
             {
@@ -584,6 +616,14 @@ public static class QuestionItemParser
                                 var innerItems = TryParseQuestionsFromJsonString(pStr, requireJsonPrefix: true);
                                 if (innerItems is { Count: > 0 })
                                 {
+                                    if (innerItems.Count == 1)
+                                    {
+                                        return new List<QuestionItem>
+                                        {
+                                            MergeSingleNestedQuestion(innerItems[0], rationale, options)
+                                        };
+                                    }
+
                                     return innerItems;
                                 }
                             }
@@ -601,18 +641,6 @@ public static class QuestionItemParser
                     }
                 }
             }
-
-            string? rationale = null;
-            foreach (var rk in RationaleKeys)
-            {
-                if (TryGetPropertyIgnoreCase(el, rk, out var rProp) && rProp.ValueKind == JsonValueKind.String)
-                {
-                    rationale = rProp.GetString();
-                    break;
-                }
-            }
-
-            var options = ParseOptionsFromJsonElement(el);
 
             if (!string.IsNullOrWhiteSpace(prompt))
             {
@@ -840,18 +868,20 @@ public static class QuestionItemParser
                             continue;
                         }
 
-                        if (string.Equals(key, "question", StringComparison.OrdinalIgnoreCase) &&
+                        if (string.Equals(key, SingularQuestionKey, StringComparison.OrdinalIgnoreCase) &&
                             prop.ValueKind == JsonValueKind.String)
                         {
-                            var qStr = prop.GetString();
-                            if (qStr == null || !LooksLikeJsonOrCodeFence(qStr))
-                            {
-                                continue;
-                            }
+                            continue;
                         }
 
                         if (prop.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
                         {
+                            if (string.Equals(key, SingularQuestionKey, StringComparison.OrdinalIgnoreCase) &&
+                                HasOtherNonNullPromptProperty(el, key))
+                            {
+                                continue;
+                            }
+
                             questions = Array.Empty<QuestionItem>();
                             return true;
                         }
@@ -981,7 +1011,7 @@ public static class QuestionItemParser
                         {
                             questions = new[]
                             {
-                                new QuestionItem(first.Prompt, first.Rationale ?? rationale, first.Options ?? options)
+                                MergeSingleNestedQuestion(first, rationale, options)
                             };
                             return true;
                         }
@@ -1016,6 +1046,54 @@ public static class QuestionItemParser
 
         questions = new[] { new QuestionItem(prompt, rationale, options) };
         return true;
+    }
+
+    private static QuestionItem MergeSingleNestedQuestion(
+        QuestionItem inner,
+        string? outerRationale,
+        IReadOnlyList<string>? outerOptions)
+    {
+        var effectiveRationale = !string.IsNullOrWhiteSpace(inner.Rationale) ? inner.Rationale : outerRationale;
+        var effectiveOptions = inner.Options is { Count: > 0 } ? inner.Options : outerOptions;
+        return new QuestionItem(inner.Prompt, effectiveRationale, effectiveOptions);
+    }
+
+    private static bool HasOtherNonNullPromptProperty(JsonElement el, string excludedKey)
+    {
+        foreach (var key in PromptKeys.Concat(QuestionKeys))
+        {
+            if (string.Equals(key, excludedKey, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (TryGetPropertyIgnoreCase(el, key, out var prop) &&
+                prop.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasOtherNonNullPromptEntry(IDictionary<string, object?> dict, string excludedKey)
+    {
+        foreach (var key in PromptKeys.Concat(QuestionKeys))
+        {
+            if (string.Equals(key, excludedKey, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (TryGetValueIgnoreCase(dict, key, out var val) &&
+                val is not (null or JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined }))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryExtractAskOptionsFromJsonElement(JsonElement el, out List<string>? options)
@@ -1167,11 +1245,18 @@ public static class QuestionItemParser
                     JsonElement nestedJe when nestedJe.ValueKind == JsonValueKind.String => nestedJe.GetString(),
                     _ => null
                 };
-                if (string.Equals(qk, "question", StringComparison.OrdinalIgnoreCase) &&
-                    nestedScalar != null &&
-                    !LooksLikeJsonOrCodeFence(nestedScalar))
+                if (string.Equals(qk, SingularQuestionKey, StringComparison.OrdinalIgnoreCase))
                 {
-                    continue;
+                    if (nestedScalar != null)
+                    {
+                        continue;
+                    }
+
+                    if (nested is null or JsonElement { ValueKind: JsonValueKind.Null or JsonValueKind.Undefined } &&
+                        HasOtherNonNullPromptEntry(dict, qk))
+                    {
+                        continue;
+                    }
                 }
 
                 return TryBindAskQuestions(nested, out questions);
@@ -1246,7 +1331,7 @@ public static class QuestionItemParser
                         {
                             questions = new[]
                             {
-                                new QuestionItem(first.Prompt, first.Rationale ?? rationale, first.Options ?? options)
+                                MergeSingleNestedQuestion(first, rationale, options)
                             };
                             return true;
                         }

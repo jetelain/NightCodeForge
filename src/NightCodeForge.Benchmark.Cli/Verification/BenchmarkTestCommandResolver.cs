@@ -857,7 +857,6 @@ internal static partial class BenchmarkTestCommandResolver
         string constraintSetup = string.Empty;
         string staleVenvGuard;
         string constraintArg = string.Empty;
-        string constraintMarkerUpdate = string.Empty;
 
         if (sanitizedConstraints.Count > 0)
         {
@@ -867,7 +866,6 @@ internal static partial class BenchmarkTestCommandResolver
             staleVenvGuard =
                 $"if [ -d {PythonVenvDir} ] && ! cmp -s {PythonPipConstraintsPath} {PythonPipConstraintsMarker} 2>/dev/null; then rm -rf {PythonVenvDir}; fi && ";
             constraintArg = $"-c {PythonPipConstraintsPath} ";
-            constraintMarkerUpdate = $"cp {PythonPipConstraintsPath} {PythonPipConstraintsMarker} && ";
         }
         else
         {
@@ -875,16 +873,25 @@ internal static partial class BenchmarkTestCommandResolver
                 $"if [ -f {PythonPipConstraintsMarker} ]; then rm -rf {PythonVenvDir} {PythonPipConstraintsPath}; fi && ";
         }
 
-        return $"{caBundleExport} && {scmVersionGuard} && {constraintSetup}" +
-               "if ! command -v pytest >/dev/null 2>&1; then " +
+        var venvInstallBody =
+            $"if [ ! -d {PythonVenvDir}/bin ]; then python3 -m venv {PythonVenvDir}; fi && " +
+            "(for req in requirements/tests.txt requirements/test.txt requirements-test.txt test-requirements.txt requirements/dev.txt requirements-dev.txt requirements.txt; do " +
+            $"[ -f \"$req\" ] && {PythonVenvDir}/bin/pip install -q {constraintArg}-r \"$req\" || true; done) && " +
+            "(if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ]; then " +
+            $"{PythonVenvDir}/bin/pip install -q {constraintArg}-e . || {PythonVenvDir}/bin/pip install -q {constraintArg}--no-build-isolation -e . || true; fi) && " +
+            $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then {PythonVenvDir}/bin/pip install -q {constraintArg}pytest; fi";
+
+        if (sanitizedConstraints.Count > 0)
+        {
+            return $"{caBundleExport} && {scmVersionGuard} && {constraintSetup}{staleVenvGuard}" +
+                   $"if [ ! -x {PythonVenvDir}/bin/pytest ] || [ ! -f {PythonPipConstraintsMarker} ]; then {venvInstallBody} && cp {PythonPipConstraintsPath} {PythonPipConstraintsMarker}; fi && " +
+                   $"export PATH=\"{PythonVenvDir}/bin:$PATH\" && {WrapPosixCompoundBody(testCommand)}";
+        }
+
+        return $"{caBundleExport} && {scmVersionGuard} && " +
+               "if ! pytest --version >/dev/null 2>&1; then " +
                $"{staleVenvGuard}" +
-               $"if [ ! -d {PythonVenvDir}/bin ]; then python3 -m venv {PythonVenvDir}; fi && " +
-               "(for req in requirements/tests.txt requirements/test.txt requirements-test.txt test-requirements.txt requirements/dev.txt requirements-dev.txt requirements.txt; do " +
-               $"[ -f \"$req\" ] && {PythonVenvDir}/bin/pip install -q {constraintArg}-r \"$req\" || true; done) && " +
-               "(if [ -f pyproject.toml ] || [ -f setup.py ] || [ -f setup.cfg ]; then " +
-               $"{PythonVenvDir}/bin/pip install -q {constraintArg}-e . || {PythonVenvDir}/bin/pip install -q {constraintArg}--no-build-isolation -e . || true; fi) && " +
-               $"if [ ! -x {PythonVenvDir}/bin/pytest ]; then {PythonVenvDir}/bin/pip install -q {constraintArg}pytest; fi && " +
-               $"{constraintMarkerUpdate}" +
+               $"{venvInstallBody} && " +
                $"export PATH=\"{PythonVenvDir}/bin:$PATH\"; " +
                $"fi && {WrapPosixCompoundBody(testCommand)}";
     }

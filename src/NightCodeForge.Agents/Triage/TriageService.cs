@@ -694,7 +694,7 @@ Please inspect the codebase and review <existing_workspace_tasks> (plus get_task
             SandboxSecurityTier.RestrictedReadOnly,
             taskId: null,
             mountTable: mountTable,
-            scopeCacheKey: $"ws:{workspace.Id}:triage:tier:{SandboxSecurityTier.RestrictedReadOnly}");
+            scopeCacheKey: SandboxScopeDescriptor.BuildTriageCacheKey(workspace.Id, SandboxSecurityTier.RestrictedReadOnly));
 
         // Distinct container (ncf-sandbox-{id}-triage-ro): never share the Ideation -ro container (writable memory, attachments).
         return scope with { ContainerName = SandboxScopeDescriptor.BuildTriageContainerBaseName(baseContainerName) };

@@ -526,9 +526,21 @@ public class ExecutionEnvironmentTests
             {
                 return new ProcessExecutionResult(0, user + "\n", string.Empty);
             }
+            if (args.Contains("inspect") && args.Contains(".HostConfig.ReadonlyRootfs"))
+            {
+                return new ProcessExecutionResult(0, "false\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".HostConfig.NetworkMode"))
+            {
+                return new ProcessExecutionResult(0, "bridge\n", string.Empty);
+            }
             if (args.Contains("inspect") && args.Contains(".Config.Env"))
             {
-                return new ProcessExecutionResult(0, $"{ContainerExecutorOptions.CargoHomeEnvVarName}={ContainerExecutorOptions.ContainerCargoCachePath}\n", string.Empty);
+                return new ProcessExecutionResult(
+                    0,
+                    $"{ContainerExecutorOptions.CargoHomeEnvVarName}={ContainerExecutorOptions.ContainerCargoCachePath}\n" +
+                    $"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}\n",
+                    string.Empty);
             }
             return new ProcessExecutionResult(0, string.Empty, string.Empty);
         });
@@ -783,9 +795,21 @@ public class ExecutionEnvironmentTests
             {
                 return new ProcessExecutionResult(0, "alpine\n", string.Empty);
             }
+            if (args.Contains("inspect") && args.Contains(".HostConfig.ReadonlyRootfs"))
+            {
+                return new ProcessExecutionResult(0, "false\n", string.Empty);
+            }
+            if (args.Contains("inspect") && args.Contains(".HostConfig.NetworkMode"))
+            {
+                return new ProcessExecutionResult(0, "bridge\n", string.Empty);
+            }
             if (args.Contains("inspect") && args.Contains(".Config.Env"))
             {
-                return new ProcessExecutionResult(0, $"{ContainerExecutorOptions.CargoHomeEnvVarName}={ContainerExecutorOptions.ContainerCargoCachePath}\n", string.Empty);
+                return new ProcessExecutionResult(
+                    0,
+                    $"{ContainerExecutorOptions.CargoHomeEnvVarName}={ContainerExecutorOptions.ContainerCargoCachePath}\n" +
+                    $"{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}\n",
+                    string.Empty);
             }
             if (args.StartsWith("start") || args.Contains(" start "))
             {

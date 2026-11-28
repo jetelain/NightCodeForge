@@ -25,12 +25,13 @@ public class ContainerMountAndDriftBuilder
     private const string ExtraHostsInspectFormat = "{{range .HostConfig.ExtraHosts}}{{.}};{{end}}";
     private const string TmpfsInspectFormat = "{{range $k, $v := .HostConfig.Tmpfs}}{{$k}}={{$v}};{{end}}";
     private const string EnvInspectFormat = "{{range .Config.Env}}{{.}}\n{{end}}";
+    private const string ReadonlyRootfsInspectFormat = "{{.HostConfig.ReadonlyRootfs}}";
     private const string NoneNetworkMode = "none";
     private const string ReadOnlyTmpfsOption = "ro";
-    private const string RustupHomeEnvVarName = "RUSTUP_HOME";
     private const string BlockedHostLoopbackIp = "127.0.0.1";
     private const string DotnetDirectorySuffix = "/.dotnet";
-    private const string DotnetToolsDirectorySuffix = "/.dotnet/tools";
+    private const string DotnetToolsSubdirectorySuffix = "/tools";
+    private const string DotnetToolsDirectorySuffix = DotnetDirectorySuffix + DotnetToolsSubdirectorySuffix;
 
     /// <summary>
     /// Appends the '-ro' suffix to a container name when the security tier is <see cref="SandboxSecurityTier.RestrictedReadOnly"/>.
@@ -285,16 +286,27 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
-        // 3. Heavy SDK mounts
+        // 3. Host SDKs (ReadOnly, or writable container ~/.dotnet mapped to host user root when not RestrictedReadOnly)
         if (options.MountHostSdks && options.SdkMountPaths != null)
         {
             var isManagedBaseImage = IsManagedBaseImage(options.ContainerImage);
-            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
+            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}{DotnetDirectorySuffix}";
             var hasMappedHomeDotnet = false;
             var userDotnetRoots = options.SdkMountPaths
-                .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.TrimEnd('/')))
-                .Select(p => p.TrimEnd('/'))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p =>
+                {
+                    var resolvedContainer = ResolveContainerSdkPath(p, options);
+                    if (resolvedContainer != null && IsNonRootUserDotnetRoot(resolvedContainer))
+                    {
+                        return resolvedContainer;
+                    }
+
+                    var rawTrimmed = p.Trim().TrimEnd('/');
+                    return IsNonRootUserDotnetRoot(rawTrimmed) ? rawTrimmed : null;
+                })
+                .Where(p => p != null)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
             var rustupHomes = options.SdkMountPaths
                 .Where(p => !string.IsNullOrWhiteSpace(p))
                 .Select(p => NormalizeContainerPath(ResolveHostPath(p, options)))
@@ -308,22 +320,31 @@ public class ContainerMountAndDriftBuilder
                     continue;
                 }
 
-                var trimmedSdk = sdkPath.TrimEnd('/');
-                var normSdk = NormalizeContainerPath(sdkPath);
+                var rawTrimmed = sdkPath.Trim().TrimEnd('/');
+                var containerSdkPath = ResolveContainerSdkPath(sdkPath, options);
+                var trimmedSdk = containerSdkPath ?? (IsNonRootUserDotnetRoot(rawTrimmed) || rawTrimmed.Equals($"~{DotnetToolsDirectorySuffix}", StringComparison.OrdinalIgnoreCase)
+                    ? rawTrimmed
+                    : null);
+                if (trimmedSdk == null)
+                {
+                    continue;
+                }
+
+                var normSdk = NormalizeContainerPath(trimmedSdk);
                 if (!isManagedBaseImage && IsHostMultiarchSharedLibraryPath(normSdk))
                 {
                     continue;
                 }
 
-                if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
+                if (trimmedSdk.EndsWith(DotnetToolsDirectorySuffix, StringComparison.OrdinalIgnoreCase))
                 {
                     if (!options.MountHostDotnetTools)
                     {
                         continue;
                     }
 
-                    var parentDotnet = trimmedSdk[..^"/tools".Length];
-                    if (userDotnetRoots.Contains(parentDotnet))
+                    var parentDotnet = trimmedSdk[..^DotnetToolsSubdirectorySuffix.Length];
+                    if (userDotnetRoots.Contains(parentDotnet) || !trimmedSdk.StartsWith('/'))
                     {
                         continue;
                     }
@@ -349,7 +370,7 @@ public class ContainerMountAndDriftBuilder
                     continue;
                 }
 
-                AddMount(resolvedHostSdk, sdkPath, isReadOnly: true);
+                AddMount(resolvedHostSdk, trimmedSdk, isReadOnly: true);
             }
         }
 
@@ -465,9 +486,9 @@ public class ContainerMountAndDriftBuilder
             options,
             ["inspect", "-f", MountInspectFormat, options.ContainerNameOrId],
             timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-        if (mountResult.ExitCode != 0)
+        if (mountResult == null || mountResult.ExitCode != 0)
         {
-            return $"Failed to inspect mounts of container (exit code {mountResult.ExitCode}): {mountResult.StandardError}";
+            return $"Failed to inspect mounts of container (exit code {mountResult?.ExitCode ?? -1}): {mountResult?.StandardError}";
         }
 
         var driftFromMounts = EvaluateMountDrift(mountResult.StandardOutput, options, out var expectedMounts);
@@ -476,19 +497,22 @@ public class ContainerMountAndDriftBuilder
             return driftFromMounts;
         }
 
-        var maskedDotnetRoots = GetDotnetRootsRequiringToolsMask(expectedMounts, options);
-        if (maskedDotnetRoots.Count > 0)
+        var mountedDotnetRoots = GetMountedDotnetRoots(expectedMounts);
+        if (mountedDotnetRoots.Count > 0)
         {
             var tmpfsResult = await runInspect(BuildDockerProcessSpec(
                 options,
                 ["inspect", "-f", TmpfsInspectFormat, options.ContainerNameOrId],
                 timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-            if (tmpfsResult.ExitCode != 0)
+            if (tmpfsResult == null || tmpfsResult.ExitCode != 0)
             {
-                return $"Failed to inspect tmpfs mounts of container (exit code {tmpfsResult.ExitCode}): {tmpfsResult.StandardError}";
+                return $"Failed to inspect tmpfs mounts of container (exit code {tmpfsResult?.ExitCode ?? -1}): {tmpfsResult?.StandardError}";
             }
 
-            var tmpfsDrift = EvaluateDotnetToolsTmpfsMaskDrift(tmpfsResult.StandardOutput, maskedDotnetRoots);
+            var tmpfsDrift = EvaluateDotnetToolsTmpfsMaskDrift(
+                tmpfsResult.StandardOutput,
+                mountedDotnetRoots,
+                expectMask: !options.MountHostDotnetTools);
             if (tmpfsDrift != null)
             {
                 return tmpfsDrift;
@@ -502,9 +526,9 @@ public class ContainerMountAndDriftBuilder
             options,
             ["inspect", "-f", ImageInspectFormat, options.ContainerNameOrId],
             timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-        if (imageResult.ExitCode != 0)
+        if (imageResult == null || imageResult.ExitCode != 0)
         {
-            return $"Failed to inspect image of container (exit code {imageResult.ExitCode}): {imageResult.StandardError}";
+            return $"Failed to inspect image of container (exit code {imageResult?.ExitCode ?? -1}): {imageResult?.StandardError}";
         }
 
         var actualImage = imageResult.StandardOutput.Trim();
@@ -520,9 +544,9 @@ public class ContainerMountAndDriftBuilder
                 options,
                 ["inspect", "-f", UserInspectFormat, options.ContainerNameOrId],
                 timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-            if (userResult.ExitCode != 0)
+            if (userResult == null || userResult.ExitCode != 0)
             {
-                return $"Failed to inspect user of container (exit code {userResult.ExitCode}): {userResult.StandardError}";
+                return $"Failed to inspect user of container (exit code {userResult?.ExitCode ?? -1}): {userResult?.StandardError}";
             }
 
             var actualUser = userResult.StandardOutput.Trim();
@@ -532,43 +556,53 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
-        var networkExpectedNone = options.IsRestrictedReadOnly || options.DisableNetwork;
-        if (networkExpectedNone)
+        var readonlyRootfsResult = await runInspect(BuildDockerProcessSpec(
+            options,
+            ["inspect", "-f", ReadonlyRootfsInspectFormat, options.ContainerNameOrId],
+            timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+        if (readonlyRootfsResult == null || readonlyRootfsResult.ExitCode != 0)
         {
-            var networkResult = await runInspect(BuildDockerProcessSpec(
-                options,
-                ["inspect", "-f", NetworkModeInspectFormat, options.ContainerNameOrId],
-                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-            if (networkResult == null || networkResult.ExitCode != 0)
-            {
-                return $"Failed to inspect network mode of container (exit code {networkResult?.ExitCode ?? -1}): {networkResult?.StandardError}";
-            }
-
-            var networkDrift = EvaluateNetworkModeDrift(networkResult.StandardOutput);
-            if (networkDrift != null)
-            {
-                return networkDrift;
-            }
+            return $"Failed to inspect readonly rootfs of container (exit code {readonlyRootfsResult?.ExitCode ?? -1}): {readonlyRootfsResult?.StandardError}";
         }
-        else
+
+        var rawReadonlyRootfs = readonlyRootfsResult.StandardOutput.Trim();
+        if (!bool.TryParse(rawReadonlyRootfs, out var actualReadonlyRootfs) || actualReadonlyRootfs != options.IsRestrictedReadOnly)
+        {
+            return $"Readonly rootfs mismatch: '{rawReadonlyRootfs}' vs '{options.IsRestrictedReadOnly.ToString().ToLowerInvariant()}'";
+        }
+
+        var networkExpectedNone = options.IsRestrictedReadOnly || options.DisableNetwork;
+        var networkResult = await runInspect(BuildDockerProcessSpec(
+            options,
+            ["inspect", "-f", NetworkModeInspectFormat, options.ContainerNameOrId],
+            timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+        if (networkResult == null || networkResult.ExitCode != 0)
+        {
+            return $"Failed to inspect network mode of container (exit code {networkResult?.ExitCode ?? -1}): {networkResult?.StandardError}";
+        }
+
+        var networkDrift = EvaluateNetworkModeDrift(networkResult.StandardOutput, expectNone: networkExpectedNone);
+        if (networkDrift != null)
+        {
+            return networkDrift;
+        }
+
+        if (!networkExpectedNone)
         {
             var blockedHosts = NormalizeBlockedHosts(options.BlockedHosts);
-            if (blockedHosts.Count > 0)
+            var extraHostsResult = await runInspect(BuildDockerProcessSpec(
+                options,
+                ["inspect", "-f", ExtraHostsInspectFormat, options.ContainerNameOrId],
+                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+            if (extraHostsResult == null || extraHostsResult.ExitCode != 0)
             {
-                var extraHostsResult = await runInspect(BuildDockerProcessSpec(
-                    options,
-                    ["inspect", "-f", ExtraHostsInspectFormat, options.ContainerNameOrId],
-                    timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-                if (extraHostsResult.ExitCode != 0)
-                {
-                    return $"Failed to inspect extra hosts of container (exit code {extraHostsResult.ExitCode}): {extraHostsResult.StandardError}";
-                }
+                return $"Failed to inspect extra hosts of container (exit code {extraHostsResult?.ExitCode ?? -1}): {extraHostsResult?.StandardError}";
+            }
 
-                var hostsDrift = EvaluateBlockedHostsDrift(extraHostsResult.StandardOutput, blockedHosts);
-                if (hostsDrift != null)
-                {
-                    return hostsDrift;
-                }
+            var hostsDrift = EvaluateBlockedHostsDrift(extraHostsResult.StandardOutput, blockedHosts);
+            if (hostsDrift != null)
+            {
+                return hostsDrift;
             }
         }
 
@@ -576,69 +610,113 @@ public class ContainerMountAndDriftBuilder
         var expectCargoHome = options.MountPackageCaches && !string.IsNullOrWhiteSpace(options.CargoCachePath);
         var expectOfflineNpmEnv = networkExpectedNone;
         var expectFallbackNpmCacheEnv = networkExpectedNone && options.MountPackageCaches;
-        if (!string.IsNullOrWhiteSpace(expectedRustupHome) || expectCargoHome || expectOfflineNpmEnv || expectFallbackNpmCacheEnv)
+        var expectOnlineNpmCacheEnv = !networkExpectedNone && options.MountPackageCaches;
+
+        var envResult = await runInspect(BuildDockerProcessSpec(
+            options,
+            ["inspect", "-f", EnvInspectFormat, options.ContainerNameOrId],
+            timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
+        if (envResult == null || envResult.ExitCode != 0)
         {
-            var envResult = await runInspect(BuildDockerProcessSpec(
-                options,
-                ["inspect", "-f", EnvInspectFormat, options.ContainerNameOrId],
-                timeoutSeconds: InspectTimeoutSeconds)).ConfigureAwait(false);
-            if (envResult == null || envResult.ExitCode != 0)
+            return $"Failed to inspect environment of container (exit code {envResult?.ExitCode ?? -1}): {envResult?.StandardError}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedRustupHome))
+        {
+            var rustupDrift = EvaluateRequiredEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.RustupHomeEnvVarName,
+                expectedRustupHome);
+            if (rustupDrift != null)
             {
-                return $"Failed to inspect environment of container (exit code {envResult?.ExitCode ?? -1}): {envResult?.StandardError}";
+                return rustupDrift;
+            }
+        }
+
+        if (expectCargoHome)
+        {
+            var cargoDrift = EvaluateRequiredEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.CargoHomeEnvVarName,
+                ContainerExecutorOptions.ContainerCargoCachePath);
+            if (cargoDrift != null)
+            {
+                return cargoDrift;
+            }
+        }
+
+        if (expectOfflineNpmEnv)
+        {
+            var offlineLowerDrift = EvaluateRequiredEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmConfigOfflineEnvVarName,
+                ContainerExecutorOptions.OfflineTrueValue);
+            if (offlineLowerDrift != null)
+            {
+                return offlineLowerDrift;
             }
 
-            if (!string.IsNullOrWhiteSpace(expectedRustupHome))
+            var offlineUpperDrift = EvaluateRequiredEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName,
+                ContainerExecutorOptions.OfflineTrueValue);
+            if (offlineUpperDrift != null)
             {
-                var rustupDrift = EvaluateRequiredEnvVarDrift(envResult.StandardOutput, RustupHomeEnvVarName, expectedRustupHome);
-                if (rustupDrift != null)
-                {
-                    return rustupDrift;
-                }
+                return offlineUpperDrift;
+            }
+        }
+        else
+        {
+            var staleOfflineLowerDrift = EvaluateForbiddenEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmConfigOfflineEnvVarName,
+                ContainerExecutorOptions.OfflineTrueValue);
+            if (staleOfflineLowerDrift != null)
+            {
+                return staleOfflineLowerDrift;
             }
 
-            if (expectCargoHome)
+            var staleOfflineUpperDrift = EvaluateForbiddenEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName,
+                ContainerExecutorOptions.OfflineTrueValue);
+            if (staleOfflineUpperDrift != null)
             {
-                var cargoDrift = EvaluateRequiredEnvVarDrift(
-                    envResult.StandardOutput,
-                    ContainerExecutorOptions.CargoHomeEnvVarName,
-                    ContainerExecutorOptions.ContainerCargoCachePath);
-                if (cargoDrift != null)
-                {
-                    return cargoDrift;
-                }
+                return staleOfflineUpperDrift;
             }
+        }
 
-            if (expectOfflineNpmEnv)
+        if (expectFallbackNpmCacheEnv)
+        {
+            var npmCacheDrift = EvaluateRequiredEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmCacheEnvVarName,
+                ContainerExecutorOptions.FallbackNpmCachePath);
+            if (npmCacheDrift != null)
             {
-                var offlineLowerDrift = EvaluateRequiredEnvVarDrift(
-                    envResult.StandardOutput,
-                    ContainerExecutorOptions.NpmConfigOfflineEnvVarName,
-                    ContainerExecutorOptions.OfflineTrueValue);
-                if (offlineLowerDrift != null)
-                {
-                    return offlineLowerDrift;
-                }
-
-                var offlineUpperDrift = EvaluateRequiredEnvVarDrift(
-                    envResult.StandardOutput,
-                    ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName,
-                    ContainerExecutorOptions.OfflineTrueValue);
-                if (offlineUpperDrift != null)
-                {
-                    return offlineUpperDrift;
-                }
+                return npmCacheDrift;
             }
-
-            if (expectFallbackNpmCacheEnv)
+        }
+        else if (expectOnlineNpmCacheEnv)
+        {
+            var npmCacheDrift = EvaluateRequiredEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmCacheEnvVarName,
+                ContainerExecutorOptions.ContainerNpmCachePath);
+            if (npmCacheDrift != null)
             {
-                var npmCacheDrift = EvaluateRequiredEnvVarDrift(
-                    envResult.StandardOutput,
-                    ContainerExecutorOptions.NpmCacheEnvVarName,
-                    ContainerExecutorOptions.FallbackNpmCachePath);
-                if (npmCacheDrift != null)
-                {
-                    return npmCacheDrift;
-                }
+                return npmCacheDrift;
+            }
+        }
+        else
+        {
+            var staleFallbackNpmCacheDrift = EvaluateForbiddenEnvVarDrift(
+                envResult.StandardOutput,
+                ContainerExecutorOptions.NpmCacheEnvVarName,
+                ContainerExecutorOptions.FallbackNpmCachePath);
+            if (staleFallbackNpmCacheDrift != null)
+            {
+                return staleFallbackNpmCacheDrift;
             }
         }
 
@@ -769,6 +847,31 @@ public class ContainerMountAndDriftBuilder
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(options.HostWorkspacePath) &&
+            string.IsNullOrWhiteSpace(options.CanonicalClonePath) &&
+            !options.ProtectCloneWorkingTree &&
+            !options.IsRestrictedReadOnly)
+        {
+            var normProtectedClone = NormalizeContainerPath($"{normWks}/clone");
+            var expectedHasProtectedClone = expectedMounts.Any(m =>
+                string.Equals(NormalizeContainerPath(m.ContainerPath), normProtectedClone, StringComparison.OrdinalIgnoreCase));
+            if (!expectedHasProtectedClone &&
+                actual.TryGetValue(normProtectedClone, out var staleProtectedCloneMount) &&
+                !staleProtectedCloneMount.IsRw)
+            {
+                problems.Add($"{normProtectedClone} (expected absent or rw)");
+            }
+
+            var normProtectedCloneGit = NormalizeContainerPath($"{normWks}/clone/.git");
+            var expectedHasProtectedCloneGit = expectedMounts.Any(m =>
+                string.Equals(NormalizeContainerPath(m.ContainerPath), normProtectedCloneGit, StringComparison.OrdinalIgnoreCase));
+            if (!expectedHasProtectedCloneGit &&
+                actual.ContainsKey(normProtectedCloneGit))
+            {
+                problems.Add($"{normProtectedCloneGit} (expected absent)");
+            }
+        }
+
         if (!options.MountHostDotnetTools)
         {
             var hostToolsDest = NormalizeContainerPath(ContainerExecutorOptions.HostDotnetToolsContainerPath);
@@ -823,7 +926,8 @@ public class ContainerMountAndDriftBuilder
 
     private static string? EvaluateDotnetToolsTmpfsMaskDrift(
         string tmpfsInspectOutput,
-        IReadOnlyList<string> maskedDotnetRoots)
+        IReadOnlyList<string> mountedDotnetRoots,
+        bool expectMask)
     {
         var actualTmpfs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in (tmpfsInspectOutput ?? string.Empty).Trim().Split(';', StringSplitOptions.RemoveEmptyEntries))
@@ -840,13 +944,20 @@ public class ContainerMountAndDriftBuilder
         }
 
         var problems = new List<string>();
-        foreach (var dotnetRoot in maskedDotnetRoots)
+        foreach (var dotnetRoot in mountedDotnetRoots)
         {
-            var toolsDest = $"{dotnetRoot}/tools";
-            if (!actualTmpfs.TryGetValue(toolsDest, out var mountOpts) ||
-                !HasTmpfsOption(mountOpts, ReadOnlyTmpfsOption))
+            var toolsDest = $"{dotnetRoot}{DotnetToolsSubdirectorySuffix}";
+            if (expectMask)
             {
-                problems.Add($"{toolsDest} (missing ro tmpfs mask)");
+                if (!actualTmpfs.TryGetValue(toolsDest, out var mountOpts) ||
+                    !HasTmpfsOption(mountOpts, ReadOnlyTmpfsOption))
+                {
+                    problems.Add($"{toolsDest} (missing ro tmpfs mask)");
+                }
+            }
+            else if (actualTmpfs.ContainsKey(toolsDest))
+            {
+                problems.Add($"{toolsDest} (stale tmpfs mask)");
             }
         }
 
@@ -868,12 +979,19 @@ public class ContainerMountAndDriftBuilder
         return false;
     }
 
-    private static string? EvaluateNetworkModeDrift(string networkInspectOutput)
+    private static string? EvaluateNetworkModeDrift(string networkInspectOutput, bool expectNone)
     {
         var actualMode = (networkInspectOutput ?? string.Empty).Trim();
+        if (expectNone)
+        {
+            return string.Equals(actualMode, NoneNetworkMode, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : $"Network mode mismatch: '{actualMode}' vs '{NoneNetworkMode}'";
+        }
+
         return string.Equals(actualMode, NoneNetworkMode, StringComparison.OrdinalIgnoreCase)
-            ? null
-            : $"Network mode mismatch: '{actualMode}' vs '{NoneNetworkMode}'";
+            ? $"Network mode mismatch: '{actualMode}' vs online network"
+            : null;
     }
 
     private static string? EvaluateBlockedHostsDrift(string extraHostsInspectOutput, IReadOnlyList<string> expectedBlockedHosts)
@@ -883,19 +1001,36 @@ public class ContainerMountAndDriftBuilder
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             StringComparer.OrdinalIgnoreCase);
 
-        var missing = new List<string>();
-        foreach (var host in expectedBlockedHosts)
+        var expectedMappings = expectedBlockedHosts
+            .Select(host => $"{host}:{BlockedHostLoopbackIp}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var missing = expectedMappings
+            .Where(mapping => !actualHosts.Contains(mapping))
+            .ToList();
+
+        var loopbackSuffix = $":{BlockedHostLoopbackIp}";
+        var unexpected = actualHosts
+            .Where(actual => actual.EndsWith(loopbackSuffix, StringComparison.OrdinalIgnoreCase) && !expectedMappings.Contains(actual))
+            .ToList();
+
+        if (missing.Count == 0 && unexpected.Count == 0)
         {
-            var mapping = $"{host}:{BlockedHostLoopbackIp}";
-            if (!actualHosts.Contains(mapping))
-            {
-                missing.Add(mapping);
-            }
+            return null;
         }
 
-        return missing.Count > 0
-            ? $"Blocked hosts mismatch: missing {string.Join(", ", missing)}"
-            : null;
+        var parts = new List<string>();
+        if (missing.Count > 0)
+        {
+            parts.Add($"missing {string.Join(", ", missing)}");
+        }
+
+        if (unexpected.Count > 0)
+        {
+            parts.Add($"unexpected {string.Join(", ", unexpected)}");
+        }
+
+        return $"Blocked hosts mismatch: {string.Join("; ", parts)}";
     }
 
     private static string? EvaluateRequiredEnvVarDrift(string envInspectOutput, string envVarName, string expectedValue)
@@ -913,6 +1048,32 @@ public class ContainerMountAndDriftBuilder
         }
 
         return $"Environment mismatch: missing {envVarName}='{expectedValue}'";
+    }
+
+    private static string? EvaluateForbiddenEnvVarDrift(string envInspectOutput, string envVarName, string forbiddenValue)
+    {
+        var envEntries = (envInspectOutput ?? string.Empty)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var entry in envEntries)
+        {
+            var trimmed = entry.Trim();
+            var eqIdx = trimmed.IndexOf('=');
+            if (eqIdx <= 0)
+            {
+                continue;
+            }
+
+            var name = trimmed[..eqIdx];
+            var value = trimmed[(eqIdx + 1)..];
+            if (string.Equals(name, envVarName, StringComparison.Ordinal) &&
+                string.Equals(value, forbiddenValue, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"Environment mismatch: stale {envVarName}='{forbiddenValue}'";
+            }
+        }
+
+        return null;
     }
 
     private static List<string> NormalizeBlockedHosts(IEnumerable<string>? blockedHosts)
@@ -958,6 +1119,11 @@ public class ContainerMountAndDriftBuilder
             return Array.Empty<string>();
         }
 
+        return GetMountedDotnetRoots(mounts);
+    }
+
+    private static IReadOnlyList<string> GetMountedDotnetRoots(IReadOnlyList<ContainerVolumeMount> mounts)
+    {
         var roots = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mount in mounts)
@@ -974,14 +1140,31 @@ public class ContainerMountAndDriftBuilder
 
     public static bool IsNonRootUserDotnetRoot(string trimmedPath)
     {
-        if (trimmedPath.Equals("~/.dotnet", StringComparison.OrdinalIgnoreCase))
+        if (trimmedPath.Equals($"~{DotnetDirectorySuffix}", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
         return trimmedPath.StartsWith("/home/", StringComparison.OrdinalIgnoreCase) &&
-               trimmedPath.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase) &&
-               !trimmedPath.Equals($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet", StringComparison.OrdinalIgnoreCase);
+               trimmedPath.EndsWith(DotnetDirectorySuffix, StringComparison.OrdinalIgnoreCase) &&
+               !trimmedPath.Equals($"{ContainerExecutorOptions.ContainerHomePath}{DotnetDirectorySuffix}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveContainerSdkPath(string sdkPath, ContainerExecutorOptions options)
+    {
+        var trimmed = sdkPath.Trim().TrimEnd('/', '\\');
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        if (trimmed == "~" || trimmed.StartsWith("~/") || trimmed.StartsWith("~\\") || options.UseWsl)
+        {
+            var expanded = ResolveHostPath(trimmed, options).TrimEnd('/', '\\');
+            return expanded.StartsWith('/') ? expanded : null;
+        }
+
+        return trimmed.StartsWith('/') ? trimmed : null;
     }
 
     public static string ResolveHostPath(string path, ContainerExecutorOptions options)
@@ -1138,16 +1321,31 @@ public class ContainerMountAndDriftBuilder
 
         if (options.MountHostSdks && options.SdkMountPaths != null)
         {
-            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet";
+            var containerHomeDotnet = $"{ContainerExecutorOptions.ContainerHomePath}{DotnetDirectorySuffix}";
             var userDotnetRoots = options.SdkMountPaths
-                .Where(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.Trim().TrimEnd('/')))
-                .Select(p => p.Trim().TrimEnd('/'))
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p =>
+                {
+                    var resolvedContainer = ResolveContainerSdkPath(p, options);
+                    if (resolvedContainer != null && IsNonRootUserDotnetRoot(resolvedContainer))
+                    {
+                        return resolvedContainer;
+                    }
+
+                    var rawTrimmed = p.Trim().TrimEnd('/');
+                    return IsNonRootUserDotnetRoot(rawTrimmed) ? rawTrimmed : null;
+                })
+                .Where(p => p != null)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
 
             foreach (var sdk in options.SdkMountPaths)
             {
                 if (string.IsNullOrWhiteSpace(sdk)) continue;
-                var trimmedSdk = sdk.Trim().TrimEnd('/');
+                var rawTrimmed = sdk.Trim().TrimEnd('/');
+                var trimmedSdk = ResolveContainerSdkPath(sdk, options)
+                    ?? (IsNonRootUserDotnetRoot(rawTrimmed) || rawTrimmed.Equals($"~{DotnetToolsDirectorySuffix}", StringComparison.OrdinalIgnoreCase)
+                        ? rawTrimmed
+                        : null);
                 if (string.IsNullOrEmpty(trimmedSdk)) continue;
 
                 if (trimmedSdk.StartsWith("/etc/", StringComparison.OrdinalIgnoreCase) ||
@@ -1161,25 +1359,30 @@ public class ContainerMountAndDriftBuilder
                     continue;
                 }
 
-                if (trimmedSdk.EndsWith("/.dotnet/tools", StringComparison.OrdinalIgnoreCase))
+                if (trimmedSdk.EndsWith(DotnetToolsDirectorySuffix, StringComparison.OrdinalIgnoreCase))
                 {
                     if (!options.MountHostDotnetTools)
                     {
                         continue;
                     }
 
-                    var parentDotnet = trimmedSdk[..^"/tools".Length];
+                    var parentDotnet = trimmedSdk[..^DotnetToolsSubdirectorySuffix.Length];
                     if (userDotnetRoots.Contains(parentDotnet))
                     {
                         if (!options.IsRestrictedReadOnly)
                         {
-                            pathEntries.Add($"{containerHomeDotnet}/tools");
+                            pathEntries.Add($"{containerHomeDotnet}{DotnetToolsSubdirectorySuffix}");
                         }
+                        continue;
+                    }
+
+                    if (!trimmedSdk.StartsWith('/'))
+                    {
                         continue;
                     }
                 }
 
-                if (trimmedSdk.EndsWith("/.dotnet", StringComparison.OrdinalIgnoreCase))
+                if (trimmedSdk.EndsWith(DotnetDirectorySuffix, StringComparison.OrdinalIgnoreCase))
                 {
                     if (userDotnetRoots.Contains(trimmedSdk))
                     {
@@ -1187,7 +1390,7 @@ public class ContainerMountAndDriftBuilder
                         {
                             if (options.MountHostDotnetTools)
                             {
-                                pathEntries.Add($"{containerHomeDotnet}/tools");
+                                pathEntries.Add($"{containerHomeDotnet}{DotnetToolsSubdirectorySuffix}");
                             }
                             pathEntries.Add(containerHomeDotnet);
                         }
@@ -1196,7 +1399,7 @@ public class ContainerMountAndDriftBuilder
                     {
                         if (options.MountHostDotnetTools)
                         {
-                            pathEntries.Add($"{trimmedSdk}/tools");
+                            pathEntries.Add($"{trimmedSdk}{DotnetToolsSubdirectorySuffix}");
                         }
                         pathEntries.Add(trimmedSdk);
                     }
@@ -1272,13 +1475,13 @@ public class ContainerMountAndDriftBuilder
         if (options.MountHostDotnetTools)
         {
             pathEntries.Add(ContainerExecutorOptions.HostDotnetToolsContainerPath);
-            pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.dotnet/tools");
+            pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}{DotnetToolsDirectorySuffix}");
         }
         pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.local/bin");
         pathEntries.Add($"{ContainerExecutorOptions.ContainerHomePath}/.cargo/bin");
         if (options.MountHostDotnetTools)
         {
-            pathEntries.Add("/root/.dotnet/tools");
+            pathEntries.Add($"/root{DotnetToolsDirectorySuffix}");
         }
         pathEntries.Add("/root/.local/bin");
         pathEntries.Add("/root/.cargo/bin");
@@ -1319,10 +1522,10 @@ public class ContainerMountAndDriftBuilder
                 continue;
             }
 
-            var trimmed = sdk.Trim().TrimEnd('/');
-            if (IsRustupHomePath(trimmed))
+            var resolved = ResolveContainerSdkPath(sdk, options);
+            if (!string.IsNullOrEmpty(resolved) && IsRustupHomePath(resolved))
             {
-                return trimmed;
+                return resolved;
             }
         }
 
@@ -1387,16 +1590,27 @@ public class ContainerMountAndDriftBuilder
         args.AddRange(["-e", $"HOME={containerHome}"]);
         args.AddRange(["-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0"]);
         args.AddRange(["-e", "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"]);
+        args.AddRange(["-e", $"{ContainerExecutorOptions.DotNetRollForwardEnvVar}={ContainerExecutorOptions.DotNetRollForwardLatestMajor}"]);
         args.AddRange(["-e", $"{ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}={ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}"]);
         args.AddRange(["-e", $"LANG={containerLocale}"]);
         args.AddRange(["-e", $"LC_ALL={containerLocale}"]);
 
-        var dotnetSdkPath = options.SdkMountPaths?
+        var resolvedSdkPaths = options.MountHostSdks && options.SdkMountPaths != null
+            ? options.SdkMountPaths
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => ResolveContainerSdkPath(p, options))
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Cast<string>()
+                .ToList()
+            : [];
+        var dotnetSdkPath = resolvedSdkPaths
             .FirstOrDefault(p => p.Equals("/usr/lib/dotnet", StringComparison.OrdinalIgnoreCase))
-            ?? options.SdkMountPaths?
-                .FirstOrDefault(p => p.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) || p == "/usr/share/dotnet")
-            ?? (options.SdkMountPaths != null && !options.IsRestrictedReadOnly && options.SdkMountPaths.Any(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(p.Trim().TrimEnd('/')))
-                ? $"{ContainerExecutorOptions.ContainerHomePath}/.dotnet"
+            ?? resolvedSdkPaths
+                .FirstOrDefault(p => p.EndsWith("/dotnet", StringComparison.OrdinalIgnoreCase) ||
+                                     p.Equals("/usr/share/dotnet", StringComparison.OrdinalIgnoreCase))
+            ?? (options.MountHostSdks && !options.IsRestrictedReadOnly && options.SdkMountPaths != null &&
+                options.SdkMountPaths.Any(p => !string.IsNullOrWhiteSpace(p) && IsNonRootUserDotnetRoot(ResolveContainerSdkPath(p, options) ?? p.Trim().TrimEnd('/', '\\')))
+                ? $"{ContainerExecutorOptions.ContainerHomePath}{DotnetDirectorySuffix}"
                 : null)
             ?? "/usr/share/dotnet";
         args.AddRange(["-e", $"DOTNET_ROOT={dotnetSdkPath}"]);
@@ -1404,7 +1618,7 @@ public class ContainerMountAndDriftBuilder
         var rustupHome = ResolveRustupHomePath(options);
         if (!string.IsNullOrWhiteSpace(rustupHome))
         {
-            args.AddRange(["-e", $"RUSTUP_HOME={rustupHome}"]);
+            args.AddRange(["-e", $"{ContainerExecutorOptions.RustupHomeEnvVarName}={rustupHome}"]);
         }
 
         if (options.MountPackageCaches)
@@ -1435,7 +1649,7 @@ public class ContainerMountAndDriftBuilder
 
         foreach (var dotnetRoot in GetDotnetRootsRequiringToolsMask(mounts, options))
         {
-            args.AddRange(["--tmpfs", $"{dotnetRoot}/tools:ro,noexec,nosuid,size=1m"]);
+            args.AddRange(["--tmpfs", $"{dotnetRoot}{DotnetToolsSubdirectorySuffix}:{ReadOnlyTmpfsOption},noexec,nosuid,size=1m"]);
         }
 
         var workDir = !string.IsNullOrWhiteSpace(options.DefaultWorkingDirectory)
@@ -1470,7 +1684,7 @@ public class ContainerMountAndDriftBuilder
 
         if (options.IsRestrictedReadOnly || options.DisableNetwork)
         {
-            args.AddRange(["--network", "none"]);
+            args.AddRange(["--network", NoneNetworkMode]);
             args.AddRange(["-e", $"{ContainerExecutorOptions.NpmConfigOfflineEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}"]);
             args.AddRange(["-e", $"{ContainerExecutorOptions.NpmConfigOfflineUpperEnvVarName}={ContainerExecutorOptions.OfflineTrueValue}"]);
         }

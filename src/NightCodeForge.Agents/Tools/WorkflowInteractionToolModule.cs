@@ -93,10 +93,18 @@ public sealed class WorkflowInteractionToolModule : IAgentToolModule
                         shouldRewrite = true;
                     }
                 }
+                else if (rawQuestions is IReadOnlyList<QuestionItem>)
+                {
+                    if (!string.Equals(matchedKey, QuestionsParameterName, StringComparison.Ordinal))
+                    {
+                        effectiveQuestions = rawQuestions;
+                        shouldRewrite = true;
+                    }
+                }
                 else if (rawQuestions is IEnumerable<QuestionItem> typed)
                 {
                     effectiveQuestions = QuestionItemParser.Normalize(typed);
-                    shouldRewrite = !string.Equals(matchedKey, QuestionsParameterName, StringComparison.Ordinal);
+                    shouldRewrite = true;
                 }
 
                 if (!shouldRewrite &&
@@ -135,6 +143,12 @@ public sealed class WorkflowInteractionToolModule : IAgentToolModule
             out string matchedKey,
             out object? rawQuestions)
         {
+            if (arguments.TryGetValue(QuestionsParameterName, out rawQuestions))
+            {
+                matchedKey = QuestionsParameterName;
+                return true;
+            }
+
             foreach (var pair in arguments)
             {
                 if (string.Equals(pair.Key, QuestionsParameterName, StringComparison.OrdinalIgnoreCase))

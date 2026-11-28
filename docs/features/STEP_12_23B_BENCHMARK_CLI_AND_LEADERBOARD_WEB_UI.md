@@ -13,7 +13,7 @@
 
 ## 1. Executive Objective
 
-With the core Crucible Benchmark Engine (`ICrucibleBenchmarkRunner`), mock/in-memory DB layer, and verifiers in place ([Step 12.23A](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md)), this step (Part 2 of Step 12.23) exposes benchmark execution and comparative reporting in a **dedicated standalone CLI** (`NightCodeForge.Benchmark.Cli`, command `ncf-bench`), keeping the main `NightCodeForge.Cli` (`ncf`) lightweight and dependency-free (Web UI `/benchmarks` and Hangfire queue integration remain deferred until after `v0.1.0`):
+With the core Crucible Benchmark Engine (`ICrucibleBenchmarkRunner`), mock/in-memory DB layer, and verifiers in place ([Step 12.23A](STEP_12_23A_CRUCIBLE_BENCHMARK_ENGINE_AND_CONTAINER_VERIFIER.md)), this step (Part 2 of Step 12.23) exposes benchmark execution and comparative reporting in a **dedicated standalone CLI** (`NightCodeForge.Benchmark.Cli`, command `ncf-bench`), keeping the main `NightCodeForge.Cli` (`ncf`) lightweight and dependency-free (strictly CLI-only, with no Benchmark Web UI or Hangfire dependency):
 1. **Dedicated `benchmark run` CLI:**
    - Evaluate **Implementation**, **Code Review**, and **ForgeTask Review** suites across a set of **local/configured models** using `NightCodeForge.Agents` (`CrucibleAgentHarness`) and mock/in-memory repositories (zero dependency on `NightCodeForge.Web`, Hangfire, or SQLite).
    - Record `BenchmarkRunProvenance` (NightCodeForge version, git commit, git branch, provider, active skills/flags), stream live terminal progress, and export `results.json` (`BenchmarkRunReport`), `summary.md`, `transcripts/`, and `predictions.jsonl`.

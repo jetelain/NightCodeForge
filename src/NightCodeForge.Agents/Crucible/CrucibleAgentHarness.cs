@@ -549,6 +549,7 @@ public partial class CrucibleAgentHarness : IAgentHarness
         async Task<AgentRunResult> CompleteWithRequestChangesAsync(RequestChangesException reqChange)
         {
             stopwatch.Stop();
+            FlushTurnToHistory();
             latestSerializedState = SerializeSession(chatHistory);
 
             var summary = $"Reviewer requested changes: {reqChange.Feedback}";

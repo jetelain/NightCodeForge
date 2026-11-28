@@ -27,6 +27,23 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
 {
     private const int MaxDiscoveredSymbols = 15;
     private const int MinSubstringKeywordLength = 4;
+    private const int ExactSymbolNameScore = 100;
+    private const int WholeQualifiedSymbolScore = 120;
+    private const int ExactDotSegmentScore = 80;
+    private const int ExactSubTokenScore = 20;
+    private const int KeywordSubstringInSegmentScore = 10;
+    private const int SegmentSubstringInKeywordScore = 5;
+    private const int ProductionPathBonus = 30;
+    private const int TestPathBonus = 10;
+    private const int AuxiliaryPathBonus = 0;
+    private const string SandboxPathSegment = "sandbox";
+
+    internal enum SymbolPathCategory
+    {
+        Auxiliary = 0,
+        Test = 1,
+        Production = 2
+    }
 
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -182,10 +199,22 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
             {
                 var relevance = ScoreSymbolRelevance(s, keywords, taskText);
                 var (pathCategory, isExplicitSourceRoot) = ClassifyPathPriority(s.RelativePath);
-                return (Symbol: s, Relevance: relevance, PathCategory: pathCategory, IsExplicitSourceRoot: isExplicitSourceRoot);
+                var pathBonus = pathCategory switch
+                {
+                    SymbolPathCategory.Production => ProductionPathBonus,
+                    SymbolPathCategory.Test => TestPathBonus,
+                    _ => AuxiliaryPathBonus
+                };
+                return (
+                    Symbol: s,
+                    Relevance: relevance,
+                    PathCategory: pathCategory,
+                    IsExplicitSourceRoot: isExplicitSourceRoot,
+                    TotalScore: relevance + pathBonus);
             })
             .Where(x => x.Relevance > 0)
-            .OrderByDescending(x => x.PathCategory)
+            .OrderByDescending(x => x.TotalScore)
+            .ThenByDescending(x => x.PathCategory)
             .ThenByDescending(x => x.Relevance)
             .ThenByDescending(x => x.IsExplicitSourceRoot)
             .ThenBy(x => x.Symbol.RelativePath, StringComparer.OrdinalIgnoreCase)
@@ -212,17 +241,23 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
         return sb.ToString().TrimEnd();
     }
 
-    internal static (int PathCategory, bool IsExplicitSourceRoot) ClassifyPathPriority(string relativePath)
+    internal static (SymbolPathCategory PathCategory, bool IsExplicitSourceRoot) ClassifyPathPriority(string relativePath)
     {
         var normalized = (relativePath ?? string.Empty).Replace('\\', '/');
         var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        bool isExplicitSourceRoot = segments.Length > 0 && ProductionRootSegments.Contains(segments[0]);
 
         foreach (var seg in segments)
         {
             if (AuxiliaryPathSegments.Contains(seg) ||
                 AuxiliaryPathSuffixes.Any(suffix => seg.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)))
             {
-                return (0, false);
+                if (isExplicitSourceRoot && string.Equals(seg, SandboxPathSegment, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                return (SymbolPathCategory.Auxiliary, false);
             }
         }
 
@@ -233,11 +268,10 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
                 TestPathSegments.Contains(seg) ||
                 TestPathSuffixes.Any(suffix => seg.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))))
         {
-            return (1, false);
+            return (SymbolPathCategory.Test, false);
         }
 
-        bool isExplicitSourceRoot = segments.Length > 0 && ProductionRootSegments.Contains(segments[0]);
-        return (2, isExplicitSourceRoot);
+        return (SymbolPathCategory.Production, isExplicitSourceRoot);
     }
 
     internal static int ScoreSymbolRelevance(CodeSymbol symbol, IReadOnlySet<string> keywords, string taskText)
@@ -250,12 +284,12 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
         int score = 0;
         if (keywords.Contains(symbol.Name))
         {
-            score += 100;
+            score += ExactSymbolNameScore;
         }
 
         if (symbol.Name.Contains('.') && ContainsWholeQualifiedSymbol(taskText, symbol.Name))
         {
-            score += 120;
+            score += WholeQualifiedSymbolScore;
         }
 
         var dotSegments = symbol.Name.Split('.', StringSplitOptions.RemoveEmptyEntries)
@@ -265,7 +299,7 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
         {
             if (keywords.Contains(segment))
             {
-                score += 80;
+                score += ExactDotSegmentScore;
                 continue;
             }
 
@@ -278,13 +312,13 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
             {
                 if (subTokens.Contains(keyword))
                 {
-                    score += 20;
+                    score += ExactSubTokenScore;
                     matchedSubToken = true;
                 }
                 else if (keyword.Length >= MinSubstringKeywordLength &&
                          segment.Contains(keyword, StringComparison.OrdinalIgnoreCase))
                 {
-                    score += 10;
+                    score += KeywordSubstringInSegmentScore;
                     matchedSubToken = true;
                 }
             }
@@ -295,7 +329,7 @@ public partial class RoslynSymbolIndexProvider : IWorkspaceSymbolService
                 keywords.Any(k => k.Length >= MinSubstringKeywordLength &&
                                   k.Contains(segment, StringComparison.OrdinalIgnoreCase)))
             {
-                score += 5;
+                score += SegmentSubstringInKeywordScore;
             }
         }
 

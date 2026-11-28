@@ -179,4 +179,60 @@ public class PaymentGateway
         Assert.Equal(0, RoslynSymbolIndexProvider.ScoreSymbolRelevance(stopWordMember, keywords, "Investigate ValueTask and TypeConverter"));
         Assert.Equal(0, RoslynSymbolIndexProvider.ScoreSymbolRelevance(stopWordTypeMember, keywords, "Investigate ValueTask and TypeConverter"));
     }
+
+    [Fact]
+    public async Task Step1166_BalancedCompositeRanking_And_SourceRootSandboxClassification()
+    {
+        // Source-rooted feature folder named "Sandbox" stays Production, while standalone "sandbox/" is Auxiliary
+        Assert.Equal((RoslynSymbolIndexProvider.SymbolPathCategory.Production, true),
+            RoslynSymbolIndexProvider.ClassifyPathPriority("src/MyApp/Sandbox/SandboxPolicy.cs"));
+        Assert.Equal((RoslynSymbolIndexProvider.SymbolPathCategory.Auxiliary, false),
+            RoslynSymbolIndexProvider.ClassifyPathPriority("sandbox/Demo/WidgetRunner.cs"));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "ncf-roslyn-1166-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var srcDir = Path.Combine(tempDir, "src", "Unrelated");
+            var sandboxDir = Path.Combine(tempDir, "sandbox", "Target");
+            Directory.CreateDirectory(srcDir);
+            Directory.CreateDirectory(sandboxDir);
+
+            // Create 18 weak substring hits in src/ matching "Widget" in "TargetWidgetExecutor"
+            var srcSb = new System.Text.StringBuilder("namespace DemoApp.Unrelated;\n");
+            for (int i = 1; i <= 18; i++)
+            {
+                srcSb.AppendLine($"public class LegacyWidgetAdapter{i:D2} {{ public void Run() {{}} }}");
+            }
+            await File.WriteAllTextAsync(Path.Combine(srcDir, "LegacyWidgets.cs"), srcSb.ToString());
+
+            await File.WriteAllTextAsync(
+                Path.Combine(sandboxDir, "TargetWidgetExecutor.cs"),
+                """
+                namespace DemoApp.Sandbox;
+
+                public class TargetWidgetExecutor
+                {
+                    public void ExecuteSpecial() {}
+                }
+                """);
+
+            var indexer = new RoslynSymbolIndexProvider();
+            var prompt = await indexer.GetMatchingSymbolsPromptAsync(
+                tempDir,
+                "Fix TargetWidgetExecutor.ExecuteSpecial bug",
+                new LocalOptimizationFlags());
+
+            Assert.Contains("TargetWidgetExecutor.ExecuteSpecial", prompt);
+            Assert.Contains("sandbox/Target/TargetWidgetExecutor.cs", prompt);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
 }

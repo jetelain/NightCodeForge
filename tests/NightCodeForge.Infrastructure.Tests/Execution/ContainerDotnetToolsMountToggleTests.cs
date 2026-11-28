@@ -280,6 +280,22 @@ public sealed class ContainerDotnetToolsMountToggleTests
                 .ReturnsAsync(new ProcessExecutionResult(0, "alpine\n", string.Empty));
             runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.Config.Image}}"))))
                 .Returns(new ProcessExecutionResult(0, "alpine\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "false\n", string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}"))))
+                .Returns(new ProcessExecutionResult(0, "false\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "bridge\n", string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}"))))
+                .Returns(new ProcessExecutionResult(0, "bridge\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .HostConfig.ExtraHosts}}{{.}};{{end}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .HostConfig.ExtraHosts}}{{.}};{{end}}"))))
+                .Returns(new ProcessExecutionResult(0, string.Empty, string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}"))))
+                .Returns(new ProcessExecutionResult(0, string.Empty, string.Empty));
             return runner;
         }
 
@@ -316,10 +332,13 @@ public sealed class ContainerDotnetToolsMountToggleTests
     {
         static Mock<IProcessRunner> CreateRunner(
             ContainerExecutorOptions opts,
-            string networkMode = "none",
+            string? networkMode = null,
             string extraHosts = "",
-            string envOut = "")
+            string envOut = "",
+            string? readonlyRootfs = null)
         {
+            var effectiveNetworkMode = networkMode ?? (opts.IsRestrictedReadOnly || opts.DisableNetwork ? "none" : "bridge");
+            var effectiveReadonlyRootfs = readonlyRootfs ?? (opts.IsRestrictedReadOnly ? "true" : "false");
             var mounts = ContainerMountAndDriftBuilder.BuildVolumeMounts(opts);
             var mountsOut = string.Concat(mounts.Select(m =>
                 $"{m.ContainerPath}={m.HostPath}={(!m.IsReadOnly).ToString().ToLowerInvariant()};"));
@@ -337,10 +356,14 @@ public sealed class ContainerDotnetToolsMountToggleTests
                 .ReturnsAsync(new ProcessExecutionResult(0, ContainerExecutorOptions.RestrictedReadOnlyUserUidGid + "\n", string.Empty));
             runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.Config.User}}"))))
                 .Returns(new ProcessExecutionResult(0, ContainerExecutorOptions.RestrictedReadOnlyUserUidGid + "\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, effectiveReadonlyRootfs + "\n", string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}"))))
+                .Returns(new ProcessExecutionResult(0, effectiveReadonlyRootfs + "\n", string.Empty));
             runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}")), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new ProcessExecutionResult(0, networkMode + "\n", string.Empty));
+                .ReturnsAsync(new ProcessExecutionResult(0, effectiveNetworkMode + "\n", string.Empty));
             runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}"))))
-                .Returns(new ProcessExecutionResult(0, networkMode + "\n", string.Empty));
+                .Returns(new ProcessExecutionResult(0, effectiveNetworkMode + "\n", string.Empty));
             runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .HostConfig.ExtraHosts}}{{.}};{{end}}")), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ProcessExecutionResult(0, extraHosts, string.Empty));
             runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .HostConfig.ExtraHosts}}{{.}};{{end}}"))))
@@ -541,6 +564,10 @@ public sealed class ContainerDotnetToolsMountToggleTests
                 .ReturnsAsync(new ProcessExecutionResult(0, "none\n", string.Empty));
             runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}"))))
                 .Returns(new ProcessExecutionResult(0, "none\n", string.Empty));
+            runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}")), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "false\n", string.Empty));
+            runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}"))))
+                .Returns(new ProcessExecutionResult(0, "false\n", string.Empty));
             runner.Setup(r => r.RunAsync(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}")), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ProcessExecutionResult(0, envOut, string.Empty));
             runner.Setup(r => r.Run(It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}"))))

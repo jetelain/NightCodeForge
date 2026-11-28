@@ -124,6 +124,8 @@ public class AgentsMdServiceTests
         Assert.Equal("dotnet build && dotnet test", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental&& dotnet test"));
         Assert.Equal("dotnet build ; dotnet test", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental; dotnet test"));
         Assert.Equal("dotnet build --no-incremental-custom", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental-custom"));
+        Assert.Equal("dotnet build  &&\n  dotnet test", AgentsMdService.StripNoIncrementalFlag("  dotnet build  &&\n  dotnet test  "));
+        Assert.Equal("dotnet build &&\n  dotnet test", AgentsMdService.StripNoIncrementalFlag("dotnet build --no-incremental &&\n  dotnet test"));
 
         var service = new AgentsMdService();
 

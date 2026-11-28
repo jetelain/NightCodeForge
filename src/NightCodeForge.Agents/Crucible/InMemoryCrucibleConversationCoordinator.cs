@@ -64,7 +64,7 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
         return new CaptureScopeRestore(previous);
     }
 
-    public Task<CrucibleConversationState> BeginAsync(
+    public async Task<CrucibleConversationState> BeginAsync(
         AgentSessionContext context,
         string harnessId,
         CancellationToken cancellationToken)
@@ -142,7 +142,8 @@ public sealed class InMemoryCrucibleConversationCoordinator : ICrucibleConversat
             capture.CapturedMetrics = null;
         }
 
-        return Task.FromResult(state);
+        await state.DrainAsync().ConfigureAwait(false);
+        return state;
     }
 
     public async Task<string?> SaveTranscriptAsync(

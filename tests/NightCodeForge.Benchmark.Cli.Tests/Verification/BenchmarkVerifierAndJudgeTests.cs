@@ -2459,6 +2459,8 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("/etc/ssl/certs/ca-certificates.crt", wrappedDefault);
         Assert.Contains("SETUPTOOLS_SCM_PRETEND_VERSION", wrappedDefault);
         Assert.DoesNotContain("ncf-pip-constraints.txt\"", wrappedDefault);
+        Assert.Contains("if ! pytest --version >/dev/null 2>&1; then", wrappedDefault);
+        Assert.DoesNotContain("command -v pytest", wrappedDefault);
         Assert.Contains("if [ -f /tmp/ncf-bench-venv/.ncf-pip-constraints ]; then rm -rf /tmp/ncf-bench-venv /tmp/ncf-pip-constraints.txt; fi", wrappedDefault);
 
         var wrappedNode = BenchmarkTestCommandResolver.WrapWithContainerDependencySetup(
@@ -2532,6 +2534,9 @@ public sealed class BenchmarkVerifierAndJudgeTests : IDisposable
         Assert.Contains("Werkzeug<3.0", wrappedPinned);
         Assert.Contains("click>=8.0", wrappedPinned);
         Assert.Contains(".ncf-pip-constraints", wrappedPinned);
+        Assert.DoesNotContain("if ! pytest --version >/dev/null 2>&1; then", wrappedPinned);
+        Assert.Contains("if [ ! -x /tmp/ncf-bench-venv/bin/pytest ] || [ ! -f /tmp/ncf-bench-venv/.ncf-pip-constraints ]; then", wrappedPinned);
+        Assert.Contains("export PATH=\"/tmp/ncf-bench-venv/bin:$PATH\" && { pytest --junitxml=/workspace/.ncf-bench-results/junit.xml; }", wrappedPinned);
     }
 
     [Fact]

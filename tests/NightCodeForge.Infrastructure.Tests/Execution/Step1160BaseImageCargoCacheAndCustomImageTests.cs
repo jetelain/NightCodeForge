@@ -103,6 +103,18 @@ public sealed class Step1160BaseImageCargoCacheAndCustomImageTests : IDisposable
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ProcessExecutionResult(0, imageOut + "\n", string.Empty));
             runner.Setup(r => r.RunAsync(
+                    It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.ReadonlyRootfs}}")),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "false\n", string.Empty));
+            runner.Setup(r => r.RunAsync(
+                    It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{.HostConfig.NetworkMode}}")),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, "bridge\n", string.Empty));
+            runner.Setup(r => r.RunAsync(
+                    It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .HostConfig.ExtraHosts}}{{.}};{{end}}")),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+            runner.Setup(r => r.RunAsync(
                     It.Is<ProcessStartSpec>(s => s.ArgumentList != null && s.ArgumentList.Contains("{{range .Config.Env}}{{.}}\n{{end}}")),
                     It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new ProcessExecutionResult(0, envOut, string.Empty));
@@ -110,11 +122,12 @@ public sealed class Step1160BaseImageCargoCacheAndCustomImageTests : IDisposable
         }
 
         // 1. Clean match
-        var cleanRunner = BuildDriftRunner(matchingMounts, ContainerExecutorOptions.DefaultAgentBaseImage, "CARGO_HOME=/cache/cargo\n");
+        var cleanEnv = $"CARGO_HOME=/cache/cargo\n{ContainerExecutorOptions.NpmCacheEnvVarName}={ContainerExecutorOptions.ContainerNpmCachePath}\n";
+        var cleanRunner = BuildDriftRunner(matchingMounts, ContainerExecutorOptions.DefaultAgentBaseImage, cleanEnv);
         Assert.Null(await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(cleanRunner.Object, options));
 
         // 2. Legacy v5 container image triggers drift
-        var legacyRunner = BuildDriftRunner(matchingMounts, "ncf-agent-base:v5", "CARGO_HOME=/cache/cargo\n");
+        var legacyRunner = BuildDriftRunner(matchingMounts, "ncf-agent-base:v5", cleanEnv);
         var legacyDrift = await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(legacyRunner.Object, options);
         Assert.NotNull(legacyDrift);
         Assert.Contains("Image mismatch", legacyDrift);
@@ -128,7 +141,7 @@ public sealed class Step1160BaseImageCargoCacheAndCustomImageTests : IDisposable
         // 4. Mode mismatch (:ro instead of :rw) on /cache/cargo triggers drift
         var roCargoMounts = string.Concat(expectedMounts.Select(m =>
             $"{m.ContainerPath}={m.HostPath}={(m.ContainerPath == "/cache/cargo" ? "false" : (!m.IsReadOnly).ToString().ToLowerInvariant())};"));
-        var roCargoRunner = BuildDriftRunner(roCargoMounts, ContainerExecutorOptions.DefaultAgentBaseImage, "CARGO_HOME=/cache/cargo\n");
+        var roCargoRunner = BuildDriftRunner(roCargoMounts, ContainerExecutorOptions.DefaultAgentBaseImage, cleanEnv);
         var mountDrift = await ContainerMountAndDriftBuilder.DetectContainerDriftAsync(roCargoRunner.Object, options);
         Assert.NotNull(mountDrift);
         Assert.Contains("/cache/cargo (expected rw)", mountDrift);
@@ -447,5 +460,153 @@ public sealed class Step1160BaseImageCargoCacheAndCustomImageTests : IDisposable
         await factory.EnsureHostPackageCacheDirectoriesOnceAsync(options);
 
         Assert.Equal(2, callCount);
+    }
+
+    [Fact]
+    public async Task EnsureHostPackageCacheDirectoriesOnceAsync_GuardsSymlinksScopesWideningAndCachesPerTarget()
+    {
+        var capturedCommands = new List<string>();
+        var processRunnerMock = new Mock<IProcessRunner>();
+        processRunnerMock
+            .Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
+            .Callback<ProcessStartSpec, CancellationToken>((spec, _) => capturedCommands.Add(spec.ArgumentList!.Last()))
+            .ReturnsAsync(new ProcessExecutionResult(0, string.Empty, string.Empty));
+
+        var factory = CreateContainerFactory(processRunnerMock.Object, useWsl: true);
+
+        var initialOptions = new ContainerExecutorOptions
+        {
+            UseWsl = true,
+            WslExecutable = "wsl.exe",
+            WslDistribution = "Ubuntu-24.04",
+            WslUserName = "wsluser",
+            MountPackageCaches = true,
+            NugetPackageCachePath = "~/.nuget/packages/",
+            NpmCachePath = null,
+            PnpmCachePath = null,
+            UvCachePath = null,
+            MavenCachePath = null,
+            PlaywrightCachePath = null,
+            CargoCachePath = ContainerExecutorOptions.DefaultCargoCachePath
+        };
+
+        await factory.EnsureHostPackageCacheDirectoriesOnceAsync(initialOptions);
+        await factory.EnsureHostPackageCacheDirectoriesOnceAsync(initialOptions);
+        Assert.Single(capturedCommands);
+
+        var firstCmd = capturedCommands[0];
+        // Trailing slash stripped + per-directory symlink check + isolated chmod failure + aggregate rc
+        Assert.Contains("[ ! -L \"$d\" ]", firstCmd);
+        Assert.DoesNotContain("/home/wsluser/.nuget/packages/", firstCmd);
+        Assert.Contains("2>/dev/null || true", firstCmd);
+        Assert.StartsWith("rc=0; ", firstCmd);
+        Assert.EndsWith("; exit $rc", firstCmd);
+        // Shared NuGet cache must only be chmod-widened on fresh creation ([ ! -e "$d" ]),
+        // while NCF-owned cargo cache may ensure permissions directly.
+        Assert.Contains("d='/home/wsluser/.nuget/packages'; if [ ! -L \"$d\" ] && [ ! -e \"$d\" ]; then if mkdir -p \"$d\"; then chmod 777 \"$d\" 2>/dev/null || true; else rc=1; fi; fi", firstCmd);
+        Assert.Contains("d='/home/wsluser/.cache/ncf-cargo'; if [ ! -L \"$d\" ]; then if mkdir -p \"$d\"; then chmod 777 \"$d\" 2>/dev/null || true; else rc=1; fi; fi", firstCmd);
+
+        // Introducing a custom per-option cache path under the same WSL distro must still execute setup ONLY for the new target.
+        // Any ncf-* cache directory (even on non-Cargo cache options) is treated as NCF-owned, while ~/.cargo is treated as shared.
+        var customCargoOptions = new ContainerExecutorOptions
+        {
+            UseWsl = true,
+            WslExecutable = "wsl.exe",
+            WslDistribution = "Ubuntu-24.04",
+            WslUserName = "wsluser",
+            MountPackageCaches = true,
+            NugetPackageCachePath = "~/.nuget/packages",
+            NpmCachePath = "~/.cache/ncf-npm",
+            PnpmCachePath = null,
+            UvCachePath = null,
+            MavenCachePath = null,
+            PlaywrightCachePath = null,
+            CargoCachePath = "~/.cargo"
+        };
+
+        await factory.EnsureHostPackageCacheDirectoriesOnceAsync(customCargoOptions);
+        Assert.Equal(2, capturedCommands.Count);
+        Assert.Contains("d='/home/wsluser/.cache/ncf-npm'; if [ ! -L \"$d\" ]; then if mkdir -p \"$d\"; then chmod 777 \"$d\" 2>/dev/null || true; else rc=1; fi; fi", capturedCommands[1]);
+        Assert.Contains("d='/home/wsluser/.cargo'; if [ ! -L \"$d\" ] && [ ! -e \"$d\" ]; then if mkdir -p \"$d\"; then chmod 777 \"$d\" 2>/dev/null || true; else rc=1; fi; fi", capturedCommands[1]);
+        Assert.DoesNotContain(".nuget/packages", capturedCommands[1]);
+    }
+
+    [Fact]
+    public async Task EnsureHostPackageCacheDirectoriesOnceAsync_NonWslCreatesAndCachesPerTarget_AndRetriesWslCreationFailure()
+    {
+        var nonWslRunner = new Mock<IProcessRunner>();
+        var nonWslFactory = CreateContainerFactory(nonWslRunner.Object, useWsl: false);
+
+        var tempCacheRoot = Path.Combine(_tempDir, "pkg-caches");
+        var nugetDir = Path.Combine(tempCacheRoot, "nuget");
+        var cargoDir = Path.Combine(tempCacheRoot, "ncf-cargo");
+
+        var nonWslOptions = new ContainerExecutorOptions
+        {
+            UseWsl = false,
+            MountPackageCaches = true,
+            NugetPackageCachePath = nugetDir,
+            NpmCachePath = null,
+            PnpmCachePath = null,
+            UvCachePath = null,
+            MavenCachePath = null,
+            PlaywrightCachePath = null,
+            CargoCachePath = cargoDir
+        };
+
+        await nonWslFactory.EnsureHostPackageCacheDirectoriesOnceAsync(nonWslOptions);
+        Assert.True(Directory.Exists(nugetDir));
+        Assert.True(Directory.Exists(cargoDir));
+
+        // Second option with a new cache target creates the new directory while keeping prior targets cached.
+        var customNpmDir = Path.Combine(tempCacheRoot, "ncf-npm");
+        await nonWslFactory.EnsureHostPackageCacheDirectoriesOnceAsync(new ContainerExecutorOptions
+        {
+            UseWsl = false,
+            MountPackageCaches = true,
+            NugetPackageCachePath = nugetDir,
+            NpmCachePath = customNpmDir,
+            PnpmCachePath = null,
+            UvCachePath = null,
+            MavenCachePath = null,
+            PlaywrightCachePath = null,
+            CargoCachePath = cargoDir
+        });
+        Assert.True(Directory.Exists(customNpmDir));
+
+        // WSL creation failure (non-zero exit code) must NOT poison per-target cache, so subsequent calls retry.
+        var wslAttempts = 0;
+        var wslRunner = new Mock<IProcessRunner>();
+        wslRunner
+            .Setup(r => r.RunAsync(It.IsAny<ProcessStartSpec>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                wslAttempts++;
+                return wslAttempts == 1
+                    ? new ProcessExecutionResult(1, string.Empty, "mkdir: cannot create directory: Permission denied")
+                    : new ProcessExecutionResult(0, string.Empty, string.Empty);
+            });
+
+        var wslFactory = CreateContainerFactory(wslRunner.Object, useWsl: true);
+        var wslOptions = new ContainerExecutorOptions
+        {
+            UseWsl = true,
+            WslExecutable = "wsl.exe",
+            WslDistribution = "Ubuntu-24.04",
+            WslUserName = "wsluser",
+            MountPackageCaches = true,
+            NugetPackageCachePath = "~/.nuget/packages",
+            NpmCachePath = null,
+            PnpmCachePath = null,
+            UvCachePath = null,
+            MavenCachePath = null,
+            PlaywrightCachePath = null,
+            CargoCachePath = ContainerExecutorOptions.DefaultCargoCachePath
+        };
+
+        await wslFactory.EnsureHostPackageCacheDirectoriesOnceAsync(wslOptions);
+        await wslFactory.EnsureHostPackageCacheDirectoriesOnceAsync(wslOptions);
+        await wslFactory.EnsureHostPackageCacheDirectoriesOnceAsync(wslOptions);
+        Assert.Equal(2, wslAttempts);
     }
 }

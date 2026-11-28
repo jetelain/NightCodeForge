@@ -458,5 +458,204 @@ public class ExecutionEnvironmentProviderTests
         Assert.Same(replacementEnv.Object, second);
         Assert.Equal(["remove-base-start", "remove-base-end", "create-base-2"], events);
     }
+
+    [Fact]
+    public async Task CleanupWorkspaceContainersAsync_DoesNotEvictConcurrentTaskEntryWithoutItsLock()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+
+        var baseEnv = new Mock<IExecutionEnvironment>();
+        var baseDisp = baseEnv.As<IDisposable>();
+        var concurrentTaskEnv = new Mock<IExecutionEnvironment>();
+        var concurrentTaskDisp = concurrentTaskEnv.As<IDisposable>();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.Setup(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(baseEnv.Object);
+        containerFactory.Setup(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                99,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(concurrentTaskEnv.Object);
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var workspace = new Workspace
+        {
+            Id = 33,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            RepositoryPath = "/tmp/ws-33/clone"
+        };
+
+        // Hold base cache entry, then simulate ListTaskContainerIdsAsync inserting a new task entry concurrently
+        // right before CleanupWorkspaceContainersAsync acquires base locks.
+        Assert.Same(baseEnv.Object, await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard));
+
+        var listStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        containerFactory.Setup(f => f.ListTaskContainerIdsAsync(workspace, It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                listStarted.TrySetResult();
+                await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 99);
+                return Array.Empty<int>();
+            });
+
+        await provider.CleanupWorkspaceContainersAsync(workspace);
+
+        baseDisp.Verify(d => d.Dispose(), Times.Once);
+        concurrentTaskDisp.Verify(d => d.Dispose(), Times.Never);
+
+        // Concurrent task entry must still be cached (factory invoked only once for taskId: 99)
+        var cachedTaskEnv = await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 99);
+        Assert.Same(concurrentTaskEnv.Object, cachedTaskEnv);
+        containerFactory.Verify(
+            f => f.CreateContainerEnvironmentAsync(workspace, SandboxSecurityTier.Standard, 99, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CleanupWorkspaceContainersAsync_AcquiresTriageCacheKeyLock_BeforeRemovingBaseContainers()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+
+        var events = new List<string>();
+        var triageCreationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowTriageCreationFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var triageEnv = new Mock<IExecutionEnvironment>();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.Setup(f => f.ListTaskContainerIdsAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<int>());
+        containerFactory.Setup(f => f.CreateContainerEnvironmentAsync(
+                It.Is<SandboxScopeDescriptor>(s => s.ScopeCacheKey == SandboxScopeDescriptor.BuildTriageCacheKey(44, SandboxSecurityTier.RestrictedReadOnly)),
+                It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                events.Add("create-triage-start");
+                triageCreationStarted.TrySetResult();
+                await allowTriageCreationFinish.Task;
+                events.Add("create-triage-end");
+                return triageEnv.Object;
+            });
+        containerFactory.Setup(f => f.RemoveBaseContainerAsync(It.IsAny<Workspace>(), It.IsAny<CancellationToken>()))
+            .Callback(() => events.Add("remove-base"))
+            .Returns(Task.CompletedTask);
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var workspace = new Workspace
+        {
+            Id = 44,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            RepositoryPath = "/tmp/ws-44/clone"
+        };
+
+        var triageScope = new SandboxScopeDescriptor(
+            SandboxScopeKind.WorkspaceClone,
+            ExecutionMode.ContainerSandbox,
+            SandboxSecurityTier.RestrictedReadOnly,
+            SandboxMountTable.ForWorkspace("/tmp/ws-44/clone", isReadOnly: true),
+            workspaceId: 44,
+            workspace: workspace,
+            scopeCacheKey: SandboxScopeDescriptor.BuildTriageCacheKey(44, SandboxSecurityTier.RestrictedReadOnly));
+
+        var triageTask = provider.GetEnvironmentAsync(triageScope);
+        await triageCreationStarted.Task;
+
+        var cleanupTask = provider.CleanupWorkspaceContainersAsync(workspace);
+        await Task.Delay(50);
+        Assert.DoesNotContain("remove-base", events);
+
+        allowTriageCreationFinish.TrySetResult();
+        await Task.WhenAll(triageTask, cleanupTask);
+
+        Assert.Equal(["create-triage-start", "create-triage-end", "remove-base"], events);
+    }
+
+    [Fact]
+    public async Task CleanupTaskContainerAsync_EvictsOnlyTargetTaskWithoutTouchingSiblingOrBaseEntries()
+    {
+        var pathResolver = new WorkspacePathResolver(
+            new Mock<IWslMetadataService>().Object,
+            Microsoft.Extensions.Options.Options.Create(new ExecutionEnvironmentProviderOptions()));
+        var processRunner = new Mock<IProcessRunner>();
+        var bareHost = new BareHostExecutionEnvironment(processRunner.Object, pathResolver);
+
+        var baseEnv = new Mock<IExecutionEnvironment>();
+        var baseDisp = baseEnv.As<IDisposable>();
+        var task1Env = new Mock<IExecutionEnvironment>();
+        var task1Disp = task1Env.As<IDisposable>();
+        var task2Env = new Mock<IExecutionEnvironment>();
+        var task2Disp = task2Env.As<IDisposable>();
+
+        var containerFactory = new Mock<IContainerEnvironmentFactory>();
+        containerFactory.Setup(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                null,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(baseEnv.Object);
+        containerFactory.Setup(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                1,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(task1Env.Object);
+        containerFactory.Setup(f => f.CreateContainerEnvironmentAsync(
+                It.IsAny<Workspace>(),
+                SandboxSecurityTier.Standard,
+                2,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(task2Env.Object);
+
+        var provider = new ExecutionEnvironmentProvider(
+            bareHost,
+            processRunner.Object,
+            new Mock<IGitWorkspaceManager>().Object,
+            containerFactory.Object,
+            NullLogger<ExecutionEnvironmentProvider>.Instance);
+
+        var workspace = new Workspace
+        {
+            Id = 55,
+            ExecutionMode = ExecutionMode.ContainerSandbox,
+            RepositoryPath = "/tmp/ws-55/clone"
+        };
+
+        Assert.Same(baseEnv.Object, await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard));
+        Assert.Same(task1Env.Object, await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 1));
+        Assert.Same(task2Env.Object, await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 2));
+
+        await provider.CleanupTaskContainerAsync(workspace, taskId: 1);
+
+        task1Disp.Verify(d => d.Dispose(), Times.Once);
+        task2Disp.Verify(d => d.Dispose(), Times.Never);
+        baseDisp.Verify(d => d.Dispose(), Times.Never);
+        Assert.Same(baseEnv.Object, await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard));
+        Assert.Same(task2Env.Object, await provider.GetEnvironmentAsync(workspace, SandboxSecurityTier.Standard, taskId: 2));
+    }
 }
 

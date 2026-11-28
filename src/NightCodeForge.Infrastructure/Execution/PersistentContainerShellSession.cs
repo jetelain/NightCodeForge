@@ -210,9 +210,9 @@ public sealed partial class PersistentContainerShellSession : IDisposable
         }
         var rustupHome = ContainerMountAndDriftBuilder.ResolveRustupHomePath(_options);
         if (!string.IsNullOrWhiteSpace(rustupHome) &&
-            (environmentVariables == null || !environmentVariables.ContainsKey("RUSTUP_HOME")))
+            (environmentVariables == null || !environmentVariables.ContainsKey(ContainerExecutorOptions.RustupHomeEnvVarName)))
         {
-            await _stdin.WriteLineAsync($"export RUSTUP_HOME={ShellQuoting.QuotePosix(rustupHome)}");
+            await _stdin.WriteLineAsync($"export {ContainerExecutorOptions.RustupHomeEnvVarName}={ShellQuoting.QuotePosix(rustupHome)}");
         }
         await _stdin.WriteLineAsync($"mkdir -p \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" 2>/dev/null || true");
         await _stdin.WriteLineAsync($"if [ -d \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ] && [ -w \"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\" ]; then export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{ContainerExecutorOptions.ContainerVsTestArtifactsBaseDirectory}\"; else export {ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}=\"{FallbackHomePathExpression}/{ContainerExecutorOptions.VsTestArtifactsSubDirectoryName}\"; mkdir -p \"${ContainerExecutorOptions.VsTestArtifactsBaseDirectoryEnvVar}\" 2>/dev/null || true; fi");

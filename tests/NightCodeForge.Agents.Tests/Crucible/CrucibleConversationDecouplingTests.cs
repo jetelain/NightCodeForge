@@ -560,6 +560,45 @@ public sealed class CrucibleConversationDecouplingTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task InMemoryCrucibleConversationCoordinator_BeginAsync_DrainsInitialTurnsBeforeReturning()
+    {
+        var transcriptService = new SessionTranscriptService(Path.Combine(_tempDir, "default-transcripts"));
+        var coordinator = new InMemoryCrucibleConversationCoordinator(
+            transcriptService,
+            NullLogger<InMemoryCrucibleConversationCoordinator>.Instance);
+
+        var repoDir = Path.Combine(_tempDir, "repo-drain");
+        Directory.CreateDirectory(repoDir);
+
+        var capture = new InMemoryConversationCapture(Path.Combine(_tempDir, "bench-out", "drain.md"));
+        var context = new AgentSessionContext
+        {
+            ForgeTask = new ForgeTask { Id = 0, Title = "Drain test", Description = "Desc" },
+            Workspace = new Workspace { Id = 0, Name = "bench", RepositoryPath = repoDir },
+            Profile = new AgentProfile { Id = "bench-impl", Name = "Bench", ModelName = "qwen3:8b" },
+            StageId = StandardStageIds.Implementation,
+            BootstrapPrompt = "Initial prompt",
+            SyntheticPriming = new SyntheticPrimingExecution(
+                SourceStageId: StandardStageIds.PreImplementationBaseline,
+                ToolName: CanonicalToolNames.Bash,
+                Command: "dotnet build",
+                Output: "Build failed",
+                IsSuccess: false),
+            WorkspacePath = repoDir
+        };
+
+        using var _ = InMemoryCrucibleConversationCoordinator.BeginCapture(capture);
+        var state = await coordinator.BeginAsync(context, StandardHarnessIds.Crucible, CancellationToken.None);
+
+        // Immediately upon BeginAsync returning (without an external DrainAsync call), turns must already be materialized.
+        Assert.NotNull(capture.TurnSink);
+        Assert.Equal(4, capture.TurnSink!.Turns.Count);
+        Assert.Equal(4, state.GetTrackedTurnsSnapshot().Count);
+        Assert.Contains(capture.TurnSink.Turns, t => t.Content == "Initial prompt");
+        Assert.Contains(capture.TurnSink.Turns, t => t.Role == StageTurnRole.ToolResult && t.Content == "Build failed");
+    }
+
     private sealed class TerminalToolChatClient(bool triggerAsk) : IChatClient
     {
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>

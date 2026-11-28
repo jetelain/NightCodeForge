@@ -489,6 +489,11 @@ public sealed record SandboxScopeDescriptor
             : $"ws:{workspaceId ?? 0}:tier:{securityTier}";
     }
 
+    public static string BuildTriageCacheKey(
+        int? workspaceId,
+        SandboxSecurityTier securityTier = SandboxSecurityTier.RestrictedReadOnly) =>
+        $"ws:{workspaceId ?? 0}:triage:tier:{securityTier}";
+
     public static SandboxScopeDescriptor ForWorkspace(
         Workspace workspace,
         SandboxSecurityTier securityTier,

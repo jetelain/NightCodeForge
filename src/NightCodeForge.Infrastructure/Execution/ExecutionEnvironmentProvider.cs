@@ -254,8 +254,13 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return;
         }
 
-        using var _ = await AcquireMultiKeyLocksAsync(GetTaskLockKeys(workspace.Id, taskId), cancellationToken).ConfigureAwait(false);
-        DiscardMatchingCachedEnvironmentsUnderLock(e => e.WorkspaceId == workspace.Id && e.TaskId == taskId);
+        var lockKeys = GetTaskLockKeys(workspace.Id, taskId).ToList();
+        var lockKeySet = lockKeys.ToHashSet(StringComparer.Ordinal);
+        using var _ = await AcquireMultiKeyLocksAsync(lockKeys, cancellationToken).ConfigureAwait(false);
+        DiscardMatchingCachedEnvironmentsUnderLock(e =>
+            e.WorkspaceId == workspace.Id &&
+            e.TaskId == taskId &&
+            lockKeySet.Contains(e.CacheKey));
         await _containerEnvironmentFactory.RemoveTaskContainerAsync(workspace, taskId, cancellationToken).ConfigureAwait(false);
     }
 
@@ -279,8 +284,13 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             await CleanupTaskContainerAsync(workspace, taskId, cancellationToken).ConfigureAwait(false);
         }
 
-        using var _ = await AcquireMultiKeyLocksAsync(GetWorkspaceBaseLockKeys(workspace.Id), cancellationToken).ConfigureAwait(false);
-        DiscardMatchingCachedEnvironmentsUnderLock(e => e.WorkspaceId == workspace.Id);
+        var lockKeys = GetWorkspaceBaseLockKeys(workspace.Id).ToList();
+        var lockKeySet = lockKeys.ToHashSet(StringComparer.Ordinal);
+        using var _ = await AcquireMultiKeyLocksAsync(lockKeys, cancellationToken).ConfigureAwait(false);
+        DiscardMatchingCachedEnvironmentsUnderLock(e =>
+            e.WorkspaceId == workspace.Id &&
+            e.TaskId == null &&
+            lockKeySet.Contains(e.CacheKey));
         await _containerEnvironmentFactory.RemoveBaseContainerAsync(workspace, cancellationToken).ConfigureAwait(false);
     }
 
@@ -310,11 +320,13 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
             return 0;
         }
 
-        using var _ = await AcquireMultiKeyLocksAsync(GetWorkspaceBaseLockKeys(workspace.Id), cancellationToken).ConfigureAwait(false);
+        var lockKeys = GetWorkspaceBaseLockKeys(workspace.Id).ToList();
+        var lockKeySet = lockKeys.ToHashSet(StringComparer.Ordinal);
+        using var _ = await AcquireMultiKeyLocksAsync(lockKeys, cancellationToken).ConfigureAwait(false);
 
         var now = DateTime.UtcNow;
         var workspaceEntries = _cachedEnvironments.Values
-            .Where(e => e.WorkspaceId == workspace.Id && e.TaskId == null)
+            .Where(e => e.WorkspaceId == workspace.Id && e.TaskId == null && lockKeySet.Contains(e.CacheKey))
             .ToList();
 
         if (workspaceEntries.Count == 0)
@@ -582,6 +594,7 @@ public class ExecutionEnvironmentProvider : IExecutionEnvironmentProvider
         foreach (var tier in Enum.GetValues<SandboxSecurityTier>())
         {
             yield return SandboxScopeDescriptor.BuildCacheKey(SandboxScopeKind.WorkspaceClone, workspaceId, null, tier);
+            yield return SandboxScopeDescriptor.BuildTriageCacheKey(workspaceId, tier);
         }
 
         foreach (var entry in _cachedEnvironments.Values)
