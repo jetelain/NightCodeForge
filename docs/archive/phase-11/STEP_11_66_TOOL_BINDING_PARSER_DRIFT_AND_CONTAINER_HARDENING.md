@@ -1,6 +1,6 @@
-# 🛡️ Step 11.66: Tool Binding Diagnostics, Question Parser, Symmetric Container Drift & Lifecycle Hardening
+# ðŸ›¡ï¸ Step 11.66: Tool Binding Diagnostics, Question Parser, Symmetric Container Drift & Lifecycle Hardening
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Agents`, `NightCodeForge.Infrastructure`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Core.Tests`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Benchmark.Cli.Tests`  

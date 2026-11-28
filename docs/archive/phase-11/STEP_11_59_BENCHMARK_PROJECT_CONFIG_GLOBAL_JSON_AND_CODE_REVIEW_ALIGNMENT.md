@@ -1,6 +1,6 @@
-# 🔧 Step 11.59: Benchmark ProjectConfig Propagation, Clean global.json Scoping & Code Review Verdict Alignment
+# ðŸ”§ Step 11.59: Benchmark ProjectConfig Propagation, Clean global.json Scoping & Code Review Verdict Alignment
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `NightCodeForge.Agents`, `benchmarks/datasets`  
@@ -17,12 +17,12 @@
 Inspection of the `v1-smoke-Flint-latest-20261124-123321` benchmark run (`18 / 28` completed instances at inspection time) surfaced three benchmark configuration, git-hygiene, and dataset/verdict alignment issues:
 
 1. **Missing `WorkspaceProjectConfig` & Misleading `docs/tasks/` Guidance:**
-   - `CrucibleBenchmarkRunner` constructs an ephemeral `Workspace` without supplying a language-accurate `WorkspaceProjectConfig` (`CodeStackPresets.ResolveConfig` returns an empty config when `.nightcodeforge/config.json` does not exist in external repos). As a result, `AgentsMdService.FormatExecutionGuidelines` falls back to `dotnet build` and `dotnet test --no-build` across Python, JavaScript, TypeScript, and Rust repositories—causing the model to literally run `dotnet build` on Flask (`pallets__flask-5014`).
+   - `CrucibleBenchmarkRunner` constructs an ephemeral `Workspace` without supplying a language-accurate `WorkspaceProjectConfig` (`CodeStackPresets.ResolveConfig` returns an empty config when `.nightcodeforge/config.json` does not exist in external repos). As a result, `AgentsMdService.FormatExecutionGuidelines` falls back to `dotnet build` and `dotnet test --no-build` across Python, JavaScript, TypeScript, and Rust repositoriesâ€”causing the model to literally run `dotnet build` on Flask (`pallets__flask-5014`).
    - Additionally, `BenchmarkStagePolicyResolver` injects the standard `Implementation` stage directive referencing `docs/tasks/` even when no task markdown file exists, leading agents on SWE-bench instances to spend initial turns searching for a non-existent `docs/tasks/` directory.
 2. **`DotNetGlobalJsonResilienceScope` Dirties `git status` During Agent Execution:**
    - `DotNetGlobalJsonResilienceScope` relaxes `global.json` `rollForward` in place on disk while the agent runs. Agents inspecting `git status` or `git diff` (observed in `ncf-cr-csharp-001` and `ncf-cr-csharp-003`) notice an unexpected modified `global.json`, spend extra turns investigating it, and risk reverting the relaxation.
 3. **Code Review Benchmark Verdict & Tier Boundary Misalignment (`ncf-cr-csharp-001`, `ncf-cr-csharp-006`, `ncf-cr-csharp-008`):**
-   - On `ncf-cr-csharp-006` and `ncf-cr-csharp-008`, the model identified 100% of expected findings, fixed the localized single-method bugs, added regression tests, and passed the full test suite—yet failed because `expected_verdict` was `RequestChanges` while the `code-review-fix` stage directive instructs the reviewer to reserve Tier 2 rejection (`request_changes`) for major missing features or architectural redesigns and apply Tier 1 fixes for localized defects.
+   - On `ncf-cr-csharp-006` and `ncf-cr-csharp-008`, the model identified 100% of expected findings, fixed the localized single-method bugs, added regression tests, and passed the full test suiteâ€”yet failed because `expected_verdict` was `RequestChanges` while the `code-review-fix` stage directive instructs the reviewer to reserve Tier 2 rejection (`request_changes`) for major missing features or architectural redesigns and apply Tier 1 fixes for localized defects.
    - On `ncf-cr-csharp-001` (`expected_verdict: Approve`), the model found zero defects and only wrapped a single long test line for style polish; `BenchmarkVerifier.ClassifyCodeReviewVerdict` treats any non-empty `ModelPatch` as `MinorFix`, resulting in a `0.0` score.
 
 ---

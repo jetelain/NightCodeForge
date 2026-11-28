@@ -1,6 +1,6 @@
-# 📊 Step 11.65: Benchmark Dataset Parity, Bug-Triggering MinorFix Validation, Scoring Fairness & Telemetry Accuracy
+# ðŸ“Š Step 11.65: Benchmark Dataset Parity, Bug-Triggering MinorFix Validation, Scoring Fairness & Telemetry Accuracy
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Agents`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Core.Tests`, `NightCodeForge.Agents.Tests`, `NightCodeForge.Benchmark.Cli.Tests`, `benchmarks/datasets/`  
@@ -43,7 +43,7 @@ Analysis of the post-Step-11.63 `v1-smoke` benchmark runs (`v1-smoke-Qwen3.8-27B
 
 ### 2.2 Bug-Triggering `test_patch` & Pre-Fix Failure Validation for `MinorFix` Code Reviews
 - Every `MinorFix` entry in `benchmarks/datasets/v1-code-review.jsonl` (`ncf-cr-csharp-003`, `ncf-cr-csharp-004`, `ncf-cr-csharp-005`, `ncf-cr-csharp-010`, `ncf-cr-js-002`, `ncf-cr-rust-001`, and any additional `MinorFix` entries) MUST include:
-  - A `test_patch` placed in dedicated test file path(s) **strictly disjoint from all paths modified by `CandidatePatch` and `GoldPatch`** (because `BenchmarkVerifier.ResetAndApplyTestPatchAsync` resets every path in `TestPatch` back to `BaseCommit` before applying `TestPatch` — e.g., for `ncf-cr-rust-001`, place the bug-triggering test in a dedicated integration test under `crates/regex/tests/` exercising public `RegexMatcherBuilder` word-boundary matching rather than editing `crates/regex/src/word.rs` or candidate-modified test files).
+  - A `test_patch` placed in dedicated test file path(s) **strictly disjoint from all paths modified by `CandidatePatch` and `GoldPatch`** (because `BenchmarkVerifier.ResetAndApplyTestPatchAsync` resets every path in `TestPatch` back to `BaseCommit` before applying `TestPatch` â€” e.g., for `ncf-cr-rust-001`, place the bug-triggering test in a dedicated integration test under `crates/regex/tests/` exercising public `RegexMatcherBuilder` word-boundary matching rather than editing `crates/regex/src/word.rs` or candidate-modified test files).
   - Updated `fail_to_pass` containing the new bug-reproducing test(s) that **fail** on `BaseCommit + CandidatePatch + TestPatch` and **pass** on `BaseCommit + GoldPatch + TestPatch`, moving any pre-existing tests that already pass on `CandidatePatch` into `pass_to_pass`.
 - `BenchmarkDatasetValidator.ValidateCodeReviewAsync` MUST verify for `MinorFix` instances with test assertions that:
   1. `BaseCommit + CandidatePatch + TestPatch` **fails** `fail_to_pass` (`FailToPassPassed == 0` when `FailToPass.Count > 0`, or overall suite fails when `FailToPass.Count == 0`, proving the test catches the injected bug and preventing false-positive passes), and

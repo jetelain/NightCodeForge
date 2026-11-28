@@ -1,8 +1,8 @@
 # 🛡️ Step 11.55: Benchmark Verification Environment Parity, .NET SDK Resilience & Vitest Matching
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
-> **Status:** Proposed  
+> **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `NightCodeForge.Infrastructure`  
 > **Dependencies:** Crucible Benchmark Engine (`v1-smoke` dataset & `BenchmarkVerifier`)  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
@@ -56,9 +56,9 @@ Analysis of the `v1-smoke-Flint-latest-20261123-214242` benchmark run (28 instan
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Configure `core.longpaths true` before `git checkout --detach FETCH_HEAD` in `BenchmarkWorkspaceManager.ProvisionAsync`, with unit test verification.
-- [ ] Support deterministic per-stack dependency provisioning / container parity across Python, Node (JS/TS), and Rust (including `$HOME/.cargo/bin` on `PATH`) without contaminating `model_patch`.
-- [ ] Add `.NET` `global.json` SDK roll-forward resilience for C# execution and verification without polluting `git diff` patches, with unit tests.
-- [ ] Support subdirectory `.sln`/test `.csproj` discovery in C# verification command resolution and repo-specific test config flags (e.g. Vitest unit config), with unit tests.
-- [ ] Normalize ` > ` in `TestAssertionEvaluator.NormalizeTestIdentifier` and add unit tests covering Vitest ` > ` matching against JUnit XML outcomes.
-- [ ] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.
+- [x] Configure `core.longpaths true` before `git checkout --detach FETCH_HEAD` in `BenchmarkWorkspaceManager.ProvisionAsync`, with unit test verification.
+- [x] Support deterministic per-stack dependency provisioning / container parity across Python, Node (JS/TS), and Rust (including `$HOME/.cargo/bin` on `PATH`) without contaminating `model_patch`.
+- [x] Add `.NET` `global.json` SDK roll-forward resilience for C# execution and verification without polluting `git diff` patches, with unit tests.
+- [x] Support subdirectory `.sln`/test `.csproj` discovery in C# verification command resolution and repo-specific test config flags (e.g. Vitest unit config), with unit tests.
+- [x] Normalize ` > ` in `TestAssertionEvaluator.NormalizeTestIdentifier` and add unit tests covering Vitest ` > ` matching against JUnit XML outcomes.
+- [x] Verify all non-E2E tests pass via `dotnet test --filter "Category!=Acceptance&Category!=E2E"`.

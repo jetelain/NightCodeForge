@@ -4,7 +4,7 @@
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Proposed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Infrastructure`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Infrastructure.Tests`, `NightCodeForge.Benchmark.Cli.Tests`  
-> **Dependencies:** [Step 11.66](STEP_11_66_TOOL_BINDING_PARSER_DRIFT_AND_CONTAINER_HARDENING.md), [Step 11.67](STEP_11_67_BENCHMARK_ANTICHEAT_PYTHON_IMAGE_AND_TASKREVIEW_PARITY.md), [Step 12.45A](../features/STEP_12_45A_CROSS_PLATFORM_LAYERED_CONTAINER_IMAGES_AND_TOOLCHAIN_VOLUMES.md), `SandboxScopeDescriptor`, `ContainerMountAndDriftBuilder`, `ContainerEnvironmentFactory`, `PersistentContainerShellSession`, `CrucibleBenchmarkRunner`, `BenchmarkVerifier`, `BenchmarkTestCommandResolver`, `BenchmarkWorkspaceManager`  
+> **Dependencies:** [Step 11.66](../archive/phase-11/STEP_11_66_TOOL_BINDING_PARSER_DRIFT_AND_CONTAINER_HARDENING.md), [Step 11.67](STEP_11_67_BENCHMARK_ANTICHEAT_PYTHON_IMAGE_AND_TASKREVIEW_PARITY.md), [Step 12.45A](../features/STEP_12_45A_CROSS_PLATFORM_LAYERED_CONTAINER_IMAGES_AND_TOOLCHAIN_VOLUMES.md), `SandboxScopeDescriptor`, `ContainerMountAndDriftBuilder`, `ContainerEnvironmentFactory`, `PersistentContainerShellSession`, `CrucibleBenchmarkRunner`, `BenchmarkVerifier`, `BenchmarkTestCommandResolver`, `BenchmarkWorkspaceManager`  
 > **Aligns With:** `AGENTS.md`, `docs/PLAN.md`
 
 > [!IMPORTANT]

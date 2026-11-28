@@ -766,20 +766,57 @@ public sealed class BenchmarkWorkspaceManagerTests : IDisposable
         Directory.CreateDirectory(lockedDir);
         Directory.CreateDirectory(siblingDir);
 
-        var lockedFile = Path.Combine(lockedDir, "locked.bin");
         var lockedSiblingFile = Path.Combine(lockedDir, "removable.txt");
         var siblingFile = Path.Combine(siblingDir, "sibling.txt");
-        await File.WriteAllTextAsync(lockedFile, "lock");
         await File.WriteAllTextAsync(lockedSiblingFile, "delete-me");
         await File.WriteAllTextAsync(siblingFile, "delete-me-too");
 
-        using (var lockStream = new FileStream(lockedFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        if (OperatingSystem.IsWindows())
         {
-            await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+            var lockedFile = Path.Combine(lockedDir, "locked.bin");
+            await File.WriteAllTextAsync(lockedFile, "lock");
 
-            Assert.True(File.Exists(lockedFile));
-            Assert.False(File.Exists(lockedSiblingFile));
-            Assert.False(Directory.Exists(siblingDir));
+            using (var lockStream = new FileStream(lockedFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+
+                Assert.True(File.Exists(lockedFile));
+                Assert.False(File.Exists(lockedSiblingFile));
+                Assert.False(Directory.Exists(siblingDir));
+            }
+        }
+        else
+        {
+            var lockedSubDir = Path.Combine(lockedDir, "locked-sub");
+            Directory.CreateDirectory(lockedSubDir);
+            var lockedFile = Path.Combine(lockedSubDir, "locked.bin");
+            await File.WriteAllTextAsync(lockedFile, "lock");
+
+            if (!Environment.IsPrivilegedProcess)
+            {
+                File.SetUnixFileMode(lockedSubDir, UnixFileMode.None);
+                try
+                {
+                    await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+
+                    Assert.True(Directory.Exists(lockedSubDir));
+                    Assert.False(File.Exists(lockedSiblingFile));
+                    Assert.False(Directory.Exists(siblingDir));
+                }
+                finally
+                {
+                    File.SetUnixFileMode(lockedSubDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
+
+                Assert.True(File.Exists(lockedFile));
+            }
+            else
+            {
+                await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));
+
+                Assert.False(File.Exists(lockedSiblingFile));
+                Assert.False(Directory.Exists(siblingDir));
+            }
         }
 
         await _manager.CleanupAsync(handle).WaitAsync(TimeSpan.FromSeconds(10));

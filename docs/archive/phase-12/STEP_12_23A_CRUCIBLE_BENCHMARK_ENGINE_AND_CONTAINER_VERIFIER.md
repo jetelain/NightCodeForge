@@ -1,11 +1,11 @@
 # 🏁 Step 12.23A: Crucible Benchmark Engine, Leak-Free Workspaces & Container Verifier
 
 > **Feature Implementation Step (Part 1 of 3 — Dataset Loader, Leak-Free Git Provisioner, Stateless Crucible Runner & Verifiers)**  
-> *Parent Plan:* [Features & Integrations Roadmap](README.md)  
+> *Parent Plan:* [Phase 12 (Archive): Completed Features & Integrations](../12_EXTEND_FEATURES.md)  
 > *Companion Steps:* [Step 12.23B: Standalone Benchmark CLI (`NightCodeForge.Benchmark.Cli`)](STEP_12_23B_BENCHMARK_CLI_AND_LEADERBOARD_WEB_UI.md) | [Step 12.23C: Multi-Stack Benchmark Datasets, Importers & Crafted Scenarios](STEP_12_23C_BENCHMARK_DATASETS_IMPORTERS_AND_SCENARIOS.md)  
-> *Related Steps:* [Step 11.33: Unified LLM Provider Architecture](../archive/phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md) | [Step 11.34: Live Git Diff Worktree & Untracked Files](../archive/phase-11/STEP_11_34_LIVE_GIT_DIFF_WORKTREE_AND_UNTRACKED_FILES.md) | [Step 12.14: Global Skills Injection & Stack Tooling](../archive/phase-12/STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
-> *Source Policy:* [AGENTS.md](../../AGENTS.md)  
-> *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Agents.Tests` | *Status:* Planned | *Target Framework:* .NET 10 (C# 13)
+> *Related Steps:* [Step 11.33: Unified LLM Provider Architecture](../phase-11/STEP_11_33_UNIFIED_LLM_PROVIDER_DYNAMIC_CONTEXT_AND_FLEET_INTEGRATION.md) | [Step 11.34: Live Git Diff Worktree & Untracked Files](../phase-11/STEP_11_34_LIVE_GIT_DIFF_WORKTREE_RESOLUTION_AND_UNTRACKED_CHANGES.md) | [Step 12.14: Global Skills Injection & Stack Tooling](STEP_12_14_GLOBAL_SKILLS_INJECTION_AND_STACK_TOOLING.md)  
+> *Source Policy:* [AGENTS.md](../../../AGENTS.md)  
+> *Project Target:* `src/NightCodeForge.Core`, `src/NightCodeForge.Infrastructure`, `src/NightCodeForge.Agents`, `tests/NightCodeForge.Agents.Tests` | *Status:* Completed | *Target Framework:* .NET 10 (C# 13)
 
 > This document is a **specification**: it states required behaviors and constraints, not implementations. Implementation choices (signatures, code structure) are left to the implementer, within the constraints of the documents.
 
@@ -91,11 +91,11 @@ Guarantees zero git history leakage after `BaseCommit` and provides a self-conta
 
 ## 3. Definition of Done (DoD) Checklist
 
-- [ ] Define `BenchmarkInstance` (including `Language` and `TestResultFormat`), `BenchmarkModelCandidate`, `BenchmarkRunProvenance`, `BenchmarkJudgeConfig`, `BenchmarkRunRequest`, `BenchmarkInstanceResult`, `ToolCallTelemetryBreakdown`, `BenchmarkCandidateSummary`, and `BenchmarkRunReport` in `NightCodeForge.Core.Benchmarking`.
-- [ ] Implement `IBenchmarkDatasetLoader` supporting `Implementation` (SWE-Sharp-Bench / SWE-bench `.jsonl` / `.json` with JSON string array handling), `CodeReview`, and `TaskReview` datasets with fail-fast schema validation.
-- [ ] Implement `IBenchmarkWorkspaceManager` with cached canonical clones, leak-free `git init` + `git fetch <cachedRepoPath> <BaseCommit>` workspaces, `CodeReview` candidate branch materialization, and `TaskReview` markdown task file materialization.
-- [ ] Decouple `CrucibleConversationState` turn persistence via `IConversationTurnSink` (or in-memory `ICrucibleConversationCoordinator`), add the `ContainerExecutorOptions` / `SandboxMountTable` mount toggle for `~/.dotnet/tools`, and implement `ICrucibleBenchmarkRunner` with category-specific tool/skill gating, `LenientDispatchTelemetry` + `OnBashExecutionAudited` telemetry wiring, and `predictions.jsonl` export.
-- [ ] Implement `IBenchmarkVerifier` (containerized multi-stack `.trx` / JUnit XML / `cargo test` / `CustomTestCommand` verification for `Implementation`; deterministic verdict/anchor/file-scope verification for `CodeReview` and `TaskReview`) and optional `IBenchmarkLlmJudge`.
-- [ ] Add unit tests in `NightCodeForge.Agents.Tests` covering dataset parsing across all 3 categories, zero post-`BaseCommit` git leakage, category-specific tool/skill gating, `predictions.jsonl` generation, `.trx` / JUnit XML / `cargo test` verification, deterministic + judge review scoring, telemetry capture, and summary aggregation.
+- [x] Define `BenchmarkInstance` (including `Language` and `TestResultFormat`), `BenchmarkModelCandidate`, `BenchmarkRunProvenance`, `BenchmarkJudgeConfig`, `BenchmarkRunRequest`, `BenchmarkInstanceResult`, `ToolCallTelemetryBreakdown`, `BenchmarkCandidateSummary`, and `BenchmarkRunReport` in `NightCodeForge.Core.Benchmarking`.
+- [x] Implement `IBenchmarkDatasetLoader` supporting `Implementation` (SWE-Sharp-Bench / SWE-bench `.jsonl` / `.json` with JSON string array handling), `CodeReview`, and `TaskReview` datasets with fail-fast schema validation.
+- [x] Implement `IBenchmarkWorkspaceManager` with cached canonical clones, leak-free `git init` + `git fetch <cachedRepoPath> <BaseCommit>` workspaces, `CodeReview` candidate branch materialization, and `TaskReview` markdown task file materialization.
+- [x] Decouple `CrucibleConversationState` turn persistence via `IConversationTurnSink` (or in-memory `ICrucibleConversationCoordinator`), add the `ContainerExecutorOptions` / `SandboxMountTable` mount toggle for `~/.dotnet/tools`, and implement `ICrucibleBenchmarkRunner` with category-specific tool/skill gating, `LenientDispatchTelemetry` + `OnBashExecutionAudited` telemetry wiring, and `predictions.jsonl` export.
+- [x] Implement `IBenchmarkVerifier` (containerized multi-stack `.trx` / JUnit XML / `cargo test` / `CustomTestCommand` verification for `Implementation`; deterministic verdict/anchor/file-scope verification for `CodeReview` and `TaskReview`) and optional `IBenchmarkLlmJudge`.
+- [x] Add unit tests in `NightCodeForge.Agents.Tests` covering dataset parsing across all 3 categories, zero post-`BaseCommit` git leakage, category-specific tool/skill gating, `predictions.jsonl` generation, `.trx` / JUnit XML / `cargo test` verification, deterministic + judge review scoring, telemetry capture, and summary aggregation.
 
 

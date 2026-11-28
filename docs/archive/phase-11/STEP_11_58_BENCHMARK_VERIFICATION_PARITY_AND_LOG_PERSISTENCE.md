@@ -1,6 +1,6 @@
-# 🛡️ Step 11.58: Benchmark Multi-Stack Verification Parity, Solution Discovery & Verification Log Persistence
+# ðŸ›¡ï¸ Step 11.58: Benchmark Multi-Stack Verification Parity, Solution Discovery & Verification Log Persistence
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`, `benchmarks/datasets`  
@@ -36,7 +36,7 @@ Analysis of the `v1-smoke-Flint-latest-20261124-123321` benchmark run (`18 / 28`
 - Verification MUST emit and parse structured per-test results (e.g., JUnit XML via a Mocha JUnit reporter) or scope execution away from unsupported Unix-socket tests so `TestAssertionEvaluator` evaluates the exact `fail_to_pass` and `pass_to_pass` assertions accurately without false negatives.
 
 ### 2.3 Python Verification Runtime & Dependency Compatibility
-- Python benchmark verification MUST execute against a compatible Python runtime and pinned dependency set matching the target repository's requirements—whether via per-instance container images (`custom_container_image`), installing repository-pinned requirement files prior to or instead of unpinned `pytest`, or curating Python 3.12-compatible dataset instances.
+- Python benchmark verification MUST execute against a compatible Python runtime and pinned dependency set matching the target repository's requirementsâ€”whether via per-instance container images (`custom_container_image`), installing repository-pinned requirement files prior to or instead of unpinned `pytest`, or curating Python 3.12-compatible dataset instances.
 - Verification of valid Python patches MUST NOT fail during test collection or module import due to unpinned latest `pytest`/`Werkzeug` incompatibilities (exit code `4`) or Python 3.10+ stdlib removals (`collections.MutableMapping`).
 
 ### 2.4 Persist `VerificationLog` Diagnostics

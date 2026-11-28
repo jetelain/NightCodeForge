@@ -1,6 +1,6 @@
-# 🛡️ Step 11.63: Modern-Era Dataset Curation, Python Dependency Pinning, Verification Workspace Hygiene, MaxTurns Diagnostics & TaskReview Anchor Grounding
+# ðŸ›¡ï¸ Step 11.63: Modern-Era Dataset Curation, Python Dependency Pinning, Verification Workspace Hygiene, MaxTurns Diagnostics & TaskReview Anchor Grounding
 
-> **Parent Plan:** [docs/fixes/README.md](README.md)  
+> **Parent Plan:** [docs/archive/11_EXTEND_FEATURES.md](../11_EXTEND_FEATURES.md)  
 > **Target Framework:** .NET 10 (C# 13)  
 > **Status:** Completed  
 > **Target Projects:** `NightCodeForge.Core`, `NightCodeForge.Benchmark.Cli`, `NightCodeForge.Benchmark.Cli.Tests`  
@@ -16,20 +16,20 @@
 
 Post-Step-11.62 `v1-smoke` runs (`v1-smoke-Qwen3.8-27B-latest-20261125-215112` scoring `19/28` and `v1-smoke-Flint-latest-20261125-215052` scoring `15/28` on `feat/bench @ 7b9ddd5`) eliminated all container runtime crashes and ABI/toolchain errors, exposing six remaining dataset, environment-pinning, verification-hygiene, and grading issues:
 
-1. **Unpinned `Werkzeug >= 3.0` Breaks Legacy Flask 2.3 Verification (`pallets__flask-5014` — 2 false negatives):**
+1. **Unpinned `Werkzeug >= 3.0` Breaks Legacy Flask 2.3 Verification (`pallets__flask-5014` â€” 2 false negatives):**
    - `WrapPythonContainerCommand` installs `requirements/tests.txt` (which does not pin Werkzeug) followed by `pip install -q -e .`. Flask 2.3's `pyproject.toml` declares `Werkzeug >= 2.2.2` with no upper bound, so `pip` pulls Werkzeug 3.x where `werkzeug.__version__` was removed, crashing `src/flask/testing.py:117` (`AttributeError: module 'werkzeug' has no attribute '__version__'`) across 48 tests even when both models produced the exact valid fix.
-2. **Legacy 2014 `cacert.pem` & External `httpbin.org` Dependency (`psf__requests-1921`, `psf__requests-2931` — 2 false negatives):**
+2. **Legacy 2014 `cacert.pem` & External `httpbin.org` Dependency (`psf__requests-1921`, `psf__requests-2931` â€” 2 false negatives):**
    - `psf__requests-1921` (2014) bundles a 2014 `requests/cacert.pem` that fails TLS verification (`SSLCertVerificationError`) against live `https://httpbin.org` in `test_mixed_case_scheme_acceptable` and `test_pyopenssl_redirect`, and fails `pip install -r requirements.txt` on `pexpect-u` (`use_2to3 is invalid`), despite both models passing `6/6` `fail_to_pass` and `105/107` `pass_to_pass`. Modern `python:3.11` containers also provide `/etc/ssl/certs/ca-certificates.crt` which should be exposed via `REQUESTS_CA_BUNDLE` when unset, while ancient 2014/2015 `httpbin`-coupled `psf/requests` tasks should be replaced with modern offline Python tasks.
-3. **Crafted `ncf-cr-py-001` PR Diff Contains a Real Regression Bug (`v1-code-review.jsonl` — 2 false negatives):**
+3. **Crafted `ncf-cr-py-001` PR Diff Contains a Real Regression Bug (`v1-code-review.jsonl` â€” 2 false negatives):**
    - `ncf-cr-py-001` specifies `expected_verdict: "Approve"`, yet its `candidate_patch` calls `dict(...)` instead of `dict_class(...)` inside `merge_setting`, silently breaking `CaseInsensitiveDict` and `OrderedDict` semantics. Both models caught this defect, applied the `dict_class(...)` `MinorFix`, and passed `6/6` tests, scoring `0.00` due to expected-verdict mismatch.
-4. **Pre-Existing Linux / .NET 10 Source Generator Snapshot Ordering Failures (`MessagePack-CSharp` `1798` / `2031` — 2 false negatives):**
+4. **Pre-Existing Linux / .NET 10 Source Generator Snapshot Ordering Failures (`MessagePack-CSharp` `1798` / `2031` â€” 2 false negatives):**
    - `MessagePack.SourceGenerator.Tests` cases backed by `CSharpSourceGeneratorVerifier` (`allowReordering: false` against unsorted embedded resources) fail 61/84 tests on the unmodified `BaseCommit` under Linux / .NET 10, making `messagepack-csharp__messagepack-csharp-1798` impossible for even the gold patch to pass.
 5. **Cargo 1.100 Build Directory Layout Breaks Ripgrep 13 Integration Test Harness (`burntsushi__ripgrep-2576`, `2209`, `ncf-cr-rust-001`) & Verification Artifact Leak:**
    - Modern Cargo (`1.100.0`) places integration test binaries in `target/debug/build/ripgrep/<hash>/out/integration-<hash>` rather than `target/debug/deps/`. Ripgrep 13.0.0's `tests/util.rs` resolves `env::current_exe().parent().join("../rg")`, causing 281/285 integration tests to panic with `NotFound`.
    - Furthermore, `BenchmarkWorkspaceManager.ResetToBaseAsync` used `git clean -fd`, preserving gitignored `target/`, which allowed an agent-created symlink inside `target/debug/build/` to leak into `BenchmarkVerifier` and mask the broken test harness.
 6. **Underspecified Image-Only Problem Statement (`facebook__docusaurus-9897`) & Secondary Review/Diagnostic Gaps:**
    - `facebook__docusaurus-9897` stores its entire repro snippet inside a GitHub screenshot image URL (`![image](...)`) rather than text, leaving text-only agents unable to identify `unwrapMdxCodeBlocks`.
-   - `ncf-tr-rust-002` (`WaitingForHuman` on Flint) matched `DelayQueue` and 3/4 keywords in its `ask` questions, but failed `Missing expected finding anchors: tokio-util/src/time/delay_queue.rs` because `EvaluateExpectedFindings` did not run identifier-bounded file-stem corroboration without `symbol_or_line_hint` and did not match separator-less PascalCase stems (`delay_queue` ↔ `DelayQueue`).
+   - `ncf-tr-rust-002` (`WaitingForHuman` on Flint) matched `DelayQueue` and 3/4 keywords in its `ask` questions, but failed `Missing expected finding anchors: tokio-util/src/time/delay_queue.rs` because `EvaluateExpectedFindings` did not run identifier-bounded file-stem corroboration without `symbol_or_line_hint` and did not match separator-less PascalCase stems (`delay_queue` â†” `DelayQueue`).
    - Exhausting `MaxTurns` (`100` turns) with no patch surfaced only `"Model produced an empty patch."` without indicating that the turn budget was exhausted.
 
 ---
@@ -55,7 +55,7 @@ Post-Step-11.62 `v1-smoke` runs (`v1-smoke-Qwen3.8-27B-latest-20261125-215112` s
 - When an agent finishes `CrucibleBenchmarkRunner` with `AgentRunStatus.Completed`, fails verification, and reached `turns >= candidate.MaxTurns`, `BenchmarkInstanceResult.ErrorMessage` MUST explicitly surface that the `MaxTurns` budget was exhausted (`Agent reached MaxTurns limit ({turns}/{candidate.MaxTurns}) without completing the task.`) alongside any verification error rather than reporting only `"Model produced an empty patch."`.
 
 ### 2.5 Modern-Era Dataset Curation & Live Gold Validation (`v1-smoke`, `v1-full`, `v1-code-review.jsonl`)
-- **`v1-smoke.manifest.json` & `v1-full.manifest.json`** MUST maintain tier sizes (`28` and `90`), superset parity (`v1-smoke` ⊂ `v1-full` with identical fields), and stack-mix invariants while replacing problematic historical/broken instances:
+- **`v1-smoke.manifest.json` & `v1-full.manifest.json`** MUST maintain tier sizes (`28` and `90`), superset parity (`v1-smoke` âŠ‚ `v1-full` with identical fields), and stack-mix invariants while replacing problematic historical/broken instances:
   - Replace screenshot-only `facebook__docusaurus-9897` with `facebook__docusaurus-10130` in `v1-smoke` and add `facebook__docusaurus-10309` in `v1-full` (using `yarn build:packages` + `--` delimiter for scoped Jest test execution).
   - Replace Cargo-1.100-incompatible `burntsushi__ripgrep-2576` and `burntsushi__ripgrep-2209` (plus `sharkdp__bat-2650`/`2201` in `v1-full`) with modern Rust instances (`tokio-rs__tokio-6752` in `v1-smoke`; `tokio-rs__tokio-6838`, `tokio-rs__tokio-7139`, `tokio-rs__tokio-6724`, `tokio-rs__tokio-6603` in `v1-full`, using `--manifest-path tokio/Cargo.toml` to disambiguate workspace crate versions).
   - Replace Linux/.NET 10 source-generator/snapshot-broken `messagepack-csharp__messagepack-csharp-1798`/`2031`/`1962`/`1842` with clean C# instances passing on .NET 10 (`messagepack-csharp__messagepack-csharp-2045` in `v1-smoke`/`v1-full`; `serilog__serilog-1955` and `polly-2068` alongside `messagepack-csharp__messagepack-csharp-2022` in `v1-full`).
@@ -77,7 +77,7 @@ Post-Step-11.62 `v1-smoke` runs (`v1-smoke-Qwen3.8-27B-latest-20261125-215112` s
 
 - [x] Add `pip_constraints` schema/manifest/overlay/importer/writer support, wire `REQUESTS_CA_BUNDLE` + `/tmp/ncf-pip-constraints.txt` / `PIP_CONSTRAINT` into `BenchmarkTestCommandResolver` and `BenchmarkVerifier`, and surface active `pip_constraints` in `BenchmarkStagePolicyResolver.GetSandboxEnvironmentGuidance`, with unit and live acceptance tests.
 - [x] Update `BenchmarkWorkspaceManager.ResetToBaseAsync` to use `git clean -fdx -e node_modules -e .venv` (and harden `DeleteDirectoryRobustly` against cyclic junctions), with unit tests verifying `target/` cleanup, cyclic reparse-point cleanup, and `node_modules`/`.venv` preservation.
-- [x] Update `BenchmarkVerifier.MatchesIdentifierBoundedFileStem` and `EvaluateExpectedFindings` for separator-normalized stem matching (`delay_queue` ↔ `DelayQueue`) and strong-keyword corroboration on `TaskReview` findings, and instruct `TaskReview` `StageDirective` to cite file paths/symbols in `ask`, with regression tests.
+- [x] Update `BenchmarkVerifier.MatchesIdentifierBoundedFileStem` and `EvaluateExpectedFindings` for separator-normalized stem matching (`delay_queue` â†” `DelayQueue`) and strong-keyword corroboration on `TaskReview` findings, and instruct `TaskReview` `StageDirective` to cite file paths/symbols in `ask`, with regression tests.
 - [x] Enrich `CrucibleBenchmarkRunner` `ErrorMessage` when `turns >= candidate.MaxTurns` on failed `Completed` runs, with unit tests.
 - [x] Curate `v1-smoke.manifest.json`, `v1-full.manifest.json`, and `v1-code-review.jsonl` to replace/adapt broken historical instances, harden Python/Node container wrappers and truncated-bracket pytest matching (`TestAssertionEvaluator`), re-materialize local `v1-smoke.jsonl` and `v1-full.jsonl`, and verify live `ncf-bench dataset validate` passes across `v1-smoke` and `v1-full`.
 - [x] Verify all non-E2E/non-Acceptance tests (`dotnet test --filter "Category!=Acceptance&Category!=E2E"`), Acceptance tests (`dotnet test --filter "Category=Acceptance"`), and the full test suite (`dotnet test`) pass.
